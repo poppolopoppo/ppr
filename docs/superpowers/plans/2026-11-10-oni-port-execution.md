@@ -632,3 +632,57 @@ Entry conditions for the owner stop:
 - **Unmeasured:** Windows/D3D12 build and GPU validation.
 - **Not started by this correction:** Task 3 owner acceptance itself, and Task 4
   and later.
+
+### Graceful-exit defect — closed-session teardown cancellation (fixed)
+
+Reproduced at `86d32920` in an **auto-exit during loading (pre-load
+teardown)** ordinary launch: the app exited 0 but logged two error-severity
+records during shutdown, a `SessionDeliveryLog` `std::errc::operation_canceled`
+from `SessionService::post` and a `Demo` `retainInputError_` failure. Pre-fix
+evidence: `/tmp/opencode/task3/ordinary-1281x721.log` lines 463/465; that log
+has no `new game published`, `GridPass` shutdown reports `staged_tiles: 0`, and
+its screenshot (`/tmp/opencode/task3/ordinary-1281x721.png`) shows the loading
+modal. This is not a post-load teardown reproduction.
+
+Diagnosis: `stopControls()`/`close()` close admission, while the lane and
+world-completion hooks still deliver their final acknowledgments during
+teardown. `post` rejected those through `PPR_RETURN_ERROR_ON_FAIL`, and the
+game routed the returned cancellation into `retainInputError_`. Acknowledgments
+remain admitted between `stopControls()` and `close()`; cancellation for them
+applies after `close()`.
+
+Policy: closed-session cancellation during teardown is expected, not an input
+failure. `post` and `deferTool` still return `std::errc::operation_canceled`
+(unchanged code and admission semantics) through a documented explicit
+`return` with no error diagnostic. `Game.Application.cpp` adds
+`postSessionDelivery_`/`deferSessionTool_` helpers in the class's `protected:`
+region that ignore only `operation_canceled` and forward every other error to
+`retainInputError_`; `retainInputError_` itself is unchanged. All
+`retainInputError_(post/deferTool(...))` call sites use the helpers.
+`deferSessionTool_`'s closed branch is currently unreachable in production
+teardown; it is harmless symmetry, not a required path.
+
+Evidence: `game.tests` and `app.game` build clean; the
+`game/session_service/` group passes 13/13 leaves (9.50 s), including
+`terminal_control_stop_retains_acknowledgments_until_receiver_close`. Repeating
+the originally failing pre-load shape with the fixed binary (auto-exit 70 s,
+1281x721, capture frame) exited 0 with 0 `❌`, 0 `FAILED`, and 0
+session-delivery/input-failure records; only the auto-exit setup notice
+remains. Log `/tmp/opencode/task3/preload-exit-after-fix.log`, screenshot
+`/tmp/opencode/task3/preload-exit-after-fix.png`. A separate post-load shape
+(auto-exit 130 s) also exited 0 with 0 of those records and 6 pre-existing
+Vulkan `WARNING-Shader-OutputNotConsumed` records owned by Task 11; that
+warning's pre-existing occurrence is cited from
+`/tmp/opencode/task3/worldgen-acceptance.log` (10 occurrences, pre-commit),
+because the pre-fix ordinary log exited before emitting it. Logs
+`/tmp/opencode/task3/ordinary-clean-exit.log`, screenshot
+`/tmp/opencode/task3/ordinary-clean-exit.png`. Exit status 0 was captured by the
+invoking shell; the logs are not exit-status artifacts. Commits
+`6385fca8 fix: treat closed-session teardown cancellation as expected` and
+`docs: correct graceful-exit reproduction and evidence`.
+
+Not claimed: the in-flight world-preparation cancellation behavior is not
+separately claimed as fixed (the pre-load run shows no such errors in its log,
+but this does not generalize beyond it), and no Task 3 acceptance or
+Windows/D3D12 result is claimed. Full report:
+`.superpowers/sdd/2026-11-10-oni-port/task-3-report.md`.
