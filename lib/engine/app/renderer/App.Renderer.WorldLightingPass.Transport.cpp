@@ -73,16 +73,20 @@ namespace pP {
 
         std::error_code transportStorageBuffer(
             rhi::IDevice &device, const u64 bytes, const u32 stride, const void *const initial,
-            rhi::ComPtr<rhi::IBuffer> &result, const char *const label) {
+            rhi::ComPtr<rhi::IBuffer> &result, const char *const label, const bool copy_destination = false) {
             rhi::BufferDesc desc{};
             desc.size = bytes;
             desc.elementSize = stride;
             desc.memoryType = rhi::MemoryType::DeviceLocal;
-            desc.usage = static_cast<rhi::BufferUsage>(
-                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
-                static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
-                static_cast<u32>(rhi::BufferUsage::CopySource) |
-                static_cast<u32>(rhi::BufferUsage::CopyDestination));
+            u32 usage = static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                        static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                        static_cast<u32>(rhi::BufferUsage::CopySource);
+            if (copy_destination) {
+                // Only the in-place fine field needs an upload seam so tests can
+                // prime one record; other transport storage is never copied to.
+                usage |= static_cast<u32>(rhi::BufferUsage::CopyDestination);
+            }
+            desc.usage = static_cast<rhi::BufferUsage>(usage);
             desc.defaultState = rhi::ResourceState::UnorderedAccess;
             desc.label = label;
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, device.createBuffer(desc, initial, result.writeRef()));
@@ -281,7 +285,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightingPass, transportStorageBuffer(
                                        device, kFineCHBytes, static_cast<u32>(sizeof(lighting::PackedCH)), zero.data(),
-                                       resources.m_fine_ch, "world-lighting fine CH field"));
+                                       resources.m_fine_ch, "world-lighting fine CH field", true));
         }
 
         for (u32 slot = 0u; slot < kStatusRingSize; ++slot) {
@@ -349,9 +353,10 @@ namespace pP {
         const u32 frame_low = static_cast<u32>(accepted);
         const u32 frame_high = static_cast<u32>(accepted >> 32u);
 
-        // Source preparation reads the pre-update field only: no CH writer runs
-        // in this task, so every dispatch below observes the current materials
-        // plus the previous field's angular mean.
+        // Source preparation reads the pre-update field only. Fine
+        // reconstruction runs after every dispatch below, so all source and
+        // cascade dispatches observe the current materials plus the previous
+        // field's angular mean.
         encoder.setBufferState(resources.m_source, rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(attempt.m_status, rhi::ResourceState::UnorderedAccess);
         encoder.setBufferState(inputs.m_source_materials, rhi::ResourceState::ShaderResource);

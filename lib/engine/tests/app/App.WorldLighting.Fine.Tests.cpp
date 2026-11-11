@@ -20,11 +20,16 @@ namespace pP::tests::detail::WorldLightingFine {
     inline constexpr u32 kEdge = WorldLightingPass::kWorldEdge;
     inline constexpr u32 kCells = WorldLightingPass::kCellCount;
     inline constexpr u32 kFineEdge = lighting::kFineCHEdge;
-    inline constexpr u32 kMaterialCount = 4u;
+    inline constexpr u32 kMaterialCount = 9u;
 
     inline constexpr u32 kMetal = 1u;
     inline constexpr u32 kDiffuse = 2u;
     inline constexpr u32 kOpaque = 3u;
+    inline constexpr u32 kBack = 4u;
+    inline constexpr u32 kRed = 5u;
+    inline constexpr u32 kGreen = 6u;
+    inline constexpr u32 kBlue = 7u;
+    inline constexpr u32 kYellow = 8u;
 
     // Y0 = 1/sqrt(2*pi), used only by independent CPU oracles here.
     inline constexpr double kY0 = 0.39894228040143267794;
@@ -255,6 +260,55 @@ namespace pP::tests::detail::WorldLightingFine {
     };
 
     // ------------------------------------------------------------------
+    // nonzero-AC quadrant fixture
+    // ------------------------------------------------------------------
+
+    // Four metallic materials with a known emission per quadrant around the
+    // chosen fine centre. The whole map stays occupied so every near connector
+    // hits its starting cell (Tnear=0) and the angular distribution comes only
+    // from the connector basis, not from cascade far intervals.
+    [[nodiscard]] std::array<lighting::SourceMaterial, kMaterialCount> makeQuadrantSources() {
+        std::array<lighting::SourceMaterial, kMaterialCount> sources{};
+        const auto store = [&](const u32 material, const float3 emission) {
+            const auto record = lighting::makeSourceMaterial(
+                emission, 1.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 1.0);
+            PPR_TEST_ASSERT(record.has_value());
+            sources[material] = *record;
+        };
+
+        store(kRed, rgb(4.0f, 0.0f, 0.0f));
+        store(kGreen, rgb(0.0f, 4.0f, 0.0f));
+        store(kBlue, rgb(0.0f, 0.0f, 4.0f));
+        store(kYellow, rgb(2.0f, 2.0f, 0.0f));
+        return sources;
+    }
+
+    struct QuadrantFixture {
+        // Fine probe (100,100) has centre (201,201), the shared corner of these
+        // four native cells.
+        CategoricalMap m_map;
+        std::array<lighting::SourceMaterial, kMaterialCount> m_sources;
+        std::vector<u32> m_source_words;
+        std::vector<u8> m_occupancy;
+
+        QuadrantFixture() {
+            m_map.fill(kBack);
+            m_map.occupy(200u, 200u, kRed);
+            m_map.occupy(201u, 200u, kGreen);
+            m_map.occupy(200u, 201u, kBlue);
+            m_map.occupy(201u, 201u, kYellow);
+
+            m_sources = makeQuadrantSources();
+            m_source_words.assign(kCells, 0u);
+            m_source_words[cellIndex(200u, 200u)] = m_sources[kRed].m_emission;
+            m_source_words[cellIndex(201u, 200u)] = m_sources[kGreen].m_emission;
+            m_source_words[cellIndex(200u, 201u)] = m_sources[kBlue].m_emission;
+            m_source_words[cellIndex(201u, 201u)] = m_sources[kYellow].m_emission;
+            m_occupancy.assign(kCells, 1u);
+        }
+    };
+
+    // ------------------------------------------------------------------
     // attempt driving
     // ------------------------------------------------------------------
 
@@ -417,6 +471,237 @@ namespace pP::tests::detail::WorldLightingFine {
     }
 
     // ------------------------------------------------------------------
+    // independent fine connector geometry oracle
+    // ------------------------------------------------------------------
+
+    inline constexpr float kTraceFarOracle = 3.402823466e+38f;
+
+    [[nodiscard]] u32 fineMix32(u32 value) noexcept {
+        value = (value ^ (value >> 16u)) * 0x7feb352du;
+        value = (value ^ (value >> 15u)) * 0x846ca68bu;
+        return value ^ (value >> 16u);
+    }
+
+    // Level 1 group edge is 128 and the level constant is 1.
+    [[nodiscard]] u32 fineL1Phase(const u32 probe_x, const u32 probe_y) noexcept {
+        return fineMix32(probe_x / 2u + 128u * (probe_y / 2u) + 0x9e3779b9u) & 3u;
+    }
+
+    struct L1OracleFrame {
+        bool m_valid{};
+        u32 m_trace{};
+        u32 m_age{};
+    };
+
+    [[nodiscard]] L1OracleFrame fineL1Frame(const u64 accepted, const u32 probe_x, const u32 probe_y) noexcept {
+        const u32 phase = fineL1Phase(probe_x, probe_y);
+        const u32 local = (probe_x % 2u) + 2u * (probe_y % 2u);
+        const u32 age = ((static_cast<u32>(accepted) & 3u) + phase + 4u - local) & 3u;
+        const bool valid = accepted >= age;
+        return L1OracleFrame{
+            .m_valid = valid,
+            .m_trace = valid ? static_cast<u32>(accepted - age) : static_cast<u32>(accepted),
+            .m_age = age};
+    }
+
+    [[nodiscard]] double finePhaseFraction(const u32 trace) noexcept {
+        const u32 word = trace * 0x9e3779b9u;
+        return (static_cast<double>(word >> 9u) + 0.5) / 8'388'608.0;
+    }
+
+    [[nodiscard]] double fineConnectorAngle(const u32 phi, const u32 trace) noexcept {
+        return 2.0 * std::numbers::pi * (static_cast<double>(phi) + finePhaseFraction(trace)) / 16.0;
+    }
+
+    struct FineTap {
+        u32 m_x{};
+        u32 m_y{};
+        float m_weight{};
+    };
+
+    [[nodiscard]] std::array<FineTap, 4u> fineTaps(const u32 probe_x, const u32 probe_y) noexcept {
+        const float2 fine_center{
+            (static_cast<float>(probe_x) + 0.5f) * 2.0f, (static_cast<float>(probe_y) + 0.5f) * 2.0f};
+        const float2 relative{fine_center.x * 0.25f - 0.5f, fine_center.y * 0.25f - 0.5f};
+        const i32 base_x = static_cast<i32>(std::floor(relative.x));
+        const i32 base_y = static_cast<i32>(std::floor(relative.y));
+        const float fraction_x = relative.x - static_cast<float>(base_x);
+        const float fraction_y = relative.y - static_cast<float>(base_y);
+        const std::array<i32, 4u> offset_x{0, 1, 0, 1};
+        const std::array<i32, 4u> offset_y{0, 0, 1, 1};
+
+        std::array<FineTap, 4u> taps{};
+        for (u32 index = 0u; index < 4u; ++index) {
+            taps[index].m_x = static_cast<u32>((std::clamp) (base_x + offset_x[index], 0, 255));
+            taps[index].m_y = static_cast<u32>((std::clamp) (base_y + offset_y[index], 0, 255));
+            taps[index].m_weight = (offset_x[index] == 0 ? 1.0f - fraction_x : fraction_x) *
+                                   (offset_y[index] == 0 ? 1.0f - fraction_y : fraction_y);
+        }
+
+        return taps;
+    }
+
+    struct FineOracleInputs {
+        const std::vector<u8> &m_occupancy;
+        const std::vector<u32> &m_source;
+        const std::vector<u32> *m_l1{};
+        u32 m_edge{};
+    };
+
+    [[nodiscard]] lighting::Interval fineFarInterval(
+        const FineOracleInputs &inputs, const u32 probe_x, const u32 probe_y, const u32 phi, const bool valid) {
+        lighting::Interval result{};
+        if (not valid or inputs.m_l1 == nullptr) {
+            return result;
+        }
+
+        constexpr u32 spacing = 4u;
+        const u32 atlas_x = probe_x * spacing + phi % spacing;
+        const u32 atlas_y = probe_y * spacing + phi / spacing;
+        const std::size_t record = static_cast<std::size_t>(atlas_y) * 1024u + atlas_x;
+        lighting::PackedInterval packed{};
+        packed.m_rg = (*inputs.m_l1)[record * 2u];
+        packed.m_bt = (*inputs.m_l1)[record * 2u + 1u];
+        return lighting::unpackInterval(packed);
+    }
+
+    [[nodiscard]] double fineChannel(const float3 value, const u32 channel) noexcept {
+        return static_cast<double>(channel == 0u ? value.x : (channel == 1u ? value.y : value.z));
+    }
+
+    // Replays all 64 nominal connectors with independent geometry, traversal,
+    // far-interval and spec-formula fitting. Inputs are the CPU-known resolved
+    // occupancy/source plus the GPU L1 store the fine dispatch read.
+    [[nodiscard]] std::array<float3, 9u> fineConnectorOracle(
+        const u32 probe_x, const u32 probe_y, const u64 accepted, const FineOracleInputs &inputs) {
+        const float2 fine_center{
+            (static_cast<float>(probe_x) + 0.5f) * 2.0f, (static_cast<float>(probe_y) + 0.5f) * 2.0f};
+        const float2 box_min{fine_center.x - 4.0f, fine_center.y - 4.0f};
+        const float2 box_max{fine_center.x + 4.0f, fine_center.y + 4.0f};
+        const std::span<const u8> occupancy{inputs.m_occupancy.data(), inputs.m_occupancy.size()};
+        const auto taps = fineTaps(probe_x, probe_y);
+        constexpr double direction_weight = 2.0 * std::numbers::pi / 16.0;
+
+        struct Sample {
+            float3 m_radiance;
+            double m_theta;
+            double m_weight;
+        };
+
+        std::vector<Sample> samples;
+        samples.reserve(64u);
+        for (const FineTap &tap: taps) {
+            if (tap.m_weight <= 0.0f) {
+                continue;
+            }
+
+            const L1OracleFrame frame = fineL1Frame(accepted, tap.m_x, tap.m_y);
+            const float2 center{
+                (static_cast<float>(tap.m_x) + 0.5f) * 4.0f, (static_cast<float>(tap.m_y) + 0.5f) * 4.0f};
+
+            for (u32 phi = 0u; phi < 16u; ++phi) {
+                const double angle = fineConnectorAngle(phi, frame.m_trace);
+                const float2 direction{static_cast<float>(std::cos(angle)), static_cast<float>(std::sin(angle))};
+
+                float slip_x = kTraceFarOracle;
+                float slip_y = kTraceFarOracle;
+                if (direction.x > 0.0f) {
+                    slip_x = (box_max.x - center.x) / direction.x;
+                } else if (direction.x < 0.0f) {
+                    slip_x = (box_min.x - center.x) / direction.x;
+                }
+                if (direction.y > 0.0f) {
+                    slip_y = (box_max.y - center.y) / direction.y;
+                } else if (direction.y < 0.0f) {
+                    slip_y = (box_min.y - center.y) / direction.y;
+                }
+
+                const float exit_parameter = std::min(slip_x, slip_y);
+                const float2 exit_point{
+                    center.x + direction.x * exit_parameter, center.y + direction.y * exit_parameter};
+                const float2 connector{exit_point.x - fine_center.x, exit_point.y - fine_center.y};
+                const float connector_length = std::sqrt(connector.x * connector.x + connector.y * connector.y);
+                const float2 basis = connector_length == 0.0f
+                                         ? direction
+                                         : float2{connector.x / connector_length, connector.y / connector_length};
+
+                const float2 start{fine_center.x + basis.x * 0.001f, fine_center.y + basis.y * 0.001f};
+                const std::optional<u32> hit = lighting::traceNativeCellDDA(
+                    occupancy, inputs.m_edge, start, exit_point);
+
+                lighting::Interval near_interval{};
+                near_interval.m_transmittance = 1.0f;
+                if (hit.has_value()) {
+                    near_interval.m_radiance = lighting::unpackRGB9E5(inputs.m_source[*hit]);
+                    near_interval.m_transmittance = 0.0f;
+                }
+
+                const lighting::Interval far_interval = fineFarInterval(inputs, tap.m_x, tap.m_y, phi, frame.m_valid);
+                const float3 radiance = near_interval.m_radiance +
+                                        far_interval.m_radiance * near_interval.m_transmittance;
+                const double theta = std::atan2(static_cast<double>(basis.y), static_cast<double>(basis.x));
+                samples.push_back({radiance, theta, static_cast<double>(tap.m_weight) * direction_weight});
+            }
+        }
+
+        double total_weight = 0.0;
+        std::array<double, 3u> weighted{};
+        for (const Sample &sample: samples) {
+            total_weight += sample.m_weight;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                weighted[channel] += fineChannel(sample.m_radiance, channel) * sample.m_weight;
+            }
+        }
+
+        PPR_TEST_ASSERT(total_weight > 0.0);
+        std::array<double, 3u> mean{};
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            mean[channel] = weighted[channel] / total_weight;
+        }
+
+        std::array<float3, 9u> result;
+        result[0u] = float3{
+            static_cast<float>(mean[0u] / kY0), static_cast<float>(mean[1u] / kY0), static_cast<float>(mean[2u] / kY0)};
+        for (u32 m = 1u; m <= 4u; ++m) {
+            std::array<double, 3u> cc{};
+            std::array<double, 3u> cs{};
+            for (const Sample &sample: samples) {
+                const double cosine = std::cos(static_cast<double>(m) * sample.m_theta);
+                const double sine = std::sin(static_cast<double>(m) * sample.m_theta);
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const double deviation = fineChannel(sample.m_radiance, channel) - mean[channel];
+                    cc[channel] += deviation * (sample.m_weight * cosine);
+                    cs[channel] += deviation * (sample.m_weight * sine);
+                }
+            }
+
+            const double factor = (2.0 * std::numbers::pi / total_weight) * lanczos(m) / std::sqrt(std::numbers::pi);
+            result[2u * m - 1u] = float3{
+                static_cast<float>(cc[0u] * factor), static_cast<float>(cc[1u] * factor),
+                static_cast<float>(cc[2u] * factor)};
+            result[2u * m] = float3{
+                static_cast<float>(cs[0u] * factor), static_cast<float>(cs[1u] * factor),
+                static_cast<float>(cs[2u] * factor)};
+        }
+
+        return result;
+    }
+
+    void assertFineMatchesOracle(const lighting::PackedCH &record, const std::array<float3, 9u> &expected) {
+        const lighting::CH decoded = lighting::unpackCH(record);
+        PPR_TEST_ASSERT(closeRGB9E5(decoded.m_coefficients[0u], expected[0u], 5.0e-3f));
+        const float scale = std::bit_cast<float>(record.m_words[1u]);
+        const float tolerance = 0.55f * scale + 2.0e-4f;
+        for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+            const float3 actual = decoded.m_coefficients[coefficient];
+            const float3 wanted = expected[coefficient];
+            PPR_TEST_ASSERT(std::abs(actual.x - wanted.x) <= tolerance);
+            PPR_TEST_ASSERT(std::abs(actual.y - wanted.y) <= tolerance);
+            PPR_TEST_ASSERT(std::abs(actual.z - wanted.z) <= tolerance);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // probe programs
     // ------------------------------------------------------------------
 
@@ -546,12 +831,14 @@ namespace pP::tests::detail::WorldLightingFine {
         auto sample_buffer = makeShaderBuffer(
             fixture.device(), samples.size() * sizeof(CHProbeSample), sizeof(CHProbeSample), samples.data());
         auto result_buffer = makeStorageBuffer(fixture.device(), cases.size() * 9u * sizeof(u32), sizeof(u32));
+        auto field_buffer = makeStorageBuffer(
+            fixture.device(), cases.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH));
 
         rhi::ShaderCursor cursor{probe.m_root};
         bindBuffer(cursor, "g_ch_cases", case_buffer);
         bindBuffer(cursor, "g_ch_samples", sample_buffer);
         bindBuffer(cursor, "g_ch_results", result_buffer);
-        bindOptionalBuffer(cursor, "g_fine_ch", result_buffer);
+        bindOptionalBuffer(cursor, "g_fine_ch", field_buffer);
         bindOptionalConstant(cursor, "g_fine", std::array<u32, 8u>{});
         const std::array<u32, 4u> count{static_cast<u32>(cases.size()), 0u, 0u, 0u};
         bindConstant(cursor, "g_ch_probe", count);
@@ -726,7 +1013,6 @@ namespace pP::tests::detail::WorldLightingFine {
             const float3 expected_c0 = emission * static_cast<float>(1.0 / kY0);
             PPR_TEST_ASSERT(closeRGB9E5(decoded.m_coefficients[0], expected_c0));
             PPR_TEST_ASSERT(closeRGB9E5(mean, emission));
-            PPR_TEST_ASSERT(std::abs(mean.x - decoded.m_coefficients[0].x * static_cast<float>(kY0)) <= 1.0e-6f);
             PPR_TEST_ASSERT(pass.fineCHForTest()->getDesc().elementSize == sizeof(lighting::PackedCH));
             PPR_TEST_ASSERT(pass.fineCHForTest()->getDesc().size == lighting::kFineCHBytes);
         }
@@ -1039,6 +1325,197 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(outside.m_words[1u] == 0u);
 
         std::println("WORLD_LIGHTING_FINE near_hit far_uninitialized=not_suppressing cold_far=zero");
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
+    // real reconstructFine geometry, far merge and window-once EMA
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (connector_geometry_produces_signed_harmonics) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto visuals = makePalette();
+        QuadrantFixture quadrant;
+        FineInputs inputs{visuals, quadrant.m_map};
+        inputs.uploadCommon(fixture);
+        inputs.setSources(fixture, quadrant.m_sources);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
+
+        const auto record = readFineRecord(fixture, pass, 100u, 100u);
+        const auto l1 = readWords(fixture, pass.cascadeIntervalsForTest(), 0u, lighting::kCascadeLevelBytes);
+        const FineOracleInputs oracle_inputs{quadrant.m_occupancy, quadrant.m_source_words, &l1, kEdge};
+        const auto expected = fineConnectorOracle(100u, 100u, 0u, oracle_inputs);
+        assertFineMatchesOracle(record, expected);
+
+        // The four source quadrants around the fine centre produce a signed
+        // first harmonic. The orientation is fixed by the red/green/blue/yellow
+        // cell assignment, not by a uniform source.
+        PPR_TEST_ASSERT(record.m_words[1u] != 0u);
+        PPR_TEST_ASSERT(expected[1u].x < -1.0e-4f and expected[1u].y > 1.0e-4f and expected[1u].z < -1.0e-4f);
+        PPR_TEST_ASSERT(expected[2u].x < -1.0e-4f and expected[2u].y < -1.0e-4f and expected[2u].z > 1.0e-4f);
+
+        const lighting::CH decoded = lighting::unpackCH(record);
+        const float scale = std::bit_cast<float>(record.m_words[1u]);
+        std::println(
+            "WORLD_LIGHTING_FINE geometry c0=({}, {}, {}) cc1=({}, {}, {}) cs1=({}, {}, {}) scale={}",
+            decoded.m_coefficients[0u].x, decoded.m_coefficients[0u].y, decoded.m_coefficients[0u].z,
+            decoded.m_coefficients[1u].x, decoded.m_coefficients[1u].y, decoded.m_coefficients[1u].z,
+            decoded.m_coefficients[2u].x, decoded.m_coefficients[2u].y, decoded.m_coefficients[2u].z, scale);
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (far_merge_and_clamped_edge_taps_match_the_oracle) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto visuals = makePalette();
+        CategoricalMap empty_map;
+        FineInputs inputs{visuals, empty_map};
+        inputs.uploadCommon(fixture);
+        inputs.setSources(fixture, uniformSources(rgb(0.0f, 0.0f, 0.0f)));
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // Three complete schedule blocks so probe (0,0) is re-visited after its
+        // parents are populated; a large injected dt makes each accepted frame
+        // replace history with its fresh reconstruction (weight rounds to one),
+        // so the last field is frame 11's reconstruction.
+        for (u64 frame = 0u; frame < 12u; ++frame) {
+            runFrame(fixture, pass, inputs.inputs(), frame, static_cast<double>(frame) * 20.0, 12, frame + 1u);
+        }
+
+        const auto record = readFineRecord(fixture, pass, 0u, 0u);
+        const auto l1 = readWords(fixture, pass.cascadeIntervalsForTest(), 0u, lighting::kCascadeLevelBytes);
+        const std::vector<u8> occupancy(kCells, 0u);
+        const std::vector<u32> source(kCells, 0u);
+        const FineOracleInputs oracle_inputs{occupancy, source, &l1, kEdge};
+        const auto expected = fineConnectorOracle(0u, 0u, 11u, oracle_inputs);
+        assertFineMatchesOracle(record, expected);
+
+        // The world-edge probe clamps all four L1 taps to (0,0); the repeated
+        // taps keep their ordinary bilinear weights, which sum to one.
+        const auto taps = fineTaps(0u, 0u);
+        float total = 0.0f;
+        for (const FineTap &tap: taps) {
+            PPR_TEST_ASSERT(tap.m_x == 0u and tap.m_y == 0u);
+            total += tap.m_weight;
+        }
+        PPR_TEST_ASSERT(std::abs(total - 1.0f) <= 1.0e-6f);
+
+        // An empty near segment leaves Tnear=1, so the stored L1 interval is the
+        // whole sample; it must be nonzero for this sky hour.
+        u32 nonzero_far = 0u;
+        for (u32 phi = 0u; phi < 16u; ++phi) {
+            const lighting::Interval far = fineFarInterval(oracle_inputs, 0u, 0u, phi, true);
+            if (far.m_radiance.x > 0.0f or far.m_radiance.y > 0.0f or far.m_radiance.z > 0.0f) {
+                ++nonzero_far;
+            }
+        }
+
+        PPR_TEST_ASSERT(nonzero_far > 0u);
+        PPR_TEST_ASSERT(lighting::unpackCH(record).m_coefficients[0u].x > 0.0f);
+        std::println(
+            "WORLD_LIGHTING_FINE far_merge edge_taps=clamped weights=1 nonzero_far={} oracle=match", nonzero_far);
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (window_applied_once_across_multiple_ema_frames) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        const auto visuals = makePalette();
+        QuadrantFixture quadrant;
+        FineInputs inputs{visuals, quadrant.m_map};
+        inputs.uploadCommon(fixture);
+        inputs.setSources(fixture, quadrant.m_sources);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
+        const auto first = readFineRecord(fixture, pass, 100u, 100u);
+        const lighting::CH first_decoded = lighting::unpackCH(first);
+        PPR_TEST_ASSERT(first.m_words[1u] != 0u);
+
+        // Black metallic sources keep every cell occupied but make the fresh
+        // reconstruction exactly zero, so each EMA step is history*(1-alpha).
+        std::array<lighting::SourceMaterial, kMaterialCount> black_sources{};
+        inputs.setSources(fixture, black_sources);
+
+        constexpr double kFrameDelta = 0.25;
+        const float alpha = lighting::fineAccumulationWeight(kFrameDelta);
+        PPR_TEST_ASSERT(alpha > 0.0f and alpha < 1.0f);
+
+        runFrame(fixture, pass, inputs.inputs(), 1u, kFrameDelta, -1, 2u);
+        const auto second = readFineRecord(fixture, pass, 100u, 100u);
+        const lighting::CH second_decoded = lighting::unpackCH(second);
+
+        runFrame(fixture, pass, inputs.inputs(), 2u, 2.0 * kFrameDelta, -1, 3u);
+        const auto third = readFineRecord(fixture, pass, 100u, 100u);
+        const lighting::CH third_decoded = lighting::unpackCH(third);
+
+        const auto assertStep = [&](const lighting::CH &previous, const lighting::PackedCH &current_packed,
+                                    const lighting::CH &current, const char *const label) {
+            const float scale = std::bit_cast<float>(current_packed.m_words[1u]);
+            const float tolerance = 0.55f * scale + 2.0e-4f;
+            const float retention = 1.0f - alpha;
+            PPR_TEST_ASSERT(closeRGB9E5(current.m_coefficients[0u], previous.m_coefficients[0u] * retention, 5.0e-3f));
+            for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                const float3 expected = previous.m_coefficients[coefficient] * retention;
+                const float3 actual = current.m_coefficients[coefficient];
+                PPR_TEST_ASSERT(std::abs(actual.x - expected.x) <= tolerance);
+                PPR_TEST_ASSERT(std::abs(actual.y - expected.y) <= tolerance);
+                PPR_TEST_ASSERT(std::abs(actual.z - expected.z) <= tolerance);
+            }
+
+            std::println("WORLD_LIGHTING_FINE window_once {} retention={}", label, retention);
+        };
+
+        assertStep(first_decoded, second, second_decoded, "frame1");
+        assertStep(second_decoded, third, third_decoded, "frame2");
+
+        // Direct ratio on the strongest first-frame AC component. A second
+        // Lanczos window on load/blend would shrink this by window(m), which is
+        // far outside the quantization bound.
+        float strongest = 0.0f;
+        u32 strongest_coefficient = 0u;
+        u32 strongest_channel = 0u;
+        for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+            const float3 value = first_decoded.m_coefficients[coefficient];
+            const std::array<float, 3u> channels{value.x, value.y, value.z};
+            for (u32 channel = 0u; channel < channels.size(); ++channel) {
+                if (std::abs(channels[channel]) > std::abs(strongest)) {
+                    strongest = channels[channel];
+                    strongest_coefficient = coefficient;
+                    strongest_channel = channel;
+                }
+            }
+        }
+
+        PPR_TEST_ASSERT(std::abs(strongest) > 1.0e-4f);
+        const float3 second_value = second_decoded.m_coefficients[strongest_coefficient];
+        const float second_component = strongest_channel == 0u
+                                           ? second_value.x
+                                           : (strongest_channel == 1u ? second_value.y : second_value.z);
+        const float ratio = second_component / strongest;
+        PPR_TEST_ASSERT(std::abs(ratio - (1.0f - alpha)) <= 0.025f);
+        std::println(
+            "WORLD_LIGHTING_FINE window_once ratio={} expected={} coefficient={} channel={}", ratio, 1.0f - alpha,
+            strongest_coefficient, strongest_channel);
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1392,6 +1869,10 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(fine_constants->getFieldByIndex(3u)->getOffset() == 12u);
         PPR_TEST_ASSERT(fine_constants->getFieldByIndex(4u)->getOffset() == 16u);
         PPR_TEST_ASSERT(fine_constants->getFieldByIndex(5u)->getOffset() == 20u);
+        PPR_TEST_ASSERT(fine_constants->findFieldIndexByName("m_fine_edge", nullptr) == 2);
+        PPR_TEST_ASSERT(
+            fine_constants->getFieldByIndex(2u)->getTypeLayout()->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 4u);
+        PPR_TEST_ASSERT(WorldLightingPass::kFineCHEdge == 512u);
 
         shader::ComPtr<slang::IEntryPoint> point{};
         PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName("reconstructFine", point.writeRef())));
@@ -1419,6 +1900,9 @@ namespace pP::tests {
                 detail::WorldLightingFine::injected_active_time_matches_the_approved_ema,
                 detail::WorldLightingFine::rejected_attempts_preserve_phase_validity_and_timing,
                 detail::WorldLightingFine::near_hit_with_uninitialized_far_interval_is_not_suppressed,
+                detail::WorldLightingFine::connector_geometry_produces_signed_harmonics,
+                detail::WorldLightingFine::far_merge_and_clamped_edge_taps_match_the_oracle,
+                detail::WorldLightingFine::window_applied_once_across_multiple_ema_frames,
                 detail::WorldLightingFine::retained_l1_direction_identity_uses_the_probe_trace_frame,
                 detail::WorldLightingFine::fine_writes_all_bytes_and_reads_only_its_own_prior,
                 detail::WorldLightingFine::source_reads_precede_fine_writes_across_successive_frames,

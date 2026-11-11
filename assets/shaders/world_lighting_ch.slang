@@ -117,11 +117,6 @@ bool chFinish(CHAccumulator accumulator, out CH result) {
     return true;
 }
 
-// angular_mean = C0*Y0.
-float3 chAngularMean(CH value) {
-    return value.m_coefficients[0] * kChY0;
-}
-
 // Fine-probe field sample at a continuous world-cell position. Fine probe
 // centres sit at (probe+0.5)*2 native cells, so the probe coordinate is
 // position/2-0.5. Decoded DC is interpolated in FP32 with ordinary bilinear

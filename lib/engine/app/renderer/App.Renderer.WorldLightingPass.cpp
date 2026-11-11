@@ -249,9 +249,9 @@ namespace pP {
         // Cached-source, cascade and fine-reconstruction entries. One 40 MiB
         // interval store carries L1..L5; the sky, schedule, CH basis and codecs
         // are include-only fragments.
-        const auto load_transport_programs = [&](const std::filesystem::path &file, const char *const label,
-                                                 const u32 first_entry, const std::span<const char *const> entries,
-                                                 ProjectionProgram *const programs) {
+        const auto load_world_lighting_programs = [&](const std::filesystem::path &file, const char *const label,
+                                                      const u32 first_entry, const std::span<const char *const> entries,
+                                                      ProjectionProgram *const programs) {
             shader::SharedModule module{};
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, shaders.loadModuleFromFile(file, label, module.writeRef()));
 
@@ -282,15 +282,15 @@ namespace pP {
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, load_transport_programs(
+            WorldLightingPass, load_world_lighting_programs(
                                    root / "shaders" / "world_lighting_source.slang", "world_lighting_source", 0u,
                                    kSourceEntries, m_resources->m_cascade_programs.data()));
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, load_transport_programs(
+            WorldLightingPass, load_world_lighting_programs(
                                    root / "shaders" / "world_lighting_cascade.slang", "world_lighting_cascade", 1u,
                                    kCascadeEntries, m_resources->m_cascade_programs.data()));
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, load_transport_programs(
+            WorldLightingPass, load_world_lighting_programs(
                                    root / "shaders" / "world_lighting_fine.slang", "world_lighting_fine", 0u,
                                    kFineEntries, m_resources->m_fine_programs.data()));
 
