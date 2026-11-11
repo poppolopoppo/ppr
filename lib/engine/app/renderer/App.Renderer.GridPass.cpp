@@ -8,6 +8,7 @@ import :renderer.grid_pass;
 import :renderer.frame_fence;
 import :renderer.types;
 import :renderer.world_lighting;
+import :renderer.world_lighting_pass;
 import :scene.camera;
 import std;
 import engine.core;
@@ -2530,6 +2531,9 @@ namespace pP {
         // alongside the fence epoch they named. Retain-first-error,
         // best-effort.
         std::error_code first_err{};
+        PPR_RETAIN_ERROR_ON_FAIL(
+            GridPass, first_err, m_world.m_lighting ? m_world.m_lighting->shutdown() : std::error_code{});
+        m_world.m_lighting.reset();
         clearOpticalResources_();
         m_world.m_particles = {};
         m_world.m_has_background = false;
@@ -2627,6 +2631,11 @@ namespace pP {
 
     std::error_code GridPass::notifyDeviceLost() noexcept {
         clearOpticalResources_();
+        if (m_world.m_lighting) {
+            // The device's GPU objects are gone; the owner recompiles on the
+            // next successful prepare against the restarted device.
+            m_world.m_lighting->notifyDeviceLost();
+        }
         m_world.m_diagnostic_atlas.setNull();
         m_world.m_diagnostic_colors.setNull();
         m_world.m_diagnostic_mapped = nullptr;
@@ -3112,6 +3121,71 @@ namespace pP {
         result.m_thermal_lut = m_thermal_lut;
         result.m_material_count = materialPaletteSize(not m_world.m_terrain_visuals.empty());
         return result;
+    }
+
+    // ------------------------------------------------------------------
+    // world-lighting owner
+    // ------------------------------------------------------------------
+
+    std::error_code GridPass::prepareWorldLighting(const PreRenderContext &context, const WorldLightingFrame &frame) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_ready and m_shader_service.isValid() and not m_content_dir.empty()
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::not_connected));
+
+        const auto inputs = lightingInputs();
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, inputs.has_value() ? std::error_code{} : inputs.error());
+
+        if (not m_world.m_lighting) {
+            m_world.m_lighting = std::make_unique<WorldLightingPass>();
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->initialize(*m_shader_service, m_content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->prepare(context, *inputs, frame));
+        return {};
+    }
+
+    std::error_code GridPass::finalizeWorldLighting(const PreRenderContext &context) {
+        if (not m_world.m_lighting) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->finalize(context));
+        return {};
+    }
+
+    std::error_code GridPass::bindWorldLighting(rhi::ShaderCursor &cursor) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_world.m_lighting ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->bind(cursor));
+        return {};
+    }
+
+    void GridPass::notifyWorldLightingSubmitted(const FenceCompletionValue value) noexcept {
+        if (m_world.m_lighting) {
+            m_world.m_lighting->notifySubmitted(value);
+        }
+    }
+
+    void GridPass::notifyWorldLightingReadSubmitted(const FenceCompletionValue value) noexcept {
+        if (m_world.m_lighting) {
+            m_world.m_lighting->notifyReadSubmitted(value);
+        }
+    }
+
+    void GridPass::discardWorldLightingUnsubmitted() noexcept {
+        if (m_world.m_lighting) {
+            m_world.m_lighting->discardUnsubmitted();
+        }
+    }
+
+    std::error_code GridPass::collectWorldLightingCompleted(const FenceCompletionValue completed) {
+        if (not m_world.m_lighting) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->collectCompleted(completed));
+        return {};
     }
 
     std::error_code GridPass::bindMaterialBuffers_(

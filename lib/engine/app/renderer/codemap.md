@@ -116,6 +116,42 @@ committed thermal table shape constants. It has no device or pass ownership.
 The shader mirrors are `assets/shaders/world_lighting_codec.slang` and
 `assets/shaders/thermal_emission.slang`.
 
+`engine.app:renderer.world_lighting_pass` is the per-world lighting owner
+(`WorldLightingPass`, `WorldLightingFrame`, `WorldLightingInputs`). One instance
+lives in `GridPass::WorldResources` with the world's resolved cells, reusable
+winner scratch and status tickets; GridPass exposes
+`prepareWorldLighting`/`finalizeWorldLighting`/`bindWorldLighting` and the
+submission/collection forwards, and no renderer or global service owns lighting
+state. `prepare` retains the exact `lighting::WorldLightingInputs` owners,
+allocates one 4 MiB resolved-cell grid and two 4 MiB uint32 scratch grids
+(`best_key`, `best_row`), then encodes four entries of
+`assets/shaders/world_lighting_projection.slang` with UAV barriers between them:
+`clearWinners` clears both grids, `reduceKeys` atomic-mins the class/distance key
+of every enabled moving solid/liquid particle, `reduceRows` atomic-mins the
+metadata-row rank of exact-key candidates, and `resolveCells` overwrites every
+cell with terrain, the selected particle's `packCell` material/temperature word,
+or zero. Gas and terrain-occupied cells never nominate; the class bit places
+transport surfaces ahead of receive-only transparency; the shared coordinate/key
+helper gives both reductions bit-identical binary32 squared distances, and the
+strictly increasing metadata order resolves exact ties by stable ID. Native cell
+coordinates come from committed hot64 positions minus the published origin; the
+exact closed maximum endpoint belongs to cell 1023 and nonfinite/outside
+positions are rejected (never clamped).
+
+Each numeric dispatch owns one 32-byte `NumericStatusRecord` in the attempt's
+32-byte-record status buffer: words 0/1 are atomic minima of the invalid-state
+and range-error index, words 2..7 stay zero. `finalize` copies the four records
+to a mapped readback buffer in the same submission; the pass polls settlement
+through `collectCompleted(FenceCompletionValue)` with no host wait, and a
+completed ticket reports `state_not_recoverable` (invalid arithmetic/state) or
+`result_out_of_range` (representational overflow) with category/stage/index/
+accepted-frame/world diagnostics. A status slot is reused only after its
+submission completed and collection consumed it; `discardUnsubmitted` releases
+definitely-unsubmitted attempts and leaves ambiguous submissions quarantined;
+`shutdown` drains and inspects outstanding tickets before reporting success.
+`bind` supplies `g_resolved_cells` and `g_numeric_status` to material and
+inspection shaders.
+
 ## Design
 
 Resident particle presentation accepts a renderer-neutral layout-v4 view with
@@ -470,7 +506,7 @@ validation requirements; user visual acceptance is separate.
   `engine.shader` (per-pass program loads), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`, `engine.app:renderer.world_lighting`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`, `engine.app:renderer.world_lighting`, `engine.app:renderer.world_lighting_pass`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -488,6 +524,8 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`
 - `App.Renderer.WorldLighting.cppm/.cpp` — published world-lighting record words, CPU interval/CH values, RGB9E5/half/AC codecs, source-material admission and retained-direction scheduled frame identity
+- `App.Renderer.WorldLightingPass.cppm/.cpp` — per-world categorical projection owner: resolved cells, two winner-scratch grids, numeric status ring, settlement and diagnostics
+- `App.Renderer.WorldLightingPass.Projection.cpp` — `encodeProjection_` clear/reduce/resolve encoding with the shared coordinate/key contract
 
 The shared contour surface is enabled for catalog sessions. GridPass uploads
 `math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;

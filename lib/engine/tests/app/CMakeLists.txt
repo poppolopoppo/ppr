@@ -60,6 +60,7 @@ target_sources(engine.tests.app
         App.MatterRuntime.Tests.cpp
         App.WorldLighting.Backend.Tests.cpp
         App.WorldLighting.Codec.Tests.cpp
+        App.WorldLighting.Projection.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -449,6 +450,32 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 set_tests_properties(engine.tests.app.world_lighting_backend_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Deterministic categorical projection and asynchronous numeric status: real
+# committed GPU particle publication plus device dispatches, so both entries
+# claim the gpu lock. The validation twin re-runs the identical group under the
+# RHI debug layers.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_projection
+    FILTER "app/world_lighting_projection/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 240
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_projection_gpu_validation
+    FILTER "app/world_lighting_projection/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 420
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_projection_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 

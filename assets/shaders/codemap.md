@@ -53,6 +53,18 @@ binding and `thermalRGB(float kelvin)` (log-spaced row interpolation, zero below
 `tests/world_lighting_codec_probe.slang` and `tests/thermal_emission_probe.slang`
 are test-only entry-point wrappers for `app/world_lighting_codec/`.
 
+`world_lighting_projection.slang` is the `WorldLightingPass` categorical
+projection: `clearWinners`, `reduceKeys`, `reduceRows` and `resolveCells` share
+one native-cell coordinate/key helper over the 1024-square domain. It reads the
+committed hot64/metadata rows and the 96-byte visible palette, atomic-mins
+class/distance keys and stable-ID metadata ranks into two uint32 scratch grids,
+and overwrites every resolved cell with terrain, the selected particle's packed
+material/temperature word, or zero. `numeric_status.slang` defines the bounded
+32-byte numeric status record (invalid-state/range-error atomic minima, reserved
+zero words) shared by every numeric-producing entry.
+`tests/world_lighting_projection_bind.slang` is the test-only reader for the
+`bind` resolved-cell/status contract.
+
 
 ## Design
 

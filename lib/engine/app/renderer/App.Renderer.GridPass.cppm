@@ -6,6 +6,7 @@ import :renderer.types;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
 import :renderer.world_lighting;
+import :renderer.world_lighting_pass;
 import :scene.camera;
 
 import engine.core;
@@ -401,6 +402,26 @@ export namespace pP {
         // pass device's single uploaded copy. The pass never resolves a hidden
         // service for these owners.
         [[nodiscard]] Expected<lighting::WorldLightingInputs> lightingInputs() const;
+
+        // ------------------------------------------------------------------
+        // world-lighting owner
+        // ------------------------------------------------------------------
+        // The projection owner lives in the active WorldResources value with
+        // its resolved cells, scratch and status tickets. These operations
+        // delegate to it on the owner lane; no renderer or global service owns
+        // world-lighting state.
+
+        [[nodiscard]] std::error_code prepareWorldLighting(
+            const PreRenderContext &context, const WorldLightingFrame &frame);
+        [[nodiscard]] std::error_code finalizeWorldLighting(const PreRenderContext &context);
+        [[nodiscard]] std::error_code bindWorldLighting(rhi::ShaderCursor &cursor) const;
+        void notifyWorldLightingSubmitted(FenceCompletionValue value) noexcept;
+        void notifyWorldLightingReadSubmitted(FenceCompletionValue value) noexcept;
+        void discardWorldLightingUnsubmitted() noexcept;
+        [[nodiscard]] std::error_code collectWorldLightingCompleted(FenceCompletionValue completed);
+        [[nodiscard]] WorldLightingPass *activeWorldLightingForTest() const noexcept {
+            return m_world.m_lighting.get();
+        }
 
         // Pure CPU planner: keeps the submissions whose tile boxes (expanded
         // by kGridCullEpsilon) intersect the snapshot frustum. Renders
@@ -1059,6 +1080,9 @@ export namespace pP {
             // Derived eight-byte source palette, built with the visible palette
             // from the same admitted catalog version.
             rhi::ComPtr<rhi::IBuffer> m_source_materials{};
+            // This world's categorical projection owner: resolved cells,
+            // reusable winner scratch and numeric status tickets.
+            std::unique_ptr<WorldLightingPass> m_lighting{};
             // World-owned full-domain packed terrain input (material16 + half Kelvin).
             // GPU copies from the fenced staging ring below target this buffer;
             // CPU code never writes GPU-readable device memory directly.

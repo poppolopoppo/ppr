@@ -1,0 +1,194 @@
+module;
+#include "pP/Macros.h"
+export module engine.app:renderer.world_lighting_pass;
+
+import :renderer.frame_fence;
+import :renderer.types;
+import :renderer.world_lighting;
+
+import engine.core;
+import engine.math;
+import engine.rhi;
+import engine.shader;
+import std;
+
+export namespace pP {
+    PPR_DECLARE_LOG_CATEGORY(WorldLightingPass)
+
+    // ------------------------------------------------------------------
+    // owned world-lighting owner values
+    // ------------------------------------------------------------------
+
+    // One accepted lighting attempt's input values. The projection is
+    // camera-free and time-independent; the transport stage consumes the
+    // frame's active elapsed time and selected sky hour.
+    struct WorldLightingFrame {
+        TimeSpan m_active_elapsed{};
+        i32 m_sky_hour{-1};
+    };
+
+    // ------------------------------------------------------------------
+    // numeric status records
+    // ------------------------------------------------------------------
+    // Byte-identical to assets/shaders/numeric_status.slang. One record per
+    // numeric-producing dispatch/draw in its in-flight attempt's status buffer.
+    // UINT32_MAX means "no failure"; the engine never writes a failure through
+    // a compound payload or a nondeterministic first-error-thread choice.
+    inline constexpr u32 kNumericStatusWords = 8u;
+    inline constexpr u32 kNumericStatusRecords = 4u;
+    inline constexpr u32 kNoNumericIndex = 0xffff'ffffu;
+
+    enum class ENumericStatusCategory : u32 {
+        invalid_state = 0u,
+        range_error = 1u,
+    };
+
+    struct NumericStatusRecord {
+        u32 m_invalid_index{kNoNumericIndex};
+        u32 m_range_index{kNoNumericIndex};
+        u32 m_reserved[6]{};
+    };
+
+    static_assert(sizeof(NumericStatusRecord) == 32u and alignof(NumericStatusRecord) == 4u);
+    static_assert(
+        PPR_OFFSETOF(NumericStatusRecord, m_invalid_index) == 0u and
+        PPR_OFFSETOF(NumericStatusRecord, m_range_index) == 4u and
+        PPR_OFFSETOF(NumericStatusRecord, m_reserved) == 8u);
+    static_assert(std::is_standard_layout_v<NumericStatusRecord> and std::is_trivially_copyable_v<NumericStatusRecord>);
+
+    class WorldLightingPass {
+    public:
+        // Native projection domain: one resolved u32 per cell, row-major.
+        static constexpr u32 kWorldEdge{1024u};
+        static constexpr u32 kCellCount{kWorldEdge * kWorldEdge};
+        static constexpr u32 kResolvedCellBytes{kCellCount * sizeof(u32)};
+        static constexpr u32 kScratchGridBytes{kResolvedCellBytes};
+
+        // Fixed numeric entry order; the index doubles as the status record
+        // index and the CPU ticket's pass/level.
+        static constexpr u32 kNumericDispatchCount{kNumericStatusRecords};
+        static constexpr u32 kStatusRingSize{kFrameRingSlots};
+        static constexpr u32 kStatusAttemptBytes{kNumericStatusRecords * sizeof(NumericStatusRecord)};
+
+        WorldLightingPass() = default;
+        WorldLightingPass(const WorldLightingPass &) = delete;
+        WorldLightingPass &operator=(const WorldLightingPass &) = delete;
+        ~WorldLightingPass();
+
+        // Loads the projection shader entries and creates their compute
+        // pipelines. Idempotent for one device/shader generation.
+        [[nodiscard]] std::error_code initialize(IShaderService &shaders, const std::filesystem::path &root);
+
+        // Retains the exact input owners for this attempt, allocates the
+        // world's resolved cells, and encodes clearWinners, reduceKeys,
+        // reduceRows and resolveCells. Ring exhaustion is ordinary
+        // non-admission: no pending status slot is overwritten.
+        [[nodiscard]] std::error_code prepare(
+            const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
+            const WorldLightingFrame &frame);
+
+        // Binds the current resolved cells and numeric status for material and
+        // inspection shaders. The cursor names are owner-private.
+        [[nodiscard]] std::error_code bind(rhi::ShaderCursor &cursor) const;
+
+        // Encodes the stage-end copy of this attempt's status records into its
+        // completion-fenced readback storage. Called in the same submission,
+        // immediately after the projection dispatches.
+        [[nodiscard]] std::error_code finalize(const PreRenderContext &context);
+
+        // Accepted submission: the attempt's write and status-copy fences.
+        void notifySubmitted(FenceCompletionValue value) noexcept;
+        // Stage-C diagnostic readers extend the attempt's retention.
+        void notifyReadSubmitted(FenceCompletionValue value) noexcept;
+
+        // Definitely-unsubmitted attempts release their slot; a submission
+        // whose completion is unknown stays quarantined (never released).
+        void discardUnsubmitted() noexcept;
+
+        // Inspects every attempt whose submission completed at or below
+        // `completed`. A completed failure stops further admission by returning
+        // result_out_of_range (representational overflow) or
+        // state_not_recoverable (invalid GPU arithmetic/state) after recording
+        // category/index/frame diagnostics.
+        [[nodiscard]] std::error_code collectCompleted(FenceCompletionValue completed);
+
+        // Teardown: drains and inspects outstanding tickets. A pending or
+        // failed attempt is reported instead of a successful teardown.
+        [[nodiscard]] std::error_code shutdown();
+        void notifyDeviceLost() noexcept;
+
+        // ------------------------------------------------------------------
+        // tests-only observations
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] rhi::IBuffer *resolvedCellsForTest() const noexcept;
+        [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> winnerGridsForTest() const noexcept;
+        // Mapped 4-record status readback of the armed attempt, or empty when
+        // no attempt is armed. Used to observe minima and inject range faults.
+        [[nodiscard]] std::span<u32> pendingStatusWordsForTest() noexcept;
+        [[nodiscard]] u32 statusSlotCountForTest() const noexcept {
+            return kStatusRingSize;
+        }
+        [[nodiscard]] bool statusSlotPendingForTest(u32 slot) const noexcept;
+        [[nodiscard]] bool statusSlotSubmittedForTest(u32 slot) const noexcept;
+        [[nodiscard]] bool statusSlotConsumedForTest(u32 slot) const noexcept;
+        [[nodiscard]] u32 acceptedAttemptsForTest() const noexcept;
+
+    private:
+        // ------------------------------------------------------------------
+        // projection ownership
+        // ------------------------------------------------------------------
+
+        struct ProjectionProgram {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
+        };
+
+        // One in-flight attempt's status storage and exact input owners. The
+        // slot is reusable only after its submission completed AND collection
+        // consumed it.
+        struct ProjectionStatusSlot {
+            rhi::ComPtr<rhi::IBuffer> m_status{};
+            rhi::ComPtr<rhi::IBuffer> m_readback{};
+            lighting::WorldLightingInputs m_inputs{};
+            void *m_readback_mapped{};
+            FenceCompletionValue m_submission{kFenceValueNone};
+            FenceCompletionValue m_read_submission{kFenceValueNone};
+            u64 m_world_generation{};
+            u64 m_accepted_frame{};
+            bool m_pending{};
+            bool m_copy_encoded{};
+            bool m_consumed{true};
+        };
+
+        struct ProjectionResources {
+            std::array<rhi::ComPtr<rhi::IBuffer>, 2u> m_scratch{};
+            rhi::ComPtr<rhi::IBuffer> m_resolved{};
+            // One zero metadata row keeps the constant resolve binding valid for
+            // a zero-particle world without inventing a publication.
+            rhi::ComPtr<rhi::IBuffer> m_empty_metadata{};
+            std::array<ProjectionProgram, kNumericDispatchCount> m_programs{};
+            std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kNumericDispatchCount> m_roots{};
+            std::array<ProjectionStatusSlot, kStatusRingSize> m_status{};
+            GridWorldIdentity m_world{};
+            u64 m_accepted_attempts{};
+            u64 m_attempt_sequence{};
+            u32 m_status_cursor{};
+            u32 m_attempt_slot{};
+            bool m_armed{};
+        };
+
+        [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code selectStatusSlot_(FenceCompletionValue completed) noexcept;
+        [[nodiscard]] std::error_code encodeProjection_(const PreRenderContext &context);
+        [[nodiscard]] std::error_code inspectAttempt_(ProjectionStatusSlot &slot);
+        void clearAttempt_(ProjectionStatusSlot &slot) noexcept;
+        void releaseResources_() noexcept;
+
+        safe_ptr<IShaderService> m_shaders{};
+        std::filesystem::path m_root{};
+        rhi::IDevice *m_device{};
+        std::unique_ptr<ProjectionResources> m_resources{};
+        bool m_ready{};
+    };
+}
