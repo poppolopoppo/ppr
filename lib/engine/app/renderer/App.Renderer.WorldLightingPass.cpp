@@ -66,6 +66,9 @@ namespace pP {
         constexpr std::array<const char *, WorldLightingPass::kNumericDispatchCount> kProjectionStageNames{
             "clear_winners", "reduce_keys", "reduce_rows", "resolve_cells"};
 
+        constexpr std::array<const char *, WorldLightingPass::kTransportEntryCount> kTransportEntries{
+            "buildVisibility", "buildJump"};
+
         std::error_code validateProjectionInputs(const lighting::WorldLightingInputs &inputs) {
             // Only the resources these dispatches bind are required. The source
             // palette and thermal table belong to the later source/transport
@@ -173,6 +176,43 @@ namespace pP {
             m_resources->m_programs[entry] = std::move(programs[entry]);
         }
 
+        // Full-domain acceleration entries build both visibility levels and the
+        // per-cell jump table from the resolved cells and authored palette.
+        shader::SharedModule transport_module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, shaders.loadModuleFromFile(
+                                   root / "shaders" / "world_lighting_visibility.slang", "world_lighting_visibility",
+                                   transport_module.writeRef()));
+
+        std::array<ProjectionProgram, kTransportEntryCount> transport_programs{};
+        for (u32 entry = 0u; entry < kTransportEntryCount; ++entry) {
+            shader::ComPtr<slang::IEntryPoint> point{};
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, transport_module->findEntryPointByName(kTransportEntries[entry], point.writeRef()));
+
+            slang::IComponentType *entry_points[]{point.get()};
+            rhi::ShaderProgramDesc description{};
+            description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            description.slangGlobalScope = transport_module.get();
+            description.slangEntryPoints = entry_points;
+            description.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass,
+                device.createShaderProgram(
+                    description, transport_programs[entry].m_program.writeRef(), diagnostics.writeRef()));
+
+            rhi::ComputePipelineDesc pipeline{};
+            pipeline.program = transport_programs[entry].m_program;
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass,
+                device.createComputePipeline(pipeline, transport_programs[entry].m_pipeline.writeRef()));
+        }
+
+        for (u32 entry = 0u; entry < kTransportEntryCount; ++entry) {
+            m_resources->m_transport_programs[entry] = std::move(transport_programs[entry]);
+        }
+
         m_ready = true;
         PPR_LOG(WorldLightingPass, info, "WorldLightingPass initialized");
         return {};
@@ -189,7 +229,7 @@ namespace pP {
         m_device = &device;
         auto &resources = *m_resources;
         if (resources.m_resolved) {
-            return {};
+            return ensureTransportResources_(device);
         }
 
         const std::array<NumericStatusRecord, kNumericStatusRecords> initial_status{};
@@ -234,7 +274,7 @@ namespace pP {
             }
         }
 
-        return {};
+        return ensureTransportResources_(device);
     }
 
     void WorldLightingPass::releaseResources_() noexcept {
@@ -328,6 +368,14 @@ namespace pP {
         if (auto encoding = encodeProjection_(context); encoding) {
             // Encoding failed before any submission: release the armed slot so
             // a frame that never reached the GPU leaves no pending ticket.
+            discardUnsubmitted();
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
+        }
+
+        // The resolved cells are now ordered before the visibility read, and the
+        // visibility write is ordered before the jump read and the later trace
+        // readers inside the same encoder.
+        if (auto encoding = encodeAcceleration_(context); encoding) {
             discardUnsubmitted();
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, encoding);
         }
@@ -535,6 +583,22 @@ namespace pP {
 
     rhi::IBuffer *WorldLightingPass::resolvedCellsForTest() const noexcept {
         return m_resources ? m_resources->m_resolved.get() : nullptr;
+    }
+
+    rhi::IBuffer *WorldLightingPass::accelerationVisibilityForTest() const noexcept {
+        if (not m_resources) {
+            return nullptr;
+        }
+
+        return m_resources->m_status[m_resources->m_attempt_slot].m_visibility.get();
+    }
+
+    rhi::ITexture *WorldLightingPass::accelerationJumpForTest() const noexcept {
+        if (not m_resources) {
+            return nullptr;
+        }
+
+        return m_resources->m_status[m_resources->m_attempt_slot].m_jump.get();
     }
 
     std::span<u32> WorldLightingPass::pendingStatusWordsForTest() noexcept {

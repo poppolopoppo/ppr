@@ -59,6 +59,12 @@ export namespace pP {
         static constexpr u32 kResolvedCellBytes{kCellCount * sizeof(u32)};
         static constexpr u32 kScratchGridBytes{kResolvedCellBytes};
 
+        // Full-domain acceleration: three visibility levels in one structured
+        // uint2 buffer (stride 8) and one R8_UINT jump texel per native cell.
+        static constexpr u32 kVisibilityRecordCount{lighting::kVisibilityRecordCount};
+        static constexpr u64 kVisibilityBufferBytes{lighting::kVisibilityBufferBytes};
+        static constexpr u32 kTransportEntryCount{2u};
+
         // Fixed numeric entry order; the index doubles as the status record
         // index and the CPU ticket's pass/level.
         static constexpr u32 kNumericDispatchCount{kNumericStatusRecords};
@@ -70,16 +76,17 @@ export namespace pP {
         WorldLightingPass &operator=(const WorldLightingPass &) = delete;
         ~WorldLightingPass();
 
-        // Loads the projection shader entries and creates their compute
-        // pipelines. Idempotent for one device/shader generation.
+        // Loads the projection and acceleration shader entries and creates
+        // their compute pipelines. Idempotent for one device/shader generation.
         [[nodiscard]] std::error_code initialize(IShaderService &shaders, const std::filesystem::path &root);
 
         // Retains the exact input owners for this attempt, allocates the
         // world's resolved cells, and encodes clearWinners, reduceKeys,
-        // reduceRows and resolveCells. Ring exhaustion is ordinary
-        // non-admission: no pending status slot is overwritten. A second
-        // prepare before the armed attempt is submitted or discarded is
-        // rejected (operation_not_permitted) without touching that attempt.
+        // reduceRows, resolveCells and the full-domain acceleration rebuild.
+        // Ring exhaustion is ordinary non-admission: no pending status slot is
+        // overwritten. A second prepare before the armed attempt is submitted
+        // or discarded is rejected (operation_not_permitted) without touching
+        // that attempt.
         [[nodiscard]] std::error_code prepare(
             const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
             const WorldLightingFrame &frame);
@@ -119,6 +126,11 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         [[nodiscard]] rhi::IBuffer *resolvedCellsForTest() const noexcept;
+        // Current attempt slot's visibility masks and jump table. They are
+        // allocated per slot, so a snapshot stays readable after a later
+        // attempt selects another slot.
+        [[nodiscard]] rhi::IBuffer *accelerationVisibilityForTest() const noexcept;
+        [[nodiscard]] rhi::ITexture *accelerationJumpForTest() const noexcept;
         // Mapped 4-record status readback of the last armed attempt, or empty
         // when no attempt was armed. Used to observe minima and inject range
         // faults.
@@ -142,6 +154,11 @@ export namespace pP {
         struct ProjectionStatusSlot {
             rhi::ComPtr<rhi::IBuffer> m_status{};
             rhi::ComPtr<rhi::IBuffer> m_readback{};
+            // Per-slot acceleration storage. A slot is reused only after its
+            // submission (and any read) completed, so the previous trace readers
+            // precede these next writers without a host wait.
+            rhi::ComPtr<rhi::IBuffer> m_visibility{};
+            rhi::ComPtr<rhi::ITexture> m_jump{};
             lighting::WorldLightingInputs m_inputs{};
             void *m_readback_mapped{};
             FenceCompletionValue m_submission{kFenceValueNone};
@@ -160,6 +177,9 @@ export namespace pP {
             rhi::ComPtr<rhi::IBuffer> m_empty_metadata{};
             std::array<ProjectionProgram, kNumericDispatchCount> m_programs{};
             std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kNumericDispatchCount> m_roots{};
+            std::array<ProjectionProgram, kTransportEntryCount> m_transport_programs{};
+            std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kTransportEntryCount>
+                m_transport_roots{};
             std::array<ProjectionStatusSlot, kStatusRingSize> m_status{};
             GridWorldIdentity m_world{};
             u64 m_accepted_attempts{};
@@ -170,8 +190,10 @@ export namespace pP {
         };
 
         [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code ensureTransportResources_(rhi::IDevice &device);
         [[nodiscard]] std::error_code selectStatusSlot_(FenceCompletionValue completed) noexcept;
         [[nodiscard]] std::error_code encodeProjection_(const PreRenderContext &context);
+        [[nodiscard]] std::error_code encodeAcceleration_(const PreRenderContext &context);
         [[nodiscard]] std::error_code inspectAttempt_(ProjectionStatusSlot &slot);
         void clearAttempt_(ProjectionStatusSlot &slot) noexcept;
         void releaseResources_() noexcept;

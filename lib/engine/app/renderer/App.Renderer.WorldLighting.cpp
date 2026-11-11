@@ -363,4 +363,125 @@ namespace pP::lighting {
 
         return accepted_frame - age;
     }
+
+    // ------------------------------------------------------------------
+    // native-cell traversal reference
+    // ------------------------------------------------------------------
+
+    std::optional<u32> traceNativeCellDDA(
+        const std::span<const u8> occupancy, const u32 edge, const float2 start, const float2 end) noexcept {
+        if (edge == 0u or occupancy.size() < static_cast<std::size_t>(edge) * edge) {
+            return std::nullopt;
+        }
+
+        if (not std::isfinite(start.x) or
+            not std::isfinite(start.y) or
+            not std::isfinite(end.x) or
+            not std::isfinite(end.y)) {
+            return std::nullopt;
+        }
+
+        const float2 delta{end.x - start.x, end.y - start.y};
+        if (not std::isfinite(delta.x) or not std::isfinite(delta.y)) {
+            return std::nullopt;
+        }
+
+        // A zero-length segment is a point, not a positive-length intersection.
+        if (delta.x == 0.0f and delta.y == 0.0f) {
+            return std::nullopt;
+        }
+
+        // Slab-clip the finite segment to [0, edge) in both axes. A zero
+        // direction component is a parallel slab: it either lies inside the
+        // domain on that axis or the whole segment is exterior.
+        const float edge_extent = static_cast<float>(edge);
+        float enter = 0.0f;
+        float exit = 1.0f;
+        for (const u32 axis: {0u, 1u}) {
+            const float origin = axis == 0u ? start.x : start.y;
+            const float direction = axis == 0u ? delta.x : delta.y;
+            if (direction == 0.0f) {
+                if (origin < 0.0f or origin >= edge_extent) {
+                    return std::nullopt;
+                }
+
+                continue;
+            }
+
+            const float lower = (0.0f - origin) / direction;
+            const float upper = (edge_extent - origin) / direction;
+            enter = (std::max) (enter, (std::min) (lower, upper));
+            exit = (std::min) (exit, (std::max) (lower, upper));
+        }
+
+        if (not (exit > enter)) {
+            return std::nullopt;
+        }
+
+        // Select the cell entered at the clipped start: an exact boundary uses
+        // the ray direction, while a parallel component keeps the upper cell.
+        const auto entered_cell = [](const float position, const float direction) noexcept -> i32 {
+            i32 cell = static_cast<i32>(std::floor(position));
+            if (position == static_cast<float>(cell) and direction < 0.0f) {
+                --cell;
+            }
+
+            return cell;
+        };
+
+        const float2 clipped{start.x + enter * delta.x, start.y + enter * delta.y};
+        i32 cell_x = entered_cell(clipped.x, delta.x);
+        i32 cell_y = entered_cell(clipped.y, delta.y);
+        const auto cell_in_range = [edge](const i32 value) noexcept {
+            return value >= 0 and value < static_cast<i32>(edge);
+        };
+        if (not cell_in_range(cell_x) or not cell_in_range(cell_y)) {
+            return std::nullopt;
+        }
+
+        float previous = enter;
+        for (;;) {
+            const u32 cell = static_cast<u32>(cell_y) * edge + static_cast<u32>(cell_x);
+            if (occupancy[cell] != 0u) {
+                return cell;
+            }
+
+            // Next face parameters are rebuilt from the original ray so no
+            // accumulated position nudge can drift the traversal.
+            const float next_x = delta.x > 0.0f   ? (static_cast<float>(cell_x + 1) - start.x) / delta.x
+                                 : delta.x < 0.0f ? (static_cast<float>(cell_x) - start.x) / delta.x
+                                                  : std::numeric_limits<float>::infinity();
+            const float next_y = delta.y > 0.0f   ? (static_cast<float>(cell_y + 1) - start.y) / delta.y
+                                 : delta.y < 0.0f ? (static_cast<float>(cell_y) - start.y) / delta.y
+                                                  : std::numeric_limits<float>::infinity();
+            const float next = (std::min) (next_x, next_y);
+
+            // A nonfinite or non-advancing crossing is a traversal failure, not
+            // a clear interval.
+            if (not std::isfinite(next) or next <= previous) {
+                return std::nullopt;
+            }
+
+            // A crossing at the clipped end (including t=1) belongs to the
+            // following segment and is excluded.
+            if (next >= exit) {
+                return std::nullopt;
+            }
+
+            if (next_x < next_y) {
+                cell_x += delta.x > 0.0f ? 1 : -1;
+            } else if (next_y < next_x) {
+                cell_y += delta.y > 0.0f ? 1 : -1;
+            } else {
+                cell_x += delta.x > 0.0f ? 1 : -1;
+                cell_y += delta.y > 0.0f ? 1 : -1;
+            }
+
+            if (not cell_in_range(cell_x) or not cell_in_range(cell_y)) {
+                return std::nullopt;
+            }
+
+            previous = next;
+        }
+    }
 }

@@ -50,6 +50,71 @@ export namespace pP::lighting {
         std::is_trivially_copyable_v<SourceMaterial>);
 
     // ------------------------------------------------------------------
+    // full-domain visibility records
+    // ------------------------------------------------------------------
+    // One 8-byte record holds an 8x8 occupancy mask. Levels 0/1/2 cover
+    // native, 2x2 and 4x4 cells per bit, so a native cell's level-l bit is at
+    // `((x >> l) % 8) + 8*((y >> l) % 8)`. Level record offsets and row pitches
+    // are the shared CPU/GPU addressing contract for one structured uint2
+    // buffer with stride 8 (172,032 bytes).
+    inline constexpr u32 kLightingEdge{1024u};
+    inline constexpr std::array<u32, 3u> kVisibilityLevelOffsets{0u, 16'384u, 20'480u};
+    inline constexpr std::array<u32, 3u> kVisibilityLevelPitches{128u, 64u, 32u};
+    inline constexpr u32 kVisibilityRecordCount{21'504u};
+    inline constexpr u64 kVisibilityBufferBytes{172'032u};
+    static_assert(
+        kVisibilityRecordCount == (kLightingEdge / 8u) * (kLightingEdge / 8u) +
+                                      (kLightingEdge / 16u) * (kLightingEdge / 16u) +
+                                      (kLightingEdge / 32u) * (kLightingEdge / 32u));
+    static_assert(kVisibilityRecordCount * 8u == kVisibilityBufferBytes);
+
+    struct VisibilityRecord {
+        u32 m_low{};
+        u32 m_high{};
+    };
+
+    static_assert(sizeof(VisibilityRecord) == 8u and alignof(VisibilityRecord) == 4u);
+    static_assert(PPR_OFFSETOF(VisibilityRecord, m_low) == 0u and PPR_OFFSETOF(VisibilityRecord, m_high) == 4u);
+
+    [[nodiscard]] constexpr bool visibilityBit(const VisibilityRecord record, const u32 bit) noexcept {
+        return ((bit < 32u ? record.m_low : record.m_high) & (1u << (bit & 31u))) != 0u;
+    }
+
+    [[nodiscard]] constexpr u32 visibilityRecordIndex(
+        const u32 level, const u32 record_x, const u32 record_y) noexcept {
+        return kVisibilityLevelOffsets[level] + record_y * kVisibilityLevelPitches[level] + record_x;
+    }
+
+    // ------------------------------------------------------------------
+    // categorical occupancy and native-cell traversal reference
+    // ------------------------------------------------------------------
+    // The visible palette marks optical-blend (receive-only) surfaces with bit
+    // 0. A receive-only surface with no authored emission is transparent to
+    // transport; material zero is empty and every other resolved material is
+    // opaque regardless of brightness or emission.
+    inline constexpr u32 kOpticalBlendSurfaceFlag{1u};
+
+    [[nodiscard]] constexpr bool receiveOnlyCell(const u32 surface_flags, const float emissive_strength) noexcept {
+        return (surface_flags & kOpticalBlendSurfaceFlag) != 0u and emissive_strength == 0.0f;
+    }
+
+    [[nodiscard]] constexpr bool resolvedCellOccupied(const u32 resolved, const bool receive_only) noexcept {
+        return (resolved & 0xffffu) != 0u and not receive_only;
+    }
+
+    // Simple positive-length native-cell DDA over a classified occupancy grid.
+    // Returns the first occupied cell with a positive-length intersection, or
+    // nullopt for a clear, point-only, zero-length, nonfinite or non-advancing
+    // reference segment. This is the test oracle: it never consults the GPU jump
+    // table, and the GPU path reports the corresponding numeric failure through
+    // the shared status record. Exact grid boundaries select the cell entered by
+    // the direction, exact corners advance both axes and a crossing at t=1 is
+    // excluded. A zero direction component on an exact boundary keeps the upper
+    // (`floor`) cell.
+    [[nodiscard]] std::optional<u32> traceNativeCellDDA(
+        std::span<const u8> occupancy, u32 edge, float2 start, float2 end) noexcept;
+
+    // ------------------------------------------------------------------
     // CPU math values
     // ------------------------------------------------------------------
 

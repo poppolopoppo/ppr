@@ -65,6 +65,20 @@ zero words) shared by every numeric-producing entry.
 `tests/world_lighting_projection_bind.slang` is the test-only reader for the
 `bind` resolved-cell/status contract.
 
+`world_lighting_visibility.slang` owns the two full-domain acceleration entries.
+`buildVisibility` (16x16 threads, 32x32 groups) tile-reduces one 32x32 native
+tile per group with 160 bytes of shared storage and writes the three levels of a
+single 21,504-record uint2 buffer; `buildJump` (16x16 threads, 64x64 groups)
+selects the largest aligned empty square per native cell and writes one R8_UINT
+texel. `world_lighting_trace.slang` is the shared include-only segment tracer
+with slab clipping, aligned-block jump advance, resolved classification and the
+cached per-cell source; `traceSegment(start, end)` is the common helper and
+`traceSegmentDetailed` carries the owning invocation and status record.
+`tests/world_lighting_trace_probe.slang` is the test-only batch probe. The
+`world_lighting_codec.slang` mirror now also owns the 96-byte `TerrainVisual`
+classification row and `resolvedCellOccupied`, shared by projection,
+acceleration and tracing.
+
 
 ## Design
 

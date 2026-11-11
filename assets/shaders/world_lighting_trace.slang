@@ -1,0 +1,190 @@
+// ------------------------------------------------------------------
+// common slab-clipped segment tracer
+// ------------------------------------------------------------------
+// One helper traces every near, coarse and fine finite segment. It reads the
+// resolved categorical classification, the R8 jump table and the cached
+// per-cell source; it never consults camera state or a retained history field.
+// The caller owns the fine connector's explicit 0.001-cell origin offset.
+#include "world_lighting_codec.slang"
+#include "numeric_status.slang"
+
+static const uint kTraceEdge = 1024u;
+static const float kTraceFar = 3.402823466e+38;
+
+StructuredBuffer<uint> g_resolved_cells;
+StructuredBuffer<TerrainVisual> g_visuals;
+[format("r8ui")] Texture2D<uint> g_jump;
+// One RGB9E5 outgoing-radiance word per native cell. Source preparation owns
+// the producer; tracing only decodes the cache.
+StructuredBuffer<uint> g_cell_source;
+
+// One traced segment's decoded interval and the hit native cell (0xFFFFFFFF on
+// a miss or numeric failure). Production tracing uses
+// traceSegmentDetailed(start, end, owning_invocation, status_record) so a
+// traversal failure reports the coarse/fine invocation that owns it.
+struct SegmentHit {
+    Interval m_interval;
+    uint m_cell;
+};
+
+// ------------------------------------------------------------------
+// containment and boundary helpers
+// ------------------------------------------------------------------
+
+// A numeric failure is not a clear interval: the status record reports the
+// owning invocation and the returned value is the finite zero result.
+SegmentHit traceFailure(uint invocation, uint status_record) {
+    numericRecordFailure(status_record, kNumericInvalidState, invocation);
+
+    SegmentHit failure;
+    failure.m_interval.m_radiance = float3(0.0, 0.0, 0.0);
+    failure.m_interval.m_transmittance = 0.0;
+    failure.m_cell = 0xffffffffu;
+    return failure;
+}
+
+SegmentHit traceClear() {
+    SegmentHit clear;
+    clear.m_interval.m_radiance = float3(0.0, 0.0, 0.0);
+    clear.m_interval.m_transmittance = 1.0;
+    clear.m_cell = 0xffffffffu;
+    return clear;
+}
+
+// An exact grid boundary selects the cell entered by the ray direction; a
+// parallel component keeps the upper (floor) cell.
+int2 traceEnteredCell(float2 position, float2 direction) {
+    int2 cell = int2(floor(position));
+    if (position.x == float(cell.x) && direction.x < 0.0) --cell.x;
+    if (position.y == float(cell.y) && direction.y < 0.0) --cell.y;
+    return cell;
+}
+
+// ------------------------------------------------------------------
+// finite segment traversal
+// ------------------------------------------------------------------
+SegmentHit traceSegmentDetailed(float2 start, float2 end, uint invocation, uint status_record) {
+    if (!all(isfinite(start)) || !all(isfinite(end))) return traceFailure(invocation, status_record);
+
+    float2 delta = end - start;
+    if (!all(isfinite(delta))) return traceFailure(invocation, status_record);
+
+    // A zero-length segment is a point, not a positive-length intersection.
+    if (delta.x == 0.0 && delta.y == 0.0) return traceClear();
+
+    // Slab-clip to [0, 1024) in both axes. A zero direction component is a
+    // parallel slab: no epsilon perturbation and no 0*infinity.
+    float enter = 0.0;
+    float exit = 1.0;
+    if (delta.x == 0.0) {
+        if (start.x < 0.0 || start.x >= float(kTraceEdge)) return traceClear();
+    } else {
+        float lower = (0.0 - start.x) / delta.x;
+        float upper = (float(kTraceEdge) - start.x) / delta.x;
+        enter = max(enter, min(lower, upper));
+        exit = min(exit, max(lower, upper));
+    }
+
+    if (delta.y == 0.0) {
+        if (start.y < 0.0 || start.y >= float(kTraceEdge)) return traceClear();
+    } else {
+        float lower = (0.0 - start.y) / delta.y;
+        float upper = (float(kTraceEdge) - start.y) / delta.y;
+        enter = max(enter, min(lower, upper));
+        exit = min(exit, max(lower, upper));
+    }
+
+    if (!(exit > enter)) return traceClear();
+
+    float2 clipped = start + enter * delta;
+    int2 cell = traceEnteredCell(clipped, delta);
+    if (cell.x < 0 || cell.y < 0 || cell.x >= int(kTraceEdge) || cell.y >= int(kTraceEdge)) return traceClear();
+
+    float previous = enter;
+    while (true) {
+        uint cell_index = uint(cell.y) * kTraceEdge + uint(cell.x);
+        uint resolved = g_resolved_cells[cell_index];
+        uint material = resolved & 0xffffu;
+        TerrainVisual visual = g_visuals[material];
+        bool occupied = resolvedCellOccupied(resolved, visual);
+
+        uint jump = g_jump[cell];
+        if (jump == 0u || occupied) {
+            // Decoded current source with zero transmittance, independent of
+            // source brightness (a black source still stops the path).
+            SegmentHit hit;
+            hit.m_interval.m_radiance = unpackRGB9E5(g_cell_source[cell_index]);
+            hit.m_interval.m_transmittance = 0.0;
+            hit.m_cell = cell_index;
+            return hit;
+        }
+
+        // Next face parameters are rebuilt from the original ray. A positive
+        // jump advances only to the next exiting face of its aligned block,
+        // never by the jump value as unconstrained travel.
+        float next_x = kTraceFar;
+        float next_y = kTraceFar;
+        if (jump <= 1u) {
+            if (delta.x > 0.0) next_x = (float(cell.x + 1) - start.x) / delta.x;
+            else if (delta.x < 0.0) next_x = (float(cell.x) - start.x) / delta.x;
+            if (delta.y > 0.0) next_y = (float(cell.y + 1) - start.y) / delta.y;
+            else if (delta.y < 0.0) next_y = (float(cell.y) - start.y) / delta.y;
+        } else {
+            int size = int(jump);
+            int2 base = (cell / size) * size;
+            if (delta.x > 0.0) next_x = (float(base.x + size) - start.x) / delta.x;
+            else if (delta.x < 0.0) next_x = (float(base.x) - start.x) / delta.x;
+            if (delta.y > 0.0) next_y = (float(base.y + size) - start.y) / delta.y;
+            else if (delta.y < 0.0) next_y = (float(base.y) - start.y) / delta.y;
+        }
+
+        float next = min(next_x, next_y);
+        int2 entered = cell;
+        if (jump <= 1u) {
+            if (next_x < next_y) entered.x += delta.x > 0.0 ? 1 : -1;
+            else if (next_y < next_x) entered.y += delta.y > 0.0 ? 1 : -1;
+            else {
+                entered.x += delta.x > 0.0 ? 1 : -1;
+                entered.y += delta.y > 0.0 ? 1 : -1;
+            }
+        } else {
+            // A jump crossing an aligned block face advances the crossed axis
+            // exactly; the other coordinate is the cell entered at the crossing
+            // point, which may differ from the cell the ray occupied when the
+            // jump began.
+            int size = int(jump);
+            int2 base = (cell / size) * size;
+            int2 crossing = traceEnteredCell(start + next * delta, delta);
+            if (next_x < next_y) {
+                entered.x = delta.x > 0.0 ? base.x + size : base.x - 1;
+                entered.y = crossing.y;
+            } else if (next_y < next_x) {
+                entered.y = delta.y > 0.0 ? base.y + size : base.y - 1;
+                entered.x = crossing.x;
+            } else {
+                entered.x = delta.x > 0.0 ? base.x + size : base.x - 1;
+                entered.y = delta.y > 0.0 ? base.y + size : base.y - 1;
+            }
+        }
+
+        // Nonfinite arithmetic or failure to make geometric progress is a
+        // numeric failure, never a clear interval or a step-budget miss. A
+        // crossing at the clipped end (including t=1) belongs to the following
+        // segment and is excluded.
+        if (!isfinite(next) || next <= previous) return traceFailure(invocation, status_record);
+        if (next >= exit) return traceClear();
+
+        if (entered.x < 0 || entered.y < 0 || entered.x >= int(kTraceEdge) || entered.y >= int(kTraceEdge)) {
+            return traceClear();
+        }
+
+        previous = next;
+        cell = entered;
+    }
+}
+
+// The shared helper: the caller that owns numeric diagnostics uses the
+// detailed form with its own invocation index and status record.
+Interval traceSegment(float2 start, float2 end) {
+    return traceSegmentDetailed(start, end, 0u, 0u).m_interval;
+}

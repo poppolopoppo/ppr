@@ -107,6 +107,7 @@ target_sources(engine.app
         renderer/App.Renderer.WorldLighting.cpp
         renderer/App.Renderer.WorldLightingPass.cpp
         renderer/App.Renderer.WorldLightingPass.Projection.cpp
+        renderer/App.Renderer.WorldLightingPass.Transport.cpp
 
         scene/App.Scene.Camera.cpp
         scene/App.Scene.Camera.Controller.cpp

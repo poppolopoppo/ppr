@@ -107,6 +107,8 @@ namespace pP::tests {
 
     const UnitTest &world_lighting_projectionTests() noexcept;
 
+    const UnitTest &world_lighting_traceTests() noexcept;
+
     // ------------------------------------------------------------------
     // application suite
     // ------------------------------------------------------------------
@@ -165,6 +167,7 @@ namespace pP::tests {
             world_lighting_backendTests(),
             world_lighting_codecTests(),
             world_lighting_projectionTests(),
+            world_lighting_traceTests(),
         });
     };
 } // namespace pP::tests

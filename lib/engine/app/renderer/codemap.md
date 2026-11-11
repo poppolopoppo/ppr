@@ -138,6 +138,21 @@ coordinates come from committed hot64 positions minus the published origin; the
 exact closed maximum endpoint belongs to cell 1023 and nonfinite/outside
 positions are rejected (never clamped).
 
+`App.Renderer.WorldLightingPass.Transport.cpp` then rebuilds the full domain
+with two dispatches over the resolved cells and the admitted visible palette:
+`buildVisibility` (32x32 groups, 256 threads) owns one 32x32 native tile per
+group, ORs occupancy into 160 bytes of group-shared storage and writes the
+three levels of one 21,504-record structured uint2 buffer (stride 8, 172,032
+bytes, level offsets `{0,16384,20480}`, pitches `{128,64,32}`); `buildJump`
+(64x64 groups) reads at most three masks per native cell and writes one
+`R8Uint` texel. Both dispatches run over reused per-attempt-slot allocations
+with ordered resolved-write -> visibility-read -> jump-write -> trace-read
+dependencies and no host wait, per-frame allocation or global reduction. The
+`assets/shaders/world_lighting_trace.slang` helper traces a finite segment with
+slab clipping, aligned-block jump advance, resolved classification and the
+cached per-cell source; nonfinite or non-progressing traversal reports the
+numeric status failure instead of a clear interval.
+
 Each numeric dispatch owns one 32-byte `NumericStatusRecord` in the attempt's
 32-byte-record status buffer: words 0/1 are atomic minima of the invalid-state
 and range-error index, words 2..7 stay zero. `finalize` copies the four records
@@ -529,6 +544,7 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.WorldLighting.cppm/.cpp` — published world-lighting record words, CPU interval/CH values, RGB9E5/half/AC codecs, source-material admission and retained-direction scheduled frame identity
 - `App.Renderer.WorldLightingPass.cppm/.cpp` — per-world categorical projection owner: resolved cells, two winner-scratch grids, numeric status ring, settlement and diagnostics
 - `App.Renderer.WorldLightingPass.Projection.cpp` — `encodeProjection_` clear/reduce/resolve encoding with the shared coordinate/key contract
+- `App.Renderer.WorldLightingPass.Transport.cpp` — full-domain visibility/R8 jump rebuild, per-attempt-slot acceleration storage and dispatch ordering
 
 The shared contour surface is enabled for catalog sessions. GridPass uploads
 `math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;

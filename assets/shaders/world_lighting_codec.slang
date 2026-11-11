@@ -2,6 +2,8 @@
 // PackedCH, SourceMaterial and resolved-cell words byte for byte. Every
 // component is extracted from explicit integer words: no native half3, int8
 // vector or struct-layout assumption is part of this ABI.
+#ifndef PPR_WORLD_LIGHTING_CODEC_SLANG
+#define PPR_WORLD_LIGHTING_CODEC_SLANG
 
 // ------------------------------------------------------------------
 // published record shapes (byte-identical to the C++ records)
@@ -128,3 +130,46 @@ uint unpackCellMaterial(uint cell) {
 float unpackCellTemperature(uint cell) {
     return unpackHalf((cell >> 16u) & 0xffffu);
 }
+
+// ------------------------------------------------------------------
+// visible palette classification
+// ------------------------------------------------------------------
+// 96-byte GridTerrainVisual mirror. Acceleration and source preparation read
+// the same authored classification; the projection consumes it through this
+// definition too.
+struct TerrainVisual {
+    uint material;
+    uint rgba;
+    uint textureIndex;
+    float texturePeriod;
+    float roundness;
+    float filteredMean[3];
+    uint normalTextureIndex;
+    float metallic;
+    float roughness;
+    float opacity;
+    float emissive[3];
+    float emissiveStrength;
+    float ior;
+    float normalScale;
+    float refractionDepth;
+    uint surfaceFlags;
+    uint transportModel;
+    float sigma[3];
+};
+
+static const uint kOpticalBlendSurfaceFlag = 1u;
+
+// Occupancy is opaque classification, not brightness or a nonzero material ID:
+// material zero is empty, a non-emissive receive-only (optical blend) surface is
+// transparent, and every other resolved material is opaque regardless of its
+// emission.
+bool resolvedCellOccupied(uint resolved, TerrainVisual visual) {
+    if ((resolved & 0xffffu) == 0u) return false;
+
+    bool receiveOnly =
+        (visual.surfaceFlags & kOpticalBlendSurfaceFlag) != 0u && visual.emissiveStrength == 0.0;
+    return !receiveOnly;
+}
+
+#endif

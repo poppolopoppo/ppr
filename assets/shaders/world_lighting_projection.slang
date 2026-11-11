@@ -8,29 +8,7 @@
 // winner, and no winning payload races with the index reduction.
 #include "grid_particle_native.slang"
 #include "numeric_status.slang"
-
-// Same 96-byte GridTerrainVisual palette row; the projection reads only the
-// authored emission/strength and surface classification.
-struct TerrainVisual {
-    uint material;
-    uint rgba;
-    uint textureIndex;
-    float texturePeriod;
-    float roundness;
-    float filteredMean[3];
-    uint normalTextureIndex;
-    float metallic;
-    float roughness;
-    float opacity;
-    float emissive[3];
-    float emissiveStrength;
-    float ior;
-    float normalScale;
-    float refractionDepth;
-    uint surfaceFlags;
-    uint transportModel;
-    float sigma[3];
-};
+#include "world_lighting_codec.slang"
 
 struct ProjectionFrame {
     float origin;

@@ -61,6 +61,7 @@ target_sources(engine.tests.app
         App.WorldLighting.Backend.Tests.cpp
         App.WorldLighting.Codec.Tests.cpp
         App.WorldLighting.Projection.Tests.cpp
+        App.WorldLighting.Trace.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -476,6 +477,33 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 set_tests_properties(engine.tests.app.world_lighting_projection_gpu_validation PROPERTIES
+    ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Full-domain visibility, R8 jump construction and the common segment tracer.
+# Every leaf drives the real pass (projection + two construction dispatches) and
+# the real trace helper through device readbacks, so both entries claim the gpu
+# lock. The validation twin re-runs the identical group under the RHI debug
+# layers.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_trace
+    FILTER "app/world_lighting_trace/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_trace_gpu_validation
+    FILTER "app/world_lighting_trace/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 480
+    LABELS unit engine app gpu_validation
+)
+
+set_tests_properties(engine.tests.app.world_lighting_trace_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 
