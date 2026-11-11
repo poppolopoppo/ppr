@@ -34,7 +34,7 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | --- | --- |
 | 0 | complete (checkpoint `49a3a7d`, recovery verified, inventory recorded) |
 | 1 | complete (commits `14948a7`, `015b4df`, `7c5840b`, `502cf30`; reviews clean; known red legacy gates recorded below) |
-| 2 | pending |
+| 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates and matter_gpu cost blocker recorded below) |
 | 3 | pending — mandatory owner cleanup-acceptance stop |
 | 4–19 | pending; Task 4 and later must not begin before cleanup acceptance |
 
@@ -425,3 +425,88 @@ timings.
   cost is owned by the next GPU-suite acceleration task. `gpu_grid_surface`
   optical controls (Task 11) and the checkpoint dug-solids leaf (Task 11) remain
   known red gates.
+
+## Task 2 — completion: independent post-processing and Retro removal
+
+### Commits and review
+
+- `8835fbb` `refactor: separate post processing from retro reconstruction policy`.
+- `15b6609` `fix: correct bloom weighting and post-settings validation`.
+- `2be2fc2` `fix: avoid aliasing in single-level bloom descent`.
+- Task review: 2 Critical (compounded bloom weights; user-triggerable EV-clamp
+  frame exit), 4 Important (value-only rejected-attempt coverage; tautological
+  history test; missing padded/R=1/odd GPU evidence; unrecorded background
+  coverage obligation) and several Minor findings. All Critical/Important and the
+  cheap minors were fixed; the scoped re-review found every finding addressed
+  with no new Critical/Important breakage.
+- YAGNI: no generic post graph, pass registry, alternate backend or legacy alias.
+  `PresentationGrid`/`ResolvedHdrView`/`PostProcessSettings`/`PostProcessPass`
+  have current consumers; dead point-sampler/content-submit/presented members
+  were removed. The temporary single-sample editor scene image and single
+  submission are explicitly Task 12/14 development paths, not runtime modes.
+
+### Delivered behavior
+
+- `engine.app:renderer.presentation`: checked `R=ceil(W/P)`, `S=ceil(R/2)`,
+  `B=2*S`, P1..8, positive extents, overflow rejection, zero-framebuffer caller
+  suspension; specified post defaults and finite/domain/ordering validation.
+- `engine.app:renderer.post_process_pass`: independent exposure/adaptation,
+  64-bin fractional histogram, ceil-sized bloom with unweighted raw levels and
+  once-only weighted descent, once-only AgX, fixed-P nearest present/crop,
+  native UI last, fenced output and retained readers. `finalize` is a documented
+  no-op until Task 13; A/B/C split and Hable are Task 12/14.
+- Removed `RetroPass` and Retro master/AA/temporal/pixel-mode/palette controls,
+  shaders (`retro_present`, `temporal_resolve`, `temporal_2x`), settings,
+  persistence, help, UI, CMake filters and test callers. Pixelization P1..8
+  default3 and sky hour -1 remain. `spatial_msaa4.slang` remains as the sample
+  pattern qualification asset only.
+- Assets/codemaps/third-party notices updated. `App.MatterGpu.Tests.cpp` and
+  `Checkpoint.Gpu.Tests.cpp` now use the surviving GridPass path.
+
+### Coverage disposition
+
+- Retired with their owner: Retro spatial/lifecycle, two temporal-policy leaves,
+  palette UI/config/display expectations, and obsolete grid Retro leaves.
+- Retained/adapted: HDR/AgX single encoding, bloom/exposure, native UI,
+  rejected-submission/retained-picture/fence contracts, pixelization/extent
+  behavior, generic MSAA/sample-pattern, material identity and resource lifetime.
+- `spatial_background_alignment_and_opaque_admission` was retired because it
+  drove the removed Retro spatial runtime. The committed Task 12 obligation is
+  to reintroduce two-resolution layered-background alignment, opaque projection
+  admission and retained sample-rate/per-sample source coverage on the new
+  reconstruction.
+- Removed value-only history placeholder; Task 12 owns real Hable history-byte,
+  previous-camera/grid and committed-exposure-role invariance evidence.
+- Added real `beginFrame`/`prepare` rejection + `discardUnsubmitted` coverage,
+  padded-backing sentinel coverage, and R=1/odd non-square GPU coverage.
+
+### Verification and known gates
+
+- `engine.tests.app.post_process` 16/16; app core entries 5/5; `game.tests`
+  pass; affected asset shards and HDR/picture validation entries pass.
+- `engine.tests.asset.gpu_grid_surface` remains red on the pre-existing
+  `grid_optical_controls_and_four_layer_parallax` (Task 11).
+- `game/checkpoint_gpu/actual_dug_solids_...` remains red at the pre-existing
+  empty-interstice assertion (Task 11), opt-in.
+- **Active GPU-suite cost blocker:** `engine.tests.app.matter_gpu` exceeds its
+  300 s Core+GPU-AV deadline while the adapted pool leaf passes alone in 15.8 s.
+  This is now the next GPU-suite acceleration step; do not raise the timeout or
+  disable validation. Evidence: `/tmp/opencode/task2-app-matter-gpu.log`.
+- Windows/D3D12 unmeasured.
+
+### Deferred minors
+
+- Report/codemap wording drift about the coarsest bloom binding and the replaced
+  bounded-uniform assertion.
+- `gpu_padding_does_not_reach_metering_or_bloom` does not dispatch the histogram
+  path because auto exposure is off; the padding evidence is render/bloom only.
+- No ImGui call-site regression test for the EV-ordering helper; the exported
+  helper and both live call sites are covered by inspection.
+- Unused bloom `offset` declaration and unfinished test encoders.
+- The planning input still lists the removed history placeholder among Task 2
+  key assertions; this ledger supersedes it.
+
+### Evidence
+
+- `.superpowers/sdd/2026-11-10-oni-port/task-2-report.md` and its fix sections.
+- `/tmp/opencode/task2-*.log`, `task2fix-*.log`, `task2fix2-*.log`.
