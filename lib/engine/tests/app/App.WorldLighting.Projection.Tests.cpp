@@ -168,8 +168,6 @@ namespace pP::tests::detail::WorldLightingProjection {
         rhi::ComPtr<rhi::IBuffer> m_readonly{};
         rhi::ComPtr<rhi::IBuffer> m_terrain{};
         rhi::ComPtr<rhi::IBuffer> m_visuals{};
-        rhi::ComPtr<rhi::IBuffer> m_sources{};
-        rhi::ComPtr<rhi::IBuffer> m_thermal{};
         lighting::WorldLightingInputs m_inputs{};
         u64 m_publication{};
 
@@ -244,8 +242,8 @@ namespace pP::tests::detail::WorldLightingProjection {
             m_inputs.m_identity = {view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick};
             m_inputs.m_terrain = m_terrain;
             m_inputs.m_visible_materials = m_visuals;
-            m_inputs.m_source_materials = m_sources;
-            m_inputs.m_thermal_lut = m_thermal;
+            // The projection binds neither the source palette nor the thermal
+            // table; those stay empty here to exercise its actual contract.
             m_inputs.m_material_count = kMaterialCount;
         }
 
@@ -271,12 +269,7 @@ namespace pP::tests::detail::WorldLightingProjection {
             visuals[kEmissiveLiquid].m_emissive_rgb[2] = 0.5f;
             visuals[kEmissiveLiquid].m_emissive_strength = 2.0f;
 
-            std::array<lighting::SourceMaterial, kMaterialCount> sources{};
-            Array<u8> thermal(lighting::kThermalLutBytes, u8{});
-
             m_visuals = makeShaderBuffer(device, sizeof(visuals), 96u, visuals.data());
-            m_sources = makeShaderBuffer(device, sizeof(sources), 8u, sources.data());
-            m_thermal = makeShaderBuffer(device, thermal.size(), 16u, thermal.data());
         }
     };
 
@@ -799,13 +792,17 @@ namespace pP::tests::detail::WorldLightingProjection {
         WorldLightingPass pass;
         PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
 
-        // Unsubmitted attempts occupy slots until explicitly discarded.
+        // Three submitted-but-unconsumed tickets occupy the whole ring.
         for (u32 attempt = 0u; attempt < WorldLightingPass::kStatusRingSize; ++attempt) {
-            auto encoder = makeEncoder(fixture);
-            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
-            PPR_TEST_ASSERT(not pass.prepare(context, scene.m_inputs, WorldLightingFrame{}));
-            PPR_TEST_ASSERT(pass.statusSlotPendingForTest(attempt));
-            PPR_TEST_ASSERT(not pass.statusSlotSubmittedForTest(attempt));
+            const auto encoded = encodeAttempt(fixture, pass, scene.m_inputs);
+            PPR_TEST_ASSERT(not encoded.m_prepare);
+            PPR_TEST_ASSERT(not encoded.m_finalize);
+            pass.notifySubmitted(attempt + 1u);
+        }
+
+        for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+            PPR_TEST_ASSERT(pass.statusSlotPendingForTest(slot));
+            PPR_TEST_ASSERT(pass.statusSlotSubmittedForTest(slot));
         }
 
         {
@@ -815,43 +812,138 @@ namespace pP::tests::detail::WorldLightingProjection {
                 pass.prepare(context, scene.m_inputs, WorldLightingFrame{}) == std::errc::device_or_resource_busy);
         }
 
-        // Rejected/unsubmitted attempts release only their unsubmitted tickets.
+        // Discard releases only definitely-unsubmitted tickets: every submitted
+        // slot stays occupied.
         pass.discardUnsubmitted();
+        for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+            PPR_TEST_ASSERT(pass.statusSlotPendingForTest(slot));
+        }
+
+        // Attempts at or below the completed value are inspected; the newest
+        // submission stays occupied until its own fence is covered.
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+        u32 remaining = 0u;
+        for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+            if (pass.statusSlotPendingForTest(slot)) {
+                ++remaining;
+                PPR_TEST_ASSERT(pass.statusSlotSubmittedForTest(slot));
+            }
+        }
+
+        PPR_TEST_ASSERT(remaining == 1u);
+
+        // Completion plus consumption frees the last slot.
+        PPR_TEST_ASSERT(not pass.collectCompleted(3u));
         for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
             PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(slot));
         }
 
-        // Submitted-but-unconsumed tickets keep their slot even after discard.
-        auto attempt = encodeAttempt(fixture, pass, scene.m_inputs);
-        PPR_TEST_ASSERT(not attempt.m_prepare);
-        PPR_TEST_ASSERT(not attempt.m_finalize);
-        pass.notifySubmitted(1u);
-        u32 submitted_slot = WorldLightingPass::kStatusRingSize;
+        // The consumed slots are reusable without waiting; an armed attempt is
+        // released by discard as the definitely-unsubmitted case.
+        {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, 3u, {}};
+            PPR_TEST_ASSERT(not pass.prepare(context, scene.m_inputs, WorldLightingFrame{}));
+            u32 armed_slot = WorldLightingPass::kStatusRingSize;
+            for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+                if (pass.statusSlotPendingForTest(slot)) {
+                    armed_slot = slot;
+                }
+            }
+
+            PPR_TEST_ASSERT(armed_slot < WorldLightingPass::kStatusRingSize);
+            pass.discardUnsubmitted();
+            PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(armed_slot));
+        }
+
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (second_prepare_before_submission_is_rejected_without_disturbing_the_attempt) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        Scene scene;
+        const std::array armed_specs{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(10.5f),
+                .m_y = worldPosition(10.5f)},
+        };
+        scene.publish(fixture, armed_specs);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // Prepare and finalize one attempt, then hold it: its submission fence
+        // is not known yet.
+        auto encoder = makeEncoder(fixture);
+        {
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            PPR_TEST_ASSERT(not pass.prepare(context, scene.m_inputs, WorldLightingFrame{}));
+            PPR_TEST_ASSERT(not pass.finalize(context));
+        }
+
+        u32 armed_slot = WorldLightingPass::kStatusRingSize;
         for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
             if (pass.statusSlotPendingForTest(slot)) {
-                submitted_slot = slot;
+                PPR_TEST_ASSERT(armed_slot == WorldLightingPass::kStatusRingSize);
+                armed_slot = slot;
             }
         }
 
-        PPR_TEST_ASSERT(submitted_slot < WorldLightingPass::kStatusRingSize);
-        PPR_TEST_ASSERT(pass.statusSlotSubmittedForTest(submitted_slot));
-        pass.discardUnsubmitted();
-        PPR_TEST_ASSERT(pass.statusSlotPendingForTest(submitted_slot));
+        PPR_TEST_ASSERT(armed_slot < WorldLightingPass::kStatusRingSize);
+        PPR_TEST_ASSERT(not pass.statusSlotSubmittedForTest(armed_slot));
 
-        // Uncompleted submissions are never inspected or released.
-        PPR_TEST_ASSERT(not pass.collectCompleted(kFenceValueNone));
-        PPR_TEST_ASSERT(pass.statusSlotPendingForTest(submitted_slot));
-
-        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
-        PPR_TEST_ASSERT(pass.statusSlotConsumedForTest(submitted_slot));
-
-        // The consumed slot is reusable without waiting.
+        // Different committed content in a second prepare is rejected before it
+        // arms another slot or rewrites the armed attempt's constants and roots.
+        Scene other;
+        const std::array other_specs{
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(20.5f),
+                .m_y = worldPosition(20.5f)},
+        };
+        other.publish(fixture, other_specs);
         {
-            auto encoder = makeEncoder(fixture);
-            PreRenderContext context{fixture.device(), *encoder, 1u, {}};
-            PPR_TEST_ASSERT(not pass.prepare(context, scene.m_inputs, WorldLightingFrame{}));
-            pass.discardUnsubmitted();
+            auto second = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *second, kFenceValueNone, {}};
+            PPR_TEST_ASSERT(
+                pass.prepare(context, other.m_inputs, WorldLightingFrame{}) == std::errc::operation_not_permitted);
         }
+
+        for (u32 slot = 0u; slot < WorldLightingPass::kStatusRingSize; ++slot) {
+            PPR_TEST_ASSERT(pass.statusSlotPendingForTest(slot) == (slot == armed_slot));
+        }
+
+        PPR_TEST_ASSERT(not pass.statusSlotSubmittedForTest(armed_slot));
+
+        // The armed submission still owns its fence, status copy and content:
+        // collection at its own fence succeeds and no other scene leaked in.
+        submit(fixture, *encoder);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(pass.statusSlotSubmittedForTest(armed_slot));
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(10u, 10u)) == packMaterialTemperature(kOpaque, 300.0));
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(20u, 20u)) == 0u);
+
+        // The rejected call needed no discard: the consumed slot is reusable and
+        // the next committed publication resolves normally.
+        auto attempt = encodeAttempt(fixture, pass, other.m_inputs, 1u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(2u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+        PPR_TEST_ASSERT(
+            readCell(fixture, pass, cellIndex(20u, 20u)) == packMaterialTemperature(kEmissiveOpaque, 300.0));
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(10u, 10u)) == 0u);
 
         PPR_TEST_ASSERT(not pass.shutdown());
     };
@@ -1201,6 +1293,8 @@ namespace pP::tests {
                 detail::WorldLightingProjection::maximum_endpoint_maps_to_last_cell_and_invalid_positions_are_rejected,
                 detail::WorldLightingProjection::invalid_and_range_minima_stay_separate_and_reach_the_caller,
                 detail::WorldLightingProjection::status_slots_require_completion_and_consumption_before_reuse,
+                detail::WorldLightingProjection::
+                    second_prepare_before_submission_is_rejected_without_disturbing_the_attempt,
                 detail::WorldLightingProjection::shutdown_reports_an_uninspected_pending_error,
                 detail::WorldLightingProjection::reflected_projection_records_match_the_cpu_shapes,
                 detail::WorldLightingProjection::grid_pass_owns_the_projection_and_binds_resolved_cells,

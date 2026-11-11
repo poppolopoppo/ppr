@@ -67,16 +67,16 @@ namespace pP {
             "clear_winners", "reduce_keys", "reduce_rows", "resolve_cells"};
 
         std::error_code validateProjectionInputs(const lighting::WorldLightingInputs &inputs) {
+            // Only the resources these dispatches bind are required. The source
+            // palette and thermal table belong to the later source/transport
+            // stage and stay in `WorldLightingInputs` for that owner.
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass,
-                inputs.m_terrain and inputs.m_visible_materials and inputs.m_source_materials and inputs.m_thermal_lut
-                    ? std::error_code{}
-                    : std::make_error_code(std::errc::not_connected));
+                WorldLightingPass, inputs.m_terrain and inputs.m_visible_materials
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::not_connected));
 
             rhi::IBuffer *const terrain = inputs.m_terrain.get();
             rhi::IBuffer *const visuals = inputs.m_visible_materials.get();
-            rhi::IBuffer *const sources = inputs.m_source_materials.get();
-            rhi::IBuffer *const thermal = inputs.m_thermal_lut.get();
 
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightingPass, terrain->getDesc().size == WorldLightingPass::kResolvedCellBytes and
@@ -85,16 +85,12 @@ namespace pP {
                                        : std::make_error_code(std::errc::invalid_argument));
 
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass,
-                inputs.m_material_count > 0u and
-                        inputs.m_material_count <= 65536u and
-                        visuals->getDesc().elementSize == 96u and
-                        visuals->getDesc().size >= static_cast<u64>(inputs.m_material_count) * 96u and
-                        sources->getDesc().elementSize == 8u and
-                        sources->getDesc().size >= static_cast<u64>(inputs.m_material_count) * 8u and
-                        thermal->getDesc().size >= lighting::kThermalLutBytes
-                    ? std::error_code{}
-                    : std::make_error_code(std::errc::invalid_argument));
+                WorldLightingPass, inputs.m_material_count > 0u and
+                                           inputs.m_material_count <= 65536u and
+                                           visuals->getDesc().elementSize == 96u and
+                                           visuals->getDesc().size >= static_cast<u64>(inputs.m_material_count) * 96u
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::invalid_argument));
 
             const auto &particles = inputs.m_particles;
             const bool published = particles.m_numerical or particles.m_readonly or particles.m_metadata;
@@ -229,7 +225,6 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldLightingPass,
                 device.mapBuffer(attempt.m_readback, rhi::CpuAccessMode::Read, &attempt.m_readback_mapped));
-            attempt.m_consumed = true;
 
             for (u32 entry = 0u; entry < kNumericDispatchCount; ++entry) {
                 PPR_RETURN_ERROR_ON_FAIL(
@@ -309,6 +304,18 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, initialize(*m_shaders, m_root));
         }
 
+        // A prepared attempt that was neither submitted nor discarded still owns
+        // its status slot, constants and recorded root bindings. A second
+        // prepare would silently re-associate the next submission fence with
+        // the wrong slot and leave the first attempt's GPU work releasable as
+        // "unsubmitted". Reject the call before it touches anything; the caller
+        // settles the armed attempt with notifySubmitted or discardUnsubmitted
+        // first.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, m_resources and m_resources->m_armed
+                                   ? std::make_error_code(std::errc::operation_not_permitted)
+                                   : std::error_code{});
+
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateProjectionInputs(inputs));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureResources_(context.m_device));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, selectStatusSlot_(context.m_completed_fence_value));
@@ -373,7 +380,6 @@ namespace pP {
             resources.m_armed = true;
             ++resources.m_attempt_sequence;
             attempt.m_pending = true;
-            attempt.m_consumed = false;
             attempt.m_copy_encoded = false;
             attempt.m_submission = kFenceValueNone;
             attempt.m_read_submission = kFenceValueNone;
@@ -394,7 +400,6 @@ namespace pP {
         slot.m_accepted_frame = 0u;
         slot.m_pending = false;
         slot.m_copy_encoded = false;
-        slot.m_consumed = true;
     }
 
     void WorldLightingPass::notifySubmitted(const FenceCompletionValue value) noexcept {
@@ -532,14 +537,6 @@ namespace pP {
         return m_resources ? m_resources->m_resolved.get() : nullptr;
     }
 
-    std::pair<rhi::IBuffer *, rhi::IBuffer *> WorldLightingPass::winnerGridsForTest() const noexcept {
-        if (not m_resources) {
-            return {};
-        }
-
-        return {m_resources->m_scratch[0u].get(), m_resources->m_scratch[1u].get()};
-    }
-
     std::span<u32> WorldLightingPass::pendingStatusWordsForTest() noexcept {
         if (not m_resources) {
             return {};
@@ -561,11 +558,4 @@ namespace pP {
         return m_resources and slot < kStatusRingSize and m_resources->m_status[slot].m_submission != kFenceValueNone;
     }
 
-    bool WorldLightingPass::statusSlotConsumedForTest(const u32 slot) const noexcept {
-        return not m_resources or slot >= kStatusRingSize or m_resources->m_status[slot].m_consumed;
-    }
-
-    u32 WorldLightingPass::acceptedAttemptsForTest() const noexcept {
-        return m_resources ? safe_narrowing(m_resources->m_accepted_attempts) : 0u;
-    }
 }

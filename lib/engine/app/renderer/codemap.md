@@ -150,7 +150,10 @@ submission completed and collection consumed it; `discardUnsubmitted` releases
 definitely-unsubmitted attempts and leaves ambiguous submissions quarantined;
 `shutdown` drains and inspects outstanding tickets before reporting success.
 `bind` supplies `g_resolved_cells` and `g_numeric_status` to material and
-inspection shaders.
+inspection shaders. A second `prepare` while an attempt is armed and not yet
+submitted or discarded is rejected with `operation_not_permitted` before it
+touches the armed attempt's slot, constants or recorded bindings; callers
+settle that attempt with `notifySubmitted` or `discardUnsubmitted` first.
 
 ## Design
 

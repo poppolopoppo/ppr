@@ -38,11 +38,6 @@ export namespace pP {
     inline constexpr u32 kNumericStatusRecords = 4u;
     inline constexpr u32 kNoNumericIndex = 0xffff'ffffu;
 
-    enum class ENumericStatusCategory : u32 {
-        invalid_state = 0u,
-        range_error = 1u,
-    };
-
     struct NumericStatusRecord {
         u32 m_invalid_index{kNoNumericIndex};
         u32 m_range_index{kNoNumericIndex};
@@ -82,7 +77,9 @@ export namespace pP {
         // Retains the exact input owners for this attempt, allocates the
         // world's resolved cells, and encodes clearWinners, reduceKeys,
         // reduceRows and resolveCells. Ring exhaustion is ordinary
-        // non-admission: no pending status slot is overwritten.
+        // non-admission: no pending status slot is overwritten. A second
+        // prepare before the armed attempt is submitted or discarded is
+        // rejected (operation_not_permitted) without touching that attempt.
         [[nodiscard]] std::error_code prepare(
             const PreRenderContext &context, const lighting::WorldLightingInputs &inputs,
             const WorldLightingFrame &frame);
@@ -122,17 +119,12 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         [[nodiscard]] rhi::IBuffer *resolvedCellsForTest() const noexcept;
-        [[nodiscard]] std::pair<rhi::IBuffer *, rhi::IBuffer *> winnerGridsForTest() const noexcept;
-        // Mapped 4-record status readback of the armed attempt, or empty when
-        // no attempt is armed. Used to observe minima and inject range faults.
+        // Mapped 4-record status readback of the last armed attempt, or empty
+        // when no attempt was armed. Used to observe minima and inject range
+        // faults.
         [[nodiscard]] std::span<u32> pendingStatusWordsForTest() noexcept;
-        [[nodiscard]] u32 statusSlotCountForTest() const noexcept {
-            return kStatusRingSize;
-        }
         [[nodiscard]] bool statusSlotPendingForTest(u32 slot) const noexcept;
         [[nodiscard]] bool statusSlotSubmittedForTest(u32 slot) const noexcept;
-        [[nodiscard]] bool statusSlotConsumedForTest(u32 slot) const noexcept;
-        [[nodiscard]] u32 acceptedAttemptsForTest() const noexcept;
 
     private:
         // ------------------------------------------------------------------
@@ -146,7 +138,7 @@ export namespace pP {
 
         // One in-flight attempt's status storage and exact input owners. The
         // slot is reusable only after its submission completed AND collection
-        // consumed it.
+        // consumed it; m_pending is that single occupancy fact.
         struct ProjectionStatusSlot {
             rhi::ComPtr<rhi::IBuffer> m_status{};
             rhi::ComPtr<rhi::IBuffer> m_readback{};
@@ -158,7 +150,6 @@ export namespace pP {
             u64 m_accepted_frame{};
             bool m_pending{};
             bool m_copy_encoded{};
-            bool m_consumed{true};
         };
 
         struct ProjectionResources {
