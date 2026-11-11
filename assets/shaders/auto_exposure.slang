@@ -1,11 +1,13 @@
 // ------------------------------------------------------------------
-// temporal eye-adaptation state (1x1 offset around manual exposure)
+// eye-adaptation state (1x1 offset around manual exposure)
 // ------------------------------------------------------------------
 // One thread reads the previous adapted EV offset and the histogram's target EV,
 // applies an exponential approach toward the target, clamps the result to the
 // manual-exposure window, and writes the new offset to a 1x1 texture. A disabled
-// override writes the zero offset (fixed exposure) so the present multiply stays
-// a no-op.
+// override writes the zero offset (fixed exposure) so the total exposure stays
+// exp2(manual EV). Adaptation is independent of reconstruction history: settings
+// edits and resizes never reset it, while first use and world replacement start
+// from zero.
 
 struct AutoExposureParameters {
     float adaptationAlpha; // 1 - exp(-dt / tau)
@@ -21,9 +23,9 @@ RWTexture2D<float4> g_exposure;        // 1x1 adapted offset in .x
 
 [numthreads(1, 1, 1)]
 void adaptExposure(uint3 id : SV_DispatchThreadID) {
-    // Production fixed exposure never runs this pass (RetroPass gates it on
-    // auto-exposure); the disabled branch exists so the smoke test can prove the
-    // fixed-exposure override is a deterministic zero offset.
+    // Production fixed exposure never runs this pass (PostProcessPass gates it
+    // on auto-exposure); the disabled branch exists so the smoke test can prove
+    // the fixed-exposure override is a deterministic zero offset.
     if (g_auto_exposure.enabled == 0u) {
         g_exposure[uint2(0, 0)] = float4(0.0, 0.0, 0.0, 1.0);
         return;

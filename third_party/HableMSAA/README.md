@@ -56,6 +56,6 @@ The shader requires an admitted permutation and exact 2x extents. It preserves
 signed finite linear HDR RGB and writes opaque composite alpha 1, not an opacity
 or depth history. Inputs must already contain correctly composed sample colours.
 
-The ordinary game and RetroPass remain unchanged. Real contour sample coverage,
+The ordinary game and its independent post-processing remain unchanged. Real contour sample coverage,
 runtime admission, temporal reconstruction, resize/submission integration and
 4K cost qualification remain separate work. No FPS claim follows from this batch.

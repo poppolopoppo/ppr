@@ -197,10 +197,9 @@ export namespace pP::game {
         }
     };
 
-    /// Runtime-tunable post-processing settings. Eye adaptation, bloom and the
-    /// optional palette are applied to the RetroPass through applyPostToRetro.
-    /// The defaults enable eye adaptation and bloom (the field picture's
-    /// intended look) and leave the palette quantization off.
+    /// Runtime-tunable independent post-processing settings. Eye adaptation
+    /// and bloom are applied to PostProcessPass through applyPostProcessSettings;
+    /// reconstruction history and lighting are not part of this schema.
     struct PostDisplaySettings {
         bool m_auto_exposure{true};
         float m_exposure_ev{0.0f};
@@ -210,7 +209,6 @@ export namespace pP::game {
         bool m_bloom{true};
         float m_bloom_intensity{0.125f};
         float m_bloom_threshold{1.0f};
-        bool m_palette{false};
 
         [[nodiscard]] static std::error_code validate(
             const PostDisplaySettings &settings, config::Diagnostics &diagnostics);
@@ -267,12 +265,6 @@ export namespace pP::game {
                         "game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16)", "Post",
                         EMutability::runtime, ESource::all, true},
                     Range<float>{0.0f, 16.0f}),
-                field(
-                    &PostDisplaySettings::m_palette,
-                    Metadata{
-                        "game.post.palette", "Quantize scene colors to the 32-color palette with ordered dithering",
-                        "Post", EMutability::runtime, ESource::all, true},
-                    boolean_domain),
             };
         }
     };
@@ -362,9 +354,8 @@ export namespace pP::game {
         const config::Resolved<PostDisplaySettings> &committed, const PostDisplaySettings &draft,
         config::Diagnostics &diagnostics);
 
-    /// Applies the live post display settings to the retro picture state. The
-    /// post settings are the sole source for manual exposure, bloom, eye
-    /// adaptation and the palette; the retro palette is derived here, never
-    /// edited by a second control.
-    void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept;
+    /// Applies the live post display settings to the independent post owner.
+    /// Pixelization travels separately on the owned frame request because it is
+    /// a rendering-resolution control, not a post-processing parameter.
+    void applyPostProcessSettings(PostProcessSettings &post_process, const PostDisplaySettings &post) noexcept;
 } // namespace pP::game

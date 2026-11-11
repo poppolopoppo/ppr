@@ -34,9 +34,9 @@ equivalence, an HDR-display/PQ output transform, or complete game integration.
 source. It does not import PPR shader helpers or read shader constants. It keeps
 the upstream column-major matrices and independently inverts the source outset
 matrix with Gauss-Jordan elimination, unlike the shader's row-vector literals.
-Inputs first round through IEEE binary16, matching the RetroPass scene target.
+Inputs first round through IEEE binary16, matching the post-processing resolved scene target.
 `Golden.inc` freezes 32 patch/ramp inputs and linear display outputs at EV
-0, +1, -16 and +16. The real RetroPass fixture compares FP16 readback against
+0, +1, -16 and +16. The real independent post fixture compares FP16 readback against
 these values and checks the final sRGB/UNorm byte contract separately.
 The initial generated file SHA-256 is
 `c77c5bfb4c166f0466bff391119d4c7fc36c76ad0b1b0b25a765f5d523b073c8`.
@@ -49,6 +49,6 @@ python3 third_party/FilamentAgX/generate_goldens.py
 
 Finite RGBA16F producer inputs (including negative intermediates) are required;
 the fixture rejects NaN/infinity or overflow before its producer writes. This
-does not claim that RetroPass scans arbitrary scene textures for invalid pixels.
+does not claim that PostProcessPass scans arbitrary scene textures for invalid pixels.
 Unexposed HDR history, native UI ordering, and all ordinary-world defaults stay
-under the existing RetroPass/application owners.
+under the existing PostProcessPass/application owners.

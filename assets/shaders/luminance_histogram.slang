@@ -1,11 +1,13 @@
 // ------------------------------------------------------------------
 // log-luminance histogram and percentile-clipped target EV reduction
 // ------------------------------------------------------------------
-// Downsamples the resolved HDR scene to a small luminance image, builds a
+// Downsamples the resolved HDR scene to min(R,256) per axis, builds a
 // log2-luminance histogram with workgroup-local bins merged into one global
 // histogram, then reduces a percentile-clipped average to a target EV relative
-// to 18% middle gray. The CPU oracle lives in RetroPass (averageLog2Luminance /
-// targetEv) and must stay bit-for-bit consistent with this reduction.
+// to 18% middle gray. The CPU oracle lives in PostProcessPass
+// (averageLog2Luminance / targetEv) and must stay bit-for-bit consistent with
+// this reduction. Only the valid resolved R region is sampled; backing padding
+// outside it is never referenced.
 
 static const uint kHistogramBins = 64u;
 static const float kLog2Min = -8.0;
@@ -52,16 +54,18 @@ void clearHistogram(uint3 id : SV_DispatchThreadID) {
     }
 }
 
-// Average each luminance texel over its source block.
+// Average each luminance texel over its nonempty integer source block. Blocks
+// partition R exactly: texel i covers [floor(i*R/L), floor((i+1)*R/L)).
 [numthreads(8, 8, 1)]
 void computeLuminance(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= g_luminance.luminanceExtent)) {
         return;
     }
 
-    float2 scale = float2(g_luminance.sourceExtent) / float2(g_luminance.luminanceExtent);
-    uint2 lo = uint2(float2(id.xy) * scale);
-    uint2 hi = min(uint2(ceil(float2(id.xy + 1u) * scale)), g_luminance.sourceExtent);
+    uint2 lo = id.xy * g_luminance.sourceExtent / g_luminance.luminanceExtent;
+    uint2 hi = (id.xy + 1u) * g_luminance.sourceExtent / g_luminance.luminanceExtent;
+    hi = max(hi, lo + 1u);
+    hi = min(hi, g_luminance.sourceExtent);
 
     float sum = 0.0;
     uint count = 0u;
@@ -105,26 +109,28 @@ void reduceHistogram(uint3 id : SV_DispatchThreadID) {
         total += g_histogram[bin];
     }
 
+    // Percentile counts stay fractional in FP32: an integer truncation would
+    // discard the whole valid mass of a one-texel image.
     float low = float(total) * kLowPercentile;
     float high = float(total) * kHighPercentile;
 
     float accumulated = 0.0;
-    uint accumulatedCount = 0u;
-    uint cumulative = 0u;
+    float accumulatedCount = 0.0;
+    float cumulative = 0.0;
     for (uint bin = 0u; bin < kHistogramBins; ++bin) {
-        uint binStart = cumulative;
-        cumulative += g_histogram[bin];
+        float binStart = cumulative;
+        cumulative += float(g_histogram[bin]);
 
-        float lo = max(float(binStart), low);
-        float hi = min(float(cumulative), high);
+        float lo = max(binStart, low);
+        float hi = min(cumulative, high);
         if (lo < hi) {
-            uint count = uint(hi - lo);
-            accumulated += binCenterLog2(bin) * float(count);
+            float count = hi - lo;
+            accumulated += binCenterLog2(bin) * count;
             accumulatedCount += count;
         }
     }
 
-    float average = accumulatedCount != 0u ? accumulated / float(accumulatedCount) : kLog2Min;
+    float average = accumulatedCount > 0.0 ? accumulated / accumulatedCount : kLog2Min;
     // The target is applied as exp2(target) to scene radiance: middle gray maps
     // to zero, dark scenes get positive EV, and bright scenes get negative EV.
     g_target_ev[0] = log2(kMiddleGray) - average;

@@ -217,9 +217,6 @@ namespace pP::game {
         append("game.post.bloom", "Enable SPD bloom on the resolved HDR scene.", "post-bloom", true);
         append("game.post.bloom_intensity", "Bloom contribution scale (0 to 2).", "post-bloom-intensity", false);
         append("game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16).", "post-bloom-threshold", false);
-        append(
-            "game.post.palette", "Quantize scene colors to the 32-color palette with ordered dithering.",
-            "post-palette", true);
 
         return options;
     }
@@ -302,16 +299,15 @@ namespace pP::game {
         return scratch;
     }
 
-    void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept {
-        retro.m_exposure_ev = post.m_exposure_ev;
-        retro.m_bloom_enabled = post.m_bloom;
-        retro.m_bloom_intensity = post.m_bloom_intensity;
-        retro.m_bloom_threshold = post.m_bloom_threshold;
-        retro.m_palette_enabled = post.m_palette;
-        retro.m_auto_exposure = post.m_auto_exposure;
-        retro.m_adaptation_tau = post.m_adaptation_tau;
-        retro.m_ev_min = post.m_ev_min;
-        retro.m_ev_max = post.m_ev_max;
+    void applyPostProcessSettings(PostProcessSettings &post_process, const PostDisplaySettings &post) noexcept {
+        post_process.m_exposure_ev = post.m_exposure_ev;
+        post_process.m_bloom_enabled = post.m_bloom;
+        post_process.m_bloom_intensity = post.m_bloom_intensity;
+        post_process.m_bloom_threshold = post.m_bloom_threshold;
+        post_process.m_auto_exposure = post.m_auto_exposure;
+        post_process.m_adaptation_tau = post.m_adaptation_tau;
+        post_process.m_ev_min = post.m_ev_min;
+        post_process.m_ev_max = post.m_ev_max;
     }
 
     // ------------------------------------------------------------------

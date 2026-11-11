@@ -36,13 +36,13 @@ They retain content/pixel and candidate-retirement assertions; the removed
 queue-idle convenience API is not a separate reference publication path.
 
 The `picture_hdr_*` gate leaves draw controlled finite patch/ramp inputs through
-the real RetroPass. Independent frozen double scalar values from the pinned
+`PostProcessPass`. Independent frozen double scalar values from the pinned
 Filament approximation cover manual exposure, negative intermediates, saturated
 HDR colours and FP16 output. Separate sRGB/UNorm readbacks exercise exactly one
-encoding and independent palette treatment; rejected snapshots preserve a
-prepared frame/history, and a later native-resolution draw stays outside AgX.
-This fixture does not scan arbitrary producer textures or qualify Hable TSR,
-bloom, ordinary-world lighting or the RTX 2080 frame budget.
+encoding; rejected settings commit neither exposure nor output, and a later
+native-resolution draw stays outside AgX. This fixture does not scan arbitrary
+producer textures or qualify Hable TSR, ordinary-world lighting or the RTX 2080
+frame budget.
 
 The `spatial_msaa4_*` gate leaves first recover native sample indices using
 rasterized threshold rectangles and per-index multisample loads. They exercise
@@ -51,8 +51,9 @@ geometric grid oracle, independent constant/affine moment constraints, borders,
 signed HDR and permuted indices. Normal shader-directory staging includes the
 new asset. The frozen MIT source and deliberate lower-bucket correction are
 documented in `third_party/HableMSAA/README.md`. This is sampling/filter
-qualification; RetroPass integration, runtime pattern admission, actual contour
-sample colours, temporal history and 1080p-to-4K cost remain unqualified.
+qualification; runtime pattern admission, actual contour sample colours, temporal
+history and 1080p-to-4K cost remain unqualified. Task 12 owns the reconstruction
+integration; Task 2 removed the old runtime selector.
 
 The threshold leaf additionally exercises the authored Slang-RHI MSAA capability
 and scoped allocation-query recipe included by `SlangRHI.cmake`. It
@@ -84,7 +85,7 @@ features), 60 s (liquid surface), 50 s (liquid optics appearance), 43 s
 sized from those sums; a shard that outgrows 450 s is split again by
 responsibility rather than given more time.
 
-Pass lifetime is the dominant repeated cost: each `GridPass`/`RetroPass`
+Pass lifetime is the dominant repeated cost: each `GridPass`/`PostProcessPass`
 initialization compiles and creates its full program/pipeline family (about
 12 s warm, 22 s for the first pass in a process), and the first draw on a pass
 pays its pipeline creation (about 18 s). Leaves therefore keep one pass where a
@@ -110,12 +111,11 @@ appear in `grid_liquid_optics_and_viewport_appearance` and
 `grid_liquid_nominal_density_deformation_coverage`.
 
 `temporal_layered_background_pan_uses_stable_spatial_fallback` and
-`temporal_camera_pan_preserves_pattern_contrast_and_phase` remain in
-`gpu_picture`: they encode the contrast, phase, MSE and disocclusion contracts
-of the still-live `RetroSettings::m_temporal_enabled` path, so their retirement
-belongs to Task 2 together with that policy removal. They run unmodified and
-measure about 51 s and 18 s respectively, which keeps `gpu_picture` inside its
-deadline.
+`temporal_camera_pan_preserves_pattern_contrast_and_phase` encoded the contrast,
+phase, MSE and disocclusion contracts of the removed temporal path and are
+retired with it in Task 2. `picture_controls_preserve_independent_color_and_scene_history`
+now covers exposure/bloom color independence, P1..8 pixelization blocks, stable
+repeated captures and rejection without touching scene/history bytes.
 
 The retired benchmark sampling also left `GridPass::setParticleTimingQueriesForTest`
 and its `PPR_PARTICLE_*` environment hooks without a test caller. They are
@@ -139,15 +139,13 @@ Grid draw establish viewport/scissor state independently of a backdrop. Run both
 affected leaves under explicit Core validation and inspect the log for VUIDs;
 older RGBA8 or compute-only checks do not qualify these paths.
 
-Four separate leaves cover actual GridPass per-index samples (centre outside
-with a covered sample, mixed materials, authored roundness, normals/emission and
-chunk seams), real RetroPass output against the independent grid reference,
-policy rejection after preparation, three-slot reuse/resize, legacy-x4 switching,
-isolated submit quarantine, background sample alignment, optical/matter admission,
-and spatial reconstruction before frozen AgX grading/native UI. They reuse the
-two primitive sampling/filter fixtures without changing their selected scope.
-Unsupported devices exercise explicit opt-in rejection and print that the GPU
-route was not admitted; a pass there is not sample-frequency execution evidence.
+The GridPass per-index leaves cover centre-outside samples, mixed materials,
+authored roundness, normals/emission and chunk seams. The retired
+`spatial_retro_*` and `spatial_background_*` leaves and their four filters are
+removed with the runtime selector; `spatial_msaa4_*` retains the kernel/sample
+qualification. `spatial_hdr_grading_and_native_ui_follow_reconstruction` now
+drives independent `PostProcessPass` grading at 512² and native UI after
+presentation. Unsupported devices no longer exercise an opt-in runtime route.
 
 The existing `spatial_grid_samples_preserve_contours_materials_normals_and_emission`
 leaf owns one fixture-local `SpatialPrograms` family across its six original
@@ -163,14 +161,14 @@ application/device, policy/registration/deadline change or measured speedup is
 introduced by this source refactor. The identical ordinary/GPUAV leaf remains
 the measurement scope.
 
-Each leaf now owns a disjoint ordinary/validation pair: `spatial_grid_gpu`,
-`spatial_retro_gpu`, `spatial_background_gpu` and `spatial_grading_gpu`, with
-matching `_validation` entries. The previous two aggregate registrations are
-removed. All four exact filter tokens are unchanged and these leaves are not
-part of the routine GPU shard union; the two cheap
-`picture_spatial_gpu_validation` leaves remain separate. Every new entry retains loops, GPU lock, native 300-second
-deadline and Linux ASan unwind environment modifications; all four validation
-entries explicitly set `PPR_TEST_GPU_VALIDATION=1`.
+Each surviving leaf owns a disjoint ordinary/validation pair:
+`spatial_grid_gpu` and `spatial_grading_gpu`, with matching `_validation`
+entries. The `spatial_retro_gpu`, `spatial_background_gpu` and
+`spatial_retro_gpu_validation`/`spatial_background_gpu_validation` filters and
+their environment list entries are removed with the runtime selector. Every
+surviving entry retains loops, GPU lock, native 300-second deadline and Linux
+ASan unwind environment modifications; both validation entries explicitly set
+`PPR_TEST_GPU_VALIDATION=1`.
 
 This partition follows measured execution: the ordinary aggregate passed in
 276 seconds, while Core+GPUAV reached its 300-second aggregate timeout after
@@ -179,64 +177,26 @@ the observed validation leaf sum is about 391 seconds. Individual case passes
 do not make the aggregate timeout a pass. The per-behaviour partition preserves
 coverage without increasing a deadline. Configure/selection metadata audits and
 execution of these new registrations remain pending.
-The fixtures provision six GridPass owners and three RetroPass owners plus one
-small grading owner; raw material controls reuse one GridPass's candidate/program
-lifecycle rather than initializing its full family for every case. The retained
-per-entry deadline still requires execution evidence for the new registrations.
+The fixtures provision six GridPass owners plus one small grading
+`PostProcessPass` owner; raw material controls reuse one GridPass's
+candidate/program lifecycle rather than initializing its full family for every
+case.
 
-The existing HDR rejected-policy leaf also exercises opt-in completed-picture
-retention using actual Retro draws and readback: no picture before a completed
-write, identical held pixels across repeated reads and rejected preparation, and
-replacement only by a subsequent accepted completed picture. Temporal-history
-mode rejects retention. It reuses the existing ordinary/validation HDR entries;
-no duplicate registration or extra application fixture is added.
-
-The existing spatial Retro lifecycle leaf additionally retains its actual
-MSAA4/Hable Grid image across larger/smaller actual targets, compares every
-visible pixel exactly, checks untouched clear pixels, and stamps/waits reader
-fences. A newly completed smaller scene then replaces it normally. It reuses the
-same owners and ordinary/validation registration rather than adding a device host.
-
-The private `asset/render/quarantine/editor_scene_flow` reuses its existing Editor/RHI owner for opt-in final-surface readback after real Retro and detached native UI, checks a known UI pixel plus completion/owned-byte lifetime, suppresses repeated attempts, and checks rejected/no-image capture plus capability persistence through existing surface transactions. These source assertions require execution on a supported surface; they are not a new GPU fixture.
+The private `asset/render/quarantine/editor_scene_flow` reuses its existing Editor/RHI owner for opt-in final-surface readback after the resolved post output and detached native UI, checks a known UI pixel plus completion/owned-byte lifetime, suppresses repeated attempts, and checks rejected/no-image capture plus capability persistence through existing surface transactions. These source assertions require execution on a supported surface; they are not a new GPU fixture.
 
 That Editor leaf additionally chooses an even non-64-multiple framebuffer width to require nonempty 256-byte copy-row padding, validates meaningful UI pixels and zero CPU padding/tail, and uses the existing delayed-retirement seam with real offscreen submissions to prove an armed capture survives busy credits before succeeding once. Stale surface rejection checks the explicit no-acquisition outcome before retrying with a current identity.
 
 ## Bounded bloom acceptance
 
-The existing `picture_hdr_punchy_matches_frozen_reference_and_single_encoding`
-and `picture_hdr_rejected_policy_preserves_prepared_frame_and_history` leaves
-reuse their real RetroPass/device/program fixture for default-off bloom. Their
-constant/compact-patch controls share a producer pipeline/root across captures.
-They cover off/disabled-again byte identity, zero/subthreshold response,
-normalized constant response, tiny/odd quarter extents, sparse independently
-weighted impulse predictions and symmetry/falloff, EV ordering,65504 at EV16,
-single encoding, native UI, policy rejection and retained crop/letterbox/resize.
-The existing HDR GPU-validation registration selects those same two leaves;
-there is no additional test application, registered shard or CPU display renderer.
-Authored controls require execution evidence before they are described as passed.
-
-## Temporal2x focused controls
-
-The existing HDR punchy leaf also drives an actual world-anchored quad through
-the returned jittered projection and sample-frequency fixture program. Analytic
-affine centers distinguish four2x outputs. A same-phase always-reactive control
-provides current-only observations; changing in-box signal proves static and
-adjacent-static history use, dynamic exact-current rejection and vacated-pixel
-recovery. Further controls cover a negative history lobe, actual publication/
-window/bounce changes, failed submission/preflight, retained clipping/phase,
-resize, display policy and moving-background rejection.
-
-The existing spatial Grid leaf reuses its immutable program/device family and
-MSAA dump kernel with another root for raw R8 reactive samples. Established
-static contours/background, zero/tiny-alpha optical emission, overlapping disks
-and all three matter phase probes now assert binary coverage separately from
-color. One reused TrianglePass/bag adds actual covered, outside, depth-rejected
-and alpha-mask-discard probes through the same capture/dump helper. Existing
-HDR/spatial GPU-validation selectors include these controls. Authored changes
-require runtime evidence; descriptor payload arithmetic is not a VRAM/timing pass.
-
-The render/draws group also covers resident material traversal and triangle
-readiness without submitted instances: live-value/lifecycle/callback errors,
-empty and repeated preparation, unsupported signatures, stable fence slots, and
-unchanged subsequent rendered pixels. These leaves use the shared GPU fixture
-and remain in the ordinary GPU shard.
+`picture_hdr_punchy_matches_frozen_reference_and_single_encoding` and
+`picture_hdr_rejected_policy_preserves_prepared_frame_and_history` reuse their
+`PostProcessPass`/device/program fixture. Their constant/compact-patch controls
+share a producer pipeline/root across captures. They cover off/disabled-again
+byte identity, zero/subthreshold response, normalized constant response,
+tiny/odd extents, finite 65504 at EV16, single encoding, native UI and rejection
+without an exposure/history commit. The detailed ceil-level geometry, odd-edge
+replication and fractional percentile mass are pinned in the app
+`post_process` suite (`cpu_bloom_ceil_chain_layout`,
+`percentile_trim_retains_fractional_mass`). The existing HDR GPU-validation
+registration selects those same two leaves; there is no additional test
+application, registered shard or CPU display renderer.

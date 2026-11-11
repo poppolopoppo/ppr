@@ -66,17 +66,15 @@ export namespace pP::ui {
         u32 &m_refresh_hz;
     };
 
-    /// Borrowed live retro fields; caller owns the values for the session.
-    /// The widget edits them immediately and never folds them into the
+    /// Borrowed live resolution control; the caller owns the value for the
+    /// session. The widget edits it immediately and never folds it into the
     /// display draft, its validation, or a transaction.
-    struct RetroWidgetDraft {
-        bool &m_enabled;
+    struct PixelizationWidgetDraft {
         u32 &m_pixel_scale;
-        bool &m_temporal_enabled;
     };
 
     /// Borrowed live sky and post fields; caller owns the values for the
-    /// session. The widget edits them immediately (like the retro fields)
+    /// session. The widget edits them immediately (like the pixelization field)
     /// and never folds them into the display draft or its transaction. Reset
     /// emits a widget action the caller maps to restoring factory defaults.
     struct LightingPostWidgetDraft {
@@ -89,7 +87,6 @@ export namespace pP::ui {
         bool &m_bloom;
         float &m_bloom_intensity;
         float &m_bloom_threshold;
-        bool &m_palette;
     };
 
     struct DisplayWidgetAvailability {
@@ -99,7 +96,7 @@ export namespace pP::ui {
     /// Read-only policy/confirmation projection; widget does not tick or commit trials.
     struct DisplayWidgetState {
         DisplayWidgetDraft m_draft;
-        RetroWidgetDraft m_retro;
+        PixelizationWidgetDraft m_pixelization;
         LightingPostWidgetDraft m_lighting_post;
         bool m_matches{};
         DisplayWidgetAvailability m_availability{};

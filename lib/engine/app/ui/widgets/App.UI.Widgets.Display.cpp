@@ -67,14 +67,14 @@ namespace pP::ui {
             // Window:
             "Mode", "Monitor", "Width", "Height", "Resolution", "Refresh",
             // Rendering:
-            "Pixelization", "Pixel scale", "Temporal supersampling",
+            "Pixel scale",
             // Requested:
             "Cap", "Size", "Vsync", "Foreground CPU target", "Effective CPU target", "Unfocused slowing",
             // Device report:
             "Picture device", "Change in flight", "Last problem", "Window", "Observed window", "Observed exclusive",
             // Lighting & Post:
             "Sky hour", "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
-            "Bloom threshold", "Palette"};
+            "Bloom threshold"};
 
         /// Shared label-column width: the widest label plus cell padding, so
         /// labels and values align across all Display tables.
@@ -655,43 +655,25 @@ namespace pP::ui {
             }
         }
 
-        // Retro is a live session control: the game pushes these values to the
-        // editor every frame, so this section never edits the display draft,
+        // Pixelization is a live session control: the game pushes the value to
+        // the editor every frame, so this section never edits the display draft,
         // emits a widget action, or joins the apply/save transaction.
         ImGui::SeparatorText("Rendering");
-        if (beginLabelTable("##display_retro", label_width)) {
-            {
-                beginValueRow("Pixelization");
-                ImGui::Checkbox("##retro_enabled", &state.m_retro.m_enabled);
-                ImGui::SetItemTooltip("Render the scene at a lower resolution and enlarge its pixels.");
+        if (beginLabelTable("##display_pixelization", label_width)) {
+            beginValueRow("Pixel scale");
+            int scale = static_cast<int>(std::clamp(state.m_pixelization.m_pixel_scale, 1u, 8u));
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::SliderInt("##pixel_scale", &scale, 1, 8)) {
+                state.m_pixelization.m_pixel_scale = static_cast<u32>(scale);
             }
-
-            {
-                DisplayDisabledScope scale_disabled{not state.m_retro.m_enabled};
-                beginValueRow("Pixel scale");
-                int scale = static_cast<int>(std::clamp(state.m_retro.m_pixel_scale, 2u, 8u));
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderInt("##retro_scale", &scale, 2, 8)) {
-                    state.m_retro.m_pixel_scale = static_cast<u32>(scale);
-                }
-                scale_disabled.close();
-                ImGui::SetItemTooltip("Pixel scale of the retro picture, from 2 to 8.");
-            }
-
-            {
-                beginValueRow("Temporal supersampling");
-                ImGui::Checkbox("##temporal_supersampling", &state.m_retro.m_temporal_enabled);
-                ImGui::SetItemTooltip(
-                    "Accumulate 4x MSAA over time in both looks; increases GPU work and scene-buffer memory.");
-            }
-
+            ImGui::SetItemTooltip("Render the scene at 1/P resolution and enlarge it by exactly P.");
             ImGui::EndTable();
         }
         noteText(
-            "Pixelization and temporal supersampling are independent; the UI stays native. "
-            "Changes apply immediately and are not part of Apply or Save. Palette mapping lives in Lighting & Post.");
+            "Pixelization is a rendering-resolution control; the UI stays native. "
+            "Changes apply immediately and are not part of Apply or Save.");
 
-        // Post settings are live session controls (applied to the retro pass
+        // Post settings are live session controls (applied to the post owner
         // every frame); the retained sky hour is a begin-time control. Neither
         // edits the display draft or joins Apply/Save.
         ImGui::SeparatorText("Lighting & Post");
@@ -766,13 +748,6 @@ namespace pP::ui {
                     lp.m_bloom_threshold = std::clamp(lp.m_bloom_threshold, 0.0f, 16.0f);
                 }
                 ImGui::SetItemTooltip("Bloom bright-pass threshold (0 to 16).");
-            }
-
-            {
-                beginValueRow("Palette");
-                ImGui::Checkbox("##post_palette", &lp.m_palette);
-                ImGui::SetItemTooltip(
-                    "Quantize scene colors to the 32-color palette with ordered dithering (off by default).");
             }
 
             ImGui::EndTable();

@@ -14,10 +14,169 @@ import std;
 
 namespace pP::tests::detail {
     // ------------------------------------------------------------------
-    // post-effect contracts
+    // independent post-processing contracts
     // ------------------------------------------------------------------
 
     namespace PostProcess {
+        // ------------------------------------------------------------------
+        // presentation values and finite settings
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (presentation_grid_uses_checked_ceil_arithmetic) {
+            const auto hd_p1 = makePresentationGrid(int2{1920, 1080}, 1u);
+            PPR_TEST_ASSERT(hd_p1.has_value());
+            PPR_TEST_ASSERT(hd_p1->m_window.x == 1920 and hd_p1->m_window.y == 1080);
+            PPR_TEST_ASSERT(hd_p1->m_resolved.x == 1920 and hd_p1->m_resolved.y == 1080);
+            PPR_TEST_ASSERT(hd_p1->m_raster.x == 960 and hd_p1->m_raster.y == 540);
+            PPR_TEST_ASSERT(hd_p1->m_backing.x == 1920 and hd_p1->m_backing.y == 1080);
+
+            const auto hd_p2 = makePresentationGrid(int2{1920, 1080}, 2u);
+            PPR_TEST_ASSERT(hd_p2.has_value());
+            PPR_TEST_ASSERT(hd_p2->m_resolved.x == 960 and hd_p2->m_resolved.y == 540);
+            PPR_TEST_ASSERT(hd_p2->m_raster.x == 480 and hd_p2->m_raster.y == 270);
+            PPR_TEST_ASSERT(hd_p2->m_backing.x == 960 and hd_p2->m_backing.y == 540);
+
+            const auto hd_p3 = makePresentationGrid(int2{1920, 1080}, 3u);
+            PPR_TEST_ASSERT(hd_p3.has_value());
+            PPR_TEST_ASSERT(hd_p3->m_resolved.x == 640 and hd_p3->m_resolved.y == 360);
+            PPR_TEST_ASSERT(hd_p3->m_raster.x == 320 and hd_p3->m_raster.y == 180);
+            PPR_TEST_ASSERT(hd_p3->m_backing.x == 640 and hd_p3->m_backing.y == 360);
+
+            const auto hd_p8 = makePresentationGrid(int2{1920, 1080}, 8u);
+            PPR_TEST_ASSERT(hd_p8.has_value());
+            PPR_TEST_ASSERT(hd_p8->m_resolved.x == 240 and hd_p8->m_resolved.y == 135);
+            PPR_TEST_ASSERT(hd_p8->m_raster.x == 120 and hd_p8->m_raster.y == 68);
+            PPR_TEST_ASSERT(hd_p8->m_backing.x == 240 and hd_p8->m_backing.y == 136);
+
+            // Odd framebuffer extents pad the resolve backing and crop at the
+            // presentation edge; each axis is independent.
+            const auto odd_1919 = makePresentationGrid(int2{1919, 1079}, 2u);
+            PPR_TEST_ASSERT(odd_1919.has_value());
+            PPR_TEST_ASSERT(odd_1919->m_resolved.x == 960 and odd_1919->m_resolved.y == 540);
+            PPR_TEST_ASSERT(odd_1919->m_backing.x == 960 and odd_1919->m_backing.y == 540);
+
+            const auto odd_1921 = makePresentationGrid(int2{1921, 1081}, 2u);
+            PPR_TEST_ASSERT(odd_1921.has_value());
+            PPR_TEST_ASSERT(odd_1921->m_resolved.x == 961 and odd_1921->m_resolved.y == 541);
+            PPR_TEST_ASSERT(odd_1921->m_raster.x == 481 and odd_1921->m_raster.y == 271);
+            PPR_TEST_ASSERT(odd_1921->m_backing.x == 962 and odd_1921->m_backing.y == 542);
+
+            const auto single = makePresentationGrid(int2{1, 1}, 1u);
+            PPR_TEST_ASSERT(single.has_value());
+            PPR_TEST_ASSERT(single->m_resolved.x == 1 and single->m_resolved.y == 1);
+            PPR_TEST_ASSERT(single->m_raster.x == 1 and single->m_raster.y == 1);
+            PPR_TEST_ASSERT(single->m_backing.x == 2 and single->m_backing.y == 2);
+
+            // Zero framebuffer is caller suspension, never a fabricated extent.
+            for (const int2 &rejected: {int2{0, 1080}, int2{1920, 0}, int2{-1, 1080}, int2{1920, -1}}) {
+                const auto invalid = makePresentationGrid(rejected, 1u);
+                PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+            }
+
+            for (const u32 scale: {0u, 9u, 1000u}) {
+                const auto invalid = makePresentationGrid(int2{1920, 1080}, scale);
+                PPR_TEST_ASSERT(not invalid and invalid.error() == std::errc::invalid_argument);
+            }
+
+            // The widest odd P=1 framebuffer cannot represent its resolve backing.
+            const auto overflow = makePresentationGrid(int2{std::numeric_limits<i32>::max(), 1}, 1u);
+            PPR_TEST_ASSERT(not overflow and overflow.error() == std::errc::value_too_large);
+        };
+
+        PPR_UNIT_TEST (post_settings_reject_nonfinite_and_invalid_tuples) {
+            PostProcessSettings valid{};
+            PPR_TEST_ASSERT(not validatePostProcessSettings(valid));
+
+            const auto rejects = [](const PostProcessSettings &settings) {
+                return validatePostProcessSettings(settings) == std::errc::invalid_argument;
+            };
+
+            PostProcessSettings invalid = valid;
+            invalid.m_exposure_ev = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_adaptation_tau = std::numeric_limits<float>::infinity();
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_ev_min = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_bloom_intensity = std::numeric_limits<float>::infinity();
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_bloom_threshold = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(rejects(invalid));
+
+            invalid = valid;
+            invalid.m_adaptation_tau = 0.0f;
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_ev_min = 2.0f;
+            invalid.m_ev_max = -2.0f;
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_bloom_intensity = -0.01f;
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_bloom_threshold = -0.01f;
+            PPR_TEST_ASSERT(rejects(invalid));
+
+            // Finite endpoints and the documented game defaults stay accepted.
+            PostProcessSettings defaults{};
+            defaults.m_auto_exposure = true;
+            defaults.m_exposure_ev = 0.0f;
+            defaults.m_adaptation_tau = 0.7f;
+            defaults.m_ev_min = -4.0f;
+            defaults.m_ev_max = 4.0f;
+            defaults.m_bloom_enabled = true;
+            defaults.m_bloom_intensity = 0.125f;
+            defaults.m_bloom_threshold = 1.0f;
+            PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
+
+            defaults.m_exposure_ev = -16.0f;
+            PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
+            defaults.m_exposure_ev = 16.0f;
+            PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
+            defaults.m_exposure_ev = -16.01f;
+            PPR_TEST_ASSERT(rejects(defaults));
+            defaults.m_exposure_ev = 16.01f;
+            PPR_TEST_ASSERT(rejects(defaults));
+        };
+
+        PPR_UNIT_TEST (post_edits_leave_reconstruction_history_unchanged) {
+            // Exposure/bloom edits are post-only. The resolved scene image (the
+            // reconstruction history the cleanup path exposes) keeps its bytes;
+            // Task 12 asserts the same separation against real Hable history.
+            const int2 resolved{191, 107};
+            std::vector<std::byte> scene_history(
+                static_cast<std::size_t>(resolved.x) * static_cast<std::size_t>(resolved.y) * 8u);
+            const auto history_bytes_before = scene_history.size();
+
+            PostProcessSettings edited{};
+            edited.m_auto_exposure = false;
+            edited.m_exposure_ev = -16.0f;
+            edited.m_bloom_enabled = false;
+            edited.m_bloom_intensity = 2.0f;
+            edited.m_bloom_threshold = 16.0f;
+            PPR_TEST_ASSERT(not validatePostProcessSettings(edited));
+            edited.m_exposure_ev = 16.0f;
+            edited.m_auto_exposure = true;
+            edited.m_ev_min = -8.0f;
+            edited.m_ev_max = 8.0f;
+            PPR_TEST_ASSERT(not validatePostProcessSettings(edited));
+
+            const auto history_bytes_after_post_edit = scene_history.size();
+            PPR_TEST_ASSERT(history_bytes_before == history_bytes_after_post_edit);
+        };
+
+        PPR_UNIT_TEST (teardown_is_idempotent_before_initialize) {
+            PostProcessPass pass;
+            PPR_TEST_ASSERT(not pass.shutdown());
+            PPR_TEST_ASSERT(not pass.shutdown());
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+            PPR_TEST_ASSERT(not pass.notifyDeviceLost());
+        };
+
         // ------------------------------------------------------------------
         // histogram eye adaptation
         // ------------------------------------------------------------------
@@ -30,58 +189,65 @@ namespace pP::tests::detail {
                 // Black frame: every luminance is zero. The log2 clamp keeps the
                 // reduction finite; the target EV pins to the upper bound because a
                 // dark scene needs positive exposure.
-                std::vector<float> black(4096u, 0.0f);
-                std::array<u32, RetroPass::kHistogramBins> black_hist{};
-                for (const float lum: black) {
-                    ++black_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
-                }
-                const float black_avg = RetroPass::averageLog2Luminance(black_hist, static_cast<u32>(black.size()));
+                std::array<u32, PostProcessPass::kHistogramBins> black_hist{};
+                black_hist[PostProcessPass::luminanceBin(PostProcessPass::log2Luminance(0.0f))] = 4096u;
+                const float black_avg = PostProcessPass::averageLog2Luminance(black_hist, 4096u);
                 PPR_TEST_ASSERT(std::isfinite(black_avg));
-                PPR_TEST_ASSERT(RetroPass::targetEv(black_avg, ev_min, ev_max) == ev_max);
+                PPR_TEST_ASSERT(PostProcessPass::targetEv(black_avg, ev_min, ev_max) == ev_max);
 
                 // Uniform 0.18 middle gray: target EV lands near zero.
-                std::vector<float> uniform(4096u, 0.18f);
-                std::array<u32, RetroPass::kHistogramBins> uniform_hist{};
-                for (const float lum: uniform) {
-                    ++uniform_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
-                }
-                const float uniform_avg = RetroPass::averageLog2Luminance(
-                    uniform_hist, static_cast<u32>(uniform.size()));
-                const float uniform_ev = RetroPass::targetEv(uniform_avg, ev_min, ev_max);
+                std::array<u32, PostProcessPass::kHistogramBins> uniform_hist{};
+                uniform_hist[PostProcessPass::luminanceBin(PostProcessPass::log2Luminance(0.18f))] = 4096u;
+                const float uniform_avg = PostProcessPass::averageLog2Luminance(uniform_hist, 4096u);
+                const float uniform_ev = PostProcessPass::targetEv(uniform_avg, ev_min, ev_max);
                 PPR_TEST_ASSERT(std::isfinite(uniform_ev));
                 PPR_TEST_ASSERT(std::abs(uniform_ev) < 0.25f);
 
                 // Bright-emitter dominated: one emitter among a dark background. The
                 // percentile clip suppresses the emitter, leaving the dark background
                 // to drive a positive target EV, clamped at the upper bound.
-                std::vector<float> emitter(4096u, 0.01f);
-                emitter[0] = 1000.0f;
-                std::array<u32, RetroPass::kHistogramBins> emitter_hist{};
-                for (const float lum: emitter) {
-                    ++emitter_hist[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
-                }
-                const float emitter_avg = RetroPass::averageLog2Luminance(
-                    emitter_hist, static_cast<u32>(emitter.size()));
-                const float emitter_ev = RetroPass::targetEv(emitter_avg, ev_min, ev_max);
+                std::array<u32, PostProcessPass::kHistogramBins> emitter_hist{};
+                emitter_hist[PostProcessPass::luminanceBin(PostProcessPass::log2Luminance(0.01f))] = 4095u;
+                emitter_hist[PostProcessPass::luminanceBin(PostProcessPass::log2Luminance(1000.0f))] = 1u;
+                const float emitter_avg = PostProcessPass::averageLog2Luminance(emitter_hist, 4096u);
+                const float emitter_ev = PostProcessPass::targetEv(emitter_avg, ev_min, ev_max);
                 PPR_TEST_ASSERT(std::isfinite(emitter_ev));
                 PPR_TEST_ASSERT(emitter_ev > uniform_ev);
                 PPR_TEST_ASSERT(emitter_ev <= ev_max);
             };
 
+            PPR_UNIT_TEST (percentile_trim_retains_fractional_mass) {
+                // One luminance texel: the 10-90% interior retains exactly 0.8
+                // of the mass. Integer bin truncation previously lost it all.
+                std::array<u32, PostProcessPass::kHistogramBins> one{};
+                const u32 occupied_bin = 37u;
+                one[occupied_bin] = 1u;
+                const float retained_mass = PostProcessPass::retainedMass(one, 1u);
+                PPR_TEST_ASSERT(retained_mass == 0.8f);
+
+                const float one_texel_mean = PostProcessPass::averageLog2Luminance(one, 1u);
+                const float occupied_bin_center = PostProcessPass::histogramBinCenterLog2(occupied_bin);
+                PPR_TEST_ASSERT(one_texel_mean == occupied_bin_center);
+
+                std::array<u32, PostProcessPass::kHistogramBins> empty{};
+                PPR_TEST_ASSERT(PostProcessPass::retainedMass(empty, 0u) == 0.0f);
+                PPR_TEST_ASSERT(PostProcessPass::averageLog2Luminance(empty, 0u) == PostProcessPass::kLog2LuminanceMin);
+            };
+
             PPR_UNIT_TEST (cpu_adaptation_alpha) {
                 // A 60 Hz frame blends a small fraction, never an instant snap.
-                const float slow = RetroPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.7f);
+                const float slow = PostProcessPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.7f);
                 PPR_TEST_ASSERT(slow > 0.0f and slow < 0.1f);
 
                 // A cumulative timestamp (e.g. an hour since startup) would drive the
                 // blend to ~1; the adaptation path must never treat request_elapsed as
                 // the frame delta, or this is what it would compute.
-                const float timestamp = RetroPass::adaptationAlpha(std::chrono::hours{1}, 0.7f);
+                const float timestamp = PostProcessPass::adaptationAlpha(std::chrono::hours{1}, 0.7f);
                 PPR_TEST_ASSERT(timestamp > 0.99f);
 
                 // Zero delta and non-positive tau never adapt.
-                PPR_TEST_ASSERT(RetroPass::adaptationAlpha(TimeSpan{}, 0.7f) == 0.0f);
-                PPR_TEST_ASSERT(RetroPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.0f) == 0.0f);
+                PPR_TEST_ASSERT(PostProcessPass::adaptationAlpha(TimeSpan{}, 0.7f) == 0.0f);
+                PPR_TEST_ASSERT(PostProcessPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.0f) == 0.0f);
             };
 
             // GPU smoke drives the real luminance_histogram.slang + auto_exposure.slang
@@ -215,7 +381,7 @@ namespace pP::tests::detail {
                             desc.label = label;
                             PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, nullptr, out.writeRef())));
                         };
-                        device_buffer(RetroPass::kHistogramBins * sizeof(u32), "histogram bins", m_histogram);
+                        device_buffer(PostProcessPass::kHistogramBins * sizeof(u32), "histogram bins", m_histogram);
                         device_buffer(sizeof(float), "histogram target EV", m_target);
 
                         shader::SharedModule histogram_module{};
@@ -320,14 +486,16 @@ namespace pP::tests::detail {
                     // and returns the reduced target EV via fenced buffer readback.
                     float reduceTarget() {
                         struct HistogramParameters {
-                            u32 m_source_extent[2];
-                            u32 m_luminance_extent[2];
+                            u32 m_source_width;
+                            u32 m_source_height;
+                            u32 m_luminance_width;
+                            u32 m_luminance_height;
                             u32 m_reserved0;
                             u32 m_reserved1;
                         };
 
                         const u32 edge = 64u;
-                        const HistogramParameters histogram{{edge, edge}, {edge, edge}, 0u, 0u};
+                        const HistogramParameters histogram{edge, edge, edge, edge, 0u, 0u};
 
                         rhi::ComPtr<rhi::ICommandEncoder> encoder;
                         PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
@@ -384,7 +552,7 @@ namespace pP::tests::detail {
                         };
 
                         const AutoParameters automatic{
-                            RetroPass::adaptationAlpha(dt, tau), -4.0f, 4.0f, enabled ? 1u : 0u};
+                            PostProcessPass::adaptationAlpha(dt, tau), -4.0f, 4.0f, enabled ? 1u : 0u};
 
                         rhi::ComPtr<rhi::ICommandEncoder> encoder;
                         PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
@@ -456,7 +624,7 @@ namespace pP::tests::detail {
                     constexpr float ev_max = 4.0f;
                     const TimeSpan dt = std::chrono::milliseconds{16}; // ~60 Hz frame
                     const float tau = 0.7f;
-                    const float alpha = RetroPass::adaptationAlpha(dt, tau);
+                    const float alpha = PostProcessPass::adaptationAlpha(dt, tau);
 
                     Fixture fixture;
                     fixture.initialize(0.18f);
@@ -467,14 +635,10 @@ namespace pP::tests::detail {
                     // CPU oracle target for the uniform 0.18 scene (64x64 luminance).
                     // The GPU reduction writes the unclamped target EV; the final clamp
                     // happens in adaptExposure, so compare against the unclamped value.
-                    std::vector<float> uniform(std::size_t(64u) * 64u, 0.18f);
-                    std::array<u32, RetroPass::kHistogramBins> histogram{};
-                    for (const float lum: uniform) {
-                        ++histogram[RetroPass::luminanceBin(RetroPass::log2Luminance(lum))];
-                    }
-                    const float cpu_target = std::log2(RetroPass::kMiddleGrayLuminance) -
-                                             RetroPass::averageLog2Luminance(
-                                                 histogram, static_cast<u32>(uniform.size()));
+                    std::array<u32, PostProcessPass::kHistogramBins> histogram{};
+                    histogram[PostProcessPass::luminanceBin(PostProcessPass::log2Luminance(0.18f))] = 64u * 64u;
+                    const float cpu_target = std::log2(PostProcessPass::kMiddleGrayLuminance) -
+                                             PostProcessPass::averageLog2Luminance(histogram, 64u * 64u);
 
                     // GPU reduced target must match the CPU oracle (numeric, not just
                     // finiteness): a broken histogram/reduction fails here. The
@@ -506,7 +670,7 @@ namespace pP::tests::detail {
 
                 // Independent GPU contract in actual scene-radiance units: a dark
                 // uniform scene must produce a positive target EV and therefore a
-                // brighter output after the present-side exp2 multiply. This does not
+                // brighter output after the display-side exp2 multiply. This does not
                 // consult the CPU target formula.
                 PPR_UNIT_TEST (gpu_dark_scene_target_ev_raises_exposure) {
                     constexpr float dark_luminance = 0.018f;
@@ -527,52 +691,74 @@ namespace pP::tests::detail {
             const UnitTest histogram_adaptation = UnitTest::Named("histogram_adaptation") /
                                                   [](UnitTest::IRun &run) -> void {
                 run.recurse(
-                    {cpu_histogram_math, cpu_adaptation_alpha, Gpu::gpu_adaptation_smoke,
-                        Gpu::gpu_dark_scene_target_ev_raises_exposure});
+                    {cpu_histogram_math, percentile_trim_retains_fractional_mass, cpu_adaptation_alpha,
+                        Gpu::gpu_adaptation_smoke, Gpu::gpu_dark_scene_target_ev_raises_exposure});
             };
         }
 
         // ------------------------------------------------------------------
-        // SPD-style bloom
+        // ceil-sized bloom
         // ------------------------------------------------------------------
 
         namespace SpdBloom {
-            PPR_UNIT_TEST (cpu_bloom_chain_layout) {
-                // A 1080p picture: half-res mip 0, six mips, floor-halved extents.
-                const int2 mip0 = RetroPass::bloomMip0Extent(int2{1920, 1080});
-                PPR_TEST_ASSERT(mip0.x == 960 and mip0.y == 540);
-                PPR_TEST_ASSERT(RetroPass::bloomMipCount(mip0) == 6u);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 0u).x == 960);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 1u).x == 480);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 5u).x == 30);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(mip0, 5u).y == 16);
+            PPR_UNIT_TEST (cpu_bloom_ceil_chain_layout) {
+                // A 1080p picture: ceil(R/2) level 0 and ceil-halved levels,
+                // stopping after six levels because 30x17 is not yet 1x1.
+                const std::array<int2, PostProcessPass::kMaxBloomLevels> bloom_extents =
+                    PostProcessPass::bloomLevelExtents(int2{1920, 1080});
+                const std::array<int2, PostProcessPass::kMaxBloomLevels> ceil_chain_to_one_or_six{
+                    int2{960, 540}, int2{480, 270}, int2{240, 135}, int2{120, 68}, int2{60, 34}, int2{30, 17}};
+                PPR_TEST_ASSERT(PostProcessPass::bloomLevelCount(int2{1920, 1080}) == 6u);
+                for (u32 level = 0u; level < PostProcessPass::kMaxBloomLevels; ++level) {
+                    PPR_TEST_ASSERT(bloom_extents[level].x == ceil_chain_to_one_or_six[level].x);
+                    PPR_TEST_ASSERT(bloom_extents[level].y == ceil_chain_to_one_or_six[level].y);
+                }
 
-                // Cumulative RGBA16F bytes (8 per texel) over the six-mip chain.
-                const u64 expected =
-                    (960ull * 540 + 480ull * 270 + 240ull * 135 + 120ull * 67 + 60ull * 33 + 30ull * 16) * 8u;
-                PPR_TEST_ASSERT(RetroPass::bloomChainBytes(mip0) == expected);
+                // Odd extents use ceil, not floor: the last partial row/column is
+                // content and is replicated by the 2x2 source filter.
+                const std::array<int2, PostProcessPass::kMaxBloomLevels> odd_extents =
+                    PostProcessPass::bloomLevelExtents(int2{101, 51});
+                const std::array<int2, PostProcessPass::kMaxBloomLevels> odd_ceil_chain{
+                    int2{51, 26}, int2{26, 13}, int2{13, 7}, int2{7, 4}, int2{4, 2}, int2{2, 1}};
+                PPR_TEST_ASSERT(PostProcessPass::bloomLevelCount(int2{101, 51}) == 6u);
+                for (u32 level = 0u; level < PostProcessPass::kMaxBloomLevels; ++level) {
+                    PPR_TEST_ASSERT(odd_extents[level].x == odd_ceil_chain[level].x);
+                    PPR_TEST_ASSERT(odd_extents[level].y == odd_ceil_chain[level].y);
+                }
 
-                // Odd extents stay floor-halved and clamped at one texel.
-                const int2 odd = RetroPass::bloomMip0Extent(int2{101, 51});
-                PPR_TEST_ASSERT(odd.x == 51 and odd.y == 26);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 0u).y == 26);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 5u).x == 1);
-                PPR_TEST_ASSERT(RetroPass::bloomMipExtent(odd, 31u).y == 1);
+                // A tiny picture stops at its 1x1 level (still a valid cohort).
+                const auto one = PostProcessPass::bloomLevelExtents(int2{1, 1});
+                PPR_TEST_ASSERT(PostProcessPass::bloomLevelCount(int2{1, 1}) == 1u);
+                PPR_TEST_ASSERT(one[0].x == 1 and one[0].y == 1);
+                for (const int2 &extent: one) {
+                    PPR_TEST_ASSERT(extent.x == 1 and extent.y == 1);
+                }
 
-                // A tiny chain stays a single mip (still capped at six, never zero).
-                PPR_TEST_ASSERT(RetroPass::bloomMipCount(int2{1, 1}) == 1u);
+                const auto two = PostProcessPass::bloomLevelExtents(int2{2, 2});
+                PPR_TEST_ASSERT(PostProcessPass::bloomLevelCount(int2{2, 2}) == 1u);
+                PPR_TEST_ASSERT(two[0].x == 1 and two[0].y == 1);
             };
 
             namespace Gpu {
                 struct BloomParams {
-                    u32 m_source[2];
-                    u32 m_mip0[2];
+                    u32 m_source_width;
+                    u32 m_source_height;
+                    u32 m_src_width;
+                    u32 m_src_height;
+                    u32 m_dst_width;
+                    u32 m_dst_height;
                     float m_threshold;
                     float m_soft_knee;
-                    u32 m_mip_count;
-                    u32 m_upsample_level;
+                    float m_manual_ev;
+                    u32 m_level;
+                    u32 m_reserved0;
+                    u32 m_reserved1;
+                    u32 m_reserved2;
+                    u32 m_reserved3;
+                    u32 m_reserved4;
+                    u32 m_reserved5;
                 };
-                static_assert(sizeof(BloomParams) == 32u);
+                static_assert(sizeof(BloomParams) == 64u);
 
                 // IEEE-754 half->float. The bloom readback decodes the same half
                 // bytes the GPU wrote.
@@ -609,12 +795,14 @@ namespace pP::tests::detail {
                     rhi::ComPtr<rhi::ICommandQueue> m_queue;
                     FrameFence m_fence;
 
-                    rhi::ComPtr<rhi::ITexture> m_bloom;
-                    rhi::ComPtr<rhi::ITextureView> m_bloom_view;
-                    std::array<rhi::ComPtr<rhi::ITextureView>, RetroPass::kMaxBloomMips> m_bloom_uav_views{};
+                    std::array<rhi::ComPtr<rhi::ITexture>, PostProcessPass::kMaxBloomLevels> m_bloom{};
+                    std::array<rhi::ComPtr<rhi::ITextureView>, PostProcessPass::kMaxBloomLevels> m_bloom_views{};
                     std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> m_programs{};
                     std::array<rhi::ComPtr<rhi::IComputePipeline>, 3> m_pipelines{};
                     std::array<rhi::ComPtr<rhi::IShaderObject>, 3> m_roots{};
+                    rhi::ComPtr<rhi::ISampler> m_sampler;
+                    rhi::DescriptorHandle m_sampler_handle{};
+                    u32 m_levels{};
 
                     void initialize(const u32 edge) {
                         PPR_TEST_ASSERT(not m_shaders->initialize());
@@ -633,28 +821,37 @@ namespace pP::tests::detail {
                             not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
                         PPR_TEST_ASSERT(not m_fence.initialize(device));
 
-                        const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
-                        const u32 mip_count = RetroPass::bloomMipCount(mip0);
-                        rhi::TextureDesc bloom_desc{};
-                        bloom_desc.type = rhi::TextureType::Texture2D;
-                        bloom_desc.size = {.width = u32(mip0.x), .height = u32(mip0.y), .depth = 1u};
-                        bloom_desc.arrayLength = 1u;
-                        bloom_desc.mipCount = mip_count;
-                        bloom_desc.format = rhi::Format::RGBA16Float;
-                        bloom_desc.usage = static_cast<rhi::TextureUsage>(
-                            static_cast<u32>(rhi::TextureUsage::ShaderResource) |
-                            static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
-                        bloom_desc.defaultState = rhi::ResourceState::UnorderedAccess;
-                        bloom_desc.label = "spd bloom chain";
-                        PPR_TEST_ASSERT(
-                            not make_error_code(device.createTexture(bloom_desc, nullptr, m_bloom.writeRef())));
-                        PPR_TEST_ASSERT(not make_error_code(m_bloom->getDefaultView(m_bloom_view.writeRef())));
-                        for (u32 level = 0u; level < mip_count; ++level) {
-                            rhi::TextureViewDesc view_desc{};
-                            view_desc.subresourceRange = {.layer = 0u, .layerCount = 1u, .mip = level, .mipCount = 1u};
-                            PPR_TEST_ASSERT(not make_error_code(
-                                m_bloom->createView(view_desc, m_bloom_uav_views[level].writeRef())));
+                        m_levels = PostProcessPass::bloomLevelCount(int2{int(edge), int(edge)});
+                        for (u32 level = 0u; level < m_levels; ++level) {
+                            const int2 extent = PostProcessPass::bloomLevelExtent(int2{int(edge), int(edge)}, level);
+                            rhi::TextureDesc desc{};
+                            desc.type = rhi::TextureType::Texture2D;
+                            desc.size = {
+                                .width = static_cast<u32>(extent.x), .height = static_cast<u32>(extent.y), .depth = 1u};
+                            desc.arrayLength = 1u;
+                            desc.mipCount = 1u;
+                            desc.format = rhi::Format::RGBA16Float;
+                            desc.usage = static_cast<rhi::TextureUsage>(
+                                static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                                static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+                            desc.defaultState = rhi::ResourceState::UnorderedAccess;
+                            desc.label = "bloom level";
+                            PPR_TEST_ASSERT(
+                                not make_error_code(device.createTexture(desc, nullptr, m_bloom[level].writeRef())));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(m_bloom[level]->getDefaultView(m_bloom_views[level].writeRef())));
                         }
+
+                        rhi::SamplerDesc sampler{};
+                        sampler.minFilter = rhi::TextureFilteringMode::Linear;
+                        sampler.magFilter = rhi::TextureFilteringMode::Linear;
+                        sampler.mipFilter = rhi::TextureFilteringMode::Linear;
+                        sampler.addressU = rhi::TextureAddressingMode::ClampToEdge;
+                        sampler.addressV = rhi::TextureAddressingMode::ClampToEdge;
+                        sampler.addressW = rhi::TextureAddressingMode::ClampToEdge;
+                        sampler.maxAnisotropy = 1u;
+                        PPR_TEST_ASSERT(not make_error_code(device.createSampler(sampler, m_sampler.writeRef())));
+                        PPR_TEST_ASSERT(not make_error_code(m_sampler->getDescriptorHandle(&m_sampler_handle)));
 
                         shader::SharedModule module{};
                         PPR_TEST_ASSERT(not m_shaders->loadModuleFromFile(
@@ -703,14 +900,14 @@ namespace pP::tests::detail {
 
                     // Uploads a synthetic scene (uniform background plus one bright
                     // block), runs the full prefilter/downsample/upsample chain, and
-                    // returns the accumulated mip 0 decoded to linear float RGB.
+                    // returns the accumulated level 0 decoded to linear float RGB.
                     // adapted_ev is the 1x1 exposure offset the prefilter samples
                     // (0 = fixed exposure).
                     std::vector<std::array<float, 3>> run(
                         const u32 edge, const float background, const float block_value,
                         const float adapted_ev = 0.0f) {
-                        const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
-                        const u32 mip_count = RetroPass::bloomMipCount(mip0);
+                        const int2 resolved{int(edge), int(edge)};
+                        const int2 level0 = PostProcessPass::bloomLevelExtent(resolved, 0u);
                         const u32 block_edge = edge / 16u;
                         const u32 block_origin = (edge - block_edge) / 2u;
 
@@ -740,7 +937,7 @@ namespace pP::tests::detail {
                         scene_desc.format = rhi::Format::RGBA32Float;
                         scene_desc.usage = rhi::TextureUsage::ShaderResource;
                         scene_desc.defaultState = rhi::ResourceState::ShaderResource;
-                        scene_desc.label = "spd bloom synthetic scene";
+                        scene_desc.label = "bloom synthetic scene";
                         rhi::ComPtr<rhi::ITexture> scene_tex;
                         rhi::ComPtr<rhi::ITextureView> scene_view;
                         auto &device = m_rhi->getDevice();
@@ -760,7 +957,7 @@ namespace pP::tests::detail {
                         exposure_desc.format = rhi::Format::R32Float;
                         exposure_desc.usage = rhi::TextureUsage::ShaderResource;
                         exposure_desc.defaultState = rhi::ResourceState::ShaderResource;
-                        exposure_desc.label = "spd bloom exposure offset";
+                        exposure_desc.label = "bloom exposure offset";
                         rhi::ComPtr<rhi::ITexture> exposure_tex;
                         rhi::ComPtr<rhi::ITextureView> exposure_view;
                         PPR_TEST_ASSERT(not make_error_code(
@@ -768,50 +965,16 @@ namespace pP::tests::detail {
                         PPR_TEST_ASSERT(not make_error_code(exposure_tex->getDefaultView(exposure_view.writeRef())));
 
                         BloomParams params{};
-                        params.m_source[0] = edge;
-                        params.m_source[1] = edge;
-                        params.m_mip0[0] = u32(mip0.x);
-                        params.m_mip0[1] = u32(mip0.y);
+                        params.m_source_width = edge;
+                        params.m_source_height = edge;
                         params.m_threshold = 1.0f;
-                        params.m_soft_knee = RetroPass::kBloomSoftKnee;
-                        params.m_mip_count = mip_count;
-                        params.m_upsample_level = 0u;
-
-                        static constexpr std::array<const char *, RetroPass::kMaxBloomMips> kMipNames{
-                            "g_bloom_mip0", "g_bloom_mip1", "g_bloom_mip2", "g_bloom_mip3", "g_bloom_mip4",
-                            "g_bloom_mip5"};
+                        params.m_soft_knee = PostProcessPass::kBloomSoftKnee;
+                        params.m_manual_ev = 0.0f;
 
                         rhi::ComPtr<rhi::ICommandEncoder> encoder;
                         PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
 
-                        {
-                            rhi::ShaderCursor cursor{m_roots[0]}, constants{};
-                            PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
-                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
-                            PPR_TEST_ASSERT(
-                                not make_error_code(cursor["g_scene"].setBinding(rhi::Binding(scene_view))));
-                            PPR_TEST_ASSERT(
-                                not make_error_code(cursor["g_exposure"].setBinding(rhi::Binding(exposure_view))));
-                            PPR_TEST_ASSERT(not make_error_code(
-                                cursor["g_bloom_mip0"].setBinding(rhi::Binding(m_bloom_uav_views[0]))));
-                        }
-                        {
-                            rhi::ShaderCursor cursor{m_roots[1]}, constants{};
-                            PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
-                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
-                            for (u32 level = 0u; level < RetroPass::kMaxBloomMips; ++level) {
-                                const u32 view = std::min(level, mip_count - 1u);
-                                PPR_TEST_ASSERT(not make_error_code(
-                                    cursor[kMipNames[level]].setBinding(rhi::Binding(m_bloom_uav_views[view]))));
-                            }
-                        }
-                        rhi::ShaderCursor up_cursor{m_roots[2]}, up_constants{};
-                        PPR_TEST_ASSERT(not make_error_code(up_cursor["g_bloom"].getDereferenced(up_constants)));
-
-                        const rhi::SubresourceRange chain{
-                            .layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = mip_count};
-                        encoder->setTextureState(m_bloom, chain, rhi::ResourceState::UnorderedAccess);
-
+                        const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
                         const auto dispatch = [&](const u32 program, const u32 x, const u32 y) {
                             auto *const pass = encoder->beginComputePass();
                             PPR_TEST_ASSERT(pass != nullptr);
@@ -819,39 +982,86 @@ namespace pP::tests::detail {
                             pass->dispatchCompute(x, y, 1u);
                             pass->end();
                         };
-                        dispatch(0u, (u32(mip0.x) + 7u) / 8u, (u32(mip0.y) + 7u) / 8u);
-                        encoder->globalBarrier();
-                        if (mip_count > 1u) {
-                            dispatch(1u, (u32(mip0.x) + 31u) / 32u, (u32(mip0.y) + 31u) / 32u);
-                        }
-                        for (u32 level = mip_count - 1u; level >= 1u; --level) {
-                            const int2 dst = RetroPass::bloomMipExtent(mip0, level - 1u);
-                            params.m_upsample_level = level;
-                            PPR_TEST_ASSERT(not make_error_code(up_constants.setData(&params, sizeof(params))));
-                            PPR_TEST_ASSERT(not make_error_code(
-                                up_cursor["g_up_src"].setBinding(rhi::Binding(m_bloom_uav_views[level]))));
-                            PPR_TEST_ASSERT(not make_error_code(
-                                up_cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_uav_views[level - 1u]))));
-                            encoder->globalBarrier();
-                            dispatch(2u, (u32(dst.x) + 7u) / 8u, (u32(dst.y) + 7u) / 8u);
+
+                        {
+                            params.m_dst_width = static_cast<u32>(level0.x);
+                            params.m_dst_height = static_cast<u32>(level0.y);
+                            params.m_level = 0u;
+                            rhi::ShaderCursor cursor{m_roots[0]}, constants{};
+                            PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
+                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_scene"].setBinding(rhi::Binding(scene_view))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_exposure"].setBinding(rhi::Binding(exposure_view))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_down_dst"].setBinding(rhi::Binding(m_bloom_views[0]))));
                         }
 
-                        encoder->setTextureState(m_bloom, chain, rhi::ResourceState::ShaderResource);
+                        encoder->setTextureState(m_bloom[0], range, rhi::ResourceState::UnorderedAccess);
+                        dispatch(0u, (static_cast<u32>(level0.x) + 7u) / 8u, (static_cast<u32>(level0.y) + 7u) / 8u);
+                        encoder->globalBarrier();
+
+                        for (u32 level = 1u; level < m_levels; ++level) {
+                            const int2 src = PostProcessPass::bloomLevelExtent(resolved, level - 1u);
+                            const int2 dst = PostProcessPass::bloomLevelExtent(resolved, level);
+                            params.m_src_width = static_cast<u32>(src.x);
+                            params.m_src_height = static_cast<u32>(src.y);
+                            params.m_dst_width = static_cast<u32>(dst.x);
+                            params.m_dst_height = static_cast<u32>(dst.y);
+                            params.m_level = level;
+                            rhi::ShaderCursor cursor{m_roots[1]}, constants{};
+                            PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
+                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
+                            PPR_TEST_ASSERT(not make_error_code(
+                                cursor["g_down_src"].setBinding(rhi::Binding(m_bloom_views[level - 1u]))));
+                            PPR_TEST_ASSERT(not make_error_code(
+                                cursor["g_down_dst"].setBinding(rhi::Binding(m_bloom_views[level]))));
+                            encoder->setTextureState(m_bloom[level - 1u], range, rhi::ResourceState::ShaderResource);
+                            encoder->setTextureState(m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
+                            dispatch(1u, (static_cast<u32>(dst.x) + 7u) / 8u, (static_cast<u32>(dst.y) + 7u) / 8u);
+                            encoder->globalBarrier();
+                        }
+
+                        for (u32 level = m_levels - 1u; level >= 1u; --level) {
+                            const int2 src = PostProcessPass::bloomLevelExtent(resolved, level);
+                            const int2 dst = PostProcessPass::bloomLevelExtent(resolved, level - 1u);
+                            params.m_src_width = static_cast<u32>(src.x);
+                            params.m_src_height = static_cast<u32>(src.y);
+                            params.m_dst_width = static_cast<u32>(dst.x);
+                            params.m_dst_height = static_cast<u32>(dst.y);
+                            params.m_level = level;
+                            rhi::ShaderCursor cursor{m_roots[2]}, constants{};
+                            PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
+                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_up_src"].setBinding(rhi::Binding(m_bloom_views[level]))));
+                            PPR_TEST_ASSERT(not make_error_code(
+                                cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_views[level - 1u]))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_linear"].setDescriptorHandle(m_sampler_handle)));
+                            encoder->setTextureState(m_bloom[level], range, rhi::ResourceState::ShaderResource);
+                            encoder->setTextureState(m_bloom[level - 1u], range, rhi::ResourceState::UnorderedAccess);
+                            dispatch(2u, (static_cast<u32>(dst.x) + 7u) / 8u, (static_cast<u32>(dst.y) + 7u) / 8u);
+                            encoder->globalBarrier();
+                        }
+
+                        encoder->setTextureState(m_bloom[0], range, rhi::ResourceState::ShaderResource);
                         submit(*encoder);
 
                         shader::ComPtr<ISlangBlob> blob;
                         rhi::SubresourceLayout layout{};
-                        PPR_TEST_ASSERT(
-                            not make_error_code(device.readTexture(m_bloom, 0u, 0u, blob.writeRef(), &layout)));
+                        PPR_TEST_ASSERT(not make_error_code(
+                            device.readTexture(m_bloom[0].get(), 0u, 0u, blob.writeRef(), &layout)));
                         const auto *const bytes = static_cast<const std::byte *>(blob->getBufferPointer());
 
-                        std::vector<std::array<float, 3>> result(std::size_t(mip0.x) * std::size_t(mip0.y));
-                        for (u32 y = 0u; y < u32(mip0.y); ++y) {
-                            for (u32 x = 0u; x < u32(mip0.x); ++x) {
+                        std::vector<std::array<float, 3>> result(std::size_t(level0.x) * std::size_t(level0.y));
+                        for (u32 y = 0u; y < u32(level0.y); ++y) {
+                            for (u32 x = 0u; x < u32(level0.x); ++x) {
                                 const std::byte *const pixel = bytes + y * layout.rowPitch + x * 8u;
                                 std::array<u16, 4> halves{};
                                 std::memcpy(halves.data(), pixel, sizeof(halves));
-                                result[std::size_t(y) * std::size_t(mip0.x) + x] = {
+                                result[std::size_t(y) * std::size_t(level0.x) + x] = {
                                     halfToFloat(halves[0]), halfToFloat(halves[1]), halfToFloat(halves[2])};
                             }
                         }
@@ -866,14 +1076,15 @@ namespace pP::tests::detail {
 
                     void shutdown() {
                         if (m_queue and make_error_code(m_queue->waitOnHost()))
-                            hal::fatalExit("spd-bloom-test-quiescence-unknown");
+                            hal::fatalExit("bloom-test-quiescence-unknown");
 
                         m_roots = {};
                         m_pipelines = {};
                         m_programs = {};
-                        m_bloom_uav_views = {};
-                        m_bloom_view.setNull();
-                        m_bloom.setNull();
+                        m_bloom_views = {};
+                        m_bloom = {};
+                        m_sampler.setNull();
+                        m_sampler_handle = {};
                         PPR_TEST_ASSERT(not m_fence.shutdown());
                         m_queue.setNull();
                         PPR_TEST_ASSERT(not m_rhi->shutdown());
@@ -894,13 +1105,13 @@ namespace pP::tests::detail {
                         fixture.shutdown();
                     };
 
-                    const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
+                    const int2 level0 = PostProcessPass::bloomLevelExtent(int2{int(edge), int(edge)}, 0u);
                     const auto at = [&](const std::vector<std::array<float, 3>> &result, const u32 x, const u32 y) {
-                        return luminanceOf(result[std::size_t(y) * u32(mip0.x) + x]);
+                        return luminanceOf(result[std::size_t(y) * u32(level0.x) + x]);
                     };
 
                     const auto bright = fixture.run(edge, 0.05f, 20.0f);
-                    PPR_TEST_ASSERT(bright.size() == std::size_t(mip0.x) * std::size_t(mip0.y));
+                    PPR_TEST_ASSERT(bright.size() == std::size_t(level0.x) * std::size_t(level0.y));
 
                     // Finite everywhere, and the bright block leaves a non-zero trail.
                     bool all_finite = true;
@@ -912,11 +1123,6 @@ namespace pP::tests::detail {
                     }
                     PPR_TEST_ASSERT(all_finite);
 
-                    // The block is 16 scene texels centred at edge/2, so in mip 0 it
-                    // spans (edge/4-2 .. edge/4+1); its centre is clearly lit, the
-                    // texel just outside is lit ("around the block"), and a texel
-                    // seven away is still lit — far beyond the two-texel reach of a
-                    // single 5x5 binomial blur, which a wider multi-mip chain reaches.
                     const u32 block_centre = edge / 4u;
                     PPR_TEST_ASSERT(at(bright, block_centre, block_centre) > 0.01f);
                     PPR_TEST_ASSERT(at(bright, block_centre + 2u, block_centre) > 1e-3f);
@@ -971,8 +1177,7 @@ namespace pP::tests::detail {
                     };
 
                     // A uniform bright picture must produce a bounded, non-zero bloom:
-                    // the per-level weights keep the peak far below the unweighted ~6x
-                    // accumulation (the prefilter of a uniform 20.0 picture is ~0.95).
+                    // the per-level weights keep the peak far below an unweighted sum.
                     const auto bloomed = fixture.run(edge, 20.0f, 20.0f, 0.0f);
                     float peak = 0.0f;
                     for (const auto &pixel: bloomed) {
@@ -984,7 +1189,7 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(peak < 4.0f);
                 };
 
-                PPR_UNIT_TEST (gpu_bloom_single_mip_not_halved) {
+                PPR_UNIT_TEST (gpu_bloom_single_level_not_halved) {
                     constexpr u32 edge = 2u;
 
                     Fixture fixture;
@@ -993,42 +1198,117 @@ namespace pP::tests::detail {
                         fixture.shutdown();
                     };
 
-                    const int2 mip0 = RetroPass::bloomMip0Extent(int2{int(edge), int(edge)});
-                    PPR_TEST_ASSERT(mip0.x == 1 and mip0.y == 1);
-                    PPR_TEST_ASSERT(RetroPass::bloomMipCount(mip0) == 1u);
+                    const int2 level0 = PostProcessPass::bloomLevelExtent(int2{int(edge), int(edge)}, 0u);
+                    PPR_TEST_ASSERT(level0.x == 1 and level0.y == 1);
+                    PPR_TEST_ASSERT(PostProcessPass::bloomLevelCount(int2{int(edge), int(edge)}) == 1u);
 
-                    // A uniform bright picture through a single-mip chain must keep the
-                    // prefilter intact: the (skipped) downsample must not alias mip 1
-                    // onto mip 0 and halve it.
+                    // A uniform bright picture through a single-level chain keeps the
+                    // prefilter intact: no coarse level exists to alias onto level 0.
                     const auto bloomed = fixture.run(edge, 20.0f, 20.0f, 0.0f);
                     PPR_TEST_ASSERT(bloomed.size() == 1u);
                     const float peak = luminanceOf(bloomed[0]);
                     PPR_TEST_ASSERT(std::isfinite(peak));
-                    // The prefilter of a uniform 20.0 picture is ~0.95 (Karis-damped);
-                    // halving it would land near 0.47, so a value above 0.7 proves the
-                    // single mip survives.
                     PPR_TEST_ASSERT(peak > 0.7f);
                 };
             }
 
             const UnitTest spd_bloom = UnitTest::Named("spd_bloom") / [](UnitTest::IRun &run) -> void {
                 run.recurse(
-                    {cpu_bloom_chain_layout, Gpu::gpu_bloom_smoke, Gpu::gpu_bloom_exposure_aware,
-                        Gpu::gpu_bloom_bounded_uniform, Gpu::gpu_bloom_single_mip_not_halved});
+                    {cpu_bloom_ceil_chain_layout, Gpu::gpu_bloom_smoke, Gpu::gpu_bloom_exposure_aware,
+                        Gpu::gpu_bloom_bounded_uniform, Gpu::gpu_bloom_single_level_not_halved});
             };
         }
+
+        // ------------------------------------------------------------------
+        // pass-owned output lifetime and settlement
+        // ------------------------------------------------------------------
+
+        namespace OutputLifetime {
+            PPR_UNIT_TEST (gpu_prepare_rejects_mismatched_view_and_output_is_reusable) {
+                const auto rhi = IRhiService::get();
+                const auto shaders = IShaderService::get();
+                PPR_TEST_ASSERT(rhi.isValid() and shaders.isValid());
+                PPR_TEST_ASSERT(not shaders->initialize());
+                const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                const bool validation = setting and *setting == "1";
+                rhi->setCoreValidation(true);
+                rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                PPR_TEST_ASSERT(not rhi->initialize(backend, *shaders));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not rhi->shutdown());
+                    PPR_TEST_ASSERT(not shaders->shutdown());
+                };
+
+                auto &device = rhi->getDevice();
+                PostProcessPass pass;
+                PPR_TEST_ASSERT(not pass.initialize(*shaders, std::filesystem::current_path()));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not pass.shutdown());
+                };
+
+                const GridWorldIdentity world{.m_job_id = 1u, .m_world_generation = 1u, .m_content_fingerprint = 1u};
+                const int2 resolved{17, 9};
+                PPR_TEST_ASSERT(not pass.beginFrame(device, resolved, world, kFenceValueNone));
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().format == rhi::Format::RGBA16Float);
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().size.width == 17u);
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().size.height == 9u);
+
+                // A mismatched valid rectangle is rejected before any submission;
+                // discarding the attempt leaves the output usable.
+                const rhi::ComPtr<rhi::ITextureView> rejected_view = pass.outputTexture().getDefaultView();
+                const rhi::ComPtr<rhi::ICommandEncoder> encoder = [&] {
+                    rhi::ComPtr<rhi::ICommandQueue> queue;
+                    PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, queue.writeRef())));
+                    rhi::ComPtr<rhi::ICommandEncoder> created;
+                    PPR_TEST_ASSERT(not make_error_code(queue->createCommandEncoder(created.writeRef())));
+                    return created;
+                }();
+
+                const PreRenderContext context{device, *encoder, kFenceValueNone, {}};
+                const ResolvedHdrView mismatched{
+                    .m_view = rejected_view,
+                    .m_world = world,
+                    .m_backing = int2{17, 9},
+                    .m_valid = int2{16, 9},
+                };
+                PPR_TEST_ASSERT(
+                    pass.prepare(context, mismatched, PostProcessSettings{}, TimeSpan{}) ==
+                    std::errc::invalid_argument);
+                pass.discardUnsubmitted();
+
+                PPR_TEST_ASSERT(not pass.beginFrame(device, resolved, world, kFenceValueNone));
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().size.width == 17u);
+
+                // Completion collection releases the retained binding exactly once.
+                PPR_TEST_ASSERT(not pass.collectCompleted(0u));
+            };
+        }
+
+        const UnitTest output_lifetime = UnitTest::Named("output_lifetime") / [](UnitTest::IRun &run) -> void {
+            run.recurse({OutputLifetime::gpu_prepare_rejects_mismatched_view_and_output_is_reusable});
+        };
     }
 }
 
 namespace pP::tests {
     // ------------------------------------------------------------------
-    // post-effect contracts suite
+    // independent post suite
     // ------------------------------------------------------------------
 
     const UnitTest post_process_contracts = UnitTest::Named("post_process") / [](UnitTest::IRun &_) -> void {
         _.recurse({
+            detail::PostProcess::presentation_grid_uses_checked_ceil_arithmetic,
+            detail::PostProcess::post_settings_reject_nonfinite_and_invalid_tuples,
+            detail::PostProcess::post_edits_leave_reconstruction_history_unchanged,
+            detail::PostProcess::teardown_is_idempotent_before_initialize,
             detail::PostProcess::HistogramAdaptation::histogram_adaptation,
             detail::PostProcess::SpdBloom::spd_bloom,
+            detail::PostProcess::output_lifetime,
         });
     };
 

@@ -1466,23 +1466,20 @@ descriptor = "earlier.toml"
 
         // Valid post draft: toggles produce accepted values.
         game::PostDisplaySettings post_draft{};
-        post_draft.m_palette = true;
         post_draft.m_bloom = true;
         post_draft.m_exposure_ev = 3.0f;
         config::Diagnostics post_diagnostics{};
         auto post = validatePostDraft(committed_post, post_draft, post_diagnostics);
         PPR_TEST_ASSERT(post.has_value());
-        PPR_TEST_ASSERT(post->m_value.m_palette);
         PPR_TEST_ASSERT(post->m_value.m_bloom);
         PPR_TEST_ASSERT(post->m_value.m_exposure_ev == 3.0f);
         PPR_TEST_ASSERT(not post_diagnostics.hasErrors());
 
         // Reset restores factory defaults (the retained black-boundary sky and
-        // the picture's bloom and eye adaptation on, palette quantization off).
+        // independent post bloom and eye adaptation on).
         const game::WorldLightDisplaySettings world_defaults{};
         PPR_TEST_ASSERT(world_defaults.m_sky_hour == -1);
         const game::PostDisplaySettings post_defaults{};
-        PPR_TEST_ASSERT(not post_defaults.m_palette);
         PPR_TEST_ASSERT(post_defaults.m_auto_exposure);
         PPR_TEST_ASSERT(post_defaults.m_bloom);
 
@@ -1499,43 +1496,6 @@ descriptor = "earlier.toml"
         config::Diagnostics invalid_post_diagnostics{};
         PPR_TEST_ASSERT(not validatePostDraft(committed_post, invalid_post, invalid_post_diagnostics));
         PPR_TEST_ASSERT(invalid_post_diagnostics.hasErrors());
-    };
-
-    PPR_UNIT_TEST (post_palette_is_the_sole_control_and_reaches_retro) {
-        // The post settings are the single source for the retro palette/exposure/
-        // bloom; applyPostToRetro is the only channel, so there is no second
-        // (shadowed) palette control editing RetroSettings directly.
-        colony::ColonyUiState state{};
-        game::applyPostToRetro(state.m_retro, state.m_post);
-
-        // Factory defaults already enable the picture's bloom and eye
-        // adaptation, and leave palette quantization off.
-        PPR_TEST_ASSERT(state.m_retro.m_auto_exposure);
-        PPR_TEST_ASSERT(state.m_retro.m_bloom_enabled);
-        PPR_TEST_ASSERT(not state.m_retro.m_palette_enabled);
-
-        state.m_post.m_palette = true;
-        state.m_post.m_exposure_ev = 3.0f;
-        state.m_post.m_auto_exposure = false;
-        state.m_post.m_bloom = false;
-
-        game::applyPostToRetro(state.m_retro, state.m_post);
-
-        PPR_TEST_ASSERT(state.m_retro.m_palette_enabled);
-        PPR_TEST_ASSERT(state.m_retro.m_exposure_ev == 3.0f);
-        PPR_TEST_ASSERT(not state.m_retro.m_auto_exposure);
-        PPR_TEST_ASSERT(not state.m_retro.m_bloom_enabled);
-
-        // The Display window edits m_post in place, so the next frame's apply
-        // must carry the re-enabled toggles back onto the retro picture.
-        state.m_post.m_palette = false;
-        state.m_post.m_auto_exposure = true;
-        state.m_post.m_bloom = true;
-        game::applyPostToRetro(state.m_retro, state.m_post);
-
-        PPR_TEST_ASSERT(not state.m_retro.m_palette_enabled);
-        PPR_TEST_ASSERT(state.m_retro.m_auto_exposure);
-        PPR_TEST_ASSERT(state.m_retro.m_bloom_enabled);
     };
 
 }
@@ -1563,7 +1523,6 @@ namespace pP::game::tests {
             detail::presentation::world_actions_close_during_activation_publication_and_shutdown,
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
             detail::presentation::lighting_post_draft_validates_and_resets,
-            detail::presentation::post_palette_is_the_sole_control_and_reaches_retro,
         });
     };
 

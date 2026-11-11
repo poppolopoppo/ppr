@@ -2504,9 +2504,9 @@ namespace pP::tests::detail::MatterGpu {
             }
         }
 
-        std::array<u64, 4u> holes{};
-        std::array<u64, 4u> samples{};
-        std::array<u64, 4u> outside_painted{};
+        std::array<u64, 2u> holes{};
+        std::array<u64, 2u> samples{};
+        std::array<u64, 2u> outside_painted{};
         for (u32 state = 0u; state < 2u; ++state) {
             u64 hash = 14695981039346656037ull;
             double rms_motion_squared = 0.0;
@@ -2533,13 +2533,10 @@ namespace pP::tests::detail::MatterGpu {
 
             for (u32 variant = 0u; variant < (glossy_qa ? 2u : 1u); ++variant) {
                 const bool glossy = variant != 0u;
-                for (const bool temporal: {false, true}) {
+                {
                     GridPass grid;
-                    RetroPass picture;
                     PPR_TEST_ASSERT(
                         not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
-                    PPR_TEST_ASSERT(
-                        not picture.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
                     PPR_DEFER {
                         const auto submitted = renderer.lastSubmittedFenceValue();
                         if (submitted != kFenceValueNone) {
@@ -2547,7 +2544,6 @@ namespace pP::tests::detail::MatterGpu {
                         }
 
                         PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-                        PPR_TEST_ASSERT(not picture.shutdown());
                         PPR_TEST_ASSERT(not grid.shutdown());
                     };
 
@@ -2616,63 +2612,41 @@ namespace pP::tests::detail::MatterGpu {
 
                         PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
                     }
-                    const RetroSettings settings{
-                        .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
-                    for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
-                        const auto raster = picture.beginFrame(
-                            settings, snapshot, int2{512, 512}, grid.worldGeneration());
-                        PPR_TEST_ASSERT(raster.has_value());
-                        PPR_TEST_ASSERT(picture.temporalActive() == temporal);
-                        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, *raster));
-                        const auto draw = [&](const DrawContext &context) -> std::error_code {
-                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.renderBackground(context));
-                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.render(context));
-                            return grid.renderParticles(context);
-                        };
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                    const auto draw = [&](const DrawContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.renderBackground(context));
+                        PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.render(context));
+                        return grid.renderParticles(context);
+                    };
 
-                        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
-                            PPR_RETURN_ERROR_ON_FAIL(
-                                MatterPoolRender, grid.prepareBackground(context, snapshot, viewport, scissor));
-                            PPR_RETURN_ERROR_ON_FAIL(MatterPoolRender, grid.prepareGpuParticles(context));
-                            if (temporal) {
-                                return picture.prepareScene(
-                                    context, RetroPass::scenePipelineSignature(true), int2{512, 512},
-                                    DrawCallback{draw});
-                            }
+                    const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            MatterPoolRender, grid.prepareBackground(context, snapshot, viewport, scissor));
+                        return grid.prepareGpuParticles(context);
+                    };
 
-                            return {};
-                        };
-
-                        const auto present = [&](const DrawContext &context) {
-                            return temporal ? picture.render(context) : draw(context);
-                        };
-                        DrawSubmission submission{"frozen actual solver pool", present};
-                        submission.m_viewport = viewport;
-                        submission.m_scissor = scissor;
-                        PPR_TEST_ASSERT(
-                            not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
-                        const auto submitted = renderer.lastSubmittedFenceValue();
-                        grid.notifyFrameSubmitted(submitted);
-                        if (temporal) {
-                            picture.notifyFrameSubmitted(submitted);
-                        }
-
-                        PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
-                        PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-                    }
+                    DrawSubmission submission{"frozen actual solver pool", draw};
+                    submission.m_viewport = viewport;
+                    submission.m_scissor = scissor;
+                    PPR_TEST_ASSERT(
+                        not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                    const auto submitted = renderer.lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(submitted);
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
 
                     shader::ComPtr<ISlangBlob> pixels;
                     rhi::SubresourceLayout layout{};
                     PPR_TEST_ASSERT(
                         not make_error_code(device.readTexture(target.get(), 0u, 0u, pixels.writeRef(), &layout)));
                     const auto *const bytes = static_cast<const u8 *>(pixels->getBufferPointer());
-                    const u32 index = state * 2u + u32(temporal);
+                    const u32 index = state;
                     std::ofstream ppm;
                     if (qa != nullptr and *qa != '\0') {
                         ppm.open(
-                            std::filesystem::path{qa} / std::format(
-                                                            "solver-pool-epoch-{}-{}{}.ppm", epochs[state],
-                                                            temporal ? "temporal" : "native", glossy ? "-glossy" : ""),
+                            std::filesystem::path{qa} /
+                                std::format(
+                                    "solver-pool-epoch-{}-native{}.ppm", epochs[state], glossy ? "-glossy" : ""),
                             std::ios::binary);
                         ppm << "P6\n512 512\n255\n";
                     }
@@ -2715,22 +2689,20 @@ namespace pP::tests::detail::MatterGpu {
                     if (glossy) {
                         // Authored appearance is visual QA, never a false-color
                         // coverage classification or an automatic aesthetic claim.
-                        std::println(
-                            "SOLVER-POOL-GLOSSY epoch={} hash={} temporal={} authored_water=true", epochs[state], hash,
-                            temporal);
+                        std::println("SOLVER-POOL-GLOSSY epoch={} hash={} authored_water=true", epochs[state], hash);
                         continue;
                     }
 
                     std::println(
-                        "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} temporal={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={}",
+                        "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={}",
                         epochs[state], state == 0u ? 1u : 120u, frozen[state].size(), hash,
-                        std::sqrt(rms_motion_squared / double(frozen[state].size())), temporal, samples[index],
-                        holes[index], outside_painted[index]);
+                        std::sqrt(rms_motion_squared / double(frozen[state].size())), samples[index], holes[index],
+                        outside_painted[index]);
                 }
             }
         }
 
-        // Emit all early/late native/temporal evidence even against old shaders.
+        // Emit all early/late native evidence even against old shaders.
         for (u32 index = 0u; index < holes.size(); ++index) {
             PPR_TEST_ASSERT(samples[index] > 0u);
             PPR_TEST_ASSERT(outside_painted[index] == 0u);

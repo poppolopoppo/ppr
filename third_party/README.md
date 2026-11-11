@@ -17,7 +17,7 @@ The [Hable MSAA spatial prerequisite](HableMSAA/README.md) retains the original
 MIT-licensed spatial source, its SHA-256 and the derivation of the adaptation's
 deliberately corrected lower output buckets. It introduces no engine dependency.
 The standalone shader is exercised by sampling/filter fixtures; runtime sample
-pattern admission and RetroPass integration remain separate work.
+pattern admission and reconstruction integration remain separate work.
 
 Sources of dependency versions:
 

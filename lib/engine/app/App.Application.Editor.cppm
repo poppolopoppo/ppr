@@ -6,8 +6,10 @@ import :application;
 import :frame.packet;
 import :frame.render_lane;
 import :scene.camera;
+import :renderer.frame_fence;
 import :renderer.grid_pass;
-import :renderer.retro_pass;
+import :renderer.post_process_pass;
+import :renderer.presentation;
 import :renderer.triangle_pass;
 import :service.client;
 import :service.input;
@@ -82,16 +84,11 @@ export namespace pP {
             return *m_grid_pass;
         }
 
-        // Retro scene-lane policy: the pixel scale is clamped here so every
-        // owned frame request carries a valid value. CPU-only: no GPU work
-        // and no frame drain; the next submit picks the stored settings up.
-        void setRetroSettings(const RetroSettings &settings) noexcept;
-
-        // Returns true only for a retained-only odd spatial target. The old
-        // picture extent is a completed-image proof supplied by the caller;
-        // the owner lane rechecks the actual pass before drawing it.
-        [[nodiscard]] static Expected<bool> admitPictureFrame(
-            const RetroSettings &settings, int2 target_extent, std::optional<int2> retained_extent = {});
+        // Independent post-processing policy: values are validated before
+        // backend work; the pixel scale is clamped to P1..8 here so every owned
+        // frame request carries a valid resolution control. CPU-only: no GPU
+        // work and no frame drain; the next submit picks the stored values up.
+        void setPostProcessSettings(const PostProcessSettings &settings, u32 pixel_scale) noexcept;
 
         // Post-initialize only. Rebuilds the camera input mapping before
         // releasing the previous controller; the editor keeps camera ownership.
@@ -250,6 +247,21 @@ export namespace pP {
         Array<image::ImageAsset> m_images{};
         TrianglePass::UploadedScene m_uploaded_scene{};
 
+        // The temporary cleanup scene image: one single-sample R-sized color
+        // target plus matching depth, completion-governed on the render lane.
+        // Task 12 replaces it with ReconstructionPass's resolved view.
+        struct PostSceneImage {
+            rhi::ComPtr<rhi::ITexture> m_color{};
+            rhi::ComPtr<rhi::ITextureView> m_view{};
+            rhi::ComPtr<rhi::ITexture> m_depth{};
+            rhi::ComPtr<rhi::ITextureView> m_depth_view{};
+            int2 m_extent{zero_v};
+            FenceCompletionValue m_last_use{kFenceValueNone};
+        };
+
+        [[nodiscard]] std::error_code ensureSceneImage_(rhi::IDevice &device, int2 resolved_extent);
+        void releaseSceneImages_() noexcept;
+
         std::unique_ptr<Player> m_player{};
         std::unique_ptr<Camera> m_camera{};
         std::unique_ptr<ICameraController> m_camera_controller{};
@@ -259,9 +271,17 @@ export namespace pP {
         std::unique_ptr<WindowViewport> m_main_viewport{};
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
-        std::unique_ptr<RetroPass> m_retro_pass{};
+        std::unique_ptr<PostProcessPass> m_post_process{};
+        PostProcessSettings m_post_settings{};
+        u32 m_pixel_scale{3u};
+        TimeSpan m_active_elapsed{};
+        std::array<PostSceneImage, kFrameRingSlots> m_scene_images{};
+        rhi::ComPtr<rhi::ITextureView> m_post_output_view{};
+        rhi::ITexture *m_post_output_texture{};
+        u32 m_scene_image_cursor{};
+        u32 m_scene_image_selected{};
+        bool m_scene_image_recorded{};
         bool m_scene_passes_encoded{};
-        RetroSettings m_retro_settings{};
 
         // Background-drag actuator @ detector priority; registrar == owner.
         // Routing-owned latch; actuator borrows it (detach-before-destroy).

@@ -40,7 +40,8 @@ target_sources(engine.app
         renderer/App.Renderer.FrameFence.cppm
         renderer/App.Renderer.GpuCaches.cppm
         renderer/App.Renderer.GridPass.cppm
-        renderer/App.Renderer.RetroPass.cppm
+        renderer/App.Renderer.PostProcessPass.cppm
+        renderer/App.Renderer.Presentation.cppm
         renderer/App.Renderer.TrianglePass.cppm
         renderer/App.Renderer.Types.cppm
 
@@ -98,7 +99,8 @@ target_sources(engine.app
         renderer/App.Renderer.GridPass.Particles.cpp
         renderer/App.Renderer.GridPass.Fluids.cpp
         renderer/App.Renderer.GridPass.Solids.cpp
-        renderer/App.Renderer.RetroPass.cpp
+        renderer/App.Renderer.PostProcessPass.cpp
+        renderer/App.Renderer.Presentation.cpp
         renderer/App.Renderer.TrianglePass.cpp
 
         scene/App.Scene.Camera.cpp

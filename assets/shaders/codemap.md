@@ -25,9 +25,9 @@ for the fixed K2 gain, contact ordering and grid-scale density limitations.
 
 Slang shader assets for application render passes. `mesh_bindless.slang` is the
 `TrianglePass` static-mesh program; `grid_tiles.slang` is the `GridPass` debug-grid program (flat
-tinted or per-cell quads, one instance per visible chunk-sized tile). `retro_present.slang` and
-`temporal_resolve.slang` supply independent picture treatment and optional temporal reconstruction
-through `RetroPass`. The former `triangle.slang`
+tinted or per-cell quads, one instance per visible chunk-sized tile). `post_process.slang` and
+`present_scene.slang` supply the independent resolved-size treatment and fixed-Presentation
+enlargement through `PostProcessPass`. The former `triangle.slang`
 reference asset was deleted. Each pass owns its shader program, and diagnostic
 fixtures load their qualification assets directly.
 
@@ -152,25 +152,26 @@ is required by presentation.
   neighboring terrain reads add bounded fragment work.
 - `grid_tiles.slang` entry points: `[shader("vertex")] vertexGridMain` and
   `[shader("fragment")] fragmentGridMain`.
-- `retro_present.slang` samples the chosen scene resolution with clamped pixel-center nearest taps
-  (`SampleLevel 0`). Optional palette mapping converts linear→sRGB, applies a 4×4 Bayer threshold,
-  selects the DawnBringer-32 entry by luma-weighted squared distance, then returns linear color.
-  Palette bypass preserves full scene color independently of pixelization. Its
-  `ConstantBuffer<RetroParameters>` is 528 B (32 float4 palette entries, float2 source extent,
-  float dither strength, uint palette-enabled flag). `uniform SamplerState.Handle g_sampler`
-  remains the present entry's only ordinary-data parameter. Entries: `vertexRetroPresent`,
-  `fragmentRetroPresent`.
-- `temporal_resolve.slang` uses a 160-byte constant-buffer mirror: current inverse and previous
-  unjittered view-projection, physical current/previous jitter offsets, extent, flags and reserved
-  word. Four-phase 4x MSAA color accumulates in linear RGBA16Float history before palette mapping.
-  Catmull-Rom RGB and depth validation share the full 4x4 point-load footprint. History alpha is
-  orthographic device Z or perspective reciprocal clip W; negative alpha marks background.
-  Camera motion requires a coherent affine metadata plane over all contributing taps. Auxiliary
-  reprojection aligns depth jitter phases separately from RGB motion; cuts and full world/policy identity or
-  projection-mode changes invalidate history. Shader entries are `vertexTemporal` and
-  `fragmentTemporal`, with no sampler or ordinary entry-point data. Composite parallax backgrounds
-  use unjittered cubic spatial filtering and reject history during motion. Near/above-Nyquist
-  patterns and dynamic silhouettes without object-motion vectors retain reconstruction limits.
+- `post_process.slang` consumes the resolved scene view and bloom level 0 at the
+  resolved extent and writes display-linear RGBA16F. Its 32-byte
+  `ConstantBuffer<PostProcessParameters>` carries the resolved width/height, bloom
+  intensity, manual EV, bloom-enabled flag and reserved words. `g_linear` combines
+  the bloom tap; `g_exposure` supplies the 1x1 adapted offset. `displayAgxPunchy`
+  runs exactly once on scene + `intensity*bloom` with total
+  `exp2(manual_ev + adapted)` exposure. Entries: `vertexPostProcess`,
+  `fragmentPostProcess`.
+- `present_scene.slang` is the fixed-P nearest enlargement/crop: each window pixel
+  loads `floor(pixel/P)` from the resolved output and the R*P-W excess is cropped
+  rather than stretched. Its 16-byte constant block carries resolved extents,
+  the pixel scale and the single SDR sRGB encoding decision. Float targets stay
+  linear; sRGB attachments encode in hardware. Entries: `vertexPresentScene`,
+  `fragmentPresentScene`.
+- `luminance_histogram.slang` downsamples the valid R region to min(R,256) with
+  integer partition blocks, builds the 64-bin [-8,8] log2 histogram and reduces
+  a fractional 10-90% percentile mean. `auto_exposure.slang` applies the
+  exponential adaptation with finite EV clamps.
+- `display_agx.slang` is the attributed Filament Punchy approximation invoked by
+  `post_process.slang` and never by reconstruction/history/presentation.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
 - The ImGui shader remains embedded in `App.UI.ImGui.cpp`, not under this asset directory.
 - CMake stages the whole shader directory beside application and relevant test executables, so
@@ -184,20 +185,20 @@ is required by presentation.
 data, the structured buffers, the `g_draw` constants per draw group, and the descriptor heap before
 each draw. `GridPass::initialize` follows the same chain for `<content_dir>/shaders/grid_tiles.slang`
 (`vertexGridMain` + `fragmentGridMain`), binding frame constants, tile/cell and
-contour/diagnostic buffers, and the bindless texture heap/shared sampler. `RetroPass::initialize`
-loads `<content_dir>/shaders/retro_present.slang` (`vertexRetroPresent` + `fragmentRetroPresent`),
-then binds the 528-byte palette/extent constant, the selected scene view, and one sampler before each
-fullscreen present. Supported devices also load `temporal_resolve.slang`; its pass-owned targets,
-roots and history are reused only through accepted-submit fence accounting.
+contour/diagnostic buffers, and the bindless texture heap/shared sampler. `PostProcessPass::initialize`
+loads `luminance_histogram.slang`, `auto_exposure.slang`, `spd_bloom.slang`,
+`post_process.slang` and `present_scene.slang`, then binds the resolved scene,
+adapted exposure and bloom level 0 before the single AgX draw. Offscreen output,
+bloom and metering cohorts are reused only through accepted-submit fences.
 
 ## Integration
 
-- **Consumers**: `engine.shader` (compile), `engine.rhi` + `TrianglePass`/`GridPass`/`RetroPass` (pipelines +
-  constants), `game` demo.
+- **Consumers**: `engine.shader` (compile), `engine.rhi` + `TrianglePass`/`GridPass`/`PostProcessPass`
+  (pipelines + constants), `game` demo.
 - **Depends on**: Slang compiler; `engine.math` matrix-layout/handedness conventions (row-major,
   row-vector, left-handed +Z forward, [0,1] depth).
 - **Provides**: the runtime bindless mesh shader asset for the scene pass, the grid-tile shader
-  asset for the debug-grid pass, and the retro present shader asset for the low-resolution palette pass.
+  asset for the debug-grid pass, and the resolved-size post/presentation shader assets.
 - **Known limitations (documented in-shader, deliberately unfixed)**: the model matrix must be a
   rigid transform or a uniform scale, since directions are rotated with `mul()` rather than the
   inverse-transpose; and `FrameConstants` carries four fields (`m_view`, `m_projection`,
@@ -208,18 +209,20 @@ roots and history are reused only through accepted-submit fence accounting.
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
-- `retro_present.slang` - the live picture present program (`vertexRetroPresent` + `fragmentRetroPresent`).
-- `display_agx.slang` - local opt-in HDR display functions included by RetroPass:
+- `post_process.slang` - resolved-size bloom combine and once-only AgX treatment.
+- `present_scene.slang` - fixed-P nearest enlargement/crop and single sRGB decision.
+- `luminance_histogram.slang` / `auto_exposure.slang` - metering and adaptation.
+- `display_agx.slang` - display treatment included by `post_process.slang`:
   attributed Filament scalar Punchy approximation, explicit linear-sRGB/Rec.2020
   conversions and final SDR gamut clipping. See `third_party/FilamentAgX/README.md`.
-- `temporal_resolve.slang` - optional MSAA temporal reconstruction (`vertexTemporal` + `fragmentTemporal`).
 - `spatial_msaa4.slang` - standalone signed linear-HDR MSAA4-to-2x spatial
   reconstruction prerequisite, currently loaded by asset fixtures. It uses an
   admitted sample-index mapping, continuous diamond weights and corrected
   lower-bucket sums; source/derivation are in `third_party/HableMSAA/README.md`.
   The raster threshold probe establishes finite coordinate brackets for tested
   pixels, not an exact/global native pattern guarantee. Runtime pattern
-  admission, real terrain sample coverage and RetroPass integration remain open.
+  admission and real terrain sample coverage remain open; Task 12 owns the
+  temporal reconstruction integration.
 
 Catalog terrain uploads the shared `engine.math` contour points and 16-case
 connectivity table verbatim (8-byte points, 72-byte cases). The fragment shader
@@ -293,10 +296,11 @@ The existing smooth 1x/legacy temporal entry remains distinct, with unchanged
 function at sample UVs directly into the MSAA scene. The old background and
 cached-copy entries remain for legacy composition. Both new entries require
 separate standard-location and sample-rate capability admission; the location
-flag alone is insufficient. RetroPass consumes the unresolved scene through
-`spatial_msaa4.slang`, retaining signed linear HDR until subsequent grading.
+flag alone is insufficient. The retired spatial runtime consumed the unresolved
+scene through `spatial_msaa4.slang`, retaining signed linear HDR until grading.
 No kernel math, temporal history or ordinary-world enablement is added here.
-Actual per-sample/source-route qualification remains pending.
+The per-sample/source-route sample-program qualification remains available to
+Task 12; no runtime selector or spatial integration survives Task 2.
 
 The endpoint coefficient now has an explicit binary32 contract: RTE of the exact
 mean of the two authored FP32 values in [0,1], promoted to double by the CPU
@@ -323,45 +327,24 @@ compatibility still require execution; no new geometry or receiver admission is
 claimed from coefficient construction.
 
 
-`spd_bloom.slang` supplies three compute entries to RetroPass: `prefilterBloom`
-(a half-resolution soft-knee + Karis bright pass), `downsampleBloom` (one
-dispatch reducing mips 1..5 with a workgroup-local 2x2 box over a 32x32 mip0
-tile, per-level bloom weights folded into each mip write), and `upsampleBloom`
-(a per-level 3x3 tent accumulating each mip back into mip 0). All three share a
-reflected 32-byte `BloomParameters` block: uint2 source extent at0, uint2 mip0
-extent at8, exposed-unit threshold at16, soft knee at20, mip count at24, and the
-upsample source level at28. The prefilter also samples a 1x1 `g_exposure` offset
-and divides the threshold/soft knee back to scene units (`exp2(-adapted)`), so
-the bright pass is exposure-aware. A single RGBA16F texture holds the mip chain,
-bound as per-mip UAV views; `retro_present.slang` adds mip 0 once, scaled by
-`m_bloom_intensity` (default 0.125), before the single exposure/AgX evaluation.
+`spd_bloom.slang` supplies three compute entries to `PostProcessPass`:
+`prefilterBloom` (exposure-aware ceil(R/2) soft-knee + Karis bright pass),
+`downsampleBloom` (one 2x2 box dispatch per coarser level, with taps clamped to
+the last valid texel and each level weight applied once when built), and
+`upsampleBloom` (a separable [1,2,1]/4 tent sampled one coarse texel apart with
+a linear clamp sampler). Level 0 is ceil(R/2); later levels are ceil(previous/2),
+stopping at 1x1 or six separately allocated RGBA16F images. The reflected 64-byte
+`BloomParameters` block carries source/src/dst extents, exposed-unit threshold and
+soft knee, manual EV, level and reserved words. The prefilter samples the 1x1
+adapted offset and converts threshold/knee to scene units exactly once:
+`threshold/E`, `0.5/E` with `E=exp2(manual_ev+adapted)`.
+`post_process.slang` adds level 0 once, scaled by `m_bloom_intensity`, before the
+single exposure/AgX evaluation.
 
-## Temporal2x and final reactive MRT programs
+## Retired reconstruction programs
 
-`temporal_2x.slang::resolveTemporal2x` uses a reflected192-byte scalar/matrix
-block: inverseVP0,previousVP64,current/previous raster-jitter UV offsets128,
-raster extent144,output extent152,index table160,flags176 and scalar reserved
-words180/184/188. It preserves Hable's four distinct current outputs and reads
-the seven actual raw color/depth/reactive taps of each bucket. History remains
-indexed by unjittered output pixels. All nonzero Catmull-Rom taps, including
-negative lobes, reject reactive metadata before plane/depth interpretation.
-Current reactive support writes-2; background is-1; old reactive rejection
-writes current metadata so vacated pixels recover. Scene-linear final history
-feeds bloom before AgX/exposure and native UI.
-
-Grid terrain/background/fluid/solid/disk and mesh reactive entries emit the
-existing final color plus R8_UNORM coverage under the exact2-target/x4 signature.
-Coverage is binary actual geometric support, independent of opacity/emission,
-and uses MAX blending independently of color. Static opaque/background0 and
-dynamic/optical/all-matter1 preserve the same depth/discard/sample decisions.
-One-target legacy/spatial programs and intermediate caches/splats are retained.
-The new shader uses existing directory staging; runtime qualification is pending.
-
-`grid_particle_prepare.slang::projectParticleCensus` is capture-only and projects
-all original metadata IDs, including offscreen/cached-pack rows, to a 24-byte
-stable-ID/original-material/status/native-cell record. Moving rows use Hot64
-sourceRow/byte60 enabled; gas uses direct metadata metres. Domain is half-open;
-invalid/outside/inactive/explicit-vacuum flags retain every row without clamping.
-The ordinary packing/culling entry bodies and their buffer layouts are unchanged.
-
-
+`temporal_resolve.slang` and `temporal_2x.slang` were the legacy screen-history
+and reactive-MRT reconstruction programs. Task 2 removed them with `RetroPass`;
+Task 12 owns the replacement Hable reconstruction, its history pair and its
+sample-rate scene entries. `spatial_msaa4.slang` remains as the independent
+kernel/sample-pattern qualification asset, not a runtime selector.

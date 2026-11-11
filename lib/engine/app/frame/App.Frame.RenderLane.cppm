@@ -6,7 +6,7 @@ import :frame.packet;
 import :renderer;
 import :renderer.frame_fence;
 import :renderer.grid_pass;
-import :renderer.retro_pass;
+import :renderer.presentation;
 import :renderer.triangle_pass;
 import :ui.imgui;
 import :window.handle;
@@ -87,10 +87,11 @@ export namespace pP {
         bool m_observe_grid{false};
         bool m_capture_final_frame{false};
 
-        // Retro presentation policy for this frame: value-only, clamped by
-        // the client before publication; the lane never reads live client
-        // policy state.
-        RetroSettings m_retro{};
+        // Independent post-processing settings for this frame: value-only,
+        // clamped by the client before publication. Pixelization is the
+        // rendering-resolution control; the lane never reads live client state.
+        PostProcessSettings m_post{};
+        u32 m_pixel_scale{3u};
         std::shared_ptr<const FramePacket> m_packet{};
         DetachedUiDrawData m_ui{};
         GridPass::GridStagedFrame m_grid_stage{};
@@ -145,10 +146,6 @@ export namespace pP {
         std::optional<RenderCpuObservations> m_cpu_observations{};
         std::optional<GpuFrameTiming> m_gpu_timing{};
         std::optional<GridPassObservations> m_grid_observations{};
-
-        // Exact accepted fresh temporal2x submit, joined on the owner lane.
-        // Value-only history binding evidence, not per-pixel history influence.
-        std::optional<RetroTemporal2xSubmission> m_temporal_2x_submission{};
 
         // Distinct control completion on the existing reliable result stream.
         // When set, this record has NO frame/reservation/staging settlement.

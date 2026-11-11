@@ -1698,13 +1698,11 @@ namespace pP::game::tests::detail::checkpoint {
         snapshot.m_has_camera_cut = false;
         const auto viewport = rhi::Viewport::fromSize(512.0f, 512.0f);
         const auto scissor = rhi::ScissorRect::fromSize(512u, 512u);
-        std::array<u64, 2u> core_samples{}, core_holes{}, packed_holes{};
+        std::array<u64, 1u> core_samples{}, core_holes{}, packed_holes{};
         for (u32 appearance = 0u; appearance < (qa != nullptr and *qa != '\0' ? 2u : 1u); ++appearance) {
-            for (const bool temporal: {false, true}) {
+            {
                 GridPass grid;
-                RetroPass picture;
                 PPR_TEST_ASSERT(not grid.initialize(*rhi, *shaders, std::filesystem::current_path()));
-                PPR_TEST_ASSERT(not picture.initialize(*rhi, *shaders, std::filesystem::current_path()));
                 PPR_DEFER {
                     const auto submitted = renderer.lastSubmittedFenceValue();
                     if (submitted != kFenceValueNone) {
@@ -1712,7 +1710,6 @@ namespace pP::game::tests::detail::checkpoint {
                     }
 
                     PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-                    PPR_TEST_ASSERT(not picture.shutdown());
                     PPR_TEST_ASSERT(not grid.shutdown());
                 };
                 auto stage = captured;
@@ -1733,8 +1730,8 @@ namespace pP::game::tests::detail::checkpoint {
                 const auto observe = [&](const char *const phase, const bool admitted = true) {
                     const auto observations = grid.observations();
                     std::println(
-                        "ACTUAL-DUG-GRID tick={} authored={} temporal={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
-                        tick, appearance != 0u, temporal, phase, observations.m_particle_instances,
+                        "ACTUAL-DUG-GRID tick={} authored={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
+                        tick, appearance != 0u, phase, observations.m_particle_instances,
                         observations.m_dispatch_commands, observations.m_draw_commands,
                         observations.m_particle_buffer_bytes, source_name);
                     if (admitted) {
@@ -1769,48 +1766,31 @@ namespace pP::game::tests::detail::checkpoint {
                 }
                 observe("activated");
 
-                const RetroSettings settings{
-                    .m_enabled = false, .m_palette_enabled = false, .m_temporal_enabled = temporal};
-                for (u32 frame = 0u; frame < (temporal ? 4u : 1u); ++frame) {
-                    const auto raster = picture.beginFrame(settings, snapshot, int2{512, 512}, grid.worldGeneration());
-                    PPR_TEST_ASSERT(raster.has_value());
-                    PPR_TEST_ASSERT(picture.temporalActive() == temporal);
-                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, *raster));
-                    const auto draw = [&](const DrawContext &context) -> std::error_code {
-                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.renderBackground(context));
-                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.render(context));
-                        return grid.renderParticles(context);
-                    };
+                PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                const auto draw = [&](const DrawContext &context) -> std::error_code {
+                    PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.renderBackground(context));
+                    PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.render(context));
+                    return grid.renderParticles(context);
+                };
 
-                    const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
-                        PPR_RETURN_ERROR_ON_FAIL(
-                            CheckpointTests, grid.prepareBackground(context, snapshot, viewport, scissor));
-                        PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.prepareGpuParticles(context));
-                        observe("prepared");
-                        return temporal ? picture.prepareScene(
-                                              context, RetroPass::scenePipelineSignature(true), int2{512, 512},
-                                              DrawCallback{draw})
-                                        : std::error_code{};
-                    };
+                const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        CheckpointTests, grid.prepareBackground(context, snapshot, viewport, scissor));
+                    PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.prepareGpuParticles(context));
+                    observe("prepared");
+                    return {};
+                };
 
-                    const auto present = [&](const DrawContext &context) {
-                        return temporal ? picture.render(context) : draw(context);
-                    };
-                    DrawSubmission submission{"actual dug solid frozen source", present};
-                    submission.m_viewport = viewport;
-                    submission.m_scissor = scissor;
-                    PPR_TEST_ASSERT(
-                        not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
-                    const auto submitted = renderer.lastSubmittedFenceValue();
-                    grid.notifyFrameSubmitted(submitted);
-                    if (temporal) {
-                        picture.notifyFrameSubmitted(submitted);
-                    }
-
-                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
-                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
-                    observe("rendered");
-                }
+                DrawSubmission submission{"actual dug solid frozen source", draw};
+                submission.m_viewport = viewport;
+                submission.m_scissor = scissor;
+                PPR_TEST_ASSERT(
+                    not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                const auto submitted = renderer.lastSubmittedFenceValue();
+                grid.notifyFrameSubmitted(submitted);
+                PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
+                PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                observe("rendered");
 
                 shader::ComPtr<ISlangBlob> pixels;
                 rhi::SubresourceLayout layout{};
@@ -1832,27 +1812,26 @@ namespace pP::game::tests::detail::checkpoint {
                         for (const Point offset:
                             {Point{0.0, 0.0, 0.0}, Point{0.5, 0.0, 0.0}, Point{-0.5, 0.0, 0.0}, Point{0.0, 0.5, 0.0},
                                 Point{0.0, -0.5, 0.0}}) {
-                            ++core_samples[u32(temporal)];
-                            core_holes[u32(temporal)] += blueAt(
-                                                             {point.x + offset.x * point.radius,
-                                                                 point.y + offset.y * point.radius, 0.0}) < 150u
-                                                             ? 1u
-                                                             : 0u;
+                            ++core_samples[0u];
+                            core_holes[0u] += blueAt(
+                                                  {point.x + offset.x * point.radius, point.y + offset.y * point.radius,
+                                                      0.0}) < 150u
+                                                  ? 1u
+                                                  : 0u;
                         }
                     }
 
                     for (const auto &point: interstices) {
-                        packed_holes[u32(temporal)] += blueAt(point) < 150u ? 1u : 0u;
+                        packed_holes[0u] += blueAt(point) < 150u ? 1u : 0u;
                     }
                 }
 
                 if (qa != nullptr and *qa != '\0') {
                     std::ofstream ppm{
-                        std::filesystem::path{qa} / std::format(
-                                                        "{}-tick-{}-{}-{}{}.ppm",
-                                                        seed_reference ? "frozen-dug-reference" : "actual-dug", tick,
-                                                        appearance == 0u ? "coverage" : "authored",
-                                                        temporal ? "temporal" : "native", long_focus ? "-focus" : ""),
+                        std::filesystem::path{qa} /
+                            std::format(
+                                "{}-tick-{}-{}-native{}.ppm", seed_reference ? "frozen-dug-reference" : "actual-dug",
+                                tick, appearance == 0u ? "coverage" : "authored", long_focus ? "-focus" : ""),
                         std::ios::binary};
                     ppm << "P6\n512 512\n255\n";
                     for (u32 y = 0u; y < 512u; ++y) {
@@ -1865,16 +1844,15 @@ namespace pP::game::tests::detail::checkpoint {
                 }
 
                 std::println(
-                    "ACTUAL-DUG tick={} hash={} rows={} authored={} temporal={} core_samples={} core_holes={} packed_samples={} packed_holes={} oracle={} max_side_h=1.25 diagnostic={} oracle_run={} focus={} source={}",
-                    tick, hash, points.size(), appearance != 0u, temporal, core_samples[u32(temporal)],
-                    core_holes[u32(temporal)], interstices.size(), packed_holes[u32(temporal)],
-                    long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores", long_diagnostic,
-                    not long_diagnostic, long_focus, source_name);
+                    "ACTUAL-DUG tick={} hash={} rows={} authored={} core_samples={} core_holes={} packed_samples={} packed_holes={} oracle={} max_side_h=1.25 diagnostic={} oracle_run={} focus={} source={}",
+                    tick, hash, points.size(), appearance != 0u, core_samples[0u], core_holes[0u], interstices.size(),
+                    packed_holes[0u], long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores",
+                    long_diagnostic, not long_diagnostic, long_focus, source_name);
             }
         }
 
         if (not long_diagnostic) {
-            for (u32 mode = 0u; mode < 2u; ++mode) {
+            for (u32 mode = 0u; mode < core_samples.size(); ++mode) {
                 PPR_TEST_ASSERT(core_samples[mode] > 0u and not interstices.empty());
                 PPR_TEST_ASSERT(core_holes[mode] == 0u and packed_holes[mode] == 0u);
             }

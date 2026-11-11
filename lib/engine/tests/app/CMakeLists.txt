@@ -333,8 +333,10 @@ set_tests_properties(engine.tests.app.gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 
-# Extracted histogram-adaptation and SPD-bloom leaves. The two CPU layout
-# leaves share the entry with the GPU device cases, so it claims the gpu lock.
+# Independent post-processing contracts: presentation/settings, fractional
+# percentile mass, ceil bloom, output lifetime and the GPU metering/bloom
+# entries. The CPU leaves share the entry with device cases, so it claims the
+# gpu lock.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME post_process
     FILTER "app/post_process"

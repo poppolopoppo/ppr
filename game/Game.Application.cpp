@@ -3771,9 +3771,9 @@ namespace demo {
             std::snprintf(m_workshop_ui.m_biome.data(), m_workshop_ui.m_biome.size(), "%s", "hearth");
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
             m_worldgen_profile = settings.m_worldgen_profile;
-            // The post display settings drive bloom, eye adaptation, manual
-            // exposure and the optional palette over the retro picture.
-            game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
+            // The post display settings drive bloom, eye adaptation and manual
+            // exposure on the independent post owner.
+            game::applyPostProcessSettings(m_ui_state.m_post_process, m_ui_state.m_post);
             m_requested_seed = settings.m_worldgen_seed;
             m_ui_state.m_tools = {
                 settings.m_tool_spawn_material, settings.m_tool_radius_m, settings.m_tool_acceleration_m_s2,
@@ -4711,12 +4711,11 @@ namespace demo {
                     m_max_render_work = std::max(m_max_render_work, m_observation_clock->now() - begin);
                 }
             };
-            // Live retro controls ride every rendered frame: the game-owned
-            // session value is pushed before the render work reads it, with no
-            // display transaction and no wait.
-            // Post display settings edit the live retro picture directly.
-            game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
-            setRetroSettings(m_ui_state.m_retro);
+            // Live post and pixelization controls ride every rendered frame:
+            // the game-owned session values are pushed before the render work
+            // reads them, with no display transaction and no wait.
+            game::applyPostProcessSettings(m_ui_state.m_post_process, m_ui_state.m_post);
+            setPostProcessSettings(m_ui_state.m_post_process, m_ui_state.m_pixel_scale);
 
             return super_t::render();
         }

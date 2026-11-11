@@ -2,7 +2,7 @@
 """Independent double scalar transcription of the pinned Filament AgX source.
 
 Regenerate only on an explicit source-contract change. This script never reads
-PPR shader code. It emits frozen C++ initializer rows used by the real RetroPass
+PPR shader code. It emits frozen C++ initializer rows used by the independent post fixtures
 fixture, not a runtime dependency. Inputs round through binary16 scene storage.
 """
 # Copyright (C) 2020 The Android Open Source Project (color space constants)

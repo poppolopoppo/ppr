@@ -15,6 +15,10 @@
 // See third_party/FilamentAgX/README.md and LICENSE. This is not an exact
 // v22 or OCIO transform. All matrices below use PPR's row-vector convention:
 // their rows are the columns in Filament's column-major mat3f constructors.
+//
+// PostProcessPass invokes this exactly once on the combined scene+bloom value
+// at the resolved extent. Reconstruction/history never applies it, and
+// presentation samples the display-linear result unchanged.
 
 float3 displaySrgbToRec2020(float3 color) {
     float3 xyz = mul(color, float3x3(

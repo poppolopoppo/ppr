@@ -178,13 +178,15 @@ export namespace pP::colony {
         std::optional<u64> m_focus_agent{};
         ColonyNotice m_notice{};
         ColonyDisplaySession m_display{};
-        /// Live retro picture controls, session-only: pushed to the editor
+        /// Live independent post controls, session-only: pushed to the editor
         /// every rendered frame (never part of the display draft or its
-        /// transaction, and never persisted).
-        RetroSettings m_retro{.m_enabled = true, .m_palette_enabled = true, .m_pixel_scale = 3u};
+        /// transaction, and never persisted). Pixelization is the retained
+        /// resolution control P1..8, default 3.
+        PostProcessSettings m_post_process{};
+        u32 m_pixel_scale{3u};
 
         /// Live sky and post display settings, session-only: the host applies
-        /// the post settings to the retro state every frame and the retained
+        /// the post settings to the independent post state every frame and the retained
         /// sky hour at the next world begin. Persisted by the Display window's
         /// Save, never part of the display draft or its transaction.
         game::WorldLightDisplaySettings m_world_light{};

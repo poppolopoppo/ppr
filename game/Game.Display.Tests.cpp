@@ -520,7 +520,7 @@ namespace pP::game::tests::detail::display {
         PPR_TEST_ASSERT(bytes->find("environment") != std::string::npos);
     };
 
-    PPR_UNIT_TEST (lighting_post_overlay_round_trip_preserves_unrelated_and_palette_default) {
+    PPR_UNIT_TEST (lighting_post_overlay_round_trip_preserves_unrelated_and_post_default) {
         const std::string existing_text{
             "[audio]\nvolume = 7\n\n[display]\npacing = \"uncapped\"\n\n[game.world_light]\nsky_hour = 3\n\n"
             "[game.post]\nbloom = true\n"};
@@ -542,7 +542,7 @@ namespace pP::game::tests::detail::display {
 
         bool audio_kept = false;
         bool display_kept = false;
-        bool palette_default = false;
+        bool palette_removed = true;
         bool sky_hour_replaced = false;
         for (const auto &entry: round->m_entries) {
             if (entry.m_key == "audio.volume" and entry.m_value.m_kind == EFileKind::integer) {
@@ -551,8 +551,8 @@ namespace pP::game::tests::detail::display {
             if (entry.m_key == "display.pacing" and entry.m_value.m_kind == EFileKind::text) {
                 display_kept = entry.m_value.m_text == "uncapped";
             }
-            if (entry.m_key == "game.post.palette" and entry.m_value.m_kind == EFileKind::boolean) {
-                palette_default = not entry.m_value.m_boolean;
+            if (entry.m_key == "game.post.palette") {
+                palette_removed = false;
             }
             if (entry.m_key == "game.world_light.sky_hour" and entry.m_value.m_kind == EFileKind::integer) {
                 sky_hour_replaced = entry.m_value.m_integer == world_light.m_sky_hour;
@@ -560,7 +560,7 @@ namespace pP::game::tests::detail::display {
         }
         PPR_TEST_ASSERT(audio_kept);
         PPR_TEST_ASSERT(display_kept);
-        PPR_TEST_ASSERT(palette_default);
+        PPR_TEST_ASSERT(palette_removed);
         PPR_TEST_ASSERT(sky_hour_replaced);
 
         // Every game.world_light.* / game.post.* entry is a persistable schema
@@ -1172,7 +1172,7 @@ namespace pP::game::tests {
             detail::display::runtime_layer_cannot_touch_startup_properties,
             detail::display::overlay_merge_replaces_display_preserves_unrelated,
             detail::display::overlay_header_documents_override_order,
-            detail::display::lighting_post_overlay_round_trip_preserves_unrelated_and_palette_default,
+            detail::display::lighting_post_overlay_round_trip_preserves_unrelated_and_post_default,
             detail::display::missing_overlay_is_absence_not_error,
             detail::display::atomic_write_round_trips_and_clears_temp,
             detail::display::atomic_write_failure_preserves_destination_and_cleans_staging,

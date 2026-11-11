@@ -66,7 +66,7 @@ ppr_add_test_entry(TARGET engine.tests.asset
 
 # Routine correctness is sharded by responsibility instead of one `gpu`
 # aggregate. The retired aggregate mixed correctness leaves with measurement
-# loops and obsolete Retro-policy leaves, so it could not finish in 450 s.
+# loops, so it could not finish in 450 s.
 # Each shard names its leaves explicitly to keep the union auditable; the
 # joins below produce the single comma-separated token the runner expects.
 # Validation entries further down re-select specific leaves opt-in and are not
@@ -81,14 +81,12 @@ ppr_add_test_entry(TARGET engine.tests.asset
 )
 
 string(JOIN "," ppr_asset_gpu_picture_filter
-    "asset/render/gates/picture_controls_preserve_independent_color_and_temporal_history"
+    "asset/render/gates/picture_controls_preserve_independent_color_and_scene_history"
     "asset/render/gates/picture_hdr_punchy_matches_frozen_reference_and_single_encoding"
     "asset/render/gates/picture_hdr_rejected_policy_preserves_prepared_frame_and_history"
     "asset/render/gates/spatial_msaa4_raster_thresholds_recover_indexed_pattern"
     "asset/render/gates/spatial_msaa4_matches_grid_reference_and_affine_moments"
     "asset/render/gates/background_magnification_matches_wrapped_cubic_reference"
-    "asset/render/gates/temporal_layered_background_pan_uses_stable_spatial_fallback"
-    "asset/render/gates/temporal_camera_pan_preserves_pattern_contrast_and_phase"
 )
 
 ppr_add_test_entry(TARGET engine.tests.asset
@@ -186,8 +184,6 @@ set(ppr_asset_solid_interface_filter "asset/render/gates/grid_solid_slanted_mate
 set(ppr_asset_solid_envelope_filter "asset/render/gates/grid_solid_envelope_closes_nominal_interstices_without_bridging_sparse_grains")
 string(JOIN "," ppr_asset_spatial_integration_filter
     "asset/render/gates/spatial_grid_samples_preserve_contours_materials_normals_and_emission"
-    "asset/render/gates/spatial_retro_matches_reference_and_preserves_lifecycle"
-    "asset/render/gates/spatial_background_alignment_and_opaque_admission"
     "asset/render/gates/spatial_hdr_grading_and_native_ui_follow_reconstruction"
 )
 
@@ -215,12 +211,11 @@ ppr_add_test_entry(TARGET engine.tests.asset
 unset(ppr_asset_solid_interface_filter)
 unset(ppr_asset_solid_envelope_filter)
 
-# Actual GridPass samples, real RetroPass reconstruction and lifecycle are
-# distinct from the two inexpensive kernel/admission prerequisite leaves.
-# Ordinary aggregate passed in 276 s. GPUAV exceeded 300 s after three leaves;
-# the remaining Retro leaf passed alone in 135.8 s (observed total about 391 s).
-# Partition by real behaviour, preserving all four exact tokens and deadlines.
-set(ppr_asset_spatial_parts grid retro background grading)
+# Actual GridPass samples and independent post grading are distinct from the
+# two inexpensive kernel/admission prerequisite leaves.
+# Ordinary aggregate passed in 276 s. GPUAV exceeded 300 s after three leaves.
+# Partition by real behaviour, preserving the surviving exact tokens/deadlines.
+set(ppr_asset_spatial_parts grid grading)
 string(REPLACE "," ";" ppr_asset_spatial_filters "${ppr_asset_spatial_integration_filter}")
 foreach(ppr_asset_spatial IN ZIP_LISTS ppr_asset_spatial_parts ppr_asset_spatial_filters)
     ppr_add_test_entry(TARGET engine.tests.asset
@@ -269,8 +264,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND PPR_ENABLE_SANITIZER_ADDRESS)
     foreach(ppr_asset_gpu_shard IN ITEMS gpu_caches gpu_picture gpu_grid_particles gpu_grid_surface gpu_grid_liquid gpu_misc
             solid_interface_gpu solid_envelope_gpu
             spatial_grid_gpu spatial_grid_gpu_validation
-            spatial_retro_gpu spatial_retro_gpu_validation
-            spatial_background_gpu spatial_background_gpu_validation
             spatial_grading_gpu spatial_grading_gpu_validation)
         set_property(TEST engine.tests.asset.${ppr_asset_gpu_shard} APPEND PROPERTY ENVIRONMENT_MODIFICATION
             "ASAN_OPTIONS=string_append::fast_unwind_on_malloc=0:malloc_context_size=20"

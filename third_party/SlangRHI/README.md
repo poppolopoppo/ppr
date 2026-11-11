@@ -68,7 +68,7 @@ forces full sample shading under the
 and the enabled feature permits the corresponding
 [SPIR-V capability](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html#spirvenv-capabilities).
 The appended enum preserves earlier values, including `StandardSampleLocations4`.
-RetroPass and GridPass require both features for the new default-off route.
+The retired opt-in spatial route required both features; only the Hable kernel/sample qualification retains that capability check.
 Feature exposure and actual sample-frequency integration await their own review
 and execution; the prior two-leaf Core/GPUAV pass does not qualify this append.
 

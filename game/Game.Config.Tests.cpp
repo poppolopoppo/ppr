@@ -710,19 +710,17 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 0.125f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_threshold == 1.0f);
-        PPR_TEST_ASSERT(not normal->m_post.m_value.m_palette);
 
         Diagnostics configured_diagnostics;
         const auto configured = resolveCli(
             {"--world-light-sky-hour=12", "--post-auto-exposure", "--post-exposure-ev=2.5",
-                "--post-bloom-intensity=1.25", "--post-palette"},
+                "--post-bloom-intensity=1.25"},
             configured_diagnostics);
         PPR_TEST_ASSERT(configured.has_value());
         PPR_TEST_ASSERT(configured->m_world_light.m_value.m_sky_hour == 12);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_bloom_intensity == 1.25f);
-        PPR_TEST_ASSERT(configured->m_post.m_value.m_palette);
 
         for (const auto *const invalid:
             {"--world-light-sky-hour=24", "--world-light-sky-hour=-2", "--post-exposure-ev=-16.1",
@@ -748,7 +746,7 @@ namespace pP::game::tests::detail::compat {
 
         const std::string help = gameHelpText();
         PPR_TEST_ASSERT(help.find("world-light-sky-hour") != std::string::npos);
-        PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("post-palette") == std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") == std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-debug") == std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-atlas-ambient") == std::string::npos);
@@ -765,7 +763,8 @@ namespace pP::game::tests::detail::compat {
         // instead of silently resolving to a dead value.
         for (const char *const obsolete:
             {"--world-light-enabled", "--world-light-samples-per-frame=1048576", "--world-light-levels=6",
-                "--world-light-atlas-ambient=0.3", "--world-light-debug=probes", "--world-lighting=field"}) {
+                "--world-light-atlas-ambient=0.3", "--world-light-debug=probes", "--world-lighting=field",
+                "--post-palette"}) {
             Diagnostics diagnostics;
             PPR_TEST_ASSERT(not resolveCli({obsolete}, diagnostics));
             PPR_TEST_ASSERT(diagnostics.hasErrors());

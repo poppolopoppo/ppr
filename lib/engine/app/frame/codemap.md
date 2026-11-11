@@ -29,12 +29,8 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   post-capture producer mutation cannot alter render preparation. `render()` consumes the staged packet single-use
   (fail closed when absent) and submits it (worker) or executes it (inline reference) the same frame.
 - `RenderLane` — one fixed worker + `Channel`-free `RawChannel` triple (depths 2/4/8: frames/results/control).
-  `RenderFrameResult::m_temporal_2x_submission` optionally carries a resource-free
-  accepted-submit observation. Editor joins it after normal pass stamping to the
-  fresh scene's actual fence, MRT signature and extents.
-  Retained, stale and unmatched observations remain absent; this does not measure
-  per-pixel history influence or add GPU ownership to the result stream.
-  Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`, and reservation epoch/frame identity with `drop_if_full` (full maps to
+  Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`,
+  the value-only `PostProcessSettings` plus P1..8 `m_pixel_scale`, and reservation epoch/frame identity with `drop_if_full` (full maps to
   capacity-busy: drop the frame, never fail the app); results carry submit value/error/drop/font-ack/surface
   generation; control carries wake/exit/config (exit additionally latches an atomic, so a full queue never blocks
   exit signalling). Exactly one logical consumer per channel; the signalling path never uses

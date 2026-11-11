@@ -3,39 +3,29 @@
 ## Responsibility
 
 The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
-queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.retro_pass` (`RetroPass`) owns a fenced offscreen ring with independent pixelization and 32-color palette/dither controls.
-Optional temporal supersampling operates at the chosen scene resolution, combining four-phase jitter,
-raw 4x MSAA color bounds, camera/depth reprojection and clamped Catmull–Rom RGB history before palette treatment; UI stays native.
-Unsupported multisample shader loads retain spatial rendering. History commits only on accepted submits
-and resets on cuts, extent/world/policy/projection-mode changes. History alpha stores orthographic
-device Z or perspective reciprocal clip W, with a negative background sentinel. During motion every
-nonzero color tap in the full 4x4 reconstruction must match the expected class and a single affine
-surface-depth fit. Metadata reprojection aligns current/previous jitter phases separately from RGB
-motion, avoiding phase-dependent rejection on perspective slopes. Current-frame
-influence grows from 5% stationary to 50% at 0.25 internal pixels/frame. Composite parallax backgrounds
-render with the unjittered camera and retain a stable cubic spatial fallback during motion.
-Center-depth camera reprojection is exact for the shipped orthographic pan/roll/zoom; translated
-perspective slopes use the nearest-MSAA-depth center approximation. Object motion uses reactive color
-rejection (no object motion buffer).
+queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.presentation` supplies checked W/P/R/S/B values and `ResolvedHdrView`, and `engine.app:renderer.post_process_pass` (`PostProcessPass`) owns exposure adaptation, ceil-sized bloom, the single AgX treatment and fixed-P presentation.
+Post-processing runs at the resolved content extent after the scene image; final
+nearest enlargement, cropping and the single sRGB decision live in
+`present_scene.slang` / `PostProcessPass::present`, and native UI remains last.
+Pixelization is a rendering-resolution control (P1..8, default 3), not a
+post-effect filter; there is no AA selector or legacy runtime alternative.
 
-`RetroSettings` also carries default-off HDR display treatment and finite manual
-exposure in [-16,+16] EV through the existing owned frame snapshot. Fallible
-`RetroPass::beginFrame` rejects invalid exposure before changing pass state.
-Exposure and the attributed Filament AgX Punchy approximation run after the
-unexposed linear-HDR history, independently of palette/pixelization; they neither
-select an EV pipeline variant nor reset history. Actual target format selects one
-sRGB encoding (hardware sRGB or shader UNorm), while FP16 diagnostic output stays
-linear. The first milestone uses controlled finite HDR producer fixtures; it is
-not ordinary-world activation, Hable TSR or complete display integration.
+`PostProcessPass` consumes an immutable resolved scene-linear HDR view with
+strong allocation ownership (`ResolvedHdrView{view, world, backing, valid}`).
+`prepare` validates the view against the selected R-sized output, retains it
+through stage-B completion, and encodes metering/adaptation/bloom. `render`
+encodes the once-only attributed Filament AgX Punchy treatment into its own
+R-sized output; `present` samples exact integer resolved pixels. Exposure and
+bloom settings never reset reconstruction history; accepted stage-B submissions
+commit the exposure role and the active-time baseline, while rejected attempts
+commit neither. Target format selects one sRGB encoding (hardware sRGB or shader
+UNorm), while float targets remain display-linear for readback.
 
-The selected Hable spatial prerequisite is being qualified separately in
-`spatial_msaa4.slang` and the asset sampling/filter fixtures. Its continuous
-diamond reconstruction preserves signed linear HDR and exact 2x extents.
-The default-off current-frame integration is now authored inside RetroPass and
-awaits its own source/execution qualification. The fixture's raster
-threshold brackets do not establish a runtime exact sample-pattern contract;
-the actual terrain/background sample-frequency variant, temporal history and
-4K cost require their own qualification.
+The earlier Hable spatial prerequisite remains qualified in `spatial_msaa4.slang`
+and the asset sampling/filter fixtures. Its continuous diamond reconstruction
+preserves signed linear HDR and exact 2x extents. The runtime temporal/spatial
+routes were removed with `RetroPass`; Task 12 owns the replacement Hable
+reconstruction, its history pair and the sampled scene entries.
 
 Camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
@@ -395,18 +385,24 @@ validation requirements; user visual acceptance is separate.
   4-byte dummy SRV serves flat-only rendering; direct and MDI lanes bind full ranges.
   `GridTilePayload` retains its 32-byte stride; offsets 20/24/28 carry cell-word base/flags/pad.
   MDI `SV_InstanceID`/startInstanceLocation parity remains to be proven with GPU readback on each backend.
-- **RetroPass** (`App.Renderer.RetroPass.cppm/.cpp`): content-free present pass beside `GridPass`/`TrianglePass`.
-  `RetroSettings{bool m_enabled; u32 m_pixel_scale{3}}` is session policy; `clampPixelScale` pins 2..8,
-  `sceneExtent` floor-divides the native extent per axis with a one-pixel floor, and `scenePipelineSignature`
-  is one RGBA16Float color target with D32Float depth at 1x. `prepareScene` selects a 3-slot
-  completion-governed target ring, recreates on extent change, clears and opens one offscreen pass, forwards
-  the frame's value-scoped fence-wait hook, and invokes the caller's scene encode with the low-resolution
-  `DrawContext`; the caller's content passes rebuild their signature-keyed pipelines for that target.
-  `render` reclaims deferred releases, caches the present pipeline per surface signature (retiring the old one
-  at the last submitted fence value), uploads the 528-byte `RetroParameters` (32 DawnBringer-32 sRGB entries,
-  source extent, dither strength), binds the selected slot's color view plus one sampler, and draws one
-  fullscreen triangle. `notifyFrameSubmitted` stamps the recorded slot. Render fails closed without a ready
-  scene; shutdown/device-loss are wait-free, drain deferred releases, and release the ring targets and roots.
+- **Presentation** (`App.Renderer.Presentation.cppm/.cpp`): `PresentationGrid{window, resolved, raster, backing,
+  pixel_scale}`, checked `makePresentationGrid(framebuffer, P)` W/P/R/S/B arithmetic (positive extents, P1..8,
+  overflow rejection; zero framebuffer is caller suspension), immutable `ResolvedHdrView`, finite
+  `PostProcessSettings` and `validatePostProcessSettings` (finite fields, EV clamp [-16,16], positive tau,
+  ordered auto limits, non-negative bloom controls).
+- **PostProcessPass** (`App.Renderer.PostProcessPass.cppm/.cpp`): content-free resolved-size pass beside
+  `GridPass`/`TrianglePass`, with no scene callback, AA field or camera parameter. `beginFrame(device, R, world,
+  completed)` selects and allocates a 3-slot completion-governed output cohort before `outputTexture()` is
+  evaluated and commits no exposure; exhaustion reports `device_or_resource_busy` without a host wait.
+  `prepare` validates/retains the resolved view and encodes the 64-bin [-8,8] luminance histogram
+  (min(R,256) integer blocks, fractional 10-90% trim), adaptive exposure (per-slot 1x1 offsets, previous role
+  committed only on acceptance, world replacement restarts at 0) and bloom (ceil(R/2) level 0, ceil-halved
+  separate images to 1x1 or six levels, edge-replicated 2x2 boxes, weights applied once, linear-clamped
+  [1,2,1]/4 tent upsample). `render` combines scene + `intensity*bloom0` and invokes AgX once into its own
+  RGBA16F output. `present` loads exact integer resolved pixels at fixed P and encodes sRGB once. Per-slot roots
+  and cohorts are keyed by completion; `notifySubmitted`, `notifyPresented`, `discardUnsubmitted` and
+  `collectCompleted` provide stage-B/C settlement without steady-state waits.
+
 - **GpuCaches** (`App.Renderer.GpuCaches.cppm/.cpp`): `TriangleBagCache` (vertex-type-agnostic bump buckets,
   stable `TriangleBagRange`, **no dedup** — one range per upload), `BindlessTextureCache` (**content-hash dedup
   + refcount + pin-while-held**, heap slot 0 pinned to the white fallback and host slots start at 1),
@@ -443,11 +439,11 @@ validation requirements; user visual acceptance is separate.
 1. Startup → `renderer.initialize(rhi_service)` (graphics queue only); first `renderAndPresent(window, …)`
    lazily creates + configures the window surface from `Window::m_framebuffer_size/m_native`
 2. Per-frame → stack the scene and UI `DrawSubmission` arrays → two `SurfaceRenderPass` records →
-   `renderAndPresent` (resize on drift → acquire → depth-enabled 3D render pass, or a retro prepare into the
-   low-resolution ring plus a depth-free nearest/palette present → color-load/no-depth UI render pass →
-   present); `TrianglePass::update(snapshot)` precedes submission; the scene submission carries
-   `TrianglePass::render` after the grid background/GPU lanes, and with retro enabled it encodes inside
-   `RetroPass::prepareScene` instead of the surface pass.
+   `renderAndPresent` (resize on drift → acquire → depth-free post presentation → color-load/no-depth UI render
+   pass → present). The temporary cleanup path renders stage A into an editor-owned single-sample R-sized scene
+   image, encodes metering/adaptation/bloom and the AgX output in the pre-render seam, then presents the
+   display-linear result and native UI in the same submission; Task 12 replaces the scene image with
+   ReconstructionPass and Task 14 owns the three-submission split.
 3. Offscreen/tests → `renderToTexture(target, …)` → `waitOnHost()` → readback
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
 5. Shutdown → Editor proves GPU idle first (`waitOnHost`; UNKNOWN → quarantine + retain + return error for
@@ -458,12 +454,13 @@ validation requirements; user visual acceptance is separate.
 
 ## Integration
 
-- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass` + `GridPass` + `RetroPass`, drives update/render/shutdown)
+- **Consumers**: owning application shell (owns `Renderer` + `TrianglePass` + `GridPass` + `PostProcessPass`,
+  drives update/render/shutdown)
 - **Depends on**: `engine.core`, `engine.math`, `engine.rhi` (devices, queues, surfaces, passes, pipelines),
   `engine.shader` (per-pass program loads), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.retro_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -475,8 +472,8 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.TrianglePass.cpp` — TrianglePass implementations (invariant state, shader program, variant pipelines, resolve/plan/upload/encode, frame-constant upload)
 - `App.Renderer.GridPass.cppm` — `GridPass` declaration (boundary structs, tile payload mirror, snapshot cache, CPU tile cache, pipeline helper)
 - `App.Renderer.GridPass.cpp` — GridPass implementations (validation/planTiles, shader program, single pipeline, upload lane, ring upload, single-draw encode)
-- `App.Renderer.RetroPass.cppm` — `RetroPass`/`RetroSettings` declaration (pixel-scale/extent/signature helpers, offscreen ring, present API)
-- `App.Renderer.RetroPass.cpp` — RetroPass implementations (ring targets, offscreen scene pass, palette upload, present pipeline, deferred release, teardown)
+- `App.Renderer.Presentation.cppm/.cpp` — presentation grid math, `ResolvedHdrView`, post settings and validation
+- `App.Renderer.PostProcessPass.cppm/.cpp` — independent post owner: output cohorts, metering/adaptation, ceil bloom, once-only AgX, fixed-P presentation and settlement
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`
@@ -546,50 +543,13 @@ partition remains; the retained contour roundness construction is the shared
 Slang code in `grid_contour_math.slang`.
 
 
-## Opt-in opaque spatial integration
+## Retired reconstruction route
 
-`RetroSettings::m_spatial_enabled` is default off and travels on the existing
-owned `RenderFrameRequest::m_retro`. Editor preflights positive even output,
-exact 2x raster/output dimensions, finite EV and incompatible legacy temporal or
-pixelization before applying a spatial request. Palette and HDR stay independent.
-The original `RetroPass::beginFrame` overload forwards equal extents; the new
-explicit raster/output overload rejects spatial use without its exact mapping.
-Unsupported backend/sample-rate capability is visible only for the new opt-in.
-No game setting enables it automatically.
-
-RetroPass lazily loads the existing 32-byte-ABI spatial compute program using its
-injected shader service. Each of three completion-governed slots owns unresolved
-RGBA16F4x color/D32 depth plus a distinct native-output RGBA16F UAV/SRV. The exact
-committed descriptors enter allocation queries before image creation. Replacement
-textures/views/roots commit together; accepted-submit fences cover source,
-output and bindings through presentation, including failed present. Unknown
-submission remains renderer quarantine. The output is sampled 1:1 before existing
-EV/AgX, optional palette and the single attachment encoding; UI stays subsequent
-and native. Spatial uses neither jitter nor temporal history. Legacy paths keep
-their previous behavior. Allocation failures propagate; no new idle wait, queue,
-resource service, hot-reload protocol or frame deadline is introduced.
-
-`GridPass::update` takes an explicit default-false spatial policy from that owned
-request. Terrain cache identity includes the policy as well as the attachment
-signature, because legacy temporal also uses MSAA4. New fragment entries use
-sample index/interpolation and the existing contour topology/material scores to
-select point occupancy and shade each covered sample's material, normal and
-emission. Geometric coverage is binary and applied once; alpha-to-coverage stays
-off. Direct sample-frequency background composition reuses the existing layered
-shader and a separate fenced cache, avoiding the legacy single-sample backdrop.
-Its roots participate in existing submission/world retirement accounting.
-
-The first admitted content domain is an opaque-only visual inventory (including
-unused rows) and no particles. Optical-blend/refraction inventory and CPU/GPU
-particle payloads reject explicitly at current-frame/preparation boundaries.
-Content publication remains independent of the previous frame's sampling policy;
-publication does not admit that content for spatial rendering.
-Matter/translucent support remains required later. No optical
-transport or contour proxy envelope changes are included. Actual GridPass sample
-readbacks and real RetroPass/reference, resize, policy, background and grading
-fixtures are authored in the asset suite; source and execution qualification are
-pending. Prior standalone-kernel passes do not establish this integration or
-ordinary-world admission, and no 4K/60 performance claim is made.
+`RetroSettings`, `RetroPass`, palette quantization, the temporal selector and the
+opt-in spatial integration were removed in Task 2. `Resolution` pixelization P1..8
+is carried on the owned frame request; `PostProcessPass` has no AA mode or
+enable/disable combination. The spatial sample-rate kernel and its Hable
+qualification remain the subject of Task 12, not a runtime alternative.
 
 The retained contour roundness construction lives in
 `assets/shaders/grid_contour_math.slang` and serves the raster/terrain consumers.
@@ -603,69 +563,15 @@ intersection path.
 `SurfaceSettings::m_readback_enabled` is a constructor-only capability, default off; Renderer preserves it across resize/vsync surface transactions. An optional owning CPU output on the snapshot `renderAndPresent` overload records one texture-to-buffer copy after all surface passes in the same encoder. The fixed Renderer staging slot distinguishes unsubmitted, unknown-submit and accepted-fence ownership; unknown teardown retains it until idle/removal proof. Presentation settles before the actual fence wait/map/copy/unmap can publish `SurfaceFramePixels`. Only RGBA8/BGRA8 UNORM and sRGB display formats are admitted. Off requests allocate/copy/wait nothing. A 4K diagnostic holds about 33 MB each of GPU staging and CPU bytes; this is not a performance gate.
 
 Readback requests use a portable copy layout with row alignment equal to the maximum of 256 bytes and the validated power-of-two device requirement, a multiple of both the backend alignment and four-byte texels. At 3840 pixels the 15360-byte row is already aligned. CPU storage retains this reported pitch, copies only each row's meaningful pixel bytes, and leaves all row padding/layout tail zero. The optional `image_acquired` output is independent of presentation/readback success and distinguishes proven pre-acquire rejection from every acquired-image fate.
+Renderer readback ownership/fates and its fixed staging slot are unchanged by
+the client-side capture sequence.
 
-Completed Retro picture slots retain the optical revision alongside existing
-world/camera/extent/timestamp identity. Restoring a picture reports that stored
-revision; it cannot acknowledge a newly activated field merely because world IDs
-are unchanged. This metadata does not alter scene textures or reconstruction.
-The existing retained-picture GPU fixture checks the protected revision as well
-as fenced pixels across rejected preparation. Renderer readback ownership/fates
-and its fixed staging slot are unchanged by the client-side capture sequence.
-
-## Opt-in scene-linear bloom (SPD)
-
-`RetroSettings::m_bloom_enabled` appends one default-off control and requires
-HDR plus current-frame spatial or temporal2x reconstruction. Validation rejects
-unsupported policy before frame mutation. `RetroPass` lazily creates three
-compute programs from `spd_bloom.slang` (prefilter, single-pass downsample, tent
-upsample); each completed scene-ring slot transactionally owns one RGBA16F mip
-chain (mip 0 at ceil(output/2), five halvings, capped at six mips) plus per-mip
-UAV views, with the existing producer/reader fences. The prefilter applies an
-exposure-aware soft-knee threshold (the exposed-unit threshold divided by `exp2`
-of the manual + adapted EV) and the Karis firefly weight; the downsample folds a
-per-level bloom-size weight so a uniform frame stays bounded; the upsample
-accumulates each mip back, and `retro_present.slang` adds mip 0 once scaled by
-`m_bloom_intensity` (default 0.125) before the single exposure/AgX call. Scene
-sampling, palette and native UI remain independent. Retention keeps the matching
-bloom/settings and samples the old native picture UV when clipped or letterboxed.
-These additions are authored; runtime/compatibility/cost qualification must be
-reported from the corresponding validation evidence.
-
-## Opt-in temporal2x and reactive scene attachments
-
-`RetroSettings::m_temporal_2x_enabled` is append-only/default-off and exclusive
-with pixelization, legacy temporal and spatial-only modes. Its exact scene
-signature is `[RGBA16Float,R8Unorm]`, D32Float,4x, with positive even output at
-2x raster extent. Retro owns and clears the reactive MSAA attachment, current
-Hable output and a distinct output-resolution scene-linear history. A lazy
-`temporal_2x.slang` compute program consumes seven actual raw samples per
-corrected Hable bucket, depth and reactive support, then reconstructs history
-with full nonzero Catmull-Rom support. Current reactive pixels use finite alpha
--2; background uses-1. Old reactive taps force exact current while permitting
-current static metadata to recover. Moving parallax backgrounds reject history.
-Bloom and present consume final history; display-only policy never resets it.
-
-No lighting publication identity is retained: history and the retained picture
-match only the world/job/content identity, camera and extents. No extra lighting
-GPU owner is retained merely for identity. A joint ring walk excludes history
-and retained picture; accepted fresh scenes alone commit history/jitter.
-Retained display state cannot replace the history producer's identity/camera.
-Failures preserve accepted history and do not advance phase.
-
-Grid/Triangle final native MRT variants select this exact signature, retaining
-old one-target programs and intermediate splat/cache passes. Target1 is a binary
-positive geometric mask with independent MAX blending; the same selected
-material/sample/mask/discard evaluation drives color and reactive coverage.
-Static opaque terrain/background write0; actor triangles, optical terrain and
-all final matter/disks mark actual coverage even at zero color opacity. Editor
-routes native sampling for spatial OR temporal2x. No Renderer API/type or Game
-activation is introduced.
-
-At3840x2160, extra history payload is199,065,600 bytes across3slots and reactive
-MSAA payload is24,883,200. Including existing raw MSAA color/depth, Hable current
-and bloom gives746,496,000 bytes across3slots before resize overlap/driver
-overhead. These are descriptor payloads; runtime allocation, compatibility,
-image/history behavior and4K timing qualification remain pending.
+Bloom is no longer an opt-in reconstruction prerequisite. `PostProcessPass`
+always owns it (enabled by the game setting): exposure-aware prefilter, ceil-sized
+level 0 and ceil-halved separate RGBA16F images to 1x1 or six levels, edge-
+replicated 2x2 boxes, once-applied level weights and a linear-clamped tent
+upsample. It is independent of AA, pixelization and reconstruction history;
+`post_process.slang` adds level 0 once at the resolved extent before AgX.
 
 ## Capture-only particle census
 
