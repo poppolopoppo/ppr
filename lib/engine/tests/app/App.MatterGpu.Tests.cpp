@@ -1767,18 +1767,15 @@ namespace pP::tests::detail::MatterGpu {
         };
         // One isolated sample has sum(W^2) < 1, so gathered reciprocal
         // volume exceeds one and the default volume blend remains inactive.
-        fixture.initialize(true, 256u, 256u);
+        // The density-error contract is the zero-gravity one, so the case
+        // initializes that profile directly rather than rebuilding the solver.
+        fixture.initialize(true, 256u, 256u, true, nullptr, 0.0f);
 
-        GpuParameters parameters = fixture.m_solver.profile();
+        const GpuParameters parameters = fixture.m_solver.profile();
         PPR_TEST_ASSERT(parameters.m_liquid_relaxation == 1.0f);
-        parameters.m_gravity_strength = 0.0f;
-        parameters.m_delta_time = 1.0f / 480.0f;
-        parameters.m_fixed_point_multiplier = 10'000'000u;
-
-        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
-        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
-            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
-            parameters));
+        PPR_TEST_ASSERT(parameters.m_gravity_strength == 0.0f);
+        PPR_TEST_ASSERT(parameters.m_delta_time == 1.0f / 480.0f);
+        PPR_TEST_ASSERT(parameters.m_fixed_point_multiplier == 10'000'000u);
 
         const std::array<std::pair<float, float>, 2u> cases{{{1.001f, 0.0f}, {0.999f, 0.00025f}}};
         for (const auto &[initial_density, initial_diagonal]: cases) {
@@ -3736,16 +3733,15 @@ namespace pP::tests::detail::MatterGpu {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize(true, 64u, 64u);
+        fixture.initialize(true, 64u, 64u, true, nullptr, 0.0f);
 
+        // The contact contract below is the zero-gravity one, so the case
+        // initializes that profile directly instead of discarding a default
+        // solver and rebuilding it.
         GpuParameters parameters = fixture.m_solver.profile();
-        parameters.m_gravity_strength = 0.0f;
+        PPR_TEST_ASSERT(parameters.m_gravity_strength == 0.0f);
         PPR_TEST_ASSERT(parameters.m_delta_time == 1.0f / 480.0f);
         PPR_TEST_ASSERT(parameters.m_liquid_relaxation == 1.0f);
-        PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
-        PPR_TEST_ASSERT(not fixture.m_solver.initialize(
-            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
-            parameters));
 
         // Eight FP32 relative roundoff units cover the short geometric
         // calculations at these coordinates, without a physical contact skin.
