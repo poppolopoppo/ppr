@@ -1724,6 +1724,22 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(after_discard.m_rgb[index].z == committed.m_rgb[index].z);
             }
 
+            // A same-extent reset request (W-only change, identical S/B) reuses
+            // the committed pair but writes its non-committed member, so even
+            // that definite discard leaves the accepted history bytes intact.
+            const auto grid_w = makePresentationGrid(int2{18, 11}, 1u);
+            PPR_TEST_ASSERT(grid_w.has_value());
+            const auto camera_w = makeOrthoCamera(int2{18, 11}, float3{0.0f, 0.0f, -1.0f});
+            PPR_TEST_ASSERT(not fixture.m_pass.beginFrame(
+                fixture.m_rhi->getDevice(), camera_w, *grid_w, world, 0u, fixture.m_fence.completed()));
+            fixture.m_pass.discardUnsubmitted();
+            const auto after_extent_match_discard = fixture.readResolved(committed_view, *grid0);
+            for (std::size_t index = 0u; index < committed.m_rgb.size(); ++index) {
+                PPR_TEST_ASSERT(after_extent_match_discard.m_rgb[index].x == committed.m_rgb[index].x);
+                PPR_TEST_ASSERT(after_extent_match_discard.m_rgb[index].y == committed.m_rgb[index].y);
+                PPR_TEST_ASSERT(after_extent_match_discard.m_rgb[index].z == committed.m_rgb[index].z);
+            }
+
             // The next accepted G0 frame must advance phase exactly once and
             // blend against the old G0 history, not uninitialized bytes.
             PPR_TEST_ASSERT(not fixture.m_pass.beginFrame(

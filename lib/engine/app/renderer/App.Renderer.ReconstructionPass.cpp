@@ -425,7 +425,10 @@ namespace pP {
                            m_history_camera_cut != camera_cut or
                            not (m_history_grid == grid);
         const u32 phase = reset ? 0u : (m_phase + 1u) % kPhaseCount;
-        const u32 write_index = reset ? 0u : 1u - m_history_index;
+        // With a reused committed pair, always write the non-committed member
+        // so even a reset attempt cannot overwrite the accepted history bytes
+        // before notifySubmitted. A tentative pair starts at zero.
+        const u32 write_index = m_tentative.has_value() ? 0u : 1u - m_history_index;
 
         m_pending = PendingFrame{};
         m_pending.m_camera = CameraSnapshot{camera};
