@@ -75,16 +75,12 @@ export namespace pP::ui {
         bool &m_temporal_enabled;
     };
 
-    /// Borrowed live world-light and post fields; caller owns the values for
-    /// the session. The widget edits them immediately (like the retro fields)
+    /// Borrowed live sky and post fields; caller owns the values for the
+    /// session. The widget edits them immediately (like the retro fields)
     /// and never folds them into the display draft or its transaction. Reset
     /// emits a widget action the caller maps to restoring factory defaults.
     struct LightingPostWidgetDraft {
-        bool &m_world_light_enabled;
-        u32 &m_samples_per_frame;
-        u32 &m_level_count;
         i32 &m_sky_hour;
-        u32 &m_world_light_debug_view;
         bool &m_auto_exposure;
         float &m_exposure_ev;
         float &m_adaptation_tau;

@@ -168,9 +168,6 @@ namespace pP::game {
                     source = config::SourceValue::boolean(value);
                 } else if constexpr (std::is_floating_point_v<T>) {
                     source = config::SourceValue::floating(static_cast<double>(value));
-                } else if constexpr (std::is_same_v<T, EWorldLightDebugView>) {
-                    // Enum sources are named, never ordinals (see EnumDomain).
-                    source = config::SourceValue::text(std::string{world_light_debug_domain.nameOf(value)});
                 } else {
                     static_assert(std::is_integral_v<T>);
                     source = config::SourceValue::integer(static_cast<i64>(value));
@@ -208,19 +205,8 @@ namespace pP::game {
         };
 
         append(
-            "game.world_light.enabled", "Enable the camera-independent world light field.", "world-light-enabled",
-            true);
-        append(
-            "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget).",
-            "world-light-samples-per-frame", false);
-        append("game.world_light.level_count", "Radiance cascade level count.", "world-light-levels", false);
-        append(
             "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",
             "world-light-sky-hour", false);
-        append(
-            "game.world_light.atlas_ambient", "Terrain ambient from the incident radiance atlas (0 to 0.35).",
-            "world-light-atlas-ambient", false);
-        append("game.world_light.debug_view", "Field debug view: off or probes.", "world-light-debug", false);
 
         append(
             "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram.", "post-auto-exposure", true);
@@ -326,16 +312,6 @@ namespace pP::game {
         retro.m_adaptation_tau = post.m_adaptation_tau;
         retro.m_ev_min = post.m_ev_min;
         retro.m_ev_max = post.m_ev_max;
-    }
-
-    void configureFieldRetro(RetroSettings &retro) noexcept {
-        retro.m_enabled = false;
-        retro.m_temporal_enabled = false;
-        retro.m_hdr_enabled = true;
-        // Temporal2x resolves the half-resolution HDR raster itself; RetroPass
-        // admission treats spatial and temporal2x as mutually exclusive.
-        retro.m_spatial_enabled = false;
-        retro.m_temporal_2x_enabled = true;
     }
 
     // ------------------------------------------------------------------
@@ -460,12 +436,6 @@ namespace pP::game {
         config::CliSchema schema{};
         schema.m_program = "ppr";
         schema.m_description = "PPR colony demo: interactive editor, headless commands, and profiling fixtures.";
-
-        appendOption(
-            schema.m_options,
-            valueOption(
-                "game.world_lighting", "world-lighting",
-                "Select world lighting. Field is the camera-independent cascade field and the only supported mode; 1024/2048 are the shipping map sizes and 4096 is benchmark-only."));
 
         appendOption(
             schema.m_options,
@@ -721,8 +691,7 @@ namespace pP::game {
         if ((settings.m_command == EGameCommand::worldgen_preview and
                 not settings.m_worldgen_output and
                 not settings.m_worldgen_gpu_output) or
-            (settings.m_command != EGameCommand::worldgen_preview and
-                settings.m_worldgen_gpu_output)) {
+            (settings.m_command != EGameCommand::worldgen_preview and settings.m_worldgen_gpu_output)) {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
             diagnostics.add(
                 "invocation", "game.command",

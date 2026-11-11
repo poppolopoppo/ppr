@@ -381,8 +381,8 @@ namespace pP::tests::detail {
                     result.m_grid_ack_chunk_ids = request.m_grid_stage.m_ack_chunk_ids;
                     result.m_presented = true;
                     result.m_presented_grid = {37u, 20u, 103u};
-                    result.m_lighting_source_revision = request.m_packet->m_frame_id;
-                    result.m_lighting_field_cycle = request.m_packet->m_frame_id;
+                    result.m_grid_observations = GridPassObservations{};
+                    result.m_grid_observations->m_draw_commands = request.m_packet->m_frame_id;
                     outstanding.fetch_add(1u);
                     return {};
                 },
@@ -416,9 +416,8 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_world_generation == 20u);
                 PPR_TEST_ASSERT(results[index].m_presented_grid.m_content_fingerprint == 103u);
 
-                PPR_TEST_ASSERT(results[index].m_lighting_source_revision == index + 1u);
-                PPR_TEST_ASSERT(results[index].m_lighting_field_cycle.has_value());
-                PPR_TEST_ASSERT(*results[index].m_lighting_field_cycle == index + 1u);
+                PPR_TEST_ASSERT(results[index].m_grid_observations.has_value());
+                PPR_TEST_ASSERT(results[index].m_grid_observations->m_draw_commands == index + 1u);
             }
 
             PPR_TEST_ASSERT(results[2].m_surface_result and not results[2].m_surface_result->m_error);
@@ -428,15 +427,14 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(not lane.drainResults(results) and results.empty());
             outstanding.store(0u);
 
-            // Repeated records carrying the field diagnostics exercise different
+            // Repeated records carrying grid observations exercise different
             // payload offsets and wrap the page-backed result ring without
             // per-record allocation.
             for (u64 frame_id = 3u; frame_id <= 130u; ++frame_id) {
                 PPR_TEST_ASSERT(not lane.submitFrame(makeRequest(frame_id)));
                 PPR_TEST_ASSERT(awaitResult(lane, frame_id, results));
-                PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_lighting_source_revision == frame_id);
-                PPR_TEST_ASSERT(results[0u].m_lighting_field_cycle.has_value());
-                PPR_TEST_ASSERT(*results[0u].m_lighting_field_cycle == frame_id);
+                PPR_TEST_ASSERT(results.size() == 1u and results[0u].m_grid_observations.has_value());
+                PPR_TEST_ASSERT(results[0u].m_grid_observations->m_draw_commands == frame_id);
                 PPR_TEST_ASSERT(results[0u].m_grid_ack_chunk_ids.empty());
 
                 results.clear();

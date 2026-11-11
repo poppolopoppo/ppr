@@ -1455,14 +1455,14 @@ descriptor = "earlier.toml"
         const Resolved<game::WorldLightDisplaySettings> committed_world{};
         const Resolved<game::PostDisplaySettings> committed_post{};
 
-        // Valid world-light draft: sliders produce accepted values.
-        game::WorldLightDisplaySettings world_draft{};
-        world_draft.m_samples_per_frame = 1048576u;
-        config::Diagnostics world_diagnostics{};
-        auto world = validateWorldLightDraft(committed_world, world_draft, world_diagnostics);
-        PPR_TEST_ASSERT(world.has_value());
-        PPR_TEST_ASSERT(world->m_value.m_samples_per_frame == 1048576u);
-        PPR_TEST_ASSERT(not world_diagnostics.hasErrors());
+        // Valid sky draft: the retained hour slider produces accepted values.
+        game::WorldLightDisplaySettings sky_draft{};
+        sky_draft.m_sky_hour = 12;
+        config::Diagnostics sky_diagnostics{};
+        auto sky = validateWorldLightDraft(committed_world, sky_draft, sky_diagnostics);
+        PPR_TEST_ASSERT(sky.has_value());
+        PPR_TEST_ASSERT(sky->m_value.m_sky_hour == 12);
+        PPR_TEST_ASSERT(not sky_diagnostics.hasErrors());
 
         // Valid post draft: toggles produce accepted values.
         game::PostDisplaySettings post_draft{};
@@ -1477,23 +1477,21 @@ descriptor = "earlier.toml"
         PPR_TEST_ASSERT(post->m_value.m_exposure_ev == 3.0f);
         PPR_TEST_ASSERT(not post_diagnostics.hasErrors());
 
-        // Reset restores factory defaults (the field picture's bloom and eye
-        // adaptation on, palette quantization off).
+        // Reset restores factory defaults (the retained black-boundary sky and
+        // the picture's bloom and eye adaptation on, palette quantization off).
         const game::WorldLightDisplaySettings world_defaults{};
-        PPR_TEST_ASSERT(world_defaults.m_enabled);
-        PPR_TEST_ASSERT(world_defaults.m_samples_per_frame == 262144u);
-        PPR_TEST_ASSERT(world_defaults.m_level_count == 6u and world_defaults.m_sky_hour == 12);
+        PPR_TEST_ASSERT(world_defaults.m_sky_hour == -1);
         const game::PostDisplaySettings post_defaults{};
         PPR_TEST_ASSERT(not post_defaults.m_palette);
         PPR_TEST_ASSERT(post_defaults.m_auto_exposure);
         PPR_TEST_ASSERT(post_defaults.m_bloom);
 
         // Invalid drafts are rejected with diagnostics, never silently clamped.
-        game::WorldLightDisplaySettings invalid_world = world_draft;
-        invalid_world.m_samples_per_frame = 0u;
-        config::Diagnostics invalid_world_diagnostics{};
-        PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_world, invalid_world_diagnostics));
-        PPR_TEST_ASSERT(invalid_world_diagnostics.hasErrors());
+        game::WorldLightDisplaySettings invalid_sky = sky_draft;
+        invalid_sky.m_sky_hour = 24;
+        config::Diagnostics invalid_sky_diagnostics{};
+        PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_sky, invalid_sky_diagnostics));
+        PPR_TEST_ASSERT(invalid_sky_diagnostics.hasErrors());
 
         game::PostDisplaySettings invalid_post = post_draft;
         invalid_post.m_ev_min = 4.0f;
@@ -1508,10 +1506,9 @@ descriptor = "earlier.toml"
         // bloom; applyPostToRetro is the only channel, so there is no second
         // (shadowed) palette control editing RetroSettings directly.
         colony::ColonyUiState state{};
-        game::configureFieldRetro(state.m_retro);
         game::applyPostToRetro(state.m_retro, state.m_post);
 
-        // Factory defaults already enable the field picture's bloom and eye
+        // Factory defaults already enable the picture's bloom and eye
         // adaptation, and leave palette quantization off.
         PPR_TEST_ASSERT(state.m_retro.m_auto_exposure);
         PPR_TEST_ASSERT(state.m_retro.m_bloom_enabled);
@@ -1541,12 +1538,6 @@ descriptor = "earlier.toml"
         PPR_TEST_ASSERT(state.m_retro.m_bloom_enabled);
     };
 
-    PPR_UNIT_TEST (world_light_enabled_gates_field_mode) {
-        PPR_TEST_ASSERT(game::worldLightFieldActive(true, true));
-        PPR_TEST_ASSERT(not game::worldLightFieldActive(true, false)); // live toggle disables the field
-        PPR_TEST_ASSERT(not game::worldLightFieldActive(false, true)); // not a field world
-        PPR_TEST_ASSERT(not game::worldLightFieldActive(false, false));
-    };
 }
 
 namespace pP::game::tests {
@@ -1573,7 +1564,6 @@ namespace pP::game::tests {
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
             detail::presentation::lighting_post_draft_validates_and_resets,
             detail::presentation::post_palette_is_the_sole_control_and_reaches_retro,
-            detail::presentation::world_light_enabled_gates_field_mode,
         });
     };
 

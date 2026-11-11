@@ -142,8 +142,6 @@ export namespace pP {
         void onLaneFrameConsumed_(const RenderFrameResult &result) override;
 
     private:
-        struct FieldLightingState;
-
         void onMainWindowFocused_(const Window &window, bool focused);
 
         // Phase 3 focus policy: preserves raw focus loss; the legacy
@@ -262,7 +260,6 @@ export namespace pP {
         std::unique_ptr<TrianglePass> m_triangle_pass{};
         std::unique_ptr<GridPass> m_grid_pass{};
         std::unique_ptr<RetroPass> m_retro_pass{};
-        std::unique_ptr<FieldLightingState> m_field_lighting{};
         bool m_scene_passes_encoded{};
         RetroSettings m_retro_settings{};
 

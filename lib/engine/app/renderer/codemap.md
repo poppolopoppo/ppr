@@ -110,14 +110,11 @@ candidate and retiring worlds. Its cumulative comparisons, reuse hits, completed
 new texture uploads/source bytes and candidate advance calls are separate from
 those live counts; upload bytes exclude descriptor/palette buffers and driver
 
-`engine.app:renderer.lighting` (`App.Renderer.Lighting.cppm/.cpp`) currently owns
-CPU-only explicit cell optical contracts, a slow slab-intersection RGB interval
-oracle, an immutable vacuum hierarchy/scalar hierarchical DDA and a checked
-fixed-lattice RC streaming resource estimator. It has no GPU
-allocation or frame integration and no sim dependency. Production contour/matter
-mapping, GPU traversal/transport and display integration remain staged.
-Behavioral tests live in `App.Lighting.Tests.cpp` under the CPU `app/lighting`
-group, registered once in `engine.tests.app.functional_cpu`.
+The former `engine.app:renderer.lighting` partition (CPU optical contracts, slab
+interval oracle, hierarchy/DDA and RC estimator) was removed with the superseded
+world-lighting integration. GridPass retains only scalar material validation,
+filtered texture means, texture residency, normal decoding, texture bombing and
+particle admission.
 
 ## Design
 
@@ -542,22 +539,10 @@ reconstruction and scene lighting activation remain separate work. The prior det
 passed Debug ordinary/real GPUAV and focused Release CPU/GPU gates.
 
 
-`renderer.optical_geometry` (`App.Renderer.OpticalGeometry.cppm/.cpp`) owns
-bounded immutable opaque/vacuum numeric terrain fixtures, reusing same-ID
-`OpticalCell` rows plus per-material roundness, centre labels and explicit
-halo/exterior inputs. Its analytic-double Bezier oracle rejects uncertain
-near-degenerate events; noise-free quadratic occupancy preserves rendered saddle
-connectivity rather than substituting physics' straight/disconnected contours.
-`canonicalTerrainRoundnessMean` is the canonical binary32 RTE of the exact
-two-endpoint mean, independent of device rounding mode.
-
-The public trace surface is one interval-origin/direction parametric traversal:
-`traceOpticalTerrainParametricReference` (p+lambda*d_raw),
-`traceOpticalTerrainConnectorReference` (S+t*(E-S), t in [0,1]) and
-`traceOpticalTerrainReference` (physical-metre `OpticalRay` wrapper). The same
-certified source-selection and event-enclosure arithmetic retains the complete
-earliest hit; uncertain ownership or event order returns `numeric_ambiguity`,
-never a successful miss or an epsilon repair.
+The former `renderer.optical_geometry` partition (analytic Bezier terrain oracle
+and parametric optical traversal) was removed with the superseded
+world-lighting integration. `canonicalTerrainRoundnessMean` remains in the
+retained contour/material path.
 
 
 ## Opt-in opaque spatial integration
@@ -634,14 +619,6 @@ are unchanged. This metadata does not alter scene textures or reconstruction.
 The existing retained-picture GPU fixture checks the protected revision as well
 as fenced pixels across rejected preparation. Renderer readback ownership/fates
 and its fixed staging slot are unchanged by the client-side capture sequence.
-
-Editor field submission now retains an explicit non-idle unknown-fate stage when
-no accepted fence and no definite Renderer rejection exist. Prepare, advance,
-cancel-ready and current-field reuse remain blocked; only the existing positive
-terminal quiescence/removal proof releases the pass owner. Entered callbacks that
-were definitely unsubmitted invoke the pass's existing discard operation even
-when encoding itself failed. Pre-callback capacity rejection keeps its existing
-prepared retry without discarding or labeling it unknown.
 
 ## Opt-in scene-linear bloom (SPD)
 

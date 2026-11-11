@@ -1930,7 +1930,7 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
 
             // A bright uniform scene blooms: the additive SPD sample is finite,
             // never darkens, and raises the picture. (The exact falloff and mip
-            // geometry are pinned in the world_light_field SPD suite.)
+            // geometry are pinned in the post_process SPD suite.)
             for (u32 y = 0u; y < 128u; ++y) {
                 for (u32 x = 0u; x < 128u; ++x) {
                     for (u32 channel = 0u; channel < 3u; ++channel) {

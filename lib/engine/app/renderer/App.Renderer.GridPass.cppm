@@ -3,8 +3,6 @@ module;
 export module engine.app:renderer.grid_pass;
 
 import :renderer.types;
-import :renderer.lighting;
-import :renderer.world_light_field;
 import :renderer.frame_fence;
 import :renderer.gpu_caches;
 import :scene.camera;
@@ -101,11 +99,8 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(GridTerrainVisual, m_filtered_mean_rgb) == 20u);
     static_assert(alignof(GridTerrainVisual) == 16u);
 
-    // Visual-only unavailable rows remain admissible with zero sigma. Strict
-    // optical conversion rejects unavailable; no missing material becomes vacuum.
+    // Visual-only unavailable rows remain admissible with zero sigma.
     [[nodiscard]] std::error_code validateGridMaterialOptics(const GridTerrainVisual &visual);
-    [[nodiscard]] std::expected<lighting::OpticalCell, std::error_code> gridMaterialOpticalCell(
-        const GridTerrainVisual &visual);
 
     // ------------------------------------------------------------------
     // coarse material projection shared with immutable world sources
@@ -522,18 +517,6 @@ export namespace pP {
             return m_world.m_world_generation;
         }
 
-        // Borrowed temporal world light field view (Task 8): the current radiance
-        // buffer and CPU constants are bound each frame for the opaque terrain
-        // path. The field owner outlives every view; pass an empty view to clear.
-        // debug_view selects the shader debug output (0 = off, 1 = probes) and
-        // only feeds the terrain WorldLightSwitch mirror. `atlas` is the
-        // per-cell incident radiance buffer the terrain ambient term samples
-        // (borrowed, already reachable through this same world-light binding);
-        // atlas_ambient is clamped to the documented shader bound before upload.
-        [[nodiscard]] std::error_code setWorldLightField(
-            const lighting::WorldLightFieldView &view, u32 debug_view = 0u, rhi::IBuffer *atlas = nullptr,
-            float atlas_ambient = 0.0f);
-
         [[nodiscard]] GridWorldIdentity activeWorldIdentity() const noexcept {
             return {m_world.m_job_id, m_world.m_world_generation, m_world.m_content_fingerprint};
         }
@@ -605,8 +588,6 @@ export namespace pP {
         [[nodiscard]] static std::error_code validateSubmission_(const GridTileSubmission &submission) noexcept;
 
         struct GridCachedPipeline;
-        [[nodiscard]] std::error_code bindWorldLightField_(rhi::ShaderCursor &cursor);
-
 
         // ------------------------------------------------------------------
         // resolve, upload, and encode
@@ -869,8 +850,6 @@ export namespace pP {
 
         rhi::ComPtr<rhi::IBuffer> m_contour_points{};
         rhi::ComPtr<rhi::IBuffer> m_contour_cases{};
-        // Dummy UAV for the world light field radiance binding when no field is set.
-        rhi::ComPtr<rhi::IBuffer> m_world_light_dummy{};
         std::array<rhi::ComPtr<rhi::IBuffer>, kTileRingSize> m_chunk_slot_buffers{};
         std::array<void *, kTileRingSize> m_chunk_slot_mapped{};
         std::array<bool, kTileRingSize> m_chunk_slot_uploaded{};
@@ -1059,10 +1038,6 @@ export namespace pP {
             Array<GridTileSubmission> m_submitted_tiles{};
         };
         WorldResources m_world{};
-        lighting::WorldLightFieldView m_world_light_view{};
-        u32 m_world_light_debug_view{};
-        rhi::IBuffer *m_world_light_atlas{};
-        float m_world_light_atlas_ambient{};
         std::unique_ptr<WorldResources> m_candidate_world{};
         std::unique_ptr<WorldResources> m_retiring_world{};
 
@@ -1112,8 +1087,6 @@ export namespace pP {
         // Static terrain can retain its checked cohort while the ordinary game
         // actor overlay advances; frozen-session callers keep the default false.
         bool m_update_actors_on_retained_terrain{};
-        // A game-clock update for the requested terminal sky on the render lane.
-        std::optional<i32> m_temporal_sky_hour{};
         float m_cell_size_m{1.0f};
         bool m_has_catalog{false};
         u32 m_boundary_material_id{1u};

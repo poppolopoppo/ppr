@@ -403,10 +403,6 @@ namespace demo {
         u64 m_requested_seed{42u};
         Array<std::filesystem::path> m_worldgen_roots{};
         std::string m_worldgen_profile{"frontier"};
-        // Startup field-mode request (--world-lighting=field). The live enabled
-        // toggle is re-read at world begin through worldLightFieldActive, never
-        // cached into a boolean that the panel cannot update.
-        bool m_field_requested{};
         std::shared_ptr<const GridWorldCommand> m_world_command{};
         std::optional<GridWorldResult> m_world_result{};
 
@@ -1023,11 +1019,6 @@ namespace demo {
                 return;
             }
 
-            if (game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled) and
-                m_ui_state.m_world_light.m_sky_hour >= 0) {
-                stage.m_temporal_sky_hour = m_ui_state.m_world_light.m_sky_hour;
-            }
-
             const bool returning = m_workshop_finish_pending and
                                    m_world_transition.m_returning and
                                    m_world_transition.m_phase == game::ESessionWorldPhase::awaiting_presentation;
@@ -1069,10 +1060,6 @@ namespace demo {
         // owned world command admission
         // ------------------------------------------------------------------
 
-        void configureWorldLightingCommand_(GridWorldCommand &command) const noexcept {
-            command.m_field = game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled);
-        }
-
         [[nodiscard]] std::error_code queueWorldCommand_(const EGridWorldCommand kind) {
             PPR_ASSERT(not m_world_command);
             PPR_ASSERT(m_world_sequence != std::numeric_limits<u64>::max());
@@ -1082,7 +1069,6 @@ namespace demo {
             command->m_job_id = m_world_view.m_id;
             command->m_world_generation = m_candidate_generation;
             command->m_content_fingerprint = m_candidate_fingerprint;
-            configureWorldLightingCommand_(*command);
             if (kind == EGridWorldCommand::begin) {
                 auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
                 auto &header = command->m_stage;
@@ -1108,26 +1094,6 @@ namespace demo {
                 header.m_diagnostic_palette = source.m_diagnostic_palette;
                 header.m_initial_matter_valid = source.m_initial_matter_valid;
                 command->m_final_batch = source.m_uploads.empty();
-
-                if (game::worldLightFieldActive(m_field_requested, m_ui_state.m_world_light.m_enabled)) {
-                    const auto plan = lighting::planWorldLight(
-                        {.m_width = m_map_size,
-                            .m_height = m_map_size,
-                            .m_cell_metres = source.m_cell_size_m,
-                            .m_level_count = m_ui_state.m_world_light.m_level_count});
-                    PPR_RETURN_ERROR_ON_FAIL(Demo, plan);
-                    command->m_field_plan = *plan;
-                    command->m_field_budget = m_ui_state.m_world_light.m_samples_per_frame;
-                    command->m_field_atlas_ambient = m_ui_state.m_world_light.m_atlas_ambient;
-                    command->m_field_debug_view = static_cast<u32>(m_ui_state.m_world_light.m_debug_view);
-                    auto field_materials = colony::buildWorldLightMaterials(
-                        std::span<const GridTerrainVisual>{
-                            source.m_terrain_visuals.data(), source.m_terrain_visuals.size()},
-                        std::span<const image::ImageAsset>{
-                            source.m_terrain_images.data(), source.m_terrain_images.size()});
-                    PPR_RETURN_ERROR_ON_FAIL(Demo, field_materials);
-                    command->m_field_materials = std::move(*field_materials);
-                }
             } else if (kind == EGridWorldCommand::append) {
                 auto &source = m_workshop_stage ? *m_workshop_stage : m_world_job->presentation();
                 const auto end = std::min(source.m_uploads.size(), m_candidate_next_chunk + 8u);
@@ -3804,15 +3770,9 @@ namespace demo {
                 settings.m_worldgen_profile.c_str());
             std::snprintf(m_workshop_ui.m_biome.data(), m_workshop_ui.m_biome.size(), "%s", "hearth");
             m_workshop_ui.m_seed = settings.m_worldgen_seed;
-            m_field_requested = settings.m_world_lighting == game::EWorldLighting::field;
-
             m_worldgen_profile = settings.m_worldgen_profile;
-            // The field picture needs its HDR + temporal2x reconstruction chain;
-            // the post display settings then drive bloom, eye adaptation, manual
-            // exposure and the optional palette over it.
-            if (m_field_requested) {
-                game::configureFieldRetro(m_ui_state.m_retro);
-            }
+            // The post display settings drive bloom, eye adaptation, manual
+            // exposure and the optional palette over the retro picture.
             game::applyPostToRetro(m_ui_state.m_retro, m_ui_state.m_post);
             m_requested_seed = settings.m_worldgen_seed;
             m_ui_state.m_tools = {

@@ -342,28 +342,4 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS game worldgen cpu
     )
 
-    # Field-mode interactive run: a bounded, windowed smoke that proves the field
-    # routes end-to-end (world generation → field init → per-frame field update
-    # with a landed dirty-chunk revision). Opt-in (gpu_validation + window): it
-    # needs a display. CTest gates this via output regexes (PASS/FAIL below), NOT
-    # the process exit code. Leak detection is disabled because the dbus/GLFW
-    # allocations are pre-existing system/driver globals, not the field path's.
-    ppr_add_test_entry(TARGET app.game
-        NAME field_run
-        ARGS "--world-lighting=field;--map-size=1024;--auto-exit=60"
-        TIMEOUT 180
-        RESOURCE_LOCK gpu window
-        LABELS game gpu_validation window
-    )
-    # APPEND (not set_tests_properties) so the PATH prepend and NVIDIA LSAN
-    # suppression installed by ppr_add_test_entry stay intact. PASS requires the
-    # once-per-run field-frame log (emitted only after a source revision lands);
-    # FAIL rejects any error/fatal marker, including the chunk-domain
-    # result_out_of_range and the "[fatal] app.run" line, regardless of exit code.
-    set_property(TEST "app.game.field_run" APPEND PROPERTY ENVIRONMENT_MODIFICATION
-        "ASAN_OPTIONS=set:detect_leaks=0")
-    set_property(TEST "app.game.field_run" PROPERTY PASS_REGULAR_EXPRESSION
-        "world light field frame")
-    set_property(TEST "app.game.field_run" PROPERTY FAIL_REGULAR_EXPRESSION
-        "FAILED|result_out_of_range|app.run|fatal")
 endif()

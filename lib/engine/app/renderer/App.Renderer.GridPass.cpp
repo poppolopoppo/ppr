@@ -116,31 +116,6 @@ namespace pP {
         return {};
     }
 
-    std::expected<lighting::OpticalCell, std::error_code> gridMaterialOpticalCell(const GridTerrainVisual &visual) {
-        PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, validateGridMaterialOptics(visual));
-        PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GridPass, visual.m_transport_model != kGridTransportUnavailable
-                          ? std::error_code{}
-                          : std::make_error_code(std::errc::no_message));
-
-        lighting::OpticalCell cell{};
-        cell.m_kind = visual.m_transport_model == kGridTransportVacuumV1   ? lighting::OpticalKind::vacuum
-                      : visual.m_transport_model == kGridTransportOpaqueV1 ? lighting::OpticalKind::opaque
-                                                                           : lighting::OpticalKind::absorbing;
-
-        for (std::size_t channel = 0u; channel < 3u; ++channel) {
-            const float source = visual.m_emissive_rgb[channel] * visual.m_emissive_strength;
-            if (cell.m_kind == lighting::OpticalKind::opaque) {
-                cell.m_surface_emission[channel] = static_cast<double>(source);
-            } else if (cell.m_kind == lighting::OpticalKind::absorbing) {
-                cell.m_extinction[channel] = static_cast<double>(visual.m_sigma_per_m[channel]);
-                cell.m_volume_emission[channel] = static_cast<double>(visual.m_sigma_per_m[channel] * source);
-            }
-        }
-
-        return cell;
-    }
-
     // ------------------------------------------------------------------
     // catalog image interpretation
     // ------------------------------------------------------------------
@@ -459,20 +434,6 @@ namespace pP {
         // only after its last submitted reader fence completes.
     }
 
-
-    std::error_code GridPass::setWorldLightField(
-        const lighting::WorldLightFieldView &view, const u32 debug_view, rhi::IBuffer *const atlas,
-        const float atlas_ambient) {
-        // Borrowed view; the field owner outlives every view. An empty view
-        // (null radiance) clears the binding and restores the existing path.
-        m_world_light_view = view;
-        m_world_light_debug_view = debug_view;
-        m_world_light_atlas = view.m_radiance != nullptr ? atlas : nullptr;
-        // kWorldLightAtlasAmbientLimit in grid_tiles.slang: ambient * albedo must
-        // stay well below one, so the shader and this mirror share the same bound.
-        m_world_light_atlas_ambient = m_world_light_atlas != nullptr ? std::clamp(atlas_ambient, 0.0f, 0.35f) : 0.0f;
-        return {};
-    }
 
     std::error_code GridPass::applyStagedFrame(const GridStagedFrame &stage) {
         PPR_RETURN_ERROR_ON_FAIL(
@@ -2426,11 +2387,6 @@ namespace pP {
         m_world.m_cell_dummy.setNull();
         m_contour_points.setNull();
         m_contour_cases.setNull();
-        m_world_light_dummy.setNull();
-        // Borrowed view/atlas: owned by the editor's FieldLightingState, which shuts down after GridPass.
-        m_world_light_view = {};
-        m_world_light_atlas = nullptr;
-        m_world_light_atlas_ambient = 0.0f;
         m_chunk_slot_buffers = {};
         m_chunk_slot_mapped = {};
         m_chunk_slot_uploaded.fill(false);
@@ -2507,7 +2463,6 @@ namespace pP {
         m_world.m_cell_dummy.setNull();
         m_contour_points.setNull();
         m_contour_cases.setNull();
-        m_world_light_dummy.setNull();
         m_chunk_slot_buffers = {};
         m_chunk_slot_mapped = {};
         m_chunk_slot_uploaded.fill(false);
@@ -2688,21 +2643,6 @@ namespace pP {
         m_contour_cases = std::move(cases);
         m_chunk_slot_buffers = std::move(maps);
         m_chunk_slot_mapped = mapped;
-
-        // Dummy UAV for the world light field radiance binding when no field is
-        // set. Matches the field radiance buffer's element stride and UAV state.
-        if (not m_world_light_dummy) {
-            rhi::BufferDesc dummy{};
-            dummy.size = 8u;
-            dummy.elementSize = 8u;
-            dummy.memoryType = rhi::MemoryType::DeviceLocal;
-            dummy.usage = static_cast<rhi::BufferUsage>(
-                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
-                static_cast<u32>(rhi::BufferUsage::UnorderedAccess));
-            dummy.defaultState = rhi::ResourceState::UnorderedAccess;
-            dummy.label = "grid world light dummy";
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createBuffer(dummy, nullptr, m_world_light_dummy.writeRef()));
-        }
         return {};
     }
 
@@ -2959,7 +2899,6 @@ namespace pP {
         }
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(device, cursor, retained_table));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLightField_(cursor));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u));
 
         if (pipeline) {
@@ -2968,70 +2907,6 @@ namespace pP {
             owners.push_back(
                 m_background_ready ? m_background_slots[m_background_cursor].m_view : m_terrain_fallback_view);
         }
-
-        return {};
-    }
-
-    std::error_code GridPass::bindWorldLightField_(rhi::ShaderCursor &cursor) {
-        // CPU mirror of the Slang WorldLightSwitch: scalar padding keeps the
-        // ConstantBuffer layout identical to the four-u32 shader struct.
-        // m_debug_view is the field debug selector (0 = off, 1 = probes);
-        // m_atlas_ambient is the terrain incident-radiance scale (already
-        // bounded by setWorldLightField) and m_pad1 stays reserved.
-        struct WorldLightSwitch {
-            u32 m_enabled{};
-            u32 m_debug_view{};
-            float m_atlas_ambient{};
-            u32 m_pad1{};
-        };
-        static_assert(sizeof(WorldLightSwitch) == 16u and alignof(WorldLightSwitch) == 4u);
-
-        const bool enabled = m_world_light_view.m_radiance != nullptr and
-                             m_world_light_view.m_constants != nullptr and
-                             m_world_light_view.m_cell_ids != nullptr and
-                             m_world_light_view.m_overlay != nullptr and
-                             m_world_light_view.m_materials != nullptr;
-
-        WorldLightSwitch sw{};
-        sw.m_enabled = enabled ? 1u : 0u;
-        sw.m_debug_view = enabled ? m_world_light_debug_view : 0u;
-        sw.m_atlas_ambient = enabled ? m_world_light_atlas_ambient : 0.0f;
-        rhi::ShaderCursor constants{};
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light"].getDereferenced(constants));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
-
-        static const lighting::WorldLightFieldConstants kZeroConstants{};
-        const auto *const field_constants = enabled ? m_world_light_view.m_constants : &kZeroConstants;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_world_light_field"].getDereferenced(constants));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(field_constants, sizeof(*field_constants)));
-
-        rhi::IBuffer *const radiance = enabled ? m_world_light_view.m_radiance : m_world_light_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_world_light_radiance_cur"].setBinding(rhi::Binding(radiance, makeFullRange(radiance))));
-
-        // One packed RGB9E5 word per native cell. The same world-light root
-        // already carried this slot for the trace; the terrain samples it here
-        // for the atlas ambient term. When no field is set, the 8-byte dummy
-        // keeps the root complete and the ambient scale is zero.
-        rhi::IBuffer *const atlas = enabled and m_world_light_atlas != nullptr ? m_world_light_atlas
-                                                                               : m_world_light_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_world_light_atlas"].setBinding(rhi::Binding(atlas, makeFullRange(atlas))));
-
-        // Dense source for the terrain's in-place near trace (read-only). The
-        // same read-only descriptors the field trace uses; the write-side UAV
-        // declarations in the source ABI stay unbound because the fragment
-        // program never references them. When no field is set the dummy keeps
-        // the root complete and the irradiance path is not taken.
-        rhi::IBuffer *const cell_ids = enabled ? m_world_light_view.m_cell_ids : m_world_light_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_world_light_dense_ids"].setBinding(rhi::Binding(cell_ids, makeFullRange(cell_ids))));
-        rhi::IBuffer *const overlay = enabled ? m_world_light_view.m_overlay : m_world_light_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_world_light_dense_overlay"].setBinding(rhi::Binding(overlay, makeFullRange(overlay))));
-        rhi::IBuffer *const materials = enabled ? m_world_light_view.m_materials : m_world_light_dummy.get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_world_light_materials"].setBinding(rhi::Binding(materials, makeFullRange(materials))));
 
         return {};
     }
@@ -3129,22 +3004,6 @@ namespace pP {
             GridPass, m_world.m_submitted_tiles.size() <= kGridTileCacheCapacity
                           ? std::error_code{}
                           : std::make_error_code(std::errc::no_buffer_space));
-
-        // The atlas producer leaves its packed incident-radiance buffer in
-        // UnorderedAccess; the terrain samples it read-only (one shader slot
-        // already on the world-light root, no extra binding group). Transition
-        // once before any terrain encode, after the atlas and field updates. The
-        // field update already leaves the dense source in ShaderResource for the
-        // in-place near trace; re-assert it so a frame that skipped the update
-        // still binds the right state.
-        if (m_world_light_atlas != nullptr) {
-            context.m_encoder.setBufferState(m_world_light_atlas, rhi::ResourceState::ShaderResource);
-        }
-        if (m_world_light_view.m_cell_ids != nullptr) {
-            context.m_encoder.setBufferState(m_world_light_view.m_cell_ids, rhi::ResourceState::ShaderResource);
-            context.m_encoder.setBufferState(m_world_light_view.m_overlay, rhi::ResourceState::ShaderResource);
-            context.m_encoder.setBufferState(m_world_light_view.m_materials, rhi::ResourceState::ShaderResource);
-        }
 
         reclaimCompleted_(context.m_completed_fence_value);
         if (m_world.m_resident_table_stale and not m_world.m_cell_publication_deferred) {

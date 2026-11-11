@@ -60,7 +60,6 @@ namespace pP::game::tests::detail::compat {
         auto smoke = resolveCli({"--smoke"}, smoke_diagnostics);
         PPR_TEST_ASSERT(smoke.has_value());
         PPR_TEST_ASSERT(smoke->m_game.m_value.m_command == EGameCommand::smoke);
-        PPR_TEST_ASSERT(smoke->m_game.m_value.m_world_lighting == EWorldLighting::field);
 
         Diagnostics default_diagnostics{};
         auto interactive = resolveCli({}, default_diagnostics);
@@ -74,43 +73,6 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(workshop->m_game.m_value.m_command == EGameCommand::worldgen_workshop);
         PPR_TEST_ASSERT(not workshop->m_game.m_value.m_worldgen_root);
         PPR_TEST_ASSERT(workshop->m_game.m_value.m_worldgen_seed == (std::numeric_limits<u64>::max)());
-    };
-
-    PPR_UNIT_TEST (field_world_lighting_parses_and_accepts_4096_benchmark) {
-        Diagnostics small_diagnostics;
-        const auto small = resolveCli({"--world-lighting=field", "--map-size=1024"}, small_diagnostics);
-        PPR_TEST_ASSERT(small.has_value());
-        PPR_TEST_ASSERT(small->m_game.m_value.m_world_lighting == EWorldLighting::field);
-        PPR_TEST_ASSERT(small->m_game.m_value.m_map_size == 1024u);
-
-        Diagnostics medium_diagnostics;
-        const auto medium = resolveCli({"--world-lighting=field", "--map-size=2048"}, medium_diagnostics);
-        PPR_TEST_ASSERT(medium.has_value());
-        PPR_TEST_ASSERT(medium->m_game.m_value.m_world_lighting == EWorldLighting::field);
-
-        // 4096 is an aspirational benchmark size, not a rejected one.
-        Diagnostics large_diagnostics;
-        const auto large = resolveCli({"--world-lighting=field", "--map-size=4096"}, large_diagnostics);
-        PPR_TEST_ASSERT(large.has_value());
-        PPR_TEST_ASSERT(large->m_game.m_value.m_world_lighting == EWorldLighting::field);
-        PPR_TEST_ASSERT(large->m_game.m_value.m_map_size == 4096u);
-
-        // A bare 4096 request resolves on the field default.
-        Diagnostics bare_diagnostics;
-        const auto bare = resolveCli({"--map-size=4096"}, bare_diagnostics);
-        PPR_TEST_ASSERT(bare.has_value());
-        PPR_TEST_ASSERT(bare->m_game.m_value.m_world_lighting == EWorldLighting::field);
-        PPR_TEST_ASSERT(bare->m_game.m_value.m_map_size == 4096u);
-
-        Diagnostics non_interactive_diagnostics;
-        const auto non_interactive = resolveCli({"--world-lighting=field", "--smoke"}, non_interactive_diagnostics);
-        PPR_TEST_ASSERT(non_interactive.has_value());
-        PPR_TEST_ASSERT(non_interactive->m_game.m_value.m_command == EGameCommand::smoke);
-        PPR_TEST_ASSERT(non_interactive->m_game.m_value.m_world_lighting == EWorldLighting::field);
-
-        Diagnostics help_diagnostics;
-        const auto help = gameHelpText();
-        PPR_TEST_ASSERT(help.find("field") != std::string::npos);
     };
 
     PPR_UNIT_TEST (map_size_uses_one_numeric_domain_for_cli_and_toml) {
@@ -736,15 +698,11 @@ namespace pP::game::tests::detail::compat {
         }
     };
 
-    PPR_UNIT_TEST (world_light_and_post_settings_parse_and_validate) {
+    PPR_UNIT_TEST (sky_and_post_settings_parse_and_validate) {
         Diagnostics defaults_diagnostics;
         const auto normal = resolveCli({}, defaults_diagnostics);
         PPR_TEST_ASSERT(normal.has_value());
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_enabled);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_samples_per_frame == 262144u);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_level_count == 6u);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == 12);
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_debug_view == EWorldLightDebugView::off);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == -1);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_exposure_ev == 0.0f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_adaptation_tau == 0.7f);
@@ -756,22 +714,19 @@ namespace pP::game::tests::detail::compat {
 
         Diagnostics configured_diagnostics;
         const auto configured = resolveCli(
-            {"--world-light-samples-per-frame=1048576", "--world-light-debug=probes", "--post-auto-exposure",
-                "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25", "--post-palette"},
+            {"--world-light-sky-hour=12", "--post-auto-exposure", "--post-exposure-ev=2.5",
+                "--post-bloom-intensity=1.25", "--post-palette"},
             configured_diagnostics);
         PPR_TEST_ASSERT(configured.has_value());
-        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_samples_per_frame == 1048576u);
-        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_debug_view == EWorldLightDebugView::probes);
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_sky_hour == 12);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_bloom_intensity == 1.25f);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_palette);
 
         for (const auto *const invalid:
-            {"--world-light-samples-per-frame=65535", "--world-light-samples-per-frame=4194305",
-                "--world-light-levels=3", "--world-light-sky-hour=24", "--world-light-debug=bogus",
-                "--world-light-debug=irradiance", "--post-exposure-ev=-16.1", "--post-adaptation-tau=0.09",
-                "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
+            {"--world-light-sky-hour=24", "--world-light-sky-hour=-2", "--post-exposure-ev=-16.1",
+                "--post-adaptation-tau=0.09", "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
                 "--post-bloom-threshold=16.1"}) {
             Diagnostics rejected;
             PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
@@ -782,101 +737,39 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(not resolveCli({"--post-ev-min=2", "--post-ev-max=-2"}, cross_diagnostics));
         PPR_TEST_ASSERT(cross_diagnostics.hasErrors());
 
-        // Enum debug view round-trips through the runtime draft layer (named,
-        // never an ordinal) and survives into the resolved settings.
+        // The retained sky hour round-trips through the runtime draft layer.
         config::Resolved<WorldLightDisplaySettings> committed_world{};
-        WorldLightDisplaySettings debug_draft{};
-        debug_draft.m_debug_view = EWorldLightDebugView::probes;
-        Diagnostics debug_diagnostics;
-        const auto debug_round_trip = validateWorldLightDraft(committed_world, debug_draft, debug_diagnostics);
-        PPR_TEST_ASSERT(debug_round_trip.has_value());
-        PPR_TEST_ASSERT(debug_round_trip->m_value.m_debug_view == EWorldLightDebugView::probes);
+        WorldLightDisplaySettings sky_draft{};
+        sky_draft.m_sky_hour = 12;
+        Diagnostics sky_diagnostics;
+        const auto sky_round_trip = validateWorldLightDraft(committed_world, sky_draft, sky_diagnostics);
+        PPR_TEST_ASSERT(sky_round_trip.has_value());
+        PPR_TEST_ASSERT(sky_round_trip->m_value.m_sky_hour == 12);
 
         const std::string help = gameHelpText();
-        PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") != std::string::npos);
-        PPR_TEST_ASSERT(help.find("world-light-debug") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-sky-hour") != std::string::npos);
         PPR_TEST_ASSERT(help.find("post-palette") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") == std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-debug") == std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-atlas-ambient") == std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-lighting") == std::string::npos);
     };
 
-    PPR_UNIT_TEST (world_light_atlas_ambient_defaults_to_visible_borders) {
-        // The atlas ambient term is the only terrain path that lights interior
-        // cells from the incident radiance of their neighbours. The validated
-        // incident range is ~0.25-2.5; with the shipped material albedos a
-        // strength in 0.2-0.35 lifts a lit border cell by roughly a third of the
-        // diffuse term while leaving a deep interior cell dark, so the default
-        // must sit inside that window and stay above zero.
+    PPR_UNIT_TEST (retired_world_light_settings_are_rejected) {
+        // The retained sky setting keeps its -1 black-boundary meaning.
         const WorldLightDisplaySettings defaults{};
-        PPR_TEST_ASSERT(defaults.m_atlas_ambient > 0.0f);
-        PPR_TEST_ASSERT(defaults.m_atlas_ambient >= 0.2f and defaults.m_atlas_ambient <= 0.35f);
+        PPR_TEST_ASSERT(defaults.m_sky_hour == -1);
 
-        Diagnostics defaults_diagnostics;
-        const auto resolved = resolveCli({}, defaults_diagnostics);
-        PPR_TEST_ASSERT(resolved.has_value());
-        PPR_TEST_ASSERT(resolved->m_world_light.m_value.m_atlas_ambient == defaults.m_atlas_ambient);
-
-        Diagnostics tuned_diagnostics;
-        const auto tuned = resolveCli({"--world-light-atlas-ambient=0.35"}, tuned_diagnostics);
-        PPR_TEST_ASSERT(tuned.has_value());
-        PPR_TEST_ASSERT(tuned->m_world_light.m_value.m_atlas_ambient == 0.35f);
-
-        // The bound is a real schema limit, not a clamp applied later: a value
-        // that would push terrain albedo * strength toward the feedback loop's
-        // gain of one is rejected outright.
-        for (const char *const invalid: {"--world-light-atlas-ambient=-0.01", "--world-light-atlas-ambient=0.351"}) {
-            Diagnostics rejected;
-            PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
-            PPR_TEST_ASSERT(rejected.hasErrors());
+        // The retired world-light controls have no active owner: an explicit
+        // assignment through any source must fail resolution with diagnostics
+        // instead of silently resolving to a dead value.
+        for (const char *const obsolete:
+            {"--world-light-enabled", "--world-light-samples-per-frame=1048576", "--world-light-levels=6",
+                "--world-light-atlas-ambient=0.3", "--world-light-debug=probes", "--world-lighting=field"}) {
+            Diagnostics diagnostics;
+            PPR_TEST_ASSERT(not resolveCli({obsolete}, diagnostics));
+            PPR_TEST_ASSERT(diagnostics.hasErrors());
         }
-    };
-
-    PPR_UNIT_TEST (debug_view_has_only_off_and_probes) {
-        // The removed `irradiance` arm must not be advertised, parsed or
-        // validated: an unimplemented mode falls back to `off` in the shader, so
-        // the schema exposes only the two implemented selectors.
-        PPR_TEST_ASSERT(world_light_debug_domain.m_entries.size() == 2u);
-        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[0].m_value == EWorldLightDebugView::off);
-        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[0].m_name == "off");
-        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[1].m_value == EWorldLightDebugView::probes);
-        PPR_TEST_ASSERT(world_light_debug_domain.m_entries[1].m_name == "probes");
-
-        EWorldLightDebugView parsed{};
-        PPR_TEST_ASSERT(world_light_debug_domain.describe() == "one of off, probes");
-        PPR_TEST_ASSERT(
-            world_light_debug_domain.parse("irradiance", parsed) == make_error_code(EConfigErrc::unknown_enum_value));
-        PPR_TEST_ASSERT(
-            world_light_debug_domain.parse("2", parsed) == make_error_code(EConfigErrc::unknown_enum_value));
-        PPR_TEST_ASSERT(world_light_debug_domain.parse("probes", parsed) == std::error_code{});
-        PPR_TEST_ASSERT(parsed == EWorldLightDebugView::probes);
-
-        Diagnostics diagnostics;
-        PPR_TEST_ASSERT(not resolveCli({"--world-light-debug=irradiance"}, diagnostics));
-        PPR_TEST_ASSERT(diagnostics.hasErrors());
-    };
-
-    PPR_UNIT_TEST (field_retro_chain_passes_frame_admission) {
-        // Mirror the field session: the field chain first, post settings over it.
-        PostDisplaySettings post{};
-        RetroSettings field{};
-        configureFieldRetro(field);
-        applyPostToRetro(field, post);
-
-        PPR_TEST_ASSERT(post.m_auto_exposure and post.m_bloom and not post.m_palette);
-        PPR_TEST_ASSERT(not field.m_enabled and not field.m_temporal_enabled);
-        PPR_TEST_ASSERT(field.m_hdr_enabled);
-        PPR_TEST_ASSERT(field.m_temporal_2x_enabled and not field.m_spatial_enabled);
-        PPR_TEST_ASSERT(field.m_auto_exposure and field.m_bloom_enabled);
-        PPR_TEST_ASSERT(not field.m_palette_enabled);
-
-        // The field picture is admitted at the temporal2x half-resolution raster.
-        const std::error_code admitted = RetroPass::validateFrameSettings(field, int2{960, 540}, int2{1920, 1080});
-        PPR_TEST_ASSERT(not admitted);
-
-        // Temporal2x already reconstructs spatially; requesting both is rejected
-        // rather than silently choosing one path.
-        RetroSettings doubled = field;
-        doubled.m_spatial_enabled = true;
-        const std::error_code rejected = RetroPass::validateFrameSettings(doubled, int2{960, 540}, int2{1920, 1080});
-        PPR_TEST_ASSERT(rejected == std::errc::invalid_argument);
     };
 
     PPR_UNIT_TEST (invalid_post_draft_is_rejected_and_not_persisted) {
@@ -910,7 +803,6 @@ namespace pP::game::tests {
     const UnitTest game_config = UnitTest::Named("game_config") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::compat::selectors_pick_commands,
-            detail::compat::field_world_lighting_parses_and_accepts_4096_benchmark,
             detail::compat::simulation_tools_resolve_bounded_physical_settings,
             detail::compat::worldgen_validation_invocation,
             detail::compat::map_size_uses_one_numeric_domain_for_cli_and_toml,
@@ -934,9 +826,8 @@ namespace pP::game::tests {
             detail::compat::help_suppresses_without_reading_config,
             detail::compat::mapped_config_files_preserve_owned_results_empty_input_and_errors,
             detail::compat::executable_boundary_rejects_unknown_options,
-            detail::compat::world_light_and_post_settings_parse_and_validate,
-            detail::compat::debug_view_has_only_off_and_probes,
-            detail::compat::field_retro_chain_passes_frame_admission,
+            detail::compat::sky_and_post_settings_parse_and_validate,
+            detail::compat::retired_world_light_settings_are_rejected,
             detail::compat::invalid_post_draft_is_rejected_and_not_persisted,
             detail::compat::retired_crash_harness_rejected,
         });

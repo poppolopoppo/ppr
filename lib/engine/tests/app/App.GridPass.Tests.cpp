@@ -83,47 +83,33 @@ namespace pP::tests::detail {
         };
 
         // ------------------------------------------------------------------
-        // versioned material optics and source-function conversion
+        // scalar material validation
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST (grid_material_optics_preserve_unavailable_and_source_function_units) {
+        PPR_UNIT_TEST (grid_material_validation_rejects_invalid_values) {
             GridTerrainVisual visual{};
             visual.m_emissive_rgb[0] = 0.5f;
             visual.m_emissive_rgb[1] = 0.25f;
             visual.m_emissive_rgb[2] = 0.125f;
             visual.m_emissive_strength = 4.0f;
             PPR_TEST_ASSERT(not validateGridMaterialOptics(visual));
-            const auto unavailable = gridMaterialOpticalCell(visual);
-            PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::no_message);
 
             visual.m_transport_model = kGridTransportOpaqueV1;
             visual.m_surface_flags = kGridSurfaceOpticalBlend;
             visual.m_opacity = 0.25f;
-            auto opaque = gridMaterialOpticalCell(visual);
-            PPR_TEST_ASSERT(opaque.has_value() and opaque->m_kind == lighting::OpticalKind::opaque);
-            PPR_TEST_ASSERT(opaque->m_surface_emission == (lighting::OpticalRgb{2.0, 1.0, 0.5}));
+            PPR_TEST_ASSERT(not validateGridMaterialOptics(visual));
 
             visual.m_transport_model = kGridTransportAbsorbingV1;
             visual.m_sigma_per_m[0] = 0.5f;
             visual.m_sigma_per_m[1] = 1.0f;
-            auto medium = gridMaterialOpticalCell(visual);
-            PPR_TEST_ASSERT(medium.has_value() and medium->m_kind == lighting::OpticalKind::absorbing);
-            PPR_TEST_ASSERT(medium->m_volume_emission == (lighting::OpticalRgb{1.0, 1.0, 0.0}));
-            const std::array<lighting::OpticalCell, 1> cells{*medium};
-            const lighting::OpticalGridView grid{cells, {}, 2.0, 1u, 1u, lighting::OpticalBoundary::vacuum};
-            const lighting::OpticalRay ray{{0.0, 1.0}, {1.0, 0.0}, 0.0, 2.0};
-            const auto interval = lighting::traceOpticalReference(grid, ray);
-            PPR_TEST_ASSERT(interval.has_value());
-            PPR_TEST_ASSERT(std::abs(interval->m_radiance[0] - 2.0 * (1.0 - std::exp(-1.0))) < 1e-12);
-            PPR_TEST_ASSERT(std::abs(interval->m_radiance[1] - (1.0 - std::exp(-2.0))) < 1e-12);
-            PPR_TEST_ASSERT(interval->m_radiance[2] == 0.0 and interval->m_transmittance[2] == 1.0);
+            PPR_TEST_ASSERT(not validateGridMaterialOptics(visual));
 
+            // A vacuum row may not emit: emission has no surface to leave from.
             visual.m_transport_model = kGridTransportVacuumV1;
             PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
             std::ranges::fill(visual.m_sigma_per_m, 0.0f);
             visual.m_emissive_strength = 0.0f;
-            const auto vacuum = gridMaterialOpticalCell(visual);
-            PPR_TEST_ASSERT(vacuum.has_value() and vacuum->m_kind == lighting::OpticalKind::vacuum);
+            PPR_TEST_ASSERT(not validateGridMaterialOptics(visual));
 
             visual.m_transport_model = 0x201u;
             PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
@@ -131,7 +117,13 @@ namespace pP::tests::detail {
             visual.m_sigma_per_m[0] = (std::numeric_limits<float>::max)();
             visual.m_emissive_strength = (std::numeric_limits<float>::max)();
             PPR_TEST_ASSERT(validateGridMaterialOptics(visual) == std::errc::invalid_argument);
+        };
 
+        // ------------------------------------------------------------------
+        // coarse filtered albedo mean
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (grid_filtered_albedo_mean_accepts_full_and_truncated_chains) {
             // The image subsystem admits BOTH full chains through1x1 and
             // truncated chains through4x4. The coarse material mean consumes
             // the last actual level without imposing the truncated policy.
@@ -962,7 +954,8 @@ namespace pP::tests {
     const UnitTest grid_pass = UnitTest::Named("grid_pass") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::GridTiles::grid_tile_payload_layout_matches_the_shader,
-            detail::GridTiles::grid_material_optics_preserve_unavailable_and_source_function_units,
+            detail::GridTiles::grid_material_validation_rejects_invalid_values,
+            detail::GridTiles::grid_filtered_albedo_mean_accepts_full_and_truncated_chains,
             detail::GridTiles::grid_plan_converts_fine_bounds_to_metres,
             detail::GridTiles::grid_plan_culls_offscreen_tiles,
             detail::GridTiles::grid_dirty_upload_serves_quiescent_from_cache,

@@ -32,30 +32,6 @@ export namespace pP::game {
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
     }};
 
-    /// World lighting is collapsed to the camera-independent cascade field; the
-    /// legacy windowed/legacy modes are retired. The enum and its single-value
-    /// domain remain so `game.world_lighting` still resolves through the schema.
-    enum class EWorldLighting : u8 {
-        field
-    };
-
-    inline constexpr config::EnumDomain<EWorldLighting, 1u> world_lighting_domain{{
-        config::EnumEntry<EWorldLighting>{EWorldLighting::field, "field"},
-    }};
-
-    /// World-light-field debug view. `off` keeps the normal material response;
-    /// `probes` false-colours the raw diffuse field and overlays the level-0
-    /// probe lattice. An unknown mode falls back to `off`.
-    enum class EWorldLightDebugView : u8 {
-        off,
-        probes,
-    };
-
-    inline constexpr config::EnumDomain<EWorldLightDebugView, 2u> world_light_debug_domain{{
-        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::off, "off"},
-        config::EnumEntry<EWorldLightDebugView>{EWorldLightDebugView::probes, "probes"},
-    }};
-
     struct MapSizeDomain {
         [[nodiscard]] std::error_code validate(const u32 &value) const noexcept;
 
@@ -84,20 +60,12 @@ export namespace pP::game {
         u32 m_tool_spawn_count{64u};
         u32 m_map_size{2048u};
         EGameCommand m_command{EGameCommand::interactive};
-        EWorldLighting m_world_lighting{EWorldLighting::field};
         bool m_worldgen_report{}, m_worldgen_acceptance{};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
 
             return std::tuple{
-                field(
-                    &GameSettings::m_world_lighting,
-                    Metadata{
-                        "game.world_lighting",
-                        "Camera-independent cascade world-light field (the sole supported world lighting)",
-                        "World lighting", EMutability::startup, ESource::all, false},
-                    world_lighting_domain),
                 field(
                     &GameSettings::m_worldgen_acceptance,
                     Metadata{
@@ -204,48 +172,20 @@ export namespace pP::game {
     };
 
     // ------------------------------------------------------------------
-    // world light and post display settings
+    // sky and post display settings
     // ------------------------------------------------------------------
 
-    /// Runtime-tunable world-light-field settings. `m_enabled` gates field mode;
-    /// the remaining fields bound the per-frame budget, the cascade level count,
-    /// the field sky hour, the terrain atlas ambient strength and the debug view.
-    /// Persisted under `game.world_light.*` and edited in the Display window's
-    /// "Lighting & Post" section; applied at field init/update.
+    /// Runtime-tunable sky and post settings. The retained sky hour keeps its
+    /// -1 black-boundary meaning: -1 selects no sky contribution and 0..23
+    /// rotate the sky. Persisted under `game.world_light.*` and edited in the
+    /// Display window's "Lighting & Post" section.
     struct WorldLightDisplaySettings {
-        bool m_enabled{true};
-        EWorldLightDebugView m_debug_view{EWorldLightDebugView::off};
-        u32 m_samples_per_frame{262144u};
-        u32 m_level_count{6u};
         i32 m_sky_hour{-1};
-        // Scale of the incident-radiance atlas term on terrain
-        // (ambient * albedo * atlasRadiance). Kept below one so ambient * albedo
-        // cannot approach the atlas feedback loop's closed-loop gain; 0.3 makes
-        // a dug border read against rock without flooding a deep interior cell.
-        float m_atlas_ambient{0.3f};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
 
             return std::tuple{
-                field(
-                    &WorldLightDisplaySettings::m_enabled,
-                    Metadata{
-                        "game.world_light.enabled", "Enable the camera-independent world light field", "World lighting",
-                        EMutability::runtime, ESource::all, true},
-                    boolean_domain),
-                field(
-                    &WorldLightDisplaySettings::m_samples_per_frame,
-                    Metadata{
-                        "game.world_light.samples_per_frame", "Direction samples traced per frame (field budget)",
-                        "World lighting", EMutability::runtime, ESource::all, true},
-                    Range<u32>{65536u, 4194304u}),
-                field(
-                    &WorldLightDisplaySettings::m_level_count,
-                    Metadata{
-                        "game.world_light.level_count", "Radiance cascade level count", "World lighting",
-                        EMutability::runtime, ESource::all, true},
-                    Range<u32>{4u, 8u}),
                 field(
                     &WorldLightDisplaySettings::m_sky_hour,
                     Metadata{
@@ -253,19 +193,6 @@ export namespace pP::game {
                         "Field sky solar hour (-1 uses the black boundary sky; 12 is noon)", "World lighting",
                         EMutability::runtime, ESource::all, true},
                     Range<i32>{-1, 23}),
-                field(
-                    &WorldLightDisplaySettings::m_atlas_ambient,
-                    Metadata{
-                        "game.world_light.atlas_ambient",
-                        "Terrain ambient from the incident radiance atlas (0 to 0.35)", "World lighting",
-                        EMutability::runtime, ESource::all, true},
-                    Range<float>{0.0f, 0.35f}),
-                field(
-                    &WorldLightDisplaySettings::m_debug_view,
-                    Metadata{
-                        "game.world_light.debug_view", "Field debug view (off, probes); bypasses the material response",
-                        "World lighting", EMutability::runtime, ESource::all, true},
-                    world_light_debug_domain),
             };
         }
     };
@@ -440,19 +367,4 @@ export namespace pP::game {
     /// adaptation and the palette; the retro palette is derived here, never
     /// edited by a second control.
     void applyPostToRetro(RetroSettings &retro, const PostDisplaySettings &post) noexcept;
-
-    /// Selects the field picture chain: scene-linear HDR reconstructed through
-    /// temporal2x at half resolution, with the legacy/palette picture and its
-    /// independent spatial/temporal supersampling disabled. Temporal2x already
-    /// performs spatial reconstruction, and RetroPass admission rejects spatial
-    /// and temporal2x together; the field path therefore enables temporal2x and
-    /// leaves m_spatial_enabled false. Post settings own bloom, eye adaptation
-    /// and the palette and are applied separately by applyPostToRetro.
-    void configureFieldRetro(RetroSettings &retro) noexcept;
-
-    /// Effective field-mode gate: the startup world-lighting request AND the
-    /// live enabled toggle, re-evaluated at world begin rather than cached.
-    [[nodiscard]] constexpr bool worldLightFieldActive(bool requested, bool enabled) noexcept {
-        return requested and enabled;
-    }
 } // namespace pP::game

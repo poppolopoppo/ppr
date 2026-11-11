@@ -27,9 +27,7 @@ namespace pP::tests {
 
     const UnitTest &grid_passTests() noexcept;
 
-    const UnitTest &lightingTests() noexcept;
-
-    const UnitTest &world_light_fieldTests() noexcept;
+    const UnitTest &post_processTests() noexcept;
 
     const UnitTest &pixel_readbackTests() noexcept;
 
@@ -121,8 +119,7 @@ namespace pP::tests {
             viewportTests(),
             render_viewTests(),
             grid_passTests(),
-            lightingTests(),
-            world_light_fieldTests(),
+            post_processTests(),
             pixel_readbackTests(),
             surface_pixels_round_trip_through_pngTests(),
             renderer_triangle_reinit_okTests(),

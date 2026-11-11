@@ -57,7 +57,6 @@ StructuredBuffer<uint> g_visible_ids;
 StructuredBuffer<uint> g_cell_materials;
 // Uploaded verbatim from engine.math; no separate shader case table.
 #include "grid_contour_math.slang"
-#include "world_light_sample.slang"
 StructuredBuffer<uint> g_chunk_slots;
 // CPU GridTerrainVisual: 96 bytes. Scalar mean components occupy offsets 20/24/28.
 // Texture index here is
@@ -90,20 +89,6 @@ static const uint kSurfaceTextureRepeat = 2u;
 static const uint kSurfaceParticleSolid = 4u;
 static const uint kSurfaceParticleLiquid = 8u;
 StructuredBuffer<TerrainVisual> g_terrain_visuals;
-// Switch selecting the temporal world light field material path (Task 8). Zero
-// keeps the native receiver/world-radiance path; nonzero routes opaque terrain
-// shading through shadeWorldLightSurface. debugView selects the raw field debug
-// output mirrored from the CPU WorldLightSwitch: 0 = off (normal material
-// response), 1 = probes (diffuse false colour + level-0 probe lattice). Unknown
-// values fall back to off. atlasAmbient is the bounded terrain ambient scale
-// for the per-cell radiance atlas (see shadeWorldLightResponse).
-struct WorldLightSwitch {
-    uint enabled;
-    uint debugView;
-    float atlasAmbient;
-    uint pad1;
-};
-ConstantBuffer<WorldLightSwitch> g_world_light;
 // Terrain pass selector: 0 draws every material in one pass (the legacy
 // reference lanes), 1 discards optical-blend (translucent) cells for the
 // depth-writing opaque pass, 2 discards opaque cells for the blended
@@ -722,314 +707,6 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
     return surface;
 }
 
-// ------------------------------------------------------------------
-// opaque terrain shading from the temporal world light field
-// ------------------------------------------------------------------
-
-// ------------------------------------------------------------------
-// world light field debug view
-// ------------------------------------------------------------------
-
-// False-colour ramp for the raw pre-albedo field result, fed the field's
-// diffuse term. Calibrated against the validated real-game probe samples at the
-// committed source (diffuse luminance ~0.577 for a lit surface, composite range
-// ~0.25-2.5): the lit-surface value lands at the ramp midpoint (green) and the
-// top of the validated composite range is the white point, so lit terrain and
-// lamps stay distinguishable instead of clipping. Log2 keeps the dark end
-// resolved. The scale is a display aid only and never feeds the material path.
-static const float kWorldLightDebugScale = 4.0;
-static const float kWorldLightDebugLuminanceSpan = 3.46; // log2(1 + 4 * 2.5)
-
-float3 worldLightDebugRamp(float3 radiance) {
-    float3 scaled = max(radiance, float3(0.0)) * kWorldLightDebugScale;
-    float luminance = dot(scaled, float3(0.2126, 0.7152, 0.0722));
-    float t = saturate(log2(1.0 + luminance) / kWorldLightDebugLuminanceSpan);
-
-    float3 colour;
-    if (t < 0.25) {
-        colour = lerp(float3(0.0, 0.0, 0.0), float3(0.0, 0.0, 1.0), t * 4.0);
-    } else if (t < 0.5) {
-        colour = lerp(float3(0.0, 0.0, 1.0), float3(0.0, 1.0, 0.0), (t - 0.25) * 4.0);
-    } else if (t < 0.75) {
-        colour = lerp(float3(0.0, 1.0, 0.0), float3(1.0, 1.0, 0.0), (t - 0.5) * 4.0);
-    } else {
-        colour = lerp(float3(1.0, 1.0, 0.0), float3(1.0, 1.0, 1.0), (t - 0.75) * 4.0);
-    }
-    return pow(colour, float3(1.0 / 2.2));
-}
-
-// Level-0 probe lattice overlay. Probe centres sit at (p + 0.5) * spacing in
-// cell units, so a fragment lies on a lattice line when its fractional probe
-// coordinate is within roughly one pixel of 0.5. Draws the row/column lines
-// through every level-0 probe centre, deriving the spacing from the field's own
-// level-0 probe spacing rather than duplicating the plan's 2-cell default.
-float worldLightDebugLattice(float2 world) {
-    float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
-    float spacing_m = g_world_light_field.cellMetres * float(g_world_light_field.levels[0].spacing);
-    if (spacing_m <= 0.0) {
-        return 0.0;
-    }
-
-    float2 probe = (world - origin) / spacing_m;
-    float2 to_centre = abs(frac(probe) - 0.5) * spacing_m;
-    float pixel_m = max(fwidth(world.x), fwidth(world.y));
-    float half_width = max(pixel_m * 0.35, spacing_m * 0.005);
-    return saturate(1.0 - min(to_centre.x, to_centre.y) / half_width);
-}
-
-// Raw merged-field false colour; the material response, albedo and normal-map
-// path are bypassed deliberately so the picture shows what the field actually
-// holds (worldLightDiffuse reads the fully merged level 0). Probe mode overlays
-// the level-0 lattice in red.
-float3 worldLightDebugColour(float2 world) {
-    float3 colour = float3(0);
-    if (g_world_light.debugView == 1u) {
-        float3 diffuse = worldLightDiffuse(world, float3(0.0, 0.0, 1.0));
-        colour = worldLightDebugRamp(diffuse);
-        colour = lerp(colour, float3(0.95, 0.1, 0.05), worldLightDebugLattice(world) * 0.45);
-    }
-    if (g_world_light.debugView == 2u || true) {
-        float2 origin = float2(g_world_light_field.originX, g_world_light_field.originY);
-        float spacing_m = g_world_light_field.cellMetres * float(g_world_light_field.levels[0].spacing);
-        float2 probe = (world - origin) / spacing_m;
-        float2 to_centre = frac(probe) - 0.5;
-        float3 sample_dir = normalize(float3(to_centre, 1));
-        sample_dir = float3(0,0,1);
-        colour = worldLightDiffuse(world, sample_dir);
-    }
-    return colour;
-}
-
-// Upper bound of the terrain atlas ambient scale, mirrored by
-// WorldLightSwitch::m_atlas_ambient on the CPU. Kept at 0.35 so
-// atlasAmbient * reflectance stays well below 1 even for unit albedo.
-static const float kWorldLightAtlasAmbientLimit = 0.35;
-
-// Shared field material response: field-sampled diffuse and specular plus linear
-// self-emission, for an already-resolved visual and surface reflectance. The
-// opaque and translucent field paths share this body so they cannot diverge.
-float3 shadeWorldLightResponse(TerrainVisual visual, float2 world, float3 normal, float3 reflectance) {
-    float3 source = visual.m_emissive_rgb * visual.m_emissive_strength;
-
-    float metallic = saturate(visual.m_metallic);
-    float roughness = saturate(visual.m_roughness);
-    float ior = max(visual.m_ior, 1.0);
-
-    // Reference material response: the 2D terrain chain applies albedo directly
-    // to the cascade irradiance (prototype.wgpu:9183-9186, kd = 1.0). The
-    // reference lightingIndirect path normalizes its irradiance integral by TAU
-    // at the final consumer; this is the final-response /TAU, not the feedback
-    // path. The cascade's worldLightIrradianceFrom returns the level-0 gather
-    // scaled by TAU, so dividing here restores the prototype's final response.
-    // The irradiance reads the stored level-0 bins only; the prototype's
-    // cascadeIrradiance false path has no in-place near trace.
-    float3 diffuse = worldLightIrradianceFrom(g_world_light_radiance_cur, world, normal) * reflectance /
-                     kWorldLightTau;
-    // View V=(0,0,1) reflected around the mapped normal; a flat normal has no
-    // in-plane reflection so worldLightSpecular returns zero rather than NaN.
-    float3 reflection = 2.0 * normal.z * normal - float3(0.0, 0.0, 1.0);
-    float3 specular = worldLightSpecular(world, reflection, roughness);
-
-    // Terrain legibility from the per-cell radiance atlas: one load of the
-    // cell's incident radiance (the previous merged field sampled at its centre)
-    // lifts rock that opens onto lit air, so a dug border reads instead of
-    // going black. This does not re-gather the cascade and the atlas is already
-    // EMA-smoothed, so borders warm over a few frames rather than snapping.
-    //
-    // Loop stability: the atlas feeds the field and the field feeds the atlas,
-    // and this factor rides on top of that loop. `atlasAmbient * reflectance`
-    // must stay well below 1 so terrain cannot inject a near-unit gain back
-    // into the chain; the shader clamps the config value to 0.35, which bounds
-    // the product even for unit albedo (the atlas itself is ceilinged at 16.0).
-    // The term is display lighting only and never feeds the field or atlas.
-    float atlasAmbient = clamp(g_world_light.atlasAmbient, 0.0, kWorldLightAtlasAmbientLimit);
-    float3 atlas = atlasAmbient > 0.0 ? worldLightAtlasRadiance(world) : float3(0.0, 0.0, 0.0);
-
-    float ratio = (ior - 1.0) / (ior + 1.0);
-    float3 f0 = lerp(float3(ratio * ratio), reflectance, metallic);
-    float grazing = 1.0 - saturate(normal.z);
-    float grazing2 = grazing * grazing;
-    float3 fresnel = f0 + (1.0 - f0) * (grazing2 * grazing2 * grazing);
-
-    return (1.0 - metallic) * (1.0 - fresnel) * diffuse + fresnel * specular + source +
-        atlasAmbient * reflectance * atlas;
-}
-
-// The world light field material path keeps the same cell atlas -> TerrainVisual
-// -> albedo/normal-map sampling, but the incident light is the cascade field's
-// diffuse and specular terms rather than the native receiver/world-radiance
-// coefficients. Linear self-emission is added exactly once; opaque shading has
-// no cut-face incident and no backdrop read.
-float4 shadeWorldLightSurface(
-    uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 decoration,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
-    // The probe debug view deliberately bypasses the atlas/normal-map/material
-    // response and emits the raw field false colour. Every other selector
-    // (including an unimplemented mode) falls through to the normal material
-    // path instead of rendering black.
-    if (g_world_light.debugView != 0u || true) {
-        float2 debug_world = fine_position * g_grid_frame.m_cell_size_m;
-        return float4(worldLightDebugColour(debug_world), 1.0);
-    }
-
-    // Deliberate re-lookup of the visual row, mirroring materialSurface; the
-    // caller already resolved the selected material but keeps this body self-contained.
-    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
-    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
-    float period = visual.m_texture_period_m;
-    float2 world = fine_position * g_grid_frame.m_cell_size_m;
-    float2 uv = world / period;
-
-    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
-    TexturePatches patches;
-    if (repeat_texture) {
-        patches.uv0 = frac(uv);
-        patches.uv1 = patches.uv0;
-        patches.uv2 = patches.uv0;
-        patches.weights = float3(1.0, 0.0, 0.0);
-    } else {
-        patches = texturePatches(uv);
-    }
-    // Derivatives belong to the continuous world UV, before lattice/hash/fract.
-    float2 uv_gradient_x = gradient_x / period;
-    float2 uv_gradient_y = gradient_y / period;
-    float4 a0 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv0, uv_gradient_x, uv_gradient_y);
-    float4 a1 = float4(0.0), a2 = float4(0.0);
-    if (!repeat_texture) {
-        a1 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv1, uv_gradient_x, uv_gradient_y);
-        a2 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv2, uv_gradient_x, uv_gradient_y);
-    }
-    float3 weights = patches.weights;
-    float4 albedo = a0 * weights.x + a1 * weights.y + a2 * weights.z;
-    float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
-    if (!repeat_texture) {
-        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
-    }
-
-    float3 normal = float3(0.0, 0.0, 1.0);
-    if (visual.m_normal_texture_index != 0xffffffffu) {
-        float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-            sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
-        float3 n1 = float3(0.0), n2 = float3(0.0);
-        if (!repeat_texture) {
-            n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
-            n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
-        }
-        float3 decoded = n0 * weights.x + n1 * weights.y + n2 * weights.z;
-        decoded.xy *= visual.m_normal_scale;
-        if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
-            normal = normalize(decoded);
-        }
-    }
-
-    // Rim treatment darkens reflectance exactly like the native world lobes.
-    float3 reflectance = lerp(tint.rgb * albedo.rgb, float3(0.025), saturate(decoration.x));
-
-    float3 result = shadeWorldLightResponse(visual, world, normal, reflectance);
-    return float4(result, 1.0);
-}
-
-// ------------------------------------------------------------------
-// translucent terrain shading from the temporal world light field
-// ------------------------------------------------------------------
-
-// Field-lit translucent cells keep the optical-blend ordering, IOR/normal-based
-// background refraction, Beer-Lambert absorption and alpha blending, but the
-// surface colour is the shared field material response (diffuse/specular plus
-// linear self-emission) instead of the legacy fixed facing light and the
-// display-only 1-exp glow.
-float4 shadeWorldLightTranslucent(
-    uint material, float2 fine_position, float2 gradient_x, float2 gradient_y, float2 screen, float2 decoration,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler, bool premultiplied) {
-    TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
-    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
-    float period = visual.m_texture_period_m;
-    float2 world = fine_position * g_grid_frame.m_cell_size_m;
-    float2 uv = world / period;
-
-    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
-    TexturePatches patches;
-    if (repeat_texture) {
-        patches.uv0 = frac(uv);
-        patches.uv1 = patches.uv0;
-        patches.uv2 = patches.uv0;
-        patches.weights = float3(1.0, 0.0, 0.0);
-    } else {
-        patches = texturePatches(uv);
-    }
-    // Derivatives belong to the continuous world UV, before lattice/hash/fract.
-    float2 uv_gradient_x = gradient_x / period;
-    float2 uv_gradient_y = gradient_y / period;
-    float4 a0 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv0, uv_gradient_x, uv_gradient_y);
-    float4 a1 = float4(0.0), a2 = float4(0.0);
-    if (!repeat_texture) {
-        a1 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv1, uv_gradient_x, uv_gradient_y);
-        a2 = nonuniform(textures[visual.m_texture_index]).SampleGrad(sampler, patches.uv2, uv_gradient_x, uv_gradient_y);
-    }
-    float3 weights = patches.weights;
-    float4 albedo = a0 * weights.x + a1 * weights.y + a2 * weights.z;
-    float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
-    if (!repeat_texture) {
-        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
-    }
-
-    float3 normal = float3(0.0, 0.0, 1.0);
-    if (visual.m_normal_texture_index != 0xffffffffu) {
-        float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-            sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
-        float3 n1 = float3(0.0), n2 = float3(0.0);
-        if (!repeat_texture) {
-            n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
-            n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
-        }
-        float3 decoded = n0 * weights.x + n1 * weights.y + n2 * weights.z;
-        decoded.xy *= visual.m_normal_scale;
-        if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
-            normal = normalize(decoded);
-        }
-    }
-
-    float3 reflectance = lerp(tint.rgb * albedo.rgb, float3(0.025), saturate(decoration.x));
-    float3 color = shadeWorldLightResponse(visual, world, normal, reflectance);
-
-    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
-    float opacity = !optical_blend ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
-    if (g_grid_frame.m_has_background == 0u) {
-        float4 surface = decorateSurface(float4(color, opacity), decoration);
-        if (premultiplied) surface.rgb *= surface.a;
-        return surface;
-    }
-    if (opacity >= 1.0) { return decorateSurface(float4(color, 1.0), decoration); }
-    float2 offset_pixels = float2(0.0);
-    if (optical_blend && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
-        float2 displacement = normal.xy / max(normal.z, 0.25) *
-            ((1.0 - 1.0 / visual.m_ior) * visual.m_refraction_depth_m);
-        float4 start = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
-        float4 shifted = mul(float4(world + displacement, 0.0, 1.0), g_grid_frame.m_view_projection);
-        if (abs(start.w) > 1.0e-6 && abs(shifted.w) > 1.0e-6) {
-            float2 delta_ndc = shifted.xy / shifted.w - start.xy / start.w;
-            offset_pixels = delta_ndc * float2(0.5, -0.5) * g_grid_frame.m_viewport.zw;
-            offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
-        }
-    }
-    // The refracted backdrop comes from the background copy (never the scene).
-    // Beer-Lambert absorption tints the transmitted light over the fixed optical
-    // thickness, including the zero-offset and premultiplied paths.
-    float3 background = backdropColor(screen + offset_pixels, sampler);
-    float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
-    if (any(sigma > 0.0)) {
-        background *= exp(-sigma * visual.m_refraction_depth_m);
-    }
-
-    float4 surface = decorateSurface(float4(lerp(background, color, opacity), opacity), decoration);
-    if (premultiplied) surface.rgb *= surface.a;
-    return surface;
-}
-
 float4 shadeGridReactive(
     GridVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
@@ -1076,7 +753,7 @@ float4 shadeGridReactive(
         uint packed = g_cell_materials[input.cell_word_base + index / 2u];
         material = ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
         if (material == 0xffffu || material == 0u) {
-             //discard;
+            discard;
         }
         }
     }
@@ -1124,7 +801,7 @@ float4 shadeGridReactive(
             if (point_sample) matter.rgb*=matter.a;
             return matter;
         }
-        //discard;
+        discard;
     }
     if ((g_grid_frame.m_surface_mode & 2u) == 0u) {
         float4 flat=compositeMatter(float4(decorateTerrain(gridTint(material),decoration),coverage),matter);
@@ -1132,42 +809,29 @@ float4 shadeGridReactive(
         return flat;
     }
     if (material == 0u || material >= 0xffffu) {
-        //discard;
+        discard;
     }
     TerrainVisual visual = g_terrain_visuals[min(material, 65535u)];
     if (visual.m_material_id != material) {
-        //discard;
+        discard;
     }
     // Terrain pass selection: the opaque pass skips optical-blend (translucent)
     // cells and the translucent pass skips opaque cells. Both draw the same
     // chunk quad; the pipeline depth states separate their ordering.
     const bool optical = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
     if ((g_grid_pass.pass == 1u && optical) || (g_grid_pass.pass == 2u && !optical)) {
-        //discard;
+        discard;
     }
     // Classify the ACTUAL selected contour before optical opacity/emission.
     if ((visual.m_surface_flags & kSurfaceOpticalBlend) != 0u || coverage != 1.0 || reactive_matter)
         reactive_coverage = 1;
 
-    float4 surface;
-    if (g_world_light.enabled != 0u) {
-        if ((visual.m_surface_flags & kSurfaceOpticalBlend) != 0u) {
-            surface = shadeWorldLightTranslucent(
-                material, input.fine_position, gradient_x, gradient_y, input.position.xy, decoration, g_textures,
-                g_sampler, point_sample);
-        } else {
-            surface = shadeWorldLightSurface(
-                material, input.fine_position, gradient_x, gradient_y, decoration, g_textures, g_sampler);
-        }
-    } else {
-        surface=materialSurface(material,input.fine_position,gradient_x,gradient_y,
-            input.position.xy,decoration,false,float3(0),g_textures,g_sampler,contour_position,false,point_sample);
-    }
+    float4 surface=materialSurface(material,input.fine_position,gradient_x,gradient_y,
+        input.position.xy,decoration,false,float3(0),g_textures,g_sampler,contour_position,false,point_sample);
     if (point_sample) {
         float alpha=surface.a*coverage;
         return float4(surface.rgb*coverage+matter.rgb*matter.a*(1-alpha),alpha+matter.a*(1-alpha));
     }
-    return surface;
     return compositeMatter(float4(surface.rgb, surface.a * coverage), matter);
 }
 
@@ -1222,8 +886,6 @@ GridReactiveOutput fragmentGridReactive(GridVertexOutput input, uint sample_inde
     input.position.xy = floor(input.position.xy) + positions[sample_index];
     GridReactiveOutput output;
     output.color=shadeGridReactive(input,g_textures,g_sampler,true,output.reactive);
-    float2 debug_world = fine * g_grid_frame.m_cell_size_m;
-    output.color = float4(worldLightDebugColour(debug_world), 1.0);
     return output;
 }
 

@@ -745,14 +745,10 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(
             visual != packet->m_terrain_visuals.end() and visual->m_transport_model == kGridTransportAbsorbingV1);
         PPR_TEST_ASSERT(visual->m_sigma_per_m[0] == 0.5f and visual->m_sigma_per_m[1] == 1.0f);
-        const auto strict = gridMaterialOpticalCell(*visual);
-        PPR_TEST_ASSERT(strict.has_value() and strict->m_kind == lighting::OpticalKind::absorbing);
         const auto legacy = std::ranges::find(
             packet->m_terrain_visuals, owner->findMaterial("basalt")->m_numeric_id, &GridTerrainVisual::m_material_id);
         PPR_TEST_ASSERT(
             legacy != packet->m_terrain_visuals.end() and legacy->m_transport_model == kGridTransportUnavailable);
-        const auto unavailable = gridMaterialOpticalCell(*legacy);
-        PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::no_message);
 
         auto adjusted_transport = transport;
         const auto coefficient = adjusted_transport.find("sigma_r_per_m=0.5");

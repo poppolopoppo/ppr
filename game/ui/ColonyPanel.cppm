@@ -183,10 +183,10 @@ export namespace pP::colony {
         /// transaction, and never persisted).
         RetroSettings m_retro{.m_enabled = true, .m_palette_enabled = true, .m_pixel_scale = 3u};
 
-        /// Live world-light and post display settings, session-only: the host
-        /// applies the post settings to the retro state every frame and the
-        /// world-light settings at field init/update. Persisted by the Display
-        /// window's Save, never part of the display draft or its transaction.
+        /// Live sky and post display settings, session-only: the host applies
+        /// the post settings to the retro state every frame and the retained
+        /// sky hour at the next world begin. Persisted by the Display window's
+        /// Save, never part of the display draft or its transaction.
         game::WorldLightDisplaySettings m_world_light{};
         game::PostDisplaySettings m_post{};
 

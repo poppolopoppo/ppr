@@ -44,8 +44,7 @@ target_sources(engine.tests.app
         App.Camera.Tests.cpp
         App.Display.Tests.cpp
         App.GridPass.Tests.cpp
-        App.Lighting.Tests.cpp
-        App.WorldLightField.Tests.cpp
+        App.PostProcess.Tests.cpp
         App.Frame.Tests.cpp
         App.FrameFence.Tests.cpp
         App.RenderLane.Tests.cpp
@@ -256,7 +255,7 @@ ppr_add_test_entry(TARGET engine.tests.app
 # loop-1; higher budget. No device or window state, so no lock.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME functional_cpu
-    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/lighting,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe,app/surface_pixels_round_trip_through_png"
+    FILTER "app/devices,app/player/,app/dispatch,app/snapshot,app/player_graph,app/viewport,app/render_view,app/camera,app/display,app/sim_packet,app/quaternion,app/input_listener,app/filtered_analog,app/imgui_dpi,app/performance_widget,app/zerov_probe,app/surface_pixels_round_trip_through_png"
     LOOPS
     TIMEOUT 600
     LABELS unit engine app
@@ -334,11 +333,11 @@ set_tests_properties(engine.tests.app.gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
 )
 
-# World light field plan and (later) GPU cases. CPU plan cases take the gpu
-# lock today because the group will host device-backed field/source cases.
+# Extracted histogram-adaptation and SPD-bloom leaves. The two CPU layout
+# leaves share the entry with the GPU device cases, so it claims the gpu lock.
 ppr_add_test_entry(TARGET engine.tests.app
-    NAME world_light_field
-    FILTER "app/world_light_field"
+    NAME post_process
+    FILTER "app/post_process"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300

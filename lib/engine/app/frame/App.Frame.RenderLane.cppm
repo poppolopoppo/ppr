@@ -8,8 +8,6 @@ import :renderer.frame_fence;
 import :renderer.grid_pass;
 import :renderer.retro_pass;
 import :renderer.triangle_pass;
-import :renderer.world_light_source;
-import :renderer.world_light_types;
 import :ui.imgui;
 import :window.handle;
 
@@ -68,21 +66,7 @@ export namespace pP {
         u64 m_job_id{};
         u64 m_world_generation{};
         u64 m_content_fingerprint{};
-        // Field mode: immutable world plan and palette carried once at begin.
-        lighting::WorldLightPlan m_field_plan{};
-        std::vector<lighting::WorldLightMaterial> m_field_materials{};
-        // Per-frame direction-sample budget for the cascade field update
-        // (defaults match the settings schema so an unset command still yields
-        // the shipped behavior).
-        u32 m_field_budget{};
-        // Terrain atlas ambient strength (0 to 0.35), mirrored into the terrain
-        // WorldLightSwitch constant buffer next to the field debug selector.
-        float m_field_atlas_ambient{0.3f};
-        // Field debug view selector (0 = off, 1 = probes), mirrored into the
-        // terrain WorldLightSwitch constant buffer.
-        u32 m_field_debug_view{};
         EGridWorldCommand m_kind{EGridWorldCommand::begin};
-        bool m_field{};
         bool m_final_batch{false};
     };
 
@@ -177,11 +161,6 @@ export namespace pP {
         // Actual active bundle rendered by a successful surface presentation.
         // Independent of staging/edit acknowledgments; empty on every other fate.
         GridWorldIdentity m_presented_grid{};
-        // Field-mode diagnostics (no gating, no per-frame logs): the dense source
-        // revision and the cascade field's completed round-robin cycle. The cycle
-        // is set only when a field update ran this frame; both stay zero otherwise.
-        u64 m_lighting_source_revision{};
-        std::optional<u64> m_lighting_field_cycle{};
 
         // Same actual-present proof for the selected jointly committed resident
         // state. CPU preparation frames and every non-present fate leave it empty.

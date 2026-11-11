@@ -693,39 +693,11 @@ namespace pP::ui {
             "Changes apply immediately and are not part of Apply or Save. Palette mapping lives in Lighting & Post.");
 
         // Post settings are live session controls (applied to the retro pass
-        // every frame); world light settings are begin-time (applied at the next
-        // world's field init/update). Neither edits the display draft or joins
-        // Apply/Save.
+        // every frame); the retained sky hour is a begin-time control. Neither
+        // edits the display draft or joins Apply/Save.
         ImGui::SeparatorText("Lighting & Post");
         if (beginLabelTable("##display_lighting_post", label_width)) {
             const LightingPostWidgetDraft &lp = state.m_lighting_post;
-
-            {
-                beginValueRow("World light field");
-                ImGui::Checkbox("##lighting_world_enabled", &lp.m_world_light_enabled);
-                ImGui::SetItemTooltip("Enable the camera-independent world light field.");
-            }
-
-            {
-                beginValueRow("Samples per frame");
-                int budget = static_cast<int>(std::clamp(lp.m_samples_per_frame, 65536u, 4194304u));
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderInt(
-                        "##lighting_samples", &budget, 65536, 4194304, "%d", ImGuiSliderFlags_Logarithmic)) {
-                    lp.m_samples_per_frame = static_cast<u32>(budget);
-                }
-                ImGui::SetItemTooltip("Direction samples traced per frame (field budget).");
-            }
-
-            {
-                beginValueRow("Level count");
-                int levels = static_cast<int>(std::clamp(lp.m_level_count, 4u, 8u));
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderInt("##lighting_levels", &levels, 4, 8)) {
-                    lp.m_level_count = static_cast<u32>(levels);
-                }
-                ImGui::SetItemTooltip("Radiance cascade level count.");
-            }
 
             {
                 beginValueRow("Sky hour");
@@ -735,17 +707,6 @@ namespace pP::ui {
                     lp.m_sky_hour = static_cast<i32>(sky);
                 }
                 ImGui::SetItemTooltip("Field sky solar hour (-1 uses the black boundary sky).");
-            }
-
-            {
-                beginValueRow("Debug view");
-                int debug_view = static_cast<int>(std::min(lp.m_world_light_debug_view, 1u));
-                const char *const items[] = {"Off", "Probes"};
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::Combo("##lighting_debug_view", &debug_view, items, 2)) {
-                    lp.m_world_light_debug_view = static_cast<u32>(debug_view);
-                }
-                ImGui::SetItemTooltip("Raw field false-colour view; off renders the normal material response.");
             }
 
             {
@@ -822,8 +783,8 @@ namespace pP::ui {
                 intent = EDisplayWidgetAction::reset_lighting_post;
             }
             noteText(
-                "Post changes apply immediately. World light changes (field, samples, levels, sky hour) take effect on "
-                "the next world. Neither joins Apply; Save persists the current values.");
+                "Post changes apply immediately. The sky hour takes effect on the next world. Neither joins Apply; "
+                "Save persists the current values.");
         }
 
         ImGui::SeparatorText("Requested");

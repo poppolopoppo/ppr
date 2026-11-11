@@ -522,8 +522,8 @@ namespace pP::game::tests::detail::display {
 
     PPR_UNIT_TEST (lighting_post_overlay_round_trip_preserves_unrelated_and_palette_default) {
         const std::string existing_text{
-            "[audio]\nvolume = 7\n\n[display]\npacing = \"uncapped\"\n\n[game.world_light]\nsamples_per_frame = "
-            "1048576\n\n[game.post]\nbloom = true\n"};
+            "[audio]\nvolume = 7\n\n[display]\npacing = \"uncapped\"\n\n[game.world_light]\nsky_hour = 3\n\n"
+            "[game.post]\nbloom = true\n"};
         Diagnostics decode_diagnostics{};
         auto existing = decode(existing_text, "existing", decode_diagnostics);
         PPR_TEST_ASSERT(existing.has_value());
@@ -543,7 +543,7 @@ namespace pP::game::tests::detail::display {
         bool audio_kept = false;
         bool display_kept = false;
         bool palette_default = false;
-        bool stale_samples_replaced = false;
+        bool sky_hour_replaced = false;
         for (const auto &entry: round->m_entries) {
             if (entry.m_key == "audio.volume" and entry.m_value.m_kind == EFileKind::integer) {
                 audio_kept = entry.m_value.m_integer == 7;
@@ -554,14 +554,14 @@ namespace pP::game::tests::detail::display {
             if (entry.m_key == "game.post.palette" and entry.m_value.m_kind == EFileKind::boolean) {
                 palette_default = not entry.m_value.m_boolean;
             }
-            if (entry.m_key == "game.world_light.samples_per_frame" and entry.m_value.m_kind == EFileKind::integer) {
-                stale_samples_replaced = entry.m_value.m_integer == 262144;
+            if (entry.m_key == "game.world_light.sky_hour" and entry.m_value.m_kind == EFileKind::integer) {
+                sky_hour_replaced = entry.m_value.m_integer == world_light.m_sky_hour;
             }
         }
         PPR_TEST_ASSERT(audio_kept);
         PPR_TEST_ASSERT(display_kept);
         PPR_TEST_ASSERT(palette_default);
-        PPR_TEST_ASSERT(stale_samples_replaced);
+        PPR_TEST_ASSERT(sky_hour_replaced);
 
         // Every game.world_light.* / game.post.* entry is a persistable schema
         // property, and the display.* entries (from a prior display merge) are
