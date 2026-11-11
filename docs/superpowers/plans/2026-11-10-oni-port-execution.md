@@ -1043,7 +1043,7 @@ and operational acceptance. No Task 4 work has begun.
 
 ## Task 11 — sample-rate categorical PBR, shared BRDF LUT and lit gas complete
 
-- Commits: `fix: make categorical view vector consistent and remove dead surface
+- Commits: `0902f44` `fix: make categorical view vector consistent and remove dead surface
   fixtures` (re-review follow-up), `58a21d8a` `fix: correct categorical view
   vector and retire legacy surface tests`, on top of `e5e073e5`
   `feat: shade categorical cells with directional PBR and lit gas`.
