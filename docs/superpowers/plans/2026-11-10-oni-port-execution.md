@@ -46,7 +46,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 10 | complete (commits `e628d018`, `46e021ae`; reviews clean; Task 11 handoffs recorded) |
 | 11 | complete (commits `e5e073e5`, `58a21d8a`, `0902f442`, `80c719c7`; reviews clean; camera-side visual gate for Task 19) |
 | 12 | complete (commits `6418d663`, `2e0f7ec5`, `b82877b7`; reviews clean; background coverage re-scoped to Task 14) |
-| 13–19 | pending |
+| 13 | complete (commit `2f46ae40`; independent review approved) |
+| 14–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1207,3 +1208,22 @@ and operational acceptance. No Task 4 work has begun.
   shader no-floor rule proven only through the CPU mirror; GPU border checks
   narrowed to an interior band; report leaf-count/log-citation drift.
 - **Unavailable gate:** Windows/D3D12 unmeasured.
+
+## Task 13 — submission-local command-tail seam complete
+
+- Commit `2f46ae40` `feat: support submission-local command-tail encoding`.
+- Independent review: approved; no Critical/Important findings. YAGNI clean.
+- Delivered: `PostRenderCallback` using the existing `std23::function_ref`
+  facility, appended after `prepare` in `Renderer::render`/`renderToTexture`
+  with defaults unchanged; invoked after the render-pass encoder ends and before
+  timing end/finish/submit on the same borrowed encoder. Tail failure is
+  definitely unsubmitted (`kRejected`, no fence advance, immediate credit
+  return); attachment writes precede the accepted copy; accepted credit/frontier
+  retention proven on a real device with byte-exact attachment/copy comparison.
+- **Task 14 handoffs:** use the seam for A's post-draw numeric status copies and
+  B's post-output copies; surface passes do not yet carry a tail.
+- **Deferred minors:** `PreRenderContext` doc still says "before opening the
+  render pass"; report green-log citation lacks an exit marker; "accepted tail
+  resources" is credit/frontier retention; the two callback aliases are the same
+  type by design.
+- **Known gate:** Windows/D3D12 unmeasured.
