@@ -2273,8 +2273,8 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
         // completion guard, which fail-stops on unknown submission quiescence.
         struct SpatialPrograms {
             shader::SharedModule m_fixture{}, m_spatial{};
-            rhi::ComPtr<rhi::IShaderProgram> m_graphics{}, m_dump_program{}, m_resolve_program{};
-            rhi::ComPtr<rhi::IRenderPipeline> m_raster{};
+            rhi::ComPtr<rhi::IShaderProgram> m_graphics{}, m_dump_program{}, m_resolve_program{}, m_sample_program{};
+            rhi::ComPtr<rhi::IRenderPipeline> m_raster{}, m_sample_raster{};
             rhi::ComPtr<rhi::IComputePipeline> m_dump_pipeline{}, m_resolve_pipeline{};
         };
 
@@ -2285,13 +2285,15 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             auto &device = rhi->getDevice();
 
             // Real geometry determines probe coverage. Synthetic data uses a
-            // separate explicit coverage mask, never sample-frequency shading.
+            // separate explicit coverage mask. Mode 5 measures the backend's
+            // actual per-sample attribute positions; it is qualification, not
+            // a shading path.
             constexpr string_literal source = R"(
 struct Fixture { uint2 extent; uint mode; uint sample_index; uint4 mapping; };
 ConstantBuffer<Fixture> g_fixture;
 Texture2DMS<float4,4> g_samples;
 RWTexture2D<float4> g_dump;
-struct Vertex { float4 position:SV_Position; };
+struct Vertex { float4 position:SV_Position; float2 pixel:TEXCOORD0; };
 [shader("vertex")]
 Vertex vertexSpatialFixture(uint id:SV_VertexID, uint instance:SV_InstanceID) {
     Vertex output;
@@ -2303,9 +2305,11 @@ Vertex vertexSpatialFixture(uint id:SV_VertexID, uint instance:SV_InstanceID) {
         float2 size = (pixel.y & 1u) == 0u ? float2(threshold,1) : float2(1,threshold);
         float2 uv = (float2(pixel) + corners[id] * size) / float2(g_fixture.extent);
         output.position = float4(uv * float2(2,-2) + float2(-1,1), 0, 1);
+        output.pixel = uv * float2(g_fixture.extent);
     } else {
         float2 uv = float2((id << 1u) & 2u, id & 2u);
         output.position = float4(uv * float2(2,-2) + float2(-1,1), 0, 1);
+        output.pixel = uv * float2(g_fixture.extent);
     }
     return output;
 }
@@ -2336,6 +2340,11 @@ Fragment fragmentSpatialFixture(Vertex input) {
     output.coverage = 1u << g_fixture.sample_index;
     return output;
 }
+[shader("fragment")]
+float4 fragmentSamplePositions(Vertex input, uint sample:SV_SampleIndex) : SV_Target {
+    float2 position = EvaluateAttributeAtSample(input.pixel, sample);
+    return float4(position, float(sample), 1);
+}
 [shader("compute")]
 [numthreads(8,8,1)]
 void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
@@ -2349,8 +2358,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 "spatial_fixture", "spatial_fixture.slang", source, family.m_fixture.writeRef()));
 
             const char *const graphics_names[] = {"vertexSpatialFixture", "fragmentSpatialFixture"};
+            const char *const sample_names[] = {"vertexSpatialFixture", "fragmentSamplePositions"};
             const char *const dump_names[] = {"dumpSpatialSamples"};
             family.m_graphics = spatialProgram_(family.m_fixture, graphics_names);
+            family.m_sample_program = spatialProgram_(family.m_fixture, sample_names);
             family.m_dump_program = spatialProgram_(family.m_fixture, dump_names);
 
             PPR_TEST_ASSERT(not shaders->loadModuleFromFile(
@@ -2392,6 +2403,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(
                 not make_error_code(device.createRenderPipeline(raster_description, family.m_raster.writeRef())));
 
+            raster_description.program = family.m_sample_program.get();
+            PPR_TEST_ASSERT(not make_error_code(
+                device.createRenderPipeline(raster_description, family.m_sample_raster.writeRef())));
+
             rhi::ComputePipelineDesc compute_description{};
             compute_description.program = family.m_dump_program.get();
             PPR_TEST_ASSERT(not make_error_code(
@@ -2415,9 +2430,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(shaders.isValid() and rhi.isValid() and renderer != nullptr);
             auto &device = rhi->getDevice();
             const auto &graphics = family.m_graphics;
+            const auto &sample_program = family.m_sample_program;
             const auto &dump_program = family.m_dump_program;
             const auto &resolve_program = family.m_resolve_program;
             const auto &raster = family.m_raster;
+            const auto &sample_raster = family.m_sample_raster;
             const auto &dump_pipeline = family.m_dump_pipeline;
             const auto &resolve_pipeline = family.m_resolve_pipeline;
 
@@ -2522,9 +2539,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 PPR_TEST_ASSERT(not make_error_code(constants.setData(&values, sizeof(values))));
             };
 
-            for (u32 index = 0u; index < (mode == 0u ? 1u : 4u); ++index) {
+            for (u32 index = 0u; index < ((mode == 0u or mode == 5u) ? 1u : 4u); ++index) {
                 values.m_sample_index = index;
-                bind_fixture(index, *graphics);
+                bind_fixture(index, *(mode == 5u ? sample_program : graphics));
             }
 
             bind_fixture(4u, *dump_program);
@@ -2661,6 +2678,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                             .m_wait_for_fence = std::move(wait),
                         };
                         PPR_RETURN_ERROR_ON_FAIL(GridMaterialGate, triangles->render(draw_context));
+                    } else if (mode == 5u) {
+                        pass->bindPipeline(sample_raster, roots[0]);
+                        pass->draw({.vertexCount = 3u, .instanceCount = 1u});
                     } else {
                         for (u32 index = 0u; index < (mode == 0u ? 1u : 4u); ++index) {
                             pass->bindPipeline(raster, roots[index]);
@@ -2689,7 +2709,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     compute->dispatchCompute((width + 7u) / 8u, (height + 7u) / 8u, 1u);
                 }
 
-                if (mode != 0u) {
+                if (mode != 0u and mode != 5u) {
                     compute->bindPipeline(resolve_pipeline, roots[5]);
                     compute->dispatchCompute((width + 7u) / 8u, (height + 7u) / 8u, 1u);
                 }
@@ -2717,7 +2737,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(sample_pixels.has_value());
             SpatialCapture capture{};
             capture.m_samples = *sample_pixels;
-            if (mode != 0u) {
+            if (mode != 0u and mode != 5u) {
                 const auto output_pixels = readback_(device, *resolved, width * 2u);
                 PPR_TEST_ASSERT(output_pixels.has_value());
                 capture.m_resolved = *output_pixels;
@@ -2748,7 +2768,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
         }
 
         [[nodiscard]] std::array<u32, 4> qualifySpatialSamples_() {
-            const auto capture = captureSpatial_(16u, 8u, 0u, {0u, 1u, 2u, 3u});
+            SpatialPrograms family;
+            initializeSpatialPrograms_(family);
+
+            const auto capture = captureSpatial_(family, 16u, 8u, 0u, {0u, 1u, 2u, 3u}, nullptr, nullptr);
             constexpr u32 positions[4][2] = {{6u, 2u}, {14u, 6u}, {2u, 10u}, {10u, 14u}};
             std::array<u32, 4> mapping{};
             u32 seen = 0u;
@@ -2800,6 +2823,35 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             std::println(
                 "SPATIAL_MSAA4 measured canonical-to-native indices={},{},{},{}", mapping[0], mapping[1], mapping[2],
                 mapping[3]);
+
+            // The threshold sweep above only brackets each location. Mode 5
+            // evaluates the pixel-coordinate plane at every sample, so it states
+            // the actual backend positions and index order exactly.
+            const auto measured = captureSpatial_(family, 16u, 8u, 5u, {0u, 1u, 2u, 3u}, nullptr, nullptr);
+            constexpr double exact[4][2] = {
+                {3.0 / 8.0, 1.0 / 8.0}, {7.0 / 8.0, 3.0 / 8.0}, {1.0 / 8.0, 5.0 / 8.0}, {5.0 / 8.0, 7.0 / 8.0}};
+            for (u32 y = 0u; y < 8u; ++y) {
+                for (u32 x = 0u; x < 16u; ++x) {
+                    for (u32 native = 0u; native < 4u; ++native) {
+                        u32 canonical = 4u;
+                        for (u32 index = 0u; index < 4u; ++index) {
+                            if (mapping[index] == native) {
+                                canonical = index;
+                            }
+                        }
+
+                        PPR_TEST_ASSERT(canonical < 4u);
+                        const double measured_x = hdrChannel_(measured.m_samples, x * 4u + native, y, 0u);
+                        const double measured_y = hdrChannel_(measured.m_samples, x * 4u + native, y, 1u);
+                        PPR_TEST_ASSERT(std::abs(measured_x - (double(x) + exact[canonical][0])) <= 1e-4);
+                        PPR_TEST_ASSERT(std::abs(measured_y - (double(y) + exact[canonical][1])) <= 1e-4);
+                        PPR_TEST_ASSERT(hdrChannel_(measured.m_samples, x * 4u + native, y, 2u) == canonical);
+                    }
+                }
+            }
+
+            std::println(
+                "SPATIAL_MSAA4 exact sample positions confirmed for all pixels: (3/8,1/8)(7/8,3/8)(1/8,5/8)(5/8,7/8)");
             return mapping;
         }
 

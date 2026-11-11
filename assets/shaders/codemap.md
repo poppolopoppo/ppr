@@ -37,6 +37,12 @@ appends at most 1024 visible IDs, and writes one indirect draw record. The tile
 vertex entry optionally resolves instances through those IDs. Reset, cull,
 barriers and drawing share one encoder and submission.
 
+`tests/world_lighting_backend.slang` is a test-only qualification asset for the
+`app/world_lighting_backend/` group. It declares the R8_UINT jump UAV/SRV bound
+as `uint` with an explicit `r8ui` image format, uint32 winner scratch reductions,
+the 4/8/32-byte structured records, the four-sample target dump entries and the
+history/status probes. No runtime pass loads it.
+
 
 ## Design
 

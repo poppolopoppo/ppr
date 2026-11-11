@@ -48,7 +48,11 @@ The `spatial_msaa4_*` gate leaves first recover native sample indices using
 rasterized threshold rectangles and per-index multisample loads. They exercise
 the standalone `spatial_msaa4.slang` current-frame 2x resolve against a double
 geometric grid oracle, independent constant/affine moment constraints, borders,
-signed HDR and permuted indices. Normal shader-directory staging includes the
+signed HDR and permuted indices. The threshold leaf additionally evaluates the
+pixel-coordinate plane at every sample (`EvaluateAttributeAtSample`) and asserts
+the exact raster-pixel top-left positions (3/8,1/8), (7/8,3/8), (1/8,5/8),
+(5/8,7/8) and their index order, so a bracketed-only result is no longer the
+sample-position evidence. Normal shader-directory staging includes the
 new asset. The frozen MIT source and deliberate lower-bucket correction are
 documented in `third_party/HableMSAA/README.md`. This is sampling/filter
 qualification; runtime pattern admission, actual contour sample colours, temporal

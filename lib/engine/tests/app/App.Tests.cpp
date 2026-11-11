@@ -101,6 +101,8 @@ namespace pP::tests {
 
     const UnitTest &matter_runtime_gpuTests() noexcept;
 
+    const UnitTest &world_lighting_backendTests() noexcept;
+
     // ------------------------------------------------------------------
     // application suite
     // ------------------------------------------------------------------
@@ -156,6 +158,7 @@ namespace pP::tests {
             matter_gpuTests(),
             matter_adapterTests(),
             matter_runtime_gpuTests(),
+            world_lighting_backendTests(),
         });
     };
 } // namespace pP::tests
