@@ -1016,8 +1016,12 @@ namespace pP::tests::detail {
                         }
 
                         for (u32 level = m_levels; level-- > 0u;) {
+                            if (m_levels == 1u) {
+                                break;
+                            }
+
                             const bool add_upsample = level + 1u < m_levels;
-                            const u32 source_level = add_upsample ? level + 1u : level;
+                            const u32 source_level = add_upsample ? level + 1u : 0u;
                             const int2 src = PostProcessPass::bloomLevelExtent(resolved, source_level);
                             const int2 dst = PostProcessPass::bloomLevelExtent(resolved, level);
                             params.m_src_width = static_cast<u32>(src.x);
@@ -1035,10 +1039,7 @@ namespace pP::tests::detail {
                                 not make_error_code(cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_views[level]))));
                             PPR_TEST_ASSERT(
                                 not make_error_code(cursor["g_linear"].setDescriptorHandle(m_sampler_handle)));
-                            if (add_upsample) {
-                                encoder->setTextureState(
-                                    m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
-                            }
+                            encoder->setTextureState(m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
                             encoder->setTextureState(m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
                             dispatch(2u, (static_cast<u32>(dst.x) + 7u) / 8u, (static_cast<u32>(dst.y) + 7u) / 8u);
                             encoder->globalBarrier();

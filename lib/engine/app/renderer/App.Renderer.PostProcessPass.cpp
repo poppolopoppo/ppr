@@ -1013,8 +1013,15 @@ namespace pP {
         // Each weight is applied once and the recursive reduction never
         // multiplies an already weighted level again.
         for (u32 level = slot.m_bloom_levels; level-- > 0u;) {
+            // A single-level chain is already its own w0=1 result; no descent.
+            if (slot.m_bloom_levels == 1u) {
+                break;
+            }
+
             const bool add_upsample = level + 1u < slot.m_bloom_levels;
-            const u32 source_level = add_upsample ? level + 1u : level;
+            // The coarsest level has no coarser source; bind level 0 as an unused
+            // SRV rather than aliasing the destination as both source and target.
+            const u32 source_level = add_upsample ? level + 1u : 0u;
             const int2 source = bloomLevelExtent(slot.m_extent, source_level);
             const int2 destination = bloomLevelExtent(slot.m_extent, level);
             parameters.m_src_width = static_cast<u32>(source.x);
@@ -1034,10 +1041,7 @@ namespace pP {
                 PostProcess, cursor["g_up_dst"].setBinding(rhi::Binding(slot.m_bloom_views[level])));
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_linear"].setDescriptorHandle(m_linear_sampler_handle));
 
-            if (add_upsample) {
-                context.m_encoder.setTextureState(
-                    slot.m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
-            }
+            context.m_encoder.setTextureState(slot.m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
             context.m_encoder.setTextureState(slot.m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
             PPR_RETURN_ERROR_ON_FAIL(
                 PostProcess,
