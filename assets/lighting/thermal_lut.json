@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "generated_by": "scripts/generate_thermal_lut.py",
+  "source": {
+    "title": "Colour-matching functions of CIE 1931 standard colorimetric observer",
+    "doi": "10.25039/CIE.DS.xvudnb9b",
+    "file": "CIE_xyz_1931_2deg.csv",
+    "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1",
+    "license": "CC BY-SA 4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "attribution": "International Commission on Illumination (CIE), Vienna, AT",
+    "wavelength_first_nm": 360,
+    "wavelength_last_nm": 830,
+    "wavelength_step_nm": 1,
+    "sample_count": 471
+  },
+  "integrator": {
+    "precision": "binary64",
+    "wavelength_unit": "m",
+    "quadrature": "trapezoid with endpoint half weights",
+    "planck_constants": {
+      "h": 6.62607015e-34,
+      "c": 299792458.0,
+      "k": 1.380649e-23
+    },
+    "exponent_cutoff": 700.0,
+    "zero_kelvin": "zero",
+    "srgb_from_xyz": [
+      [
+        3.2406,
+        -1.5372,
+        -0.4986
+      ],
+      [
+        -0.9689,
+        1.8758,
+        0.0415
+      ],
+      [
+        0.0557,
+        -0.204,
+        1.057
+      ]
+    ],
+    "negative_gamut": "project each negative component to zero",
+    "luminance_weights": [
+      0.2126,
+      0.7152,
+      0.0722
+    ],
+    "calibration_kelvin": 6500.0,
+    "calibration_y": 4498563.658692544,
+    "calibration": "divide every component by Y(6500 K); 6500 K has engine luminance one"
+  },
+  "table": {
+    "file": "thermal_lut.bin",
+    "rows": 2048,
+    "stride_bytes": 16,
+    "bytes": 32768,
+    "format": "binary32 linear RGB plus one zero padding word",
+    "temperature_formula": "256*(65504/256)^(i/2047)",
+    "temperature_first_kelvin": 256.0,
+    "temperature_last_kelvin": 65504.0,
+    "sha256": "8ae42a67efca40eeee2814d1f7e0e449970a8f172eb6e2f7b68a5f1225eed494"
+  }
+}

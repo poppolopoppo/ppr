@@ -31,6 +31,7 @@ export import :renderer.post_process_pass;
 export import :renderer.presentation;
 export import :renderer.triangle_pass;
 export import :renderer.types;
+export import :renderer.world_lighting;
 export import :renderer;
 
 export import :scene.camera.controller;

@@ -43,6 +43,16 @@ as `uint` with an explicit `r8ui` image format, uint32 winner scratch reductions
 the 4/8/32-byte structured records, the four-sample target dump entries and the
 history/status probes. No runtime pass loads it.
 
+`world_lighting_codec.slang` is the shared explicit-word mirror of the C++
+world-lighting records (`PackedInterval`, `PackedCH`, `SourceMaterial`, resolved
+cell). It decodes FP16, RGB9E5 and signed int8 AC bytes with integer word
+extraction only; no native half3/int8 struct layout is part of the ABI.
+`thermal_emission.slang` owns the one `StructuredBuffer<float4>` thermal table
+binding and `thermalRGB(float kelvin)` (log-spaced row interpolation, zero below
+256 K, no per-temperature normalization). Both are include-only fragments.
+`tests/world_lighting_codec_probe.slang` and `tests/thermal_emission_probe.slang`
+are test-only entry-point wrappers for `app/world_lighting_codec/`.
+
 
 ## Design
 

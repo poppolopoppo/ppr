@@ -106,6 +106,16 @@ world-lighting integration. GridPass retains only scalar material validation,
 filtered texture means, texture residency, normal decoding, texture bombing and
 particle admission.
 
+`engine.app:renderer.world_lighting` is the current lightweight record-codec
+partition (not the removed optical oracle). It defines the byte-exact published
+records `PackedInterval` (stride 8), `PackedCH` (stride 32) and `SourceMaterial`
+(stride 8), the decoded CPU values `Interval`/`CH`, the checked codecs
+`packCell`, `packRGB9E5`/`unpackRGB9E5`, `packInterval`/`unpackInterval`,
+`packCH`/`unpackCH`, `makeSourceMaterial` and `lastTraceFrame`, plus the
+committed thermal table shape constants. It has no device or pass ownership.
+The shader mirrors are `assets/shaders/world_lighting_codec.slang` and
+`assets/shaders/thermal_emission.slang`.
+
 ## Design
 
 Resident particle presentation accepts a renderer-neutral layout-v4 view with
@@ -460,7 +470,7 @@ validation requirements; user visual acceptance is separate.
   `engine.shader` (per-pass program loads), `engine.image` + `engine.mesh` (cache upload types only),
   `:service.window` + `:window.handle` (Window resolves surfaces),
   `:scene.camera` (TrianglePass `CameraSnapshot` only — never a mutable `Camera`)
-- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`
+- **Provides**: `engine.app:renderer`, `engine.app:renderer.frame_fence`, `engine.app:renderer.gpu_caches`, `engine.app:renderer.triangle_pass`, `engine.app:renderer.grid_pass`, `engine.app:renderer.presentation`, `engine.app:renderer.post_process_pass`, `engine.app:renderer.types`, `engine.app:renderer.world_lighting`
   (camera-free boundary: passes consume `DrawContext`/snapshot data while drawing)
 
 ## Key Files
@@ -477,6 +487,7 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.GpuCaches.cppm` — pass-owned cache vocabulary (handles, `TriangleBagRange`, `ResolvedBag`, `GpuMaterial`, caches)
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`
+- `App.Renderer.WorldLighting.cppm/.cpp` — published world-lighting record words, CPU interval/CH values, RGB9E5/half/AC codecs, source-material admission and retained-direction scheduled frame identity
 
 The shared contour surface is enabled for catalog sessions. GridPass uploads
 `math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;

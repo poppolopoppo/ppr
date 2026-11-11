@@ -44,6 +44,7 @@ target_sources(engine.app
         renderer/App.Renderer.Presentation.cppm
         renderer/App.Renderer.TrianglePass.cppm
         renderer/App.Renderer.Types.cppm
+        renderer/App.Renderer.WorldLighting.cppm
 
         scene/App.Scene.Camera.cppm
         scene/App.Scene.Camera.Controller.cppm
@@ -102,6 +103,7 @@ target_sources(engine.app
         renderer/App.Renderer.PostProcessPass.cpp
         renderer/App.Renderer.Presentation.cpp
         renderer/App.Renderer.TrianglePass.cpp
+        renderer/App.Renderer.WorldLighting.cpp
 
         scene/App.Scene.Camera.cpp
         scene/App.Scene.Camera.Controller.cpp

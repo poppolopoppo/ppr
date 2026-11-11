@@ -19,6 +19,11 @@ deliberately corrected lower output buckets. It introduces no engine dependency.
 The standalone shader is exercised by sampling/filter fixtures; runtime sample
 pattern admission and reconstruction integration remain separate work.
 
+The [CIE 1931 2-degree colour-matching data](CIE/README.md) pins the CC BY-SA 4.0
+`CIE_xyz_1931_2deg.csv` dataset and its DOI/SHA-256 as the offline input for the
+calibrated visible-band thermal lookup. Generated table bytes are committed under
+`assets/lighting`; builds never fetch the dataset.
+
 Sources of dependency versions:
 
 - **vcpkg manifest** (`vcpkg.json`): `builtin-baseline`

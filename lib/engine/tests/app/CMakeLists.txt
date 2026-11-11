@@ -59,6 +59,7 @@ target_sources(engine.tests.app
         App.MatterFork.Oracle.h
         App.MatterRuntime.Tests.cpp
         App.WorldLighting.Backend.Tests.cpp
+        App.WorldLighting.Codec.Tests.cpp
 
         ${CMAKE_SOURCE_DIR}/game/colony/Colony.cpp
         ${CMAKE_SOURCE_DIR}/game/colony/WorldGen.cpp
@@ -111,7 +112,7 @@ endif()
 
 # Renderer resolves shader assets through the executable's content directory;
 # the UI service reads its pinned font set from the staged `fonts` tree.
-ppr_stage_assets(engine.tests.app shaders fonts)
+ppr_stage_assets(engine.tests.app shaders fonts lighting)
 
 # Keep the measured source-kernel/extension group within its existing ceiling.
 # Transfer, contact, pool and dam continuations own exact leaves, excluded from that group.
@@ -449,4 +450,15 @@ ppr_add_test_entry(TARGET engine.tests.app
 
 set_tests_properties(engine.tests.app.world_lighting_backend_gpu_validation PROPERTIES
     ENVIRONMENT "PPR_TEST_GPU_VALIDATION=1"
+)
+
+# Packed world-lighting codec and calibrated thermal lookup: CPU contracts plus
+# real GPU shader/device execution, so it claims the gpu lock.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME world_lighting_codec
+    FILTER "app/world_lighting_codec/"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app
 )

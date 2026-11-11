@@ -1,0 +1,3 @@
+# Vendored datasets keep their upstream bytes: the CIE CSV must retain its
+# original CRLF line endings so its pinned SHA-256 stays verifiable.
+third_party/CIE/CIE_xyz_1931_2deg.csv -text -diff

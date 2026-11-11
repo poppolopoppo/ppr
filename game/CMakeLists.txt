@@ -102,7 +102,7 @@ add_dependencies(app.game worldgen.assets)
 # The UI service always reads its pinned font set at startup, so `fonts` is
 # a hard runtime requirement of app.game (not an optional content tree:
 # a missing directory must fail staging loudly, never degrade silently).
-set(game_asset_directories shaders textures fonts)
+set(game_asset_directories shaders textures fonts lighting)
 if(EXISTS "${CMAKE_SOURCE_DIR}/assets/meshes")
     list(APPEND game_asset_directories meshes)
 endif()
