@@ -76,9 +76,9 @@ release stays on main, GPU release on its lane. Ordinary frames stay nonblocking
 
 Fresh Editor scene encoding first prepares admitted triangle material variants
 using the shared scene draw callback's actual `DrawContext` pipeline signature.
-This covers native and Retro offscreen scenes before fresh scene acknowledgement,
-including empty triangle stages. Retained-picture rendering bypasses this work.
-Preparation errors propagate through the existing scene failure path; CPU
-preparation cost is included in triangle observations.
+This covers the editor-owned resolved scene image before fresh scene
+acknowledgement, including empty triangle stages. Preparation errors propagate
+through the existing scene failure path; CPU preparation cost is included in
+triangle observations.
 
 

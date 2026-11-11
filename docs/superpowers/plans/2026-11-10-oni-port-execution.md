@@ -404,3 +404,24 @@ timings.
   and fix evidence.
 - `.superpowers/sdd/2026-11-10-oni-port/asset-timeout-report.md` — diagnosis,
   correction, coverage disposition and measurements.
+
+## Task 2 follow-up obligations
+
+- **Task 12 (reconstruction coverage):** reintroduce the retired
+  `spatial_background_alignment_and_opaque_admission` coverage on
+  `ReconstructionPass`: two-resolution layered-background alignment, opaque
+  projection admission and retained sample-rate/per-sample source coverage.
+  Task 2 removed the old leaf because it drove the retired Retro spatial runtime;
+  it is a coverage relocation, not a reduction of the accepted contract.
+- **Task 12 (history/exposure invariance):** replace the removed value-only CPU
+  placeholder with real evidence that exposure/bloom edits and rejected attempts
+  leave Hable screen-history bytes, the previous camera/grid and the committed
+  exposure role unchanged. Task 2's `PostProcessPass` now has real rejection and
+  padding coverage; only the Task 12 history pair can prove the history half.
+- **Next GPU-suite acceleration step (not Task 2):** `engine.tests.app.matter_gpu`
+  still exceeds its 300 s validation deadline under Core+GPU-AV even though the
+  adapted `evolved_liquid_pool_has_no_interior_render_holes` leaf passes alone.
+  Do not raise the timeout or disable validation in cleanup work; the aggregate
+  cost is owned by the next GPU-suite acceleration task. `gpu_grid_surface`
+  optical controls (Task 11) and the checkpoint dug-solids leaf (Task 11) remain
+  known red gates.

@@ -38,6 +38,9 @@ export namespace pP {
         // each later level is ceil(previous/2), stopping at 1x1 or six levels.
         static constexpr u32 kMaxBloomLevels{6u};
         static constexpr float kBloomSoftKnee{0.5f};
+        // Mirrored by spd_bloom.slang. The descent multiplies each unweighted
+        // level by its weight exactly once.
+        static constexpr std::array<float, kMaxBloomLevels> kBloomLevelWeights{1.0f, 0.5f, 0.25f, 0.15f, 0.1f, 0.05f};
 
         [[nodiscard]] static float luminance(float r, float g, float b) noexcept;
         [[nodiscard]] static float log2Luminance(float lum) noexcept;
@@ -124,7 +127,6 @@ export namespace pP {
             ResolvedHdrView m_retained_view{};
             FenceCompletionValue m_retained_submission{kFenceValueNone};
             FenceCompletionValue m_last_use{kFenceValueNone};
-            FenceCompletionValue m_content_submit{kFenceValueNone};
             int2 m_extent{zero_v};
             u32 m_bloom_levels{};
         };
@@ -158,9 +160,7 @@ export namespace pP {
         rhi::ComPtr<rhi::IComputePipeline> m_auto_exposure_pipeline{};
         std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> m_bloom_programs{};
         std::array<rhi::ComPtr<rhi::IComputePipeline>, 3> m_bloom_pipelines{};
-        rhi::ComPtr<rhi::ISampler> m_point_sampler{};
         rhi::ComPtr<rhi::ISampler> m_linear_sampler{};
-        rhi::DescriptorHandle m_point_sampler_handle{};
         rhi::DescriptorHandle m_linear_sampler_handle{};
         rhi::ComPtr<rhi::ITexture> m_empty_exposure{};
         rhi::ComPtr<rhi::ITextureView> m_empty_exposure_view{};
@@ -204,7 +204,6 @@ export namespace pP {
         u32 m_pending_exposure_read_slot{0u};
         bool m_prepared{};
         bool m_rendered{};
-        bool m_presented{};
         bool m_ready{};
     };
 }

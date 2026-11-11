@@ -329,13 +329,14 @@ claimed from coefficient construction.
 
 `spd_bloom.slang` supplies three compute entries to `PostProcessPass`:
 `prefilterBloom` (exposure-aware ceil(R/2) soft-knee + Karis bright pass),
-`downsampleBloom` (one 2x2 box dispatch per coarser level, with taps clamped to
-the last valid texel and each level weight applied once when built), and
-`upsampleBloom` (a separable [1,2,1]/4 tent sampled one coarse texel apart with
-a linear clamp sampler). Level 0 is ceil(R/2); later levels are ceil(previous/2),
+`downsampleBloom` (one unweighted 2x2 box dispatch per coarser level, with taps
+clamped to the last valid texel), and `upsampleBloom` (the weighted descent:
+`w_l*raw_l + tent(result_(l+1))`, with the coarsest level applying `w_last`
+alone; the tent is separable [1,2,1]/4 sampled one coarse texel apart with a
+linear clamp sampler). Level 0 is ceil(R/2); later levels are ceil(previous/2),
 stopping at 1x1 or six separately allocated RGBA16F images. The reflected 64-byte
 `BloomParameters` block carries source/src/dst extents, exposed-unit threshold and
-soft knee, manual EV, level and reserved words. The prefilter samples the 1x1
+soft knee, manual EV, level, the upsample-add flag and reserved words. The prefilter samples the 1x1
 adapted offset and converts threshold/knee to scene units exactly once:
 `threshold/E`, `0.5/E` with `E=exp2(manual_ev+adapted)`.
 `post_process.slang` adds level 0 once, scaled by `m_bloom_intensity`, before the

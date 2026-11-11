@@ -23,9 +23,9 @@ RWTexture2D<float4> g_exposure;        // 1x1 adapted offset in .x
 
 [numthreads(1, 1, 1)]
 void adaptExposure(uint3 id : SV_DispatchThreadID) {
-    // Production fixed exposure never runs this pass (PostProcessPass gates it
-    // on auto-exposure); the disabled branch exists so the smoke test can prove
-    // the fixed-exposure override is a deterministic zero offset.
+    // PostProcessPass always runs this entry: manual exposure uses the disabled
+    // branch and writes a deterministic zero offset, which is also the value a
+    // later auto-exposure re-enable starts from.
     if (g_auto_exposure.enabled == 0u) {
         g_exposure[uint2(0, 0)] = float4(0.0, 0.0, 0.0, 1.0);
         return;

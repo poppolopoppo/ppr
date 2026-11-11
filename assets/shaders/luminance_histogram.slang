@@ -5,9 +5,10 @@
 // log2-luminance histogram with workgroup-local bins merged into one global
 // histogram, then reduces a percentile-clipped average to a target EV relative
 // to 18% middle gray. The CPU oracle lives in PostProcessPass
-// (averageLog2Luminance / targetEv) and must stay bit-for-bit consistent with
-// this reduction. Only the valid resolved R region is sampled; backing padding
-// outside it is never referenced.
+// (retainedMass / averageLog2Luminance / targetEv); both use the same bin
+// centers and fractional 10-90% trim, while GPU accumulation is FP32 and the
+// CPU oracle accumulates in double. Only the valid resolved R region is
+// sampled; backing padding outside it is never referenced.
 
 static const uint kHistogramBins = 64u;
 static const float kLog2Min = -8.0;

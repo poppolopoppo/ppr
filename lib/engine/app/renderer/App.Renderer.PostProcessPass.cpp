@@ -66,7 +66,7 @@ namespace pP {
             float m_soft_knee;
             float m_manual_ev;
             u32 m_level;
-            u32 m_reserved0;
+            u32 m_add_upsample;
             u32 m_reserved1;
             u32 m_reserved2;
             u32 m_reserved3;
@@ -79,6 +79,7 @@ namespace pP {
         static_assert(PPR_OFFSETOF(BloomParameters, m_threshold) == 24u);
         static_assert(PPR_OFFSETOF(BloomParameters, m_manual_ev) == 32u);
         static_assert(PPR_OFFSETOF(BloomParameters, m_level) == 36u);
+        static_assert(PPR_OFFSETOF(BloomParameters, m_add_upsample) == 40u);
 
         // Mirrors luminance_histogram.slang. Slang rounds this 24-byte field
         // extent up to a 16-byte multiple, so the CPU mirror carries the padding.
@@ -319,20 +320,8 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, createPrograms_(shader_service, device, content_dir));
 
-        // Point sampling is unused by presentation (integer Load) but keeps the
-        // pass's nearest convention explicit; bloom combines with bilinear taps
-        // clamped to the valid coarse edge.
-        rhi::SamplerDesc point{};
-        point.minFilter = rhi::TextureFilteringMode::Point;
-        point.magFilter = rhi::TextureFilteringMode::Point;
-        point.mipFilter = rhi::TextureFilteringMode::Point;
-        point.addressU = rhi::TextureAddressingMode::ClampToEdge;
-        point.addressV = rhi::TextureAddressingMode::ClampToEdge;
-        point.addressW = rhi::TextureAddressingMode::ClampToEdge;
-        point.maxAnisotropy = 1u;
-        PPR_RETURN_ERROR_ON_FAIL(PostProcess, device.createSampler(point, m_point_sampler.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(PostProcess, m_point_sampler->getDescriptorHandle(&m_point_sampler_handle));
-
+        // Presentation uses exact integer loads; bloom combines with bilinear
+        // taps clamped to the valid coarse edge.
         rhi::SamplerDesc linear{};
         linear.minFilter = rhi::TextureFilteringMode::Linear;
         linear.magFilter = rhi::TextureFilteringMode::Linear;
@@ -514,7 +503,8 @@ namespace pP {
                 hasFieldOffset(layout, "m_threshold", PPR_OFFSETOF(BloomParameters, m_threshold)) and
                         hasFieldOffset(layout, "m_soft_knee", PPR_OFFSETOF(BloomParameters, m_soft_knee)) and
                         hasFieldOffset(layout, "m_manual_ev", PPR_OFFSETOF(BloomParameters, m_manual_ev)) and
-                        hasFieldOffset(layout, "m_level", PPR_OFFSETOF(BloomParameters, m_level))
+                        hasFieldOffset(layout, "m_level", PPR_OFFSETOF(BloomParameters, m_level)) and
+                        hasFieldOffset(layout, "m_add_upsample", PPR_OFFSETOF(BloomParameters, m_add_upsample))
                     ? std::error_code{}
                     : std::make_error_code(std::errc::invalid_argument));
         }
@@ -699,9 +689,7 @@ namespace pP {
         m_auto_exposure_pipeline.setNull();
         m_bloom_programs = {};
         m_bloom_pipelines = {};
-        m_point_sampler.setNull();
         m_linear_sampler.setNull();
-        m_point_sampler_handle = {};
         m_linear_sampler_handle = {};
         m_empty_exposure_view.setNull();
         m_empty_exposure.setNull();
@@ -726,7 +714,6 @@ namespace pP {
         m_pending_exposure_read_slot = 0u;
         m_prepared = false;
         m_rendered = false;
-        m_presented = false;
         m_ready = false;
     }
 
@@ -783,7 +770,6 @@ namespace pP {
         m_frame_world = world;
         m_prepared = false;
         m_rendered = false;
-        m_presented = false;
         m_pending_exposure_read = false;
         return {};
     }
@@ -994,7 +980,7 @@ namespace pP {
             PostProcess, dispatch(0u, (static_cast<u32>(level0.x) + 7u) / 8u, (static_cast<u32>(level0.y) + 7u) / 8u));
         context.m_encoder.globalBarrier();
 
-        // Coarser levels: plain 2x2 boxes, edge-replicated, weighted once.
+        // Coarser levels: plain 2x2 boxes, edge-replicated, left unweighted.
         for (u32 level = 1u; level < slot.m_bloom_levels; ++level) {
             const int2 source = bloomLevelExtent(slot.m_extent, level - 1u);
             const int2 destination = bloomLevelExtent(slot.m_extent, level);
@@ -1021,28 +1007,38 @@ namespace pP {
             context.m_encoder.globalBarrier();
         }
 
-        // Progressive weighted upsample: dst = weighted raw + tent(coarser).
-        for (u32 level = slot.m_bloom_levels - 1u; level >= 1u; --level) {
-            const int2 source = bloomLevelExtent(slot.m_extent, level);
-            const int2 destination = bloomLevelExtent(slot.m_extent, level - 1u);
+        // Weighted descent over unweighted raw levels:
+        //   coarsest: result_last = w_last * raw_last
+        //   otherwise: result_l = w_l * raw_l + tent(result_(l+1))
+        // Each weight is applied once and the recursive reduction never
+        // multiplies an already weighted level again.
+        for (u32 level = slot.m_bloom_levels; level-- > 0u;) {
+            const bool add_upsample = level + 1u < slot.m_bloom_levels;
+            const u32 source_level = add_upsample ? level + 1u : level;
+            const int2 source = bloomLevelExtent(slot.m_extent, source_level);
+            const int2 destination = bloomLevelExtent(slot.m_extent, level);
             parameters.m_src_width = static_cast<u32>(source.x);
             parameters.m_src_height = static_cast<u32>(source.y);
             parameters.m_dst_width = static_cast<u32>(destination.x);
             parameters.m_dst_height = static_cast<u32>(destination.y);
             parameters.m_level = level;
+            parameters.m_add_upsample = add_upsample ? 1u : 0u;
 
             rhi::ShaderCursor cursor{slot.m_bloom_roots[2]};
             rhi::ShaderCursor constants;
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_bloom"].getDereferenced(constants));
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, constants.setData(&parameters, sizeof(parameters)));
             PPR_RETURN_ERROR_ON_FAIL(
-                PostProcess, cursor["g_up_src"].setBinding(rhi::Binding(slot.m_bloom_views[level])));
+                PostProcess, cursor["g_up_src"].setBinding(rhi::Binding(slot.m_bloom_views[source_level])));
             PPR_RETURN_ERROR_ON_FAIL(
-                PostProcess, cursor["g_up_dst"].setBinding(rhi::Binding(slot.m_bloom_views[level - 1u])));
+                PostProcess, cursor["g_up_dst"].setBinding(rhi::Binding(slot.m_bloom_views[level])));
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_linear"].setDescriptorHandle(m_linear_sampler_handle));
 
-            context.m_encoder.setTextureState(slot.m_bloom[level], range, rhi::ResourceState::ShaderResource);
-            context.m_encoder.setTextureState(slot.m_bloom[level - 1u], range, rhi::ResourceState::UnorderedAccess);
+            if (add_upsample) {
+                context.m_encoder.setTextureState(
+                    slot.m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
+            }
+            context.m_encoder.setTextureState(slot.m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
             PPR_RETURN_ERROR_ON_FAIL(
                 PostProcess,
                 dispatch(2u, (static_cast<u32>(destination.x) + 7u) / 8u, (static_cast<u32>(destination.y) + 7u) / 8u));
@@ -1205,7 +1201,6 @@ namespace pP {
         });
         context.m_pass.bindPipeline(m_present_pipeline, slot.m_present_root);
         context.m_pass.draw({.vertexCount = 3u});
-        m_presented = true;
         m_presented_slot = m_selected;
         return {};
     }
@@ -1224,7 +1219,6 @@ namespace pP {
         m_last_submitted_value = submit_value;
         if (m_selected < kFrameRingSlots) {
             OutputSlot &slot = m_slots[m_selected];
-            slot.m_content_submit = submit_value;
             slot.m_last_use = std::max(slot.m_last_use, submit_value);
             slot.m_retained_submission = submit_value;
 

@@ -143,32 +143,6 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(rejects(defaults));
         };
 
-        PPR_UNIT_TEST (post_edits_leave_reconstruction_history_unchanged) {
-            // Exposure/bloom edits are post-only. The resolved scene image (the
-            // reconstruction history the cleanup path exposes) keeps its bytes;
-            // Task 12 asserts the same separation against real Hable history.
-            const int2 resolved{191, 107};
-            std::vector<std::byte> scene_history(
-                static_cast<std::size_t>(resolved.x) * static_cast<std::size_t>(resolved.y) * 8u);
-            const auto history_bytes_before = scene_history.size();
-
-            PostProcessSettings edited{};
-            edited.m_auto_exposure = false;
-            edited.m_exposure_ev = -16.0f;
-            edited.m_bloom_enabled = false;
-            edited.m_bloom_intensity = 2.0f;
-            edited.m_bloom_threshold = 16.0f;
-            PPR_TEST_ASSERT(not validatePostProcessSettings(edited));
-            edited.m_exposure_ev = 16.0f;
-            edited.m_auto_exposure = true;
-            edited.m_ev_min = -8.0f;
-            edited.m_ev_max = 8.0f;
-            PPR_TEST_ASSERT(not validatePostProcessSettings(edited));
-
-            const auto history_bytes_after_post_edit = scene_history.size();
-            PPR_TEST_ASSERT(history_bytes_before == history_bytes_after_post_edit);
-        };
-
         PPR_UNIT_TEST (teardown_is_idempotent_before_initialize) {
             PostProcessPass pass;
             PPR_TEST_ASSERT(not pass.shutdown());
@@ -214,6 +188,24 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(std::isfinite(emitter_ev));
                 PPR_TEST_ASSERT(emitter_ev > uniform_ev);
                 PPR_TEST_ASSERT(emitter_ev <= ev_max);
+
+                // The target is a radiance multiplier: mapping each source
+                // luminance through exp2(targetEv) lands on 18% middle gray.
+                constexpr float middle_gray = 0.18f;
+                const float dark = 0.018f;
+                const float neutral = 0.18f;
+                const float bright = 1.8f;
+                const float dark_ev = PostProcessPass::targetEv(PostProcessPass::log2Luminance(dark), -10.0f, 10.0f);
+                const float neutral_ev = PostProcessPass::targetEv(
+                    PostProcessPass::log2Luminance(neutral), -10.0f, 10.0f);
+                const float bright_ev = PostProcessPass::targetEv(
+                    PostProcessPass::log2Luminance(bright), -10.0f, 10.0f);
+                PPR_TEST_ASSERT(dark_ev > 0.0f);
+                PPR_TEST_ASSERT(std::abs(neutral_ev) <= 1e-6f);
+                PPR_TEST_ASSERT(bright_ev < 0.0f);
+                PPR_TEST_ASSERT(std::abs(dark * std::exp2(dark_ev) - middle_gray) <= 1e-4f);
+                PPR_TEST_ASSERT(std::abs(neutral * std::exp2(neutral_ev) - middle_gray) <= 1e-4f);
+                PPR_TEST_ASSERT(std::abs(bright * std::exp2(bright_ev) - middle_gray) <= 1e-4f);
             };
 
             PPR_UNIT_TEST (percentile_trim_retains_fractional_mass) {
@@ -751,7 +743,7 @@ namespace pP::tests::detail {
                     float m_soft_knee;
                     float m_manual_ev;
                     u32 m_level;
-                    u32 m_reserved0;
+                    u32 m_add_upsample;
                     u32 m_reserved1;
                     u32 m_reserved2;
                     u32 m_reserved3;
@@ -1023,25 +1015,31 @@ namespace pP::tests::detail {
                             encoder->globalBarrier();
                         }
 
-                        for (u32 level = m_levels - 1u; level >= 1u; --level) {
-                            const int2 src = PostProcessPass::bloomLevelExtent(resolved, level);
-                            const int2 dst = PostProcessPass::bloomLevelExtent(resolved, level - 1u);
+                        for (u32 level = m_levels; level-- > 0u;) {
+                            const bool add_upsample = level + 1u < m_levels;
+                            const u32 source_level = add_upsample ? level + 1u : level;
+                            const int2 src = PostProcessPass::bloomLevelExtent(resolved, source_level);
+                            const int2 dst = PostProcessPass::bloomLevelExtent(resolved, level);
                             params.m_src_width = static_cast<u32>(src.x);
                             params.m_src_height = static_cast<u32>(src.y);
                             params.m_dst_width = static_cast<u32>(dst.x);
                             params.m_dst_height = static_cast<u32>(dst.y);
                             params.m_level = level;
+                            params.m_add_upsample = add_upsample ? 1u : 0u;
                             rhi::ShaderCursor cursor{m_roots[2]}, constants{};
                             PPR_TEST_ASSERT(not make_error_code(cursor["g_bloom"].getDereferenced(constants)));
                             PPR_TEST_ASSERT(not make_error_code(constants.setData(&params, sizeof(params))));
-                            PPR_TEST_ASSERT(
-                                not make_error_code(cursor["g_up_src"].setBinding(rhi::Binding(m_bloom_views[level]))));
                             PPR_TEST_ASSERT(not make_error_code(
-                                cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_views[level - 1u]))));
+                                cursor["g_up_src"].setBinding(rhi::Binding(m_bloom_views[source_level]))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_up_dst"].setBinding(rhi::Binding(m_bloom_views[level]))));
                             PPR_TEST_ASSERT(
                                 not make_error_code(cursor["g_linear"].setDescriptorHandle(m_sampler_handle)));
-                            encoder->setTextureState(m_bloom[level], range, rhi::ResourceState::ShaderResource);
-                            encoder->setTextureState(m_bloom[level - 1u], range, rhi::ResourceState::UnorderedAccess);
+                            if (add_upsample) {
+                                encoder->setTextureState(
+                                    m_bloom[source_level], range, rhi::ResourceState::ShaderResource);
+                            }
+                            encoder->setTextureState(m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
                             dispatch(2u, (static_cast<u32>(dst.x) + 7u) / 8u, (static_cast<u32>(dst.y) + 7u) / 8u);
                             encoder->globalBarrier();
                         }
@@ -1176,16 +1174,33 @@ namespace pP::tests::detail {
                         fixture.shutdown();
                     };
 
-                    // A uniform bright picture must produce a bounded, non-zero bloom:
-                    // the per-level weights keep the peak far below an unweighted sum.
-                    const auto bloomed = fixture.run(edge, 20.0f, 20.0f, 0.0f);
+                    // A uniform bright picture accumulates exactly
+                    // sum(w_l) * prefilter(20) when the raw levels stay unweighted
+                    // and each weight is applied once during the descent. A
+                    // compounded chain lands near 1.56 instead of ~1.94 and fails
+                    // both the numeric and lower-bound assertions below.
+                    constexpr float uniform_value = 20.0f;
+                    constexpr float threshold = 1.0f;
+                    constexpr float soft_knee = 0.5f;
+                    float brightness = std::max(uniform_value - threshold, 0.0f);
+                    brightness = brightness < 2.0f * soft_knee ? brightness * brightness / (4.0f * soft_knee + 1e-4f)
+                                                               : brightness - soft_knee;
+                    const float prefilter = brightness / std::max(uniform_value, 1e-4f) * uniform_value;
+                    const float raw = prefilter / (1.0f + prefilter);
+                    float specified = 0.0f;
+                    for (const float weight: PostProcessPass::kBloomLevelWeights) {
+                        specified += weight * raw;
+                    }
+
+                    const auto bloomed = fixture.run(edge, uniform_value, uniform_value, 0.0f);
                     float peak = 0.0f;
                     for (const auto &pixel: bloomed) {
                         peak = std::max(peak, luminanceOf(pixel));
                         PPR_TEST_ASSERT(
                             std::isfinite(pixel[0]) and std::isfinite(pixel[1]) and std::isfinite(pixel[2]));
                     }
-                    PPR_TEST_ASSERT(peak > 0.5f);
+                    PPR_TEST_ASSERT(std::abs(peak - specified) < 0.02f);
+                    PPR_TEST_ASSERT(peak > 1.8f);
                     PPR_TEST_ASSERT(peak < 4.0f);
                 };
 
@@ -1292,6 +1307,307 @@ namespace pP::tests::detail {
         const UnitTest output_lifetime = UnitTest::Named("output_lifetime") / [](UnitTest::IRun &run) -> void {
             run.recurse({OutputLifetime::gpu_prepare_rejects_mismatched_view_and_output_is_reusable});
         };
+
+        // ------------------------------------------------------------------
+        // padded backing, R=1 and odd non-square GPU coverage
+        // ------------------------------------------------------------------
+
+        namespace Backing {
+            [[nodiscard]] u16 toHalf(const float value) noexcept {
+                const u32 bits = std::bit_cast<u32>(value);
+                const u32 sign = (bits >> 31u) & 1u;
+                if ((bits & 0x7fffffffu) == 0u) {
+                    return static_cast<u16>(sign << 15u);
+                }
+
+                const u32 exponent = ((bits >> 23u) & 0xffu) - 127u + 15u;
+                const u32 mantissa = (bits >> 13u) & 0x3ffu;
+                return static_cast<u16>((sign << 15u) | (exponent << 10u) | mantissa);
+            }
+
+            [[nodiscard]] float fromHalf(const u16 value) noexcept {
+                const u32 sign = (value >> 15u) & 1u;
+                const u32 exponent = (value >> 10u) & 0x1fu;
+                const u32 mantissa = value & 0x3ffu;
+                u32 bits{};
+                if (exponent == 0u) {
+                    bits = sign << 31u;
+                } else {
+                    bits = (sign << 31u) | ((exponent - 15u + 127u) << 23u) | (mantissa << 13u);
+                }
+
+                return std::bit_cast<float>(bits);
+            }
+
+            struct Capture {
+                safe_ptr<IRhiService> m_rhi{IRhiService::get()};
+                safe_ptr<IShaderService> m_shaders{IShaderService::get()};
+                rhi::ComPtr<rhi::ICommandQueue> m_queue;
+                FrameFence m_fence;
+                PostProcessPass m_pass;
+                FenceCompletionValue m_value{kFenceValueNone};
+
+                void initialize() {
+                    PPR_TEST_ASSERT(not m_shaders->initialize());
+                    const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                    const bool validation = setting and *setting == "1";
+                    m_rhi->setCoreValidation(true);
+                    m_rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                    constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                    constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                    PPR_TEST_ASSERT(not m_rhi->initialize(backend, *m_shaders));
+                    auto &device = m_rhi->getDevice();
+                    PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
+                    PPR_TEST_ASSERT(not m_fence.initialize(device));
+                    PPR_TEST_ASSERT(not m_pass.initialize(*m_shaders, std::filesystem::current_path()));
+                }
+
+                void submit(rhi::ICommandEncoder &encoder) {
+                    rhi::ComPtr<rhi::ICommandBuffer> commands;
+                    PPR_TEST_ASSERT(not make_error_code(encoder.finish(commands.writeRef())));
+                    rhi::ICommandBuffer *pointer = commands.get();
+                    rhi::IFence *fence = m_fence.fence();
+                    const auto value = m_fence.nextValue();
+                    const u64 raw = value;
+                    rhi::SubmitDesc description{};
+                    description.commandBuffers = &pointer;
+                    description.commandBufferCount = 1u;
+                    description.signalFences = &fence;
+                    description.signalFenceValues = &raw;
+                    description.signalFenceCount = 1u;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->submit(description)));
+                    m_fence.commitSubmitted(value);
+                    PPR_TEST_ASSERT(not m_fence.waitFor(value));
+                    m_value = value;
+                }
+
+                // Runs one pass frame over a scene whose valid rectangle contains
+                // `valid_value` and whose backing padding (when present) contains
+                // `padding_value`. Returns the resolved output luminance per pixel.
+                [[nodiscard]] std::vector<float> run(
+                    const int2 valid, const int2 backing, const float valid_value, const float padding_value,
+                    const PostProcessSettings &settings) {
+                    auto &device = m_rhi->getDevice();
+                    std::vector<u16> scene(
+                        static_cast<std::size_t>(backing.x) * static_cast<std::size_t>(backing.y) * 4u);
+                    for (i32 y = 0; y < backing.y; ++y) {
+                        for (i32 x = 0; x < backing.x; ++x) {
+                            const bool inside = x < valid.x and y < valid.y;
+                            const float value = inside ? valid_value : padding_value;
+                            const u16 half = toHalf(value);
+                            const std::size_t pixel = static_cast<std::size_t>(y) *
+                                                          static_cast<std::size_t>(backing.x) +
+                                                      static_cast<std::size_t>(x);
+                            scene[pixel * 4u + 0u] = half;
+                            scene[pixel * 4u + 1u] = half;
+                            scene[pixel * 4u + 2u] = half;
+                            scene[pixel * 4u + 3u] = toHalf(1.0f);
+                        }
+                    }
+
+                    const rhi::SubresourceData initial{
+                        .data = scene.data(),
+                        .rowPitch = static_cast<std::size_t>(backing.x) * 4u * sizeof(u16),
+                        .slicePitch = scene.size() * sizeof(u16)};
+                    rhi::TextureDesc scene_desc{};
+                    scene_desc.type = rhi::TextureType::Texture2D;
+                    scene_desc.size = {
+                        .width = static_cast<u32>(backing.x), .height = static_cast<u32>(backing.y), .depth = 1u};
+                    scene_desc.arrayLength = 1u;
+                    scene_desc.mipCount = 1u;
+                    scene_desc.format = rhi::Format::RGBA16Float;
+                    scene_desc.usage = rhi::TextureUsage::ShaderResource;
+                    scene_desc.defaultState = rhi::ResourceState::ShaderResource;
+                    scene_desc.label = "padded post scene";
+                    rhi::ComPtr<rhi::ITexture> scene_texture;
+                    PPR_TEST_ASSERT(
+                        not make_error_code(device.createTexture(scene_desc, &initial, scene_texture.writeRef())));
+                    const rhi::ComPtr<rhi::ITextureView> scene_view = scene_texture->getDefaultView();
+
+                    const GridWorldIdentity world{
+                        .m_job_id = 1u, .m_world_generation = 1u, .m_content_fingerprint = 1u};
+                    PPR_TEST_ASSERT(not m_pass.beginFrame(device, valid, world, m_fence.completed()));
+
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
+                    const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+                    const PreRenderContext pre{device, *encoder, m_fence.completed(), {}};
+                    const ResolvedHdrView view{
+                        .m_view = scene_view,
+                        .m_world = world,
+                        .m_backing = backing,
+                        .m_valid = valid,
+                    };
+                    PPR_TEST_ASSERT(not m_pass.prepare(pre, view, settings, std::chrono::milliseconds{16}));
+
+                    rhi::ITexture &output = m_pass.outputTexture();
+                    const rhi::ComPtr<rhi::ITextureView> output_view = output.getDefaultView();
+                    encoder->setTextureState(&output, range, rhi::ResourceState::RenderTarget);
+                    const std::array<rhi::RenderPassColorAttachment, 1> colors{
+                        rhi::RenderPassColorAttachment{.view = output_view, .clearValue = {0.0f, 0.0f, 0.0f, 1.0f}}};
+                    rhi::RenderPassDesc description{};
+                    description.colorAttachments = colors.data();
+                    description.colorAttachmentCount = 1u;
+                    rhi::IRenderPassEncoder *const pass = encoder->beginRenderPass(description);
+                    PPR_TEST_ASSERT(pass != nullptr);
+                    {
+                        RenderPipelineSignature signature{};
+                        signature.m_color_formats[0] = rhi::Format::RGBA16Float;
+                        signature.m_color_format_count = 1u;
+                        signature.m_sample_count = SampleCount::x1;
+                        const RenderPipelineKey key(signature);
+                        const auto viewport = rhi::Viewport::fromSize(
+                            static_cast<float>(valid.x), static_cast<float>(valid.y));
+                        const auto scissor = rhi::ScissorRect::fromSize(
+                            static_cast<u32>(valid.x), static_cast<u32>(valid.y));
+                        const DrawContext context{
+                            .m_device = device,
+                            .m_pass = *pass,
+                            .m_render_pipeline_key = key,
+                            .m_viewport = viewport,
+                            .m_scissor = scissor,
+                            .m_target_extent = valid,
+                            .m_completed_fence_value = m_fence.completed(),
+                            .m_wait_for_fence = {},
+                        };
+                        pass->setRenderState({
+                            .viewports = {viewport},
+                            .viewportCount = 1u,
+                            .scissorRects = {scissor},
+                            .scissorRectCount = 1u,
+                            .vertexBuffers = {},
+                            .indexBuffer = {},
+                        });
+                        PPR_TEST_ASSERT(not m_pass.render(context));
+                    }
+                    pass->end();
+                    encoder->setTextureState(&output, range, rhi::ResourceState::ShaderResource);
+
+                    submit(*encoder);
+                    m_pass.notifySubmitted(m_value);
+                    m_pass.notifyPresented(m_value);
+                    PPR_TEST_ASSERT(not m_pass.collectCompleted(m_value));
+
+                    shader::ComPtr<ISlangBlob> blob;
+                    rhi::SubresourceLayout layout{};
+                    PPR_TEST_ASSERT(not make_error_code(device.readTexture(&output, 0u, 0u, blob.writeRef(), &layout)));
+                    const auto *const bytes = static_cast<const std::byte *>(blob->getBufferPointer());
+                    std::vector<float> result(static_cast<std::size_t>(valid.x) * static_cast<std::size_t>(valid.y));
+                    for (i32 y = 0; y < valid.y; ++y) {
+                        for (i32 x = 0; x < valid.x; ++x) {
+                            u16 half{};
+                            std::memcpy(
+                                &half,
+                                bytes +
+                                    static_cast<std::size_t>(y) * layout.rowPitch +
+                                    static_cast<std::size_t>(x) * 4u * sizeof(u16),
+                                sizeof(half));
+                            result
+                                [static_cast<std::size_t>(y) * static_cast<std::size_t>(valid.x) +
+                                    static_cast<std::size_t>(x)] = fromHalf(half);
+                        }
+                    }
+
+                    return result;
+                }
+
+                void shutdown() {
+                    if (m_queue and make_error_code(m_queue->waitOnHost())) {
+                        hal::fatalExit("post-backing-test-quiescence-unknown");
+                    }
+
+                    PPR_TEST_ASSERT(not m_pass.shutdown());
+                    PPR_TEST_ASSERT(not m_fence.shutdown());
+                    m_queue.setNull();
+                    PPR_TEST_ASSERT(not m_rhi->shutdown());
+                    PPR_TEST_ASSERT(not m_shaders->shutdown());
+                }
+            };
+
+            PPR_UNIT_TEST (gpu_padding_does_not_reach_metering_or_bloom) {
+                Capture capture;
+                capture.initialize();
+                PPR_DEFER {
+                    capture.shutdown();
+                };
+
+                PostProcessSettings settings{};
+                settings.m_auto_exposure = false;
+                settings.m_bloom_enabled = false;
+                settings.m_exposure_ev = 0.0f;
+                const int2 valid{5, 3};
+
+                // The same valid content with no padding, then with black and very
+                // bright padding outside R. Both padded results must match the
+                // unpadded baseline byte-for-byte.
+                const auto baseline = capture.run(valid, valid, 0.25f, 0.0f, settings);
+                const auto black_padding = capture.run(valid, int2{8, 8}, 0.25f, 0.0f, settings);
+                const auto bright_padding = capture.run(valid, int2{8, 8}, 0.25f, 2048.0f, settings);
+                PPR_TEST_ASSERT(baseline.size() == black_padding.size());
+                PPR_TEST_ASSERT(baseline.size() == bright_padding.size());
+                for (u32 index = 0u; index < baseline.size(); ++index) {
+                    PPR_TEST_ASSERT(baseline[index] == black_padding[index]);
+                    PPR_TEST_ASSERT(baseline[index] == bright_padding[index]);
+                }
+
+                // Bloom enabled: 0.25 is below threshold 1.0, so it contributes
+                // nothing. If the 2048 padding were sampled at the R edge, the
+                // bright-pass prefilter would produce a visible edge glow.
+                PostProcessSettings bloom{};
+                bloom.m_auto_exposure = false;
+                bloom.m_bloom_enabled = true;
+                bloom.m_exposure_ev = 0.0f;
+                bloom.m_bloom_threshold = 1.0f;
+                const auto bloomed_baseline = capture.run(valid, valid, 0.25f, 0.0f, bloom);
+                const auto bloomed_bright_padding = capture.run(valid, int2{8, 8}, 0.25f, 2048.0f, bloom);
+                for (u32 index = 0u; index < baseline.size(); ++index) {
+                    PPR_TEST_ASSERT(bloomed_baseline[index] == baseline[index]);
+                    PPR_TEST_ASSERT(bloomed_bright_padding[index] == bloomed_baseline[index]);
+                }
+            };
+
+            PPR_UNIT_TEST (gpu_r1_and_odd_non_square_render) {
+                Capture capture;
+                capture.initialize();
+                PPR_DEFER {
+                    capture.shutdown();
+                };
+
+                PostProcessSettings settings{};
+                settings.m_auto_exposure = false;
+                settings.m_bloom_enabled = true;
+                settings.m_exposure_ev = 0.0f;
+                settings.m_bloom_threshold = 1.0f;
+
+                // R=1: one output texel, a single bloom level, no out-of-range
+                // fetch or zero-sized chain.
+                const auto one = capture.run(int2{1, 1}, int2{1, 1}, 0.25f, 0.0f, settings);
+                PPR_TEST_ASSERT(one.size() == 1u);
+                PPR_TEST_ASSERT(std::isfinite(one[0]));
+
+                // Odd non-square R=7x3 with a matching padded backing. The valid
+                // result must equal the unpadded R=7x3 result.
+                const int2 odd{7, 3};
+                const auto unpadded = capture.run(odd, odd, 0.25f, 0.0f, settings);
+                const auto padded = capture.run(odd, int2{8, 3}, 0.25f, 2048.0f, settings);
+                PPR_TEST_ASSERT(unpadded.size() == 21u);
+                PPR_TEST_ASSERT(padded.size() == 21u);
+                for (u32 index = 0u; index < unpadded.size(); ++index) {
+                    PPR_TEST_ASSERT(std::isfinite(unpadded[index]));
+                    PPR_TEST_ASSERT(unpadded[index] == padded[index]);
+                }
+            };
+        }
+
+        const UnitTest backing = UnitTest::Named("backing") / [](UnitTest::IRun &run) -> void {
+            run.recurse({
+                Backing::gpu_padding_does_not_reach_metering_or_bloom,
+                Backing::gpu_r1_and_odd_non_square_render,
+            });
+        };
     }
 }
 
@@ -1304,11 +1620,11 @@ namespace pP::tests {
         _.recurse({
             detail::PostProcess::presentation_grid_uses_checked_ceil_arithmetic,
             detail::PostProcess::post_settings_reject_nonfinite_and_invalid_tuples,
-            detail::PostProcess::post_edits_leave_reconstruction_history_unchanged,
             detail::PostProcess::teardown_is_idempotent_before_initialize,
             detail::PostProcess::HistogramAdaptation::histogram_adaptation,
             detail::PostProcess::SpdBloom::spd_bloom,
             detail::PostProcess::output_lifetime,
+            detail::PostProcess::backing,
         });
     };
 

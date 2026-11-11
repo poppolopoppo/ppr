@@ -76,6 +76,16 @@ namespace pP::ui {
             "Sky hour", "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
             "Bloom threshold"};
 
+        void reconcileEvLimitsImpl(float &ev_min, float &ev_max, const bool edited_min) noexcept {
+            ev_min = std::clamp(ev_min, -8.0f, 8.0f);
+            ev_max = std::clamp(ev_max, -8.0f, 8.0f);
+            if (edited_min and ev_min > ev_max) {
+                ev_max = ev_min;
+            } else if (not edited_min and ev_max < ev_min) {
+                ev_min = ev_max;
+            }
+        }
+
         /// Shared label-column width: the widest label plus cell padding, so
         /// labels and values align across all Display tables.
         [[nodiscard]] float displayLabelColumnWidth() {
@@ -337,6 +347,10 @@ namespace pP::ui {
     /// the display transaction path. Requested policy and the device
     /// report stay in separate sections; unavailable measurements read as
     /// unavailable. The body scrolls and action/error content stays visible.
+    void reconcileEvLimits(float &ev_min, float &ev_max, const bool edited_min) noexcept {
+        reconcileEvLimitsImpl(ev_min, ev_max, edited_min);
+    }
+
     std::optional<EDisplayWidgetAction> drawDisplayWidget(
         const DisplayWidgetSnapshot &snap, DisplayWidgetState state, bool &open) {
         std::optional<EDisplayWidgetAction> intent{};
@@ -718,10 +732,10 @@ namespace pP::ui {
                 beginValueRow("EV clamp");
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::SliderFloat("##post_ev_min", &lp.m_ev_min, -8.0f, 8.0f, "%.1f")) {
-                    lp.m_ev_min = std::clamp(lp.m_ev_min, -8.0f, 8.0f);
+                    reconcileEvLimitsImpl(lp.m_ev_min, lp.m_ev_max, true);
                 }
                 if (ImGui::SliderFloat("##post_ev_max", &lp.m_ev_max, -8.0f, 8.0f, "%.1f")) {
-                    lp.m_ev_max = std::clamp(lp.m_ev_max, -8.0f, 8.0f);
+                    reconcileEvLimitsImpl(lp.m_ev_min, lp.m_ev_max, false);
                 }
                 ImGui::SetItemTooltip("Lower/upper adaptation clamp around manual exposure (EV).");
             }

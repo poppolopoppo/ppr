@@ -187,7 +187,7 @@ GPU pipeline after one upload per changed inventory. The chunk cache accelerates
 admission/version checks only. Selecting a resident view revokes this seed lease;
 stale or failed runtime views cannot select the seed adapter. CPU draw geometry,
 cell proxies, owner tables, chunk radix sorting and FP64 admission are retired.
-Runtime shader compilation and offscreen native/retro4 pixel gates remain
+Runtime shader compilation and offscreen native/pixelized post gates remain
 validation requirements; user visual acceptance is separate.
 
 - **Renderer** (`App.Renderer.cppm/.cpp`): private config (backend-preferred format, image count 3),
@@ -397,8 +397,8 @@ validation requirements; user visual acceptance is separate.
   `prepare` validates/retains the resolved view and encodes the 64-bin [-8,8] luminance histogram
   (min(R,256) integer blocks, fractional 10-90% trim), adaptive exposure (per-slot 1x1 offsets, previous role
   committed only on acceptance, world replacement restarts at 0) and bloom (ceil(R/2) level 0, ceil-halved
-  separate images to 1x1 or six levels, edge-replicated 2x2 boxes, weights applied once, linear-clamped
-  [1,2,1]/4 tent upsample). `render` combines scene + `intensity*bloom0` and invokes AgX once into its own
+  separate unweighted images to 1x1 or six levels, edge-replicated 2x2 boxes, then a weighted descent
+  `w_l*raw_l + tent(result_(l+1))` with each weight applied once, linear-clamped [1,2,1]/4 tent). `render` combines scene + `intensity*bloom0` and invokes AgX once into its own
   RGBA16F output. `present` loads exact integer resolved pixels at fixed P and encodes sRGB once. Per-slot roots
   and cohorts are keyed by completion; `notifySubmitted`, `notifyPresented`, `discardUnsubmitted` and
   `collectCompleted` provide stage-B/C settlement without steady-state waits.
@@ -448,7 +448,7 @@ validation requirements; user visual acceptance is separate.
 4. On minimize/resize-to-zero → surface unconfigures but the record stays; next non-zero frame reconfigures
 5. Shutdown → Editor proves GPU idle first (`waitOnHost`; UNKNOWN → quarantine + retain + return error for
    process exit where the OS reclaims; confirmed loss → `notifyDeviceLost` everywhere,
-   surface destroy skipped) → `triangle.shutdown()` + `grid.shutdown()` + `retro.shutdown()` (safe: nothing pending) →
+   surface destroy skipped) → `triangle.shutdown()` + `grid.shutdown()` + `post_process.shutdown()` (safe: nothing pending) →
    `destroyWindowSurface(*main_window)` → window destroyed via the window
    service → `renderer.shutdown()` (wait, unconfigure any survivor, release)
 

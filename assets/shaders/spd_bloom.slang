@@ -1,13 +1,13 @@
 // ------------------------------------------------------------------
-// bloom: exposure-aware prefilter, ceil-sized box levels and weighted
-// tent upsample over separately allocated FP16 images
+// bloom: exposure-aware prefilter, ceil-sized unweighted box levels and a
+// weighted tent descent over separately allocated FP16 images
 // ------------------------------------------------------------------
 // The resolved scene-linear HDR picture is prefiltered to ceil(R/2), then each
 // coarser level is a plain 2x2 box reduction with taps clamped to the last valid
 // texel (a partial last row/column is replicated, never replaced by zeros).
-// Every output texel is initialized. Levels are weighted once when built; the
-// progressive upsample adds the tent-filtered coarser result without repeating
-// the per-level weight. All targets are RGBA16F.
+// Every output texel is initialized. Levels stay unweighted; the descent applies
+// each level weight exactly once: coarsest `w_last*raw_last`, then
+// `w_l*raw_l + tent(result_(l+1))`. All targets are RGBA16F.
 
 static const float kBloomLevelWeights[6] = {1.0, 0.5, 0.25, 0.15, 0.1, 0.05};
 
@@ -24,7 +24,7 @@ struct BloomParameters {
     float m_soft_knee;
     float m_manual_ev;
     uint m_level;
-    uint m_reserved0;
+    uint m_add_upsample;
     uint m_reserved1;
     uint m_reserved2;
     uint m_reserved3;
@@ -45,9 +45,9 @@ float bloomLuminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 
-// Energy-conserving soft-knee bright pass. Threshold and knee arrive in scene
-// units (already divided by the total exposure), so black stays black and the
-// exposure conversion happens exactly once on the host.
+// Energy-conserving soft-knee bright pass. The exposed-unit threshold/knee are
+// divided by the total exposure in the prefilter, so black stays black and the
+// single exposure conversion happens there.
 float3 bloomThreshold(float3 color, float threshold, float softKnee) {
     float luma = bloomLuminance(color);
     float brightness = max(luma - threshold, 0.0);
@@ -110,12 +110,12 @@ void downsampleBloom(uint3 id : SV_DispatchThreadID) {
     float4 value = (g_down_src.Load(int3(lo.x, lo.y, 0)) + g_down_src.Load(int3(hi.x, lo.y, 0)) +
                     g_down_src.Load(int3(lo.x, hi.y, 0)) + g_down_src.Load(int3(hi.x, hi.y, 0))) *
                    0.25;
-    // The level weight is applied exactly once, when the raw level is built.
-    g_down_dst[id.xy] = value * kBloomLevelWeights[min(g_bloom.m_level, 5u)];
+    // Levels stay unweighted; the weighted descent applies each weight once.
+    g_down_dst[id.xy] = value;
 }
 
 // ------------------------------------------------------------------
-// progressive tent upsample (adds the coarser accumulated level)
+// weighted descent: result_l = w_l*raw_l + tent(result_(l+1))
 // ------------------------------------------------------------------
 
 [numthreads(8, 8, 1)]
@@ -131,17 +131,21 @@ void upsampleBloom(uint3 id : SV_DispatchThreadID) {
     // fine center. Clamp addressing replicates the valid coarse edge texels.
     float2 centre = (float2(id.xy) + 0.5) * float2(source) / float2(destination);
     float2 offset = 1.0 / float2(source);
-    float3 accumulated = float3(0.0, 0.0, 0.0);
-    [unroll]
-    for (int dy = -1; dy <= 1; ++dy) {
+    float3 result = g_up_dst.Load(int2(id.xy)).rgb * kBloomLevelWeights[min(g_bloom.m_level, 5u)];
+    if (g_bloom.m_add_upsample != 0u) {
+        float3 accumulated = float3(0.0, 0.0, 0.0);
         [unroll]
-        for (int dx = -1; dx <= 1; ++dx) {
-            float2 uv = (centre + float2(dx, dy)) / float2(source);
-            float2 weight = float2(float(2 - abs(dx)), float(2 - abs(dy))) * 0.25;
-            accumulated += g_up_src.SampleLevel(g_linear, uv, 0.0).rgb * (weight.x * weight.y);
+        for (int dy = -1; dy <= 1; ++dy) {
+            [unroll]
+            for (int dx = -1; dx <= 1; ++dx) {
+                float2 uv = (centre + float2(dx, dy)) / float2(source);
+                float2 weight = float2(float(2 - abs(dx)), float(2 - abs(dy))) * 0.25;
+                accumulated += g_up_src.SampleLevel(g_linear, uv, 0.0).rgb * (weight.x * weight.y);
+            }
         }
+
+        result += accumulated;
     }
 
-    float3 current = g_up_dst.Load(int2(id.xy)).rgb;
-    g_up_dst[id.xy] = float4(current + accumulated, 1.0);
+    g_up_dst[id.xy] = float4(result, 1.0);
 }

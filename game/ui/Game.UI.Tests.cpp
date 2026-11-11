@@ -1498,6 +1498,63 @@ descriptor = "earlier.toml"
         PPR_TEST_ASSERT(invalid_post_diagnostics.hasErrors());
     };
 
+    PPR_UNIT_TEST (live_ev_limit_edits_remain_ordered_and_valid) {
+        using pP::config::Resolved;
+
+        // The live Display sliders edit the two limits independently. Reconcile
+        // after each edit so the emitted tuple is always ordered and inside
+        // [-8,8]; dragging one bound past the other raises/lowers its partner.
+        float ev_min = -4.0f;
+        float ev_max = 4.0f;
+        ev_min = 6.0f;
+        pP::ui::reconcileEvLimits(ev_min, ev_max, true);
+        PPR_TEST_ASSERT(ev_min == 6.0f and ev_max == 6.0f);
+
+        ev_max = -2.0f;
+        pP::ui::reconcileEvLimits(ev_min, ev_max, false);
+        PPR_TEST_ASSERT(ev_min == -2.0f and ev_max == -2.0f);
+
+        ev_min = -20.0f;
+        pP::ui::reconcileEvLimits(ev_min, ev_max, true);
+        PPR_TEST_ASSERT(ev_min == -8.0f and ev_max == -2.0f);
+
+        ev_max = 20.0f;
+        pP::ui::reconcileEvLimits(ev_min, ev_max, false);
+        PPR_TEST_ASSERT(ev_min == -8.0f and ev_max == 8.0f);
+
+        // The emitted game tuple maps onto the pass contract and validates.
+        game::PostDisplaySettings post{};
+        post.m_auto_exposure = true;
+        post.m_exposure_ev = 0.5f;
+        post.m_adaptation_tau = 0.7f;
+        post.m_ev_min = ev_min;
+        post.m_ev_max = ev_max;
+        post.m_bloom = true;
+        post.m_bloom_intensity = 0.25f;
+        post.m_bloom_threshold = 2.0f;
+
+        PostProcessSettings mapped{};
+        game::applyPostProcessSettings(mapped, post);
+        PPR_TEST_ASSERT(not validatePostProcessSettings(mapped));
+        PPR_TEST_ASSERT(mapped.m_auto_exposure == post.m_auto_exposure);
+        PPR_TEST_ASSERT(mapped.m_exposure_ev == post.m_exposure_ev);
+        PPR_TEST_ASSERT(mapped.m_adaptation_tau == post.m_adaptation_tau);
+        PPR_TEST_ASSERT(mapped.m_ev_min == post.m_ev_min and mapped.m_ev_max == post.m_ev_max);
+        PPR_TEST_ASSERT(mapped.m_bloom_enabled == post.m_bloom);
+        PPR_TEST_ASSERT(mapped.m_bloom_intensity == post.m_bloom_intensity);
+        PPR_TEST_ASSERT(mapped.m_bloom_threshold == post.m_bloom_threshold);
+
+        // Explicit invalid configuration still fails resolution; reconciliation
+        // is a live-widget rule, not a relaxed schema.
+        const Resolved<game::PostDisplaySettings> committed_post{};
+        game::PostDisplaySettings invalid{};
+        invalid.m_ev_min = 4.0f;
+        invalid.m_ev_max = -4.0f;
+        config::Diagnostics diagnostics{};
+        PPR_TEST_ASSERT(not validatePostDraft(committed_post, invalid, diagnostics));
+        PPR_TEST_ASSERT(diagnostics.hasErrors());
+    };
+
 }
 
 namespace pP::game::tests {
@@ -1523,6 +1580,7 @@ namespace pP::game::tests {
             detail::presentation::world_actions_close_during_activation_publication_and_shutdown,
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
             detail::presentation::lighting_post_draft_validates_and_resets,
+            detail::presentation::live_ev_limit_edits_remain_ordered_and_valid,
         });
     };
 

@@ -2167,14 +2167,50 @@ ReactiveOutput fragmentHdrReactive(Vertex input,uint sample:SV_SampleIndex) {
             accepted.m_exposure_ev = 0.0f;
             const auto original = captureHdr_(picture, *program, rhi::Format::RGBA16Float, accepted);
 
-            // Repeating the same accepted settings after rejected attempts
-            // reproduces the picture byte-for-byte: rejection committed neither
-            // exposure nor history.
-            for (u32 attempt = 0u; attempt < 3u; ++attempt) {
-                PostProcessSettings rejected = accepted;
-                rejected.m_bloom_threshold = std::numeric_limits<float>::quiet_NaN();
-                PPR_TEST_ASSERT(validatePostProcessSettings(rejected) == std::errc::invalid_argument);
-            }
+            // A real rejected attempt enters beginFrame and prepare. The invalid
+            // binding is rejected before submission; discardUnsubmitted then
+            // leaves the accepted picture path reusable. No exposure role is
+            // exposed, so the subsequent byte-identical capture is the evidence
+            // that the rejected attempt committed neither exposure nor output.
+            auto &device = rhi->getDevice();
+            rhi::ComPtr<rhi::ICommandQueue> rejected_queue;
+            PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, rejected_queue.writeRef())));
+            rhi::ComPtr<rhi::ICommandEncoder> rejected_encoder;
+            PPR_TEST_ASSERT(not make_error_code(rejected_queue->createCommandEncoder(rejected_encoder.writeRef())));
+
+            const GridWorldIdentity rejected_world{
+                .m_job_id = 1u, .m_world_generation = 1u, .m_content_fingerprint = 1u};
+            PPR_TEST_ASSERT(
+                not picture.beginFrame(device, int2{128, 128}, rejected_world, renderer->completedFenceValue()));
+            const rhi::ComPtr<rhi::ITextureView> rejected_view = picture.outputTexture().getDefaultView();
+            const PreRenderContext rejected_context{device, *rejected_encoder, renderer->completedFenceValue(), {}};
+            const ResolvedHdrView mismatched_valid{
+                .m_view = rejected_view,
+                .m_world = rejected_world,
+                .m_backing = int2{128, 128},
+                .m_valid = int2{127, 128},
+            };
+            PPR_TEST_ASSERT(
+                picture.prepare(rejected_context, mismatched_valid, accepted, TimeSpan{}) ==
+                std::errc::invalid_argument);
+            picture.discardUnsubmitted();
+
+            // An invalid settings tuple is also rejected before any encoding.
+            PostProcessSettings rejected_settings = accepted;
+            rejected_settings.m_bloom_threshold = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(validatePostProcessSettings(rejected_settings) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(
+                not picture.beginFrame(device, int2{128, 128}, rejected_world, renderer->completedFenceValue()));
+            const ResolvedHdrView valid_view{
+                .m_view = picture.outputTexture().getDefaultView(),
+                .m_world = rejected_world,
+                .m_backing = int2{128, 128},
+                .m_valid = int2{128, 128},
+            };
+            PPR_TEST_ASSERT(
+                picture.prepare(rejected_context, valid_view, rejected_settings, TimeSpan{}) ==
+                std::errc::invalid_argument);
+            picture.discardUnsubmitted();
 
             const auto repeated = captureHdr_(picture, *program, rhi::Format::RGBA16Float, accepted);
             checkHdrIdentity_(original, repeated, 128u);

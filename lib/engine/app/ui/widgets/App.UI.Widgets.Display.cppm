@@ -89,6 +89,11 @@ export namespace pP::ui {
         float &m_bloom_threshold;
     };
 
+    /// Reconciles the two live EV-clamp sliders after one was edited. Both
+    /// values stay in [-8,8]; editing the lower bound above the upper raises the
+    /// upper (and vice versa), so the emitted post tuple is always ordered.
+    void reconcileEvLimits(float &ev_min, float &ev_max, bool edited_min) noexcept;
+
     struct DisplayWidgetAvailability {
         bool m_supported{};
         const char *m_reason{};

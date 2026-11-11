@@ -133,11 +133,12 @@ runs inside `gpu_grid_liquid`.
 
 The existing `render_accepts_msaa_sample_counts` leaf additionally renders the
 production Triangle program with distinct payload groups into RGBA16F/D32F MSAA4,
-then verifies resolved half-float colours and descriptor-backed per-group draw constants. The spatial Retro lifecycle leaf also
-renders terrain with no background, proving its private scene pass and indirect
-Grid draw establish viewport/scissor state independently of a backdrop. Run both
-affected leaves under explicit Core validation and inspect the log for VUIDs;
-older RGBA8 or compute-only checks do not qualify these paths.
+then verifies resolved half-float colours and descriptor-backed per-group draw
+constants. The retired spatial Retro lifecycle leaf rendered terrain with no
+background; Task 12 owns the equivalent new-reconstruction coverage (recorded in
+the execution ledger). Run the surviving MSAA leaf under explicit Core
+validation and inspect the log for VUIDs; older RGBA8 or compute-only checks do
+not qualify this path.
 
 The GridPass per-index leaves cover centre-outside samples, mixed materials,
 authored roundness, normals/emission and chunk seams. The retired
@@ -172,11 +173,9 @@ ASan unwind environment modifications; both validation entries explicitly set
 
 This partition follows measured execution: the ordinary aggregate passed in
 276 seconds, while Core+GPUAV reached its 300-second aggregate timeout after
-three completed leaves. The remaining focused Retro leaf passed in 135.8 seconds;
-the observed validation leaf sum is about 391 seconds. Individual case passes
-do not make the aggregate timeout a pass. The per-behaviour partition preserves
-coverage without increasing a deadline. Configure/selection metadata audits and
-execution of these new registrations remain pending.
+three completed leaves. Task 2 removed the Retro and background pairs with the
+runtime selector; the surviving grid/grading pairs keep their measurements and
+deadlines. Individual case passes do not make the aggregate timeout a pass.
 The fixtures provision six GridPass owners plus one small grading
 `PostProcessPass` owner; raw material controls reuse one GridPass's
 candidate/program lifecycle rather than initializing its full family for every
