@@ -87,6 +87,8 @@ string(JOIN "," ppr_asset_gpu_picture_filter
     "asset/render/gates/spatial_msaa4_raster_thresholds_recover_indexed_pattern"
     "asset/render/gates/spatial_msaa4_matches_grid_reference_and_affine_moments"
     "asset/render/gates/background_magnification_matches_wrapped_cubic_reference"
+    "asset/render/gates/temporal_layered_background_pan_uses_stable_spatial_fallback"
+    "asset/render/gates/temporal_camera_pan_preserves_pattern_contrast_and_phase"
 )
 
 ppr_add_test_entry(TARGET engine.tests.asset

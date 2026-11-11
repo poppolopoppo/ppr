@@ -14,7 +14,7 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 
 ## Running
 
-All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. Routine GPU correctness runs as six responsibility shards under `RESOURCE_LOCK gpu` and TIMEOUT 450: `gpu_caches` (the `caches` and `sharedmesh` groups), `gpu_picture` (picture controls, both HDR leaves, both MSAA4 spatial leaves and background magnification), `gpu_grid_particles` (particle support/resources, candidate activation, compute visibility, stochastic world UVs/mips and surface inventory), `gpu_grid_surface` (optical controls/parallax, translucent boundaries, catalog-texture particles and solid large-offset features), `gpu_grid_liquid` (liquid surface composition, liquid optics appearance, nominal-density coverage and liquid large-offset features), and `gpu_misc` (renderer/pipeline/MSAA/attachment contracts, GPU timestamps, pre-render ordering, plus the `draws` and `quarantine` groups). Each shard is an explicit leaf token list in `CMakeLists.txt` rather than a prefix filter, so the union is auditable. `solid_interface_gpu` and `solid_envelope_gpu` keep their exact slanted-interface and solid-envelope leaves with TIMEOUT 300. Together these entries cover every `asset/render` leaf exactly once; only the opt-in `*_gpu_validation` entries re-select leaves. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
+All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. Routine GPU correctness runs as six responsibility shards under `RESOURCE_LOCK gpu` and TIMEOUT 450: `gpu_caches` (the `caches` and `sharedmesh` groups), `gpu_picture` (picture controls, both HDR leaves, both MSAA4 spatial leaves, background magnification and both temporal motion-quality leaves), `gpu_grid_particles` (particle support/resources, candidate activation, compute visibility, stochastic world UVs/mips and surface inventory), `gpu_grid_surface` (optical controls/parallax, translucent boundaries, catalog-texture particles and solid large-offset features), `gpu_grid_liquid` (liquid surface composition, liquid optics appearance, nominal-density coverage and liquid large-offset features), and `gpu_misc` (renderer/pipeline/MSAA/attachment contracts, GPU timestamps, pre-render ordering, plus the `draws` and `quarantine` groups). Each shard is an explicit leaf or group token list in `CMakeLists.txt` rather than a broad suffix match, so the union is auditable. `solid_interface_gpu` and `solid_envelope_gpu` keep their exact slanted-interface and solid-envelope leaves with TIMEOUT 300. Together these entries cover every `asset/render` leaf exactly once; only the opt-in `*_gpu_validation` entries re-select leaves. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
 
 Run the routine entries with `ctest --test-dir out/build/<preset> -R '^engine[.]tests[.]asset[.]' --output-on-failure -LE gpu_validation`. The opt-in `gpu_validation`, `resident_particles_gpu`, `picture_hdr_gpu_validation` and `picture_spatial_gpu_validation` entries set `PPR_TEST_GPU_VALIDATION=1` and claim `RESOURCE_LOCK gpu` with TIMEOUT 300. They cover the representative grid visibility gate, resident-circle gate, both HDR policy/encoding gates and both indexed spatial resolve gates respectively; run them separately with the same target regex and `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
 
@@ -110,9 +110,17 @@ appear in `grid_liquid_optics_and_viewport_appearance` and
 `grid_liquid_nominal_density_deformation_coverage`.
 
 `temporal_layered_background_pan_uses_stable_spatial_fallback` and
-`temporal_camera_pan_preserves_pattern_contrast_and_phase` exercised the retired
-legacy Retro temporal policies and are removed with Task 2's approved asset-gate
-retirement; they are not replaced by a new benchmark framework.
+`temporal_camera_pan_preserves_pattern_contrast_and_phase` remain in
+`gpu_picture`: they encode the contrast, phase, MSE and disocclusion contracts
+of the still-live `RetroSettings::m_temporal_enabled` path, so their retirement
+belongs to Task 2 together with that policy removal. They run unmodified and
+measure about 51 s and 18 s respectively, which keeps `gpu_picture` inside its
+deadline.
+
+The retired benchmark sampling also left `GridPass::setParticleTimingQueriesForTest`
+and its `PPR_PARTICLE_*` environment hooks without a test caller. They are
+test-support production code; their removal/adaptation is deferred to Task 18,
+which owns profiling replacement, and is not part of this test-only correction.
 
 `grid_liquid_optics_and_viewport_cost` was not a benchmark-only leaf: it holds
 real water-optics appearance checks. Only its eight-frame 1920×1080 timing loop,
