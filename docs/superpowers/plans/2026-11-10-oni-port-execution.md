@@ -44,7 +44,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 8 | complete (commit `62621c92`; independent review approved; D3D12 pending) |
 | 9 | complete (commits `d5f95024`, `563c73a8`; reviews clean; Task 10 handoffs recorded) |
 | 10 | complete (commits `e628d018`, `46e021ae`; reviews clean; Task 11 handoffs recorded) |
-| 11–19 | pending |
+| 11 | complete (commits `e5e073e5`, `58a21d8a`, `0902f442`, `80c719c7`; reviews clean; camera-side visual gate for Task 19) |
+| 12–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1093,4 +1094,40 @@ and operational acceptance. No Task 4 work has begun.
   once every rendered world publishes resolved cells (including non-1024 edges
   and the first-lighting-publication window). The shipped `gpu_grid_surface`
   gate no longer claims that fallback as categorical coverage.
+- **Known gates:** Windows/D3D12 unmeasured.
+
+## Task 11 — categorical PBR, BRDF LUT and gas complete
+
+- Commits: `e5e073e5` (implementation), `58a21d8a` + `12caab70` (first fix
+  round: categorical early-out, texture/normal/bombing tests, gas draw test,
+  retired surface test bodies, categorical boundary leaf, opacity/saturation/
+  binding/LUT cleanup), `0902f442` + `80c719c7` (second fix round: consistent
+  view vector, end-to-end GridFrame test, dead fixtures, codemap/counts).
+- Review: initial review found six Important issues (perspective/orthographic V,
+  legacy work on the categorical hot path, untested texture/normal path,
+  compiled retired test bodies, legacy contour lane mislabeled categorical,
+  untested non-zero-CH gas). All fixed after two scoped rounds; final re-review
+  all findings addressed with no new Critical/Important breakage.
+- Delivered: exact CH diffuse/specular filters with zero-XY limits; exact
+  visible material formula with Fresnel/energy compensation and no forbidden
+  key/ambient/AO/cap; 64×128 RG16F 32 KiB VNDF/Smith BRDF LUT generated once per
+  GridPass device lifetime with binary64 reference checks and released after
+  boot; sample-rate categorical shading on the real `grid_tiles` MSAA4 program;
+  texture bombing/normal orientation/filtered means/period gradients preserved;
+  premultiplied receive-only transparency with authored coverage; non-zero-CH
+  gas alpha composition before Hable with no relight/ambient; retired smooth
+  solid/liquid production path and test bodies; categorical resolved-boundary
+  `gpu_grid_surface` leaf green.
+- **Owner visual decision for Task 19:** literal spec V (sample→camera) with the
+  shipped orthographic camera (origin z≈-0.5, forward +Z) and flat +Z terrain
+  gives `NoV≈1e-5` and diffuse ≈0.25 for CH mean 0.5, versus ≈0.494 under the
+  old eye→scene convention. No normal/camera flip was applied silently. The
+  owner must judge the visual result and decide whether the camera/base-normal
+  convention needs a bounded change at final acceptance.
+- **Task 14/15 obligation:** the legacy flat/contour `materialSurface` remains
+  only as a temporary `m_has_resolved_cells == 0` fallback for non-1024 or
+  pre-lighting frames; remove it once all rendered worlds publish resolved cells.
+- **Deferred minors:** five-blank-line run in the edited asset test; stale
+  `m_surface_to_camera` sentence in the report; CPU-helper section banner;
+  report timing freshness.
 - **Known gates:** Windows/D3D12 unmeasured.
