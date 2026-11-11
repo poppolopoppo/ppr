@@ -45,7 +45,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 9 | complete (commits `d5f95024`, `563c73a8`; reviews clean; Task 10 handoffs recorded) |
 | 10 | complete (commits `e628d018`, `46e021ae`; reviews clean; Task 11 handoffs recorded) |
 | 11 | complete (commits `e5e073e5`, `58a21d8a`, `0902f442`, `80c719c7`; reviews clean; camera-side visual gate for Task 19) |
-| 12–19 | pending |
+| 12 | complete (commits `6418d663`, `2e0f7ec5`, `b82877b7`; reviews clean; background coverage re-scoped to Task 14) |
+| 13–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1177,3 +1178,32 @@ and operational acceptance. No Task 4 work has begun.
   clean.
 - **Known gates:** Windows/D3D12 unmeasured; Task 14 wiring and native
   presentation enlargement remain pending.
+
+## Task 12 — Hable temporal reconstruction complete
+
+- Commits: `6418d663` (ReconstructionPass/Hable/extents/history),
+  `2e0f7ec5` (commit history only on acceptance; remove 1e-4 floor; independent
+  oracle), `b82877b7` (preserve committed history on same-extent reset discard).
+- Review: initial review found one Critical uninitialized-history lifecycle
+  defect after unaccepted extent changes, plus a 1e-4 history-weight contract
+  deviation, a transliterated "independent" oracle, and an inherited Task 2
+  coverage obligation. Fix round addressed them; scoped re-review found all
+  Critical/Important findings addressed with no new Critical/Important breakage.
+- Delivered: `ReconstructionPass` with exact R/S/B extents, padded/jittered
+  projection, procedural Hable lattice/known-node/diamond/bounds, exact boundary
+  sample replication, history reprojection/clamp/motion weighting, reset vs
+  pan/zoom preserve policy, transactional committed/tentative resource pairs,
+  fence-gated reuse, and fail-closed RGBA16F/4x capability admission. Tests cover
+  exact grids, padded corners, R=1/odd, lattice/oracle, history/reset matrix,
+  rejection/busy extent changes, poison padding and real GPU execution.
+- **Coordinator ruling:** background-draw alignment and opaque-projection
+  admission coverage is re-scoped from Task 12 to Task 14 integration. The
+  reconstruction pass does not own the scene/background draw path; Task 14 must
+  add focused two-resolution background alignment/opaque-admission coverage
+  before final integration. Cost if wrong: that coverage is absent until
+  Task 14; Task 19 must not call it green before then.
+- **Deferred minors:** unused `kSampleNodes`; stale extent-deferral comment;
+  same-extent reset test does not discriminate the write-index invariant;
+  shader no-floor rule proven only through the CPU mirror; GPU border checks
+  narrowed to an interior band; report leaf-count/log-citation drift.
+- **Unavailable gate:** Windows/D3D12 unmeasured.
