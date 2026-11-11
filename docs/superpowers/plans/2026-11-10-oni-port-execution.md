@@ -39,7 +39,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 3 | complete — owner accepted the cleaned application on 2026-11-11 |
 | 4 | complete (commit `317d9e8`; independent review approved; D3D12 pending) |
 | 5 | complete (commit `2b94778`; independent review approved; D3D12 pending) |
-| 6–19 | pending |
+| 6 | complete (commits `ef7276e3`, `02047b7d`, `98136a0e`, `323c6761`; reviews clean; 2 deferred minors) |
+| 7–19 | pending |
 
 ## Task 0 — evidence
 
@@ -817,3 +818,45 @@ and operational acceptance. No Task 4 work has begun.
   full interval/CH word in a future codec test to pin the intra-word byte map;
   redundant `isfinite` check in `packInterval`. None affects delivered behavior.
 - **Unavailable gate:** Windows/D3D12 unmeasured.
+
+## Task 6 — coherent temperature publication complete
+
+- Commits: `ef7276e3` (publication/queue), `02047b7d` (filtered palette +
+  fence-safe terrain words), `98136a0e` (device-loss republish + zero initial/
+  reset content), `323c6761` (retire terrain staging buffers after readers).
+- Review history: initial review found 2 Important (source palette ignored the
+  filtered albedo mean; mapped terrain writes had no reader-fence protection)
+  plus required test/lifecycle gaps. Fix round 1 addressed them but introduced
+  two Important lifecycle defects (device-loss republish; undefined initial/
+  reset buffer content); fix round 2 addressed those but recreated the staging
+  buffer before in-flight readers retired; fix round 3 deferred the previous
+  staging buffer and mapping at `m_world.m_last_reader`, unmaps before release,
+  and added a no-wait in-flight reset case. Final scoped re-review: all findings
+  addressed, no new Critical/Important breakage.
+- Delivered: `m_material_temperature` metadata word (material16+half Kelvin,
+  32-byte row/offsets preserved), all consumers masking low material bits,
+  temperature validation/rejection before identity commit, terrain packed cells
+  through `GridStagedUpload` into a zero-initialized device-local full-domain
+  buffer with completion-selected staging and generation-checked acks,
+  device-loss/reset republish from the retained CPU cache, explicit Renderer
+  graphics-queue injection into Matter (no independent acquisition), filtered
+  source-palette derivation from the same computed linear mean, visible-scalar
+  admission, once-per-device thermal table with strong refs in
+  `WorldLightingInputs`, and real-driver/checkpoint/append/reorder tests.
+- **Known gates:** `engine.tests.asset.gpu_grid_surface` remains red only on the
+  pre-existing `grid_optical_controls_and_four_layer_parallax` (Task 11);
+  Windows/D3D12 and GPU validation execution unmeasured.
+- **Deferred minors:**
+  - Deferred staging unmap captures a raw `rhi::IDevice *` and runs on the
+    confirmed-removal drain, unlike the file's `nullptr`-device convention. No
+    dangling dereference today (callers keep RHI alive), but Task 14 teardown/
+    lifetime audit must apply the `safe_ptr`/device-survived discipline.
+  - Post-completion deferred-count assertion depends on the encode-time fence
+    poll; Task 7/14 should assert after a reclaiming draw.
+  - Cost notes: 4 MiB full-domain zero image/init upload on each terrain
+    (re)creation/reset; 64 KiB CPU word cache per cached chunk; 128 row copies
+    per chunk; Vulkan/D3D12 creation-time init behavior differs (D3D12 immediate
+    submit/wait). No measured budget violation.
+  - One ASan-internal abort in `matter_resident_gpu` did not reproduce; it is
+    unrelated by code surface and lacks a captured stack. Preserve as a flake
+    until reproduced.
