@@ -34,8 +34,9 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | --- | --- |
 | 0 | complete (checkpoint `49a3a7d`, recovery verified, inventory recorded) |
 | 1 | complete (commits `14948a7`, `015b4df`, `7c5840b`, `502cf30`; reviews clean; known red legacy gates recorded below) |
-| 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates and matter_gpu cost blocker recorded below) |
-| 3 | pending — mandatory owner cleanup-acceptance stop |
+| 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates recorded below; the GPU cost blocker it recorded is resolved by the app GPU cost correction below) |
+| 2a | complete (app GPU cost correction: commits `ab37c5ba`, `test: bound matter terrain and runtime GPU entries`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
+| 3 | pending — mandatory owner cleanup-acceptance stop; entry conditions and remaining risk recorded in the Task 3 section |
 | 4–19 | pending; Task 4 and later must not begin before cleanup acceptance |
 
 ## Task 0 — evidence
@@ -418,11 +419,10 @@ timings.
   leave Hable screen-history bytes, the previous camera/grid and the committed
   exposure role unchanged. Task 2's `PostProcessPass` now has real rejection and
   padding coverage; only the Task 12 history pair can prove the history half.
-- **Next GPU-suite acceleration step (not Task 2):** `engine.tests.app.matter_gpu`
-  still exceeds its 300 s validation deadline under Core+GPU-AV even though the
-  adapted `evolved_liquid_pool_has_no_interior_render_holes` leaf passes alone.
-  Do not raise the timeout or disable validation in cleanup work; the aggregate
-  cost is owned by the next GPU-suite acceleration task. `gpu_grid_surface`
+- **GPU-suite acceleration (resolved for the app matter suite):** the former
+  `engine.tests.app.matter_gpu` exceeded its 300 s Core+GPU-AV deadline. The
+  correction is recorded in "App GPU cost correction" below; the timeout was not
+  raised, no leaf was skipped and validation was not disabled. `gpu_grid_surface`
   optical controls (Task 11) and the checkpoint dug-solids leaf (Task 11) remain
   known red gates.
 
@@ -488,10 +488,9 @@ timings.
   `grid_optical_controls_and_four_layer_parallax` (Task 11).
 - `game/checkpoint_gpu/actual_dug_solids_...` remains red at the pre-existing
   empty-interstice assertion (Task 11), opt-in.
-- **Active GPU-suite cost blocker:** `engine.tests.app.matter_gpu` exceeds its
-  300 s Core+GPU-AV deadline while the adapted pool leaf passes alone in 15.8 s.
-  This is now the next GPU-suite acceleration step; do not raise the timeout or
-  disable validation. Evidence: `/tmp/opencode/task2-app-matter-gpu.log`.
+- **GPU cost blocker resolved:** the former 300 s `engine.tests.app.matter_gpu`
+  aggregate is split into bound shards (see "App GPU cost correction" below).
+  Evidence for the original failure: `/tmp/opencode/task2-app-matter-gpu.log`.
 - Windows/D3D12 unmeasured.
 
 ### Deferred minors
@@ -510,3 +509,126 @@ timings.
 
 - `.superpowers/sdd/2026-11-10-oni-port/task-2-report.md` and its fix sections.
 - `/tmp/opencode/task2-*.log`, `task2fix-*.log`, `task2fix2-*.log`.
+
+## App GPU cost correction (Task 2 follow-up, pre-Task 3)
+
+### Commits and review
+
+- `ab37c5ba` `test: bound app matter GPU validation cost` — removed two redundant
+  solver rebuilds; split the 32-leaf `app/matter_gpu` aggregate into three
+  responsibility entries (11/11/10).
+- `test: bound matter terrain and runtime GPU entries` (follow-up to the review of
+  `ab37c5ba`) — separated the two whole-grid terrain leaves into
+  `matter_terrain_gpu`, split `matter_runtime_gpu` into `matter_runtime_gpu` and
+  `matter_runtime_scene_gpu`, corrected the report/tables/ledger evidence.
+- Independent review of `ab37c5ba` returned 5 Important findings and several
+  minors (misstated triggering-run inventory; false lifecycle-coverage claim for
+  `isolated_liquid_density…`; unquantified contact-shard worst case; runtime
+  evidence gap; stale ledger; plus wording/column corrections). All findings are
+  fixed in the follow-up; `ab37c5ba` was not amended.
+
+### Diagnosis
+
+The former `engine.tests.app.matter_gpu` timed out at 300.52 s. In that log 20
+leaves completed (234.97 s of printed durations), the 21st
+(`terrain_rounded_v_endpoint…`) was in flight for ≥60 s, and 11 leaves never
+started. Cumulative cost, not a hang: the unchanged binary re-ran at 231.67 s,
+153.04 s and 153.02 s, and the same leaf measured 13.22 s and 127.40 s.
+
+Per-case setup measured with temporary probes (removed before commit): shader
+service 0.17–0.26 s, validated device 0.15–0.37 s, queue <1 ms,
+`GpuSolver::initialize` 2.05–2.87 s for ten programs, teardown 0.35–0.8 s. Slow
+phases are CPU-side (GPU 0–1 % utilisation, 1515–1980 MHz SM), so not GPU clock
+throttling.
+
+A group-scoped shader/device/queue owner was implemented and measured, then
+rejected: on this host the shared Slang session made every later case's
+`solver.slang` module compile ten new entry-point programs at 21.3–22.1 s per
+solver (first case 2.094 s; leaf totals 3.78 → 22.29 → 21.54 → 35.14 → 44.31 s)
+against a 0.7–1.3 s/device saving. Cases therefore keep private service, device
+and queue lifetimes.
+
+### Entries
+
+| entry | leaves | timeout | worst-observed bound | measured wall |
+| --- | --- | --- | --- | --- |
+| `matter_terrain_gpu` | 2 | 300 s | 206.17 s (68.7 %) | 17 s |
+| `matter_contact_gpu` | 9 | 300 s | 61.45 s (20.5 %) | 33 s |
+| `matter_material_gpu` | 11 | 300 s | 61.67 s (20.6 %) | 49 s |
+| `matter_grid_gpu` | 10 | 300 s | 57.58 s (19.2 %) | 33 s |
+| `matter_resident_gpu` | 4 (exact union) | 300 s | — | 14 s |
+| `matter_runtime_gpu` | 2 | 180 s | ≈99.5 s (derived) | 35 s |
+| `matter_runtime_scene_gpu` | 1 | 180 s | ≈73.1 s (derived) | 25 s |
+| `matter_dedicated_gpu` | 1 | 180 s | — | 19 s |
+| `matter_fork_gpu` | 6 | 300 s | — | 26 s (105 s in one run) |
+| `matter_adapter` | 6 (CPU) | 120 s | — | 5 s |
+
+The four `app/matter_gpu` lists are disjoint explicit tokens and cover exactly the
+former 32-leaf union; the runtime lists plus the resident and dedicated leaves
+cover the runtime group's 5 leaves exactly once. The lists are explicit, so a new
+leaf must be added to exactly one list. The terrain leaves are isolated because
+their co-resident worst-observed bound with the contact set was 267.62 s (89 % of
+300 s). Deadlines were not raised, no leaf was skipped, no validation was disabled
+and no retries were added.
+
+### Verification
+
+Each affected entry ran serially through CTest on `clang-dev` with the original
+Core+GPU-AV environment; all exit 0 with the full leaf count
+(`after4`/`after5` logs). Filtered single-leaf runs for both terrain leaves and all
+three runtime leaves pass; the contact and terrain shards also pass reversed
+(`--no-shuffle`) and under two fixed shuffle seeds with every leaf present; an
+explicit `ps` capture after the sweep shows no residual `engine.tests.app`
+process. Format/style gates and `git diff --check` are clean.
+
+### Resolved and remaining risk
+
+- Resolved: no app matter/terrain/contact/material/grid/runtime entry is expected
+  to approach its deadline; the largest worst-observed bound is 68.7 % of 300 s.
+- Remaining: host variance is large (one leaf 13.22 s vs 127.40 s; one entry 26 s
+  vs 105 s; the aggregate 153 s vs 300.52 s). The shard bounds absorb it.
+- Remaining evidence gap: the runtime entry's single 177.55 s occurrence was
+  captured as a CTest summary only; eleven later verbose processes (including two
+  preceded by the heavy fork entry) measured 59.86–60.67 s, so the runtime split's
+  slow-case bound is derived from the observed 2.94× ratio and is recorded as a
+  bound, not a measurement.
+
+### Owner decision (pending)
+
+The dominant remaining per-pass cost is production program creation (~2.1–2.9 s ×
+29 cases ≈ 61–84 s). Removing it needs either a program-family/shader-module cache
+or a separate global-session/compilation-session lifetime in `IShaderService`, so a
+group-shared device can be paired with per-case compilation sessions. Both are
+production API/lifetime/caching changes and are **not** implemented; the shard
+bounds stand until the owner decides.
+
+### Evidence
+
+- `.superpowers/sdd/2026-11-10-oni-port/app-gpu-time-report.md` (corrected).
+- `/tmp/opencode/app-gpu-time/` — `tables.txt`, `after2..after5/`, `reorder-*/`,
+  `runtime-union/`, `runtime-probe/`, `probe/shared-session-penalty.log`.
+
+## Task 3 — cleanup acceptance (pending owner stop)
+
+State: pending. This section intentionally carries no GPU-cost blocker.
+
+Entry conditions for the owner stop:
+
+- **App GPU cost blocker: resolved.** The former 300 s `app/matter_gpu` aggregate
+  no longer exists; its 32 leaves are partitioned across `matter_terrain_gpu`
+  (worst observed 206.17 s), `matter_contact_gpu` (61.45 s), `matter_material_gpu`
+  (61.67 s) and `matter_grid_gpu` (57.58 s), the resident union keeps its own
+  300 s entry (13.00 s), and the runtime entry is split at its unchanged 180 s
+  (`matter_runtime_gpu` ≈35 s measured, `matter_runtime_scene_gpu` ≈25 s,
+  `matter_dedicated_gpu` 19 s).
+- **Pending owner decision, not an acceptance blocker:** the production
+  program-family/shader-module cache (see "Owner decision" above). It is an
+  optimization; acceptance does not require it, but the residual per-pass setup
+  cost stays until it is decided.
+- **Known red gates remain owned by Task 11:** `engine.tests.asset.gpu_grid_surface`
+  (`grid_optical_controls_and_four_layer_parallax`) and the checkpoint dug-solids
+  leaf (`actual_dug_solids_...`). Acceptance must not claim a green GPU matrix
+  while those are red.
+- **Unmeasured:** Windows/D3D12 build and GPU validation.
+- **Not started by this correction:** Task 3 owner acceptance itself, and Task 4
+  and later.

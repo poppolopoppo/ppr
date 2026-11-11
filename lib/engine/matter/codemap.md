@@ -189,14 +189,15 @@ tick/substep/discovery/initialization/fused/status and particle draw work. Optio
 timing now reserves 44 endpoints for eight substeps and reports eight stages;
 these are GPU/API elapsed diagnostics, not CPU execution-cost measurements.
 
-`engine.tests.app` registers the `app/matter_gpu` leaves across three device
-entries (`matter_contact_gpu`, `matter_material_gpu`, `matter_grid_gpu`) with
-explicit D3D12/core and GPU validation, runtime compilation/reflection/pipeline/
-readback, transfer overflow, collection retry, split-row pack/unpack, replacement
-accounting and the D4 dual-owner peak-footprint probe. Cases keep a private
-shader/device/queue lifetime: a group-shared Slang session measured every later
-case's program creation 10x slower (2.09 s -> 21.3-22.1 s per solver), so only the
-entry split reduces the aggregate cost. It needs no window/demo.
+`engine.tests.app` registers the `app/matter_gpu` leaves across four device
+entries (`matter_terrain_gpu`, `matter_contact_gpu`, `matter_material_gpu`,
+`matter_grid_gpu`) with explicit D3D12/core and GPU validation, runtime
+compilation/reflection/pipeline/readback, transfer overflow, collection retry,
+split-row pack/unpack, replacement accounting and the D4 dual-owner peak-footprint
+probe. Cases keep a private shader/device/queue lifetime: on this host a
+group-shared Slang session measured every later case's program creation 10x
+slower (2.09 s -> 21.3-22.1 s per solver), so only the entry split reduces the
+aggregate cost. It needs no window/demo.
 `source_checks.slang` exercises actual port helpers, not a second solver.
 
 The retired CPU `.Numerics`/`.Reference` partitions and sim `Matter.Tests.cpp`

@@ -130,17 +130,36 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # The former single `matter_gpu` entry exceeded its 300 s deadline (300.52 s) under
 # core + GPU-assisted validation: per-case device setup, a fresh Slang session that
 # recompiles `solver.slang` for every case, and whole-grid dispatches under the
-# validation layers. A group-scoped shader/device/queue owner was measured and
-# rejected: reusing the Slang session makes each later case's program creation
-# 10x slower (2.09 s -> 21.3-22.1 s per solver), so cases keep private service
-# lifetimes. The entry is split by existing responsibility instead; the three
-# token lists below are disjoint and cover exactly the 32 leaves the aggregate
-# owned (11 + 11 + 10), so GPU-validation coverage is unchanged.
-set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,app/matter_gpu/bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,app/matter_gpu/compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact,app/matter_gpu/terrain_endpoint_response_and_complete_boundary_search,app/matter_gpu/wave_boundary_search_matches_serial_for_full_mixed_groups,app/matter_gpu/moving_body_static_limit_translation_rotation_and_one_way_contact,app/matter_gpu/body_admission_rejection_and_same_epoch_contact_publication,app/matter_gpu/predicted_body_slices_select_distinct_substep_rows,app/matter_gpu/guardian_blocks_normal_and_halves_tangent_analytically")
+# validation layers. A group-scoped shader/device/queue owner was measured on this
+# host and rejected: reusing one Slang session served the cached module to ten new
+# entry-point programs per case, so that case's program creation measured 10x
+# slower (2.09 s -> 21.3-22.1 s per solver), so cases keep private service
+# lifetimes. The entry is split by existing responsibility instead.
+#
+# Every `app/matter_gpu` leaf must appear in exactly one explicit list below. The
+# lists are explicit tokens, not group prefixes, so each entry's worst observed
+# cost stays bounded: a new leaf is NOT auto-included and must be added here.
+# The four lists are disjoint and cover exactly the 32 leaves the aggregate owned
+# (2 terrain + 9 contact + 11 material + 10 grid), so GPU-validation coverage is
+# unchanged. The two whole-grid terrain leaves are separated from the rest of the
+# contact geometry because their joint worst observed bound co-resident with the
+# contact set was 267.62 s (89 % of 300 s).
+set(ppr_matter_terrain_filter "app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact")
+
+set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,app/matter_gpu/bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,app/matter_gpu/compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,app/matter_gpu/terrain_endpoint_response_and_complete_boundary_search,app/matter_gpu/wave_boundary_search_matches_serial_for_full_mixed_groups,app/matter_gpu/moving_body_static_limit_translation_rotation_and_one_way_contact,app/matter_gpu/body_admission_rejection_and_same_epoch_contact_publication,app/matter_gpu/predicted_body_slices_select_distinct_substep_rows,app/matter_gpu/guardian_blocks_normal_and_halves_tangent_analytically")
 
 set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/k2_only_rejects_other_counts_before_work,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication")
 
 set(ppr_matter_grid_filter "app/matter_gpu/sparse_capacity_layout_and_independent_admission_bounds,app/matter_gpu/sparse_gpu_aprons_publish_unique_flat_keys_and_group_rows,app/matter_gpu/sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,app/matter_gpu/opt_in_stage_timing_follows_completed_fence_and_epoch,app/matter_gpu/device_peak_footprint_for_dual_grid_ownership,app/matter_gpu/strict_conversion_and_collection_retry_preserve_cause,app/matter_gpu/prepared_replacement_accounts_peak_and_freezes_admission,app/matter_gpu/reflected_scalar_protocol_and_source_helpers,app/matter_gpu/split_device_rows_pack_and_unpack_every_semantic_field_by_name,app/matter_gpu/lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_terrain_gpu
+    FILTER "${ppr_matter_terrain_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_contact_gpu
@@ -178,6 +197,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation
 )
 
+unset(ppr_matter_terrain_filter)
 unset(ppr_matter_contact_filter)
 unset(ppr_matter_material_filter)
 unset(ppr_matter_grid_filter)
@@ -193,15 +213,38 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app cpu
 )
 
+# Runtime lifecycle: the dedicated cold/reused acknowledgment leaf and the
+# resident-completion leaf keep their own entries below/above, so the remaining
+# leaves are two explicit responsibility lists. They are tokens, not
+# `app/matter_runtime_gpu`, exactly like the matter shards: a new leaf is not
+# auto-included, and no leaf can run in two entries. The split exists because
+# this entry measured 177.55 s and 61.13 s against the 180 s deadline, so its
+# scene/resident-tick leaf no longer shares a deadline with the publication and
+# pending-pause leaves.
+set(ppr_matter_runtime_filter "app/matter_runtime_gpu/terminal_collection_rejection_discards_without_joint_publication,app/matter_runtime_gpu/actual_domain_pending_pause_finishes_only_admitted_slice")
+
+set(ppr_matter_runtime_scene_filter "app/matter_runtime_gpu/selected_map_edges_run_resident_ticks_and_frozen_snapshots")
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_runtime_gpu
-    FILTER "app/matter_runtime_gpu"
-    EXCLUDE "app/matter_runtime_gpu/dedicated_actual_domain_cold_reused_acknowledgment_and_completion_are_distinct,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot"
+    FILTER "${ppr_matter_runtime_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
     LABELS unit engine app gpu_validation
 )
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_runtime_scene_gpu
+    FILTER "${ppr_matter_runtime_scene_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 180
+    LABELS unit engine app gpu_validation
+)
+
+unset(ppr_matter_runtime_filter)
+unset(ppr_matter_runtime_scene_filter)
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_dedicated_gpu
