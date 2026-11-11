@@ -37,7 +37,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 2 | complete (commits `8835fbb`, `15b6609`, `2be2fc2`; reviews clean; known red gates recorded below; the GPU cost blocker it recorded is resolved by the app GPU cost correction below) |
 | 2a | complete (app GPU cost correction: commits `ab37c5ba`, `3c3b9963`; independent review of `ab37c5ba` returned 5 Important + minors, all fixed; records below) |
 | 3 | pending — mandatory owner cleanup-acceptance stop; entry conditions and remaining risk recorded in the Task 3 section |
-| 4–19 | pending; Task 4 and later must not begin before cleanup acceptance |
+| 4 | complete (commit `317d9e8`; independent review approved; D3D12 pending) |
+| 5–19 | pending |
 
 ## Task 0 — evidence
 
@@ -761,3 +762,30 @@ and operational acceptance. No Task 4 work has begun.
   passed. Task 4 may begin.
 - Acceptance covers the intermediate cleanup application, not the final lighting
   visuals or the remaining Task 11/Task 19 red gates.
+
+## Task 4 — backend qualification complete
+
+- Commit `317d9e8` `test: qualify world-lighting storage and Hable sample contracts`.
+- Independent review: approved; no Critical/Important findings. YAGNI pass
+  (test-only qualification shader/tests, no runtime alternative, no widened jump
+  format, no sample remap, no fallback).
+- Verified on Vulkan/RTX 2080 with real shaders, pipelines and fenced readback:
+  R8_UINT 1024² `{0,1,2,4,8,16,32}`; 32-bit atomic-min invariance under
+  forward/reversed/permuted input; reflected strides 4/8/32 and metadata offsets
+  0/4/8/12/16/20/24/28; exact 4x sample positions/order; per-sample
+  cell-boundary colors; RGBA16F 4x loads; ordered history UAV/SRV; status-copy
+  minima 2/3 with zero reserved words.
+- Registration: `app/world_lighting_backend/` routine + GPU-validation entries
+  pass; exact asset sample-pattern leaf strengthened with exact per-sample
+  positions and passes its GPU-validation entry.
+- **Task 6 handoff:** the backend test's C++ metadata mirror currently models
+  today's `m_material` word. Task 6 must rename it to `m_material_temperature`
+  and update the mirror/static assertions (or import and assert the production
+  `GridParticleMetadataRow`) while preserving the 32-byte row and offsets
+  0/4/8/12/16/20/24/28. The shader mirror and by-name offset table already force
+  the update.
+- **Deferred minors:** report says 7/7 leaves vs 8/8 group nodes; class-bit
+  comment phrasing; SPIR-V disassembly claim lacks a retained artifact;
+  duplicated test-local half decoder. None affects the evidence.
+- **Unavailable gate:** Windows/D3D12 build, shader/pipeline execution,
+  validation layers and sample order are unmeasured and reported pending.
