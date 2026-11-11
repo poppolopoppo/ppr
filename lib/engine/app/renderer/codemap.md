@@ -464,18 +464,25 @@ validation requirements; user visual acceptance is separate.
   table. Each raster sample reconstructs its own world-plane position, selects
   exactly one native packed cell, and discards empty samples, so MSAA internal
   occupancy boundaries receive real per-sample coverage. Continuous world-UV
-  derivatives are captured before cell selection. Visible response uses linear
-  texture RGB times linear tint, authored metallic/roughness/IOR, mapped world
-  normal, orthographic/current camera V, `diffuseIrradiance`/`specularRadiance`,
-  the shared RG16F BRDF pair and one authored+thermal emission term; receive-only
-  transparent cells omit thermal, use premultiplied authored opacity and do not
-  attenuate CH transport. The legacy contour/refraction path remains only for
-  explicit flat/legacy fixtures.
-- **GridPass BRDF table:** one device-lifetime immutable 64x128 RG16F table
-  (32 KiB) is generated once at `initialize` by `material_brdf_lut.slang`
-  (1,024 golden-ratio/radical-inverse VNDF/Smith samples per texel,
-  alpha=max(r,0.001), texel centers `(x+0.5)/64,(y+0.5)/128`), transitioned to
-  shader-resource state, and owned beside the thermal table. It is released by
+  derivatives are captured before cell selection, and the categorical branch
+  returns before the retired contour/cell-word/material selection. Visible
+  response uses linear texture RGB times linear tint, authored
+  metallic/roughness/IOR (publication-validated, not shader-repaired), mapped
+  world normal, `V` = `-forward` for orthographic and `normalize(origin-sample)`
+  for perspective, `diffuseIrradiance`/`specularRadiance`, the shared RG16F BRDF
+  pair and one authored+thermal emission term; receive-only transparent cells
+  omit thermal, use premultiplied authored opacity (`tint.a*albedo.a*opacity`)
+  and do not attenuate CH transport. Only a temporary explicit legacy
+  flat/contour fallback remains for worlds without published resolved cells;
+  Task 14/15 owns its removal once all rendered worlds publish the categorical
+  field.
+- **GridPass BRDF table:** one immutable 64x128 RG16F table (32 KiB) is
+  generated once per GridPass device lifetime at `initialize` by
+  `material_brdf_lut.slang` (1,024 golden-ratio/radical-inverse VNDF/Smith
+  samples per texel, alpha=max(r,0.001), texel centers
+  `(x+0.5)/64,(y+0.5)/128`), transitioned to shader-resource state, and owned
+  beside the thermal table. The one-shot generation program and pipeline are
+  released immediately after the boot dispatch. The table is released by
   `shutdown`/device-loss after renderer completion and before RHI shutdown; no
   singleton owns it.
 - **Presentation** (`App.Renderer.Presentation.cppm/.cpp`): `PresentationGrid{window, resolved, raster, backing,

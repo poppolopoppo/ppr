@@ -3367,112 +3367,6 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
         // material optics and authored background layers
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST (grid_optical_controls_and_four_layer_parallax) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            GridPass grid;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-            u64 generation = 0u;
-            const auto capture = [&](const GridPass::GridStagedFrame &stage) {
-                return captureOpticalGrid_(grid, stage, ++generation);
-            };
-            GridTerrainVisual visual{};
-            visual.m_material_id = 1u;
-            visual.m_color_rgba = 0x7090b0ffu;
-            visual.m_surface_flags = 1u;
-            visual.m_opacity = 0.0f;
-            visual.m_normal_texture_index = 5u;
-            visual.m_refraction_depth_m = 0.5f;
-            const auto background = capture(opticalGridFixture_(visual, 0u));
-            const auto ior_one = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, ior_one) == 0u);
-            visual.m_ior = 1.5f;
-            visual.m_normal_texture_index = 4u;
-            const auto flat = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, flat) == 0u);
-            visual.m_normal_texture_index = 5u;
-            visual.m_refraction_depth_m = 0.0f;
-            const auto zero_depth = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, zero_depth) == 0u);
-            visual.m_refraction_depth_m = 0.5f;
-            const auto refracted = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, refracted) > 100u);
-            visual.m_surface_flags = kGridSurfaceOpticalBlend | kGridSurfaceTextureRepeat;
-            visual.m_ior = 1.0f;
-            const auto repeat_one = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, repeat_one) == 0u);
-            visual.m_ior = 1.5f;
-            const auto repeat_refracted = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(repeat_one, repeat_refracted) > 100u);
-
-            visual.m_surface_flags = 0u;
-            const auto opaque = capture(opticalGridFixture_(visual, 1u));
-            visual.m_ior = 1.0f;
-            const auto opaque_one = capture(opticalGridFixture_(visual, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(opaque, opaque_one) == 0u);
-            auto relief = visual;
-            relief.m_normal_texture_index = 4u;
-            const auto flat_relief = capture(opticalGridFixture_(relief, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(opaque_one, flat_relief) > 100u);
-            relief.m_metallic = 1.0f;
-            relief.m_roughness = 1.0f;
-            const auto rough_metal = capture(opticalGridFixture_(relief, 1u));
-            relief.m_roughness = 0.0f;
-            const auto smooth_metal = capture(opticalGridFixture_(relief, 1u));
-            PPR_TEST_ASSERT(changedOpticalPixels_(rough_metal, smooth_metal) > 100u);
-            relief.m_emissive_rgb[0] = 1.0f;
-            relief.m_emissive_strength = 1.0f;
-            const auto emitting = capture(opticalGridFixture_(relief, 1u));
-            PPR_TEST_ASSERT(gateTexel_(emitting, 63u, 63u)[0] > gateTexel_(smooth_metal, 63u, 63u)[0] + 20u);
-            visual.m_surface_flags = 1u;
-            visual.m_opacity = 0.25f;
-            const auto quarter = capture(opticalGridFixture_(visual, 1u));
-            for (const u32 x: {17u, 53u, 91u}) {
-                const auto b = gateTexel_(background, x, 63u);
-                const auto m = gateTexel_(opaque_one, x, 63u);
-                const auto q = gateTexel_(quarter, x, 63u);
-                for (u32 channel = 0u; channel < 3u; ++channel) {
-                    const float expected = 0.25f * m[channel] + 0.75f * b[channel];
-                    PPR_TEST_ASSERT(std::abs(float(q[channel]) - expected) <= 2.0f);
-                }
-            }
-
-            const auto complete_stage = opticalGridFixture_(visual, 0u, true);
-            const auto complete = capture(complete_stage);
-            const auto pan = drawOpticalGrid_(grid, 59.0f, 57.0f);
-            const auto zoom = drawOpticalGrid_(grid, 56.0f, 56.0f, 8.0f);
-            PPR_TEST_ASSERT(changedOpticalPixels_(complete, pan) > 100u);
-            PPR_TEST_ASSERT(changedOpticalPixels_(complete, zoom) > 100u);
-            for (u32 layer = 0u; layer < 4u; ++layer) {
-                auto masked = complete_stage;
-                masked.m_background_layers[layer].m_color_rgba = layer == 0u ? 0x000000ffu : 0xffffff00u;
-                PPR_TEST_ASSERT(changedOpticalPixels_(complete, capture(masked)) > 100u);
-            }
-
-            // The centre row lies above the left surface and below the right
-            // surface. Both samples use the real reflected height buffer.
-            auto surface_stage = complete_stage;
-            auto surface = std::make_shared<GridSurfaceProfile>();
-            for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
-                surface->m_heights_m[column / 4u][column % 4u] = column < 64u ? 63.0f : 65.0f;
-            }
-            surface_stage.m_surface_profile = std::move(surface);
-            const auto surfaced = capture(surface_stage);
-            const auto sky = gateTexel_(surfaced, 32u, 64u);
-            PPR_TEST_ASSERT(sky != gateTexel_(complete, 32u, 64u));
-            PPR_TEST_ASSERT(sky[2] > sky[1] and sky[1] > sky[0]);
-            PPR_TEST_ASSERT(gateTexel_(surfaced, 96u, 64u) == gateTexel_(complete, 96u, 64u));
-            surface_stage.m_terrain_visuals[0u].m_opacity = 0.0f;
-            surface_stage.m_terrain_visuals[0u].m_ior = 1.0f;
-            surface_stage.m_uploads[0u].m_cell_materials.assign(GridPass::kCellsPerChunk, 1u);
-            PPR_TEST_ASSERT(changedOpticalPixels_(surfaced, capture(surface_stage)) == 0u);
-        };
 
         [[nodiscard]] image::ImageAsset gridPattern_(const bool normal, const bool constant = false) {
             constexpr u32 size = 128u;
@@ -3939,64 +3833,89 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             }
         };
 
-        PPR_UNIT_TEST (grid_translucent_solid_borders_and_internal_boundaries) {
+        PPR_UNIT_TEST (grid_categorical_resolved_boundary_and_translucency) {
             const auto rhi = SharedGpu::rhiService();
             const auto shader = SharedGpu::shaderService();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid());
+            const auto renderer = SharedGpu::renderer();
+            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
             GridPass grid;
             PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
             PPR_DEFER {
+                PPR_TEST_ASSERT(not renderer->waitOnHost());
                 PPR_TEST_ASSERT(not grid.shutdown());
             };
-            GridTerrainVisual glass{};
-            glass.m_material_id = 1u;
-            glass.m_color_rgba = 0xffffffffu;
-            glass.m_surface_flags = 1u;
-            auto stage = opticalGridFixture_(glass, 1u);
-            stage.m_has_catalog = true;
-            stage.m_has_background = false;
-            auto solid = glass;
-            solid.m_material_id = 2u;
-            solid.m_surface_flags = 0u;
-            stage.m_terrain_visuals.push_back(solid);
-            for (u32 y = 0u; y < 128u; ++y) {
-                for (u32 x = 64u; x < 128u; ++x) {
-                    stage.m_uploads[0].m_cell_materials[y * 128u + x] = 2u;
-                }
-            }
-            std::ignore = captureOpticalGrid_(grid, stage, 1u);
-            const auto opaque = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
-            saveGridQa_(opaque, "solid-solid-opaque-border");
-            stage.m_terrain_visuals[0].m_color_rgba = 0xffffff00u;
-            std::ignore = captureOpticalGrid_(grid, stage, 2u);
-            const auto clear = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
-            saveGridQa_(clear, "solid-solid-zero-opacity-border-no-backdrop");
-            stage.m_terrain_visuals[0].m_color_rgba = 0xffffff80u;
-            std::ignore = captureOpticalGrid_(grid, stage, 3u);
-            const auto translucent = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
-            saveGridQa_(translucent, "solid-solid-half-opacity-border-no-backdrop");
-            u32 dark_border = 0u;
-            for (u32 y = 24u; y < 232u; ++y) {
-                for (u32 x = 108u; x < 148u; ++x) {
-                    const auto reference = gateTexel_(opaque, x, y);
-                    if (reference[0] >= 5u and reference[0] <= 8u) {
-                        const auto a = gateTexel_(clear, x, y);
-                        const auto b = gateTexel_(translucent, x, y);
-                        PPR_TEST_ASSERT(std::abs(int(a[0]) - int(reference[0])) <= 2);
-                        PPR_TEST_ASSERT(std::abs(int(b[0]) - int(reference[0])) <= 2);
-                        ++dark_border;
-                    }
-                }
-            }
-            PPR_TEST_ASSERT(dark_border > 100u);
-            // The optical interior remains transparent; contour opacity does
-            // not turn the entire zero-opacity solid into opaque dark fill.
-            PPR_TEST_ASSERT(texelDist_(gateTexel_(opaque, 32u, 128u), gateTexel_(clear, 32u, 128u)) > 100u);
 
-            stage.m_has_background = true;
-            std::ignore = captureOpticalGrid_(grid, stage, 4u);
-            const auto internal = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f, 256u);
-            saveGridQa_(internal, "solid-glass-internal-border");
+            GridTerrainVisual opaque{};
+            opaque.m_material_id = 1u;
+            opaque.m_color_rgba = 0xffffffffu;
+            opaque.m_ior = 1.5f;
+            opaque.m_roughness = 0.5f;
+            opaque.m_opacity = 1.0f;
+            GridTerrainVisual glass = opaque;
+            glass.m_material_id = 2u;
+            glass.m_surface_flags = kGridSurfaceOpticalBlend;
+            glass.m_opacity = 0.5f;
+
+            auto stage = opticalGridFixture_(opaque, 1u);
+            stage.m_has_background = false;
+            stage.m_world_edge = WorldLightingPass::kWorldEdge;
+            stage.m_terrain_visuals = {opaque, glass};
+
+            Array<u32> resolved(static_cast<std::size_t>(WorldLightingPass::kCellCount), 0u);
+            for (u32 y = 60u; y < 68u; ++y) {
+                for (u32 x = 60u; x < 68u; ++x) {
+                    resolved[y * WorldLightingPass::kWorldEdge + x] = 1u;
+                }
+            }
+
+            for (u32 y = 63u; y < 66u; ++y) {
+                for (u32 x = 63u; x < 66u; ++x) {
+                    resolved[y * WorldLightingPass::kWorldEdge + x] = 2u;
+                }
+            }
+
+            for (u32 y = 60u; y < 64u; ++y) {
+                for (u32 x = 60u; x < 64u; ++x) {
+                    resolved[y * WorldLightingPass::kWorldEdge + x] = 2u;
+                }
+            }
+
+            Array<lighting::PackedCH> fine(lighting::kFineCHRecordCount);
+            lighting::CH uniform{};
+            uniform.m_coefficients[0] = float3{0.4f, 0.5f, 0.6f} / 0.39894228040143267794f;
+            const auto packed = lighting::packCH(uniform);
+            PPR_TEST_ASSERT(packed.has_value());
+            for (auto &record: fine)
+                record = *packed;
+
+            prepareOpticalGrid_(grid, stage, 1u);
+            const auto make_buffer = [&](const u64 stride, const u32 count, const void *data) {
+                rhi::BufferDesc desc{};
+                desc.size = std::max<u64>(1u, static_cast<u64>(count) * stride);
+                desc.elementSize = safe_narrowing(stride);
+                desc.memoryType = rhi::MemoryType::DeviceLocal;
+                desc.usage = rhi::BufferUsage::ShaderResource;
+                desc.defaultState = rhi::ResourceState::ShaderResource;
+                rhi::ComPtr<rhi::IBuffer> result;
+                PPR_TEST_ASSERT(not make_error_code(rhi->getDevice().createBuffer(desc, data, result.writeRef())));
+                return result;
+            };
+            PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(
+                make_buffer(sizeof(u32), safe_narrowing(resolved.size()), resolved.data()),
+                make_buffer(sizeof(lighting::PackedCH), safe_narrowing(fine.size()), fine.data())));
+
+            const auto pixels = drawOpticalGrid_(grid, 56.0f, 56.0f, 16.0f, 128u);
+            const auto clear = gateTexel_(pixels, 0u, 0u);
+            const auto opaque_pixel = gateTexel_(pixels, 32u, 32u);
+            const auto glass_pixel = gateTexel_(pixels, 64u, 64u);
+            std::println(
+                "CATEGORICAL_BOUNDARY clear={},{},{} opaque={},{},{} glass={},{},{} palette={} desc={}", clear[0],
+                clear[1], clear[2], opaque_pixel[0], opaque_pixel[1], opaque_pixel[2], glass_pixel[0], glass_pixel[1],
+                glass_pixel[2], grid.terrainPaletteForTest() != nullptr, grid.textureDescriptorsForTest() != nullptr);
+            PPR_TEST_ASSERT(texelDist_(opaque_pixel, clear) > 10u);
+            PPR_TEST_ASSERT(texelDist_(glass_pixel, opaque_pixel) > 10u);
+            PPR_TEST_ASSERT(texelDist_(glass_pixel, clear) > 2u);
+            saveGridQa_(pixels, "categorical-resolved-boundary");
         };
 
         PPR_UNIT_TEST (grid_particle_support_and_resource_repeat) {
@@ -4596,94 +4515,6 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
         // element-textured solids and reconstructed liquid surfaces
         // ------------------------------------------------------------------
 
-        PPR_UNIT_TEST (grid_solid_particles_share_catalog_textures_and_metric_uvs) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            // Both controls consume the same staged world content, so one pass
-            // carries the terrain-only capture and then the particle capture.
-            // The retained picture owner also avoids re-initializing and
-            // re-creating pipelines for each pixelized capture.
-            GridPass grid;
-            PostProcessPass picture;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_TEST_ASSERT(not picture.initialize(*shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not picture.shutdown());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-
-            GridTerrainVisual visual{};
-            visual.m_material_id = 1u;
-            visual.m_color_rgba = 0xffffffffu;
-            visual.m_texture_index = 0u;
-            visual.m_texture_period_m = 1.0f;
-            visual.m_normal_texture_index = 5u;
-            visual.m_metallic = 0.2f;
-            visual.m_roughness = 0.4f;
-            visual.m_surface_flags = kGridSurfaceParticleSolid | kGridSurfaceTextureRepeat;
-            auto terrain = opticalGridFixture_(visual, 1u);
-            terrain.m_has_background = false;
-            terrain.m_cell_size_m = 1.0f / 3.0f;
-            auto second = visual;
-            second.m_material_id = 2u;
-            second.m_texture_index = 4u;
-            terrain.m_terrain_visuals.push_back(second);
-            auto particles = terrain;
-            std::ranges::fill(particles.m_uploads.front().m_cell_materials, 0u);
-
-            // One fine cell's physical volume at the selected 3-cells/metre
-            // scale is 1/9 m^3. The metre-wide view resolves its disk interior.
-            GatePixels first_element{};
-            for (const u32 material: {1u, 2u}) {
-                std::ranges::fill(terrain.m_uploads.front().m_cell_materials, static_cast<u16>(material));
-                PPR_TEST_ASSERT(not grid.applyStagedFrame(terrain));
-                PostProcessSettings post{};
-                post.m_auto_exposure = false;
-                const auto reference_native = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 128u);
-                const auto reference_post = drawOpticalGrid_(
-                    grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, &post, 1u, &picture);
-
-                auto records = std::make_shared<Array<GridParticleInstance>>();
-                records->push_back({1u, 21.5, 21.5, 1.0 / 9.0, 1.0, 300.0, material});
-                particles.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
-                PPR_TEST_ASSERT(not grid.applyStagedFrame(particles));
-                const auto disk_native = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 128u);
-                const auto disk_post = drawOpticalGrid_(
-                    grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, &post, 1u, &picture);
-
-                // Interior samples have full disk coverage. The corresponding
-                // terrain pixels consume the same element, physical UVs,
-                // normal texture and local material response.
-                const auto check_disk = [](const GatePixels &reference, const GatePixels &disk) {
-                    for (const u32 y: {60u, 64u, 68u}) {
-                        for (const u32 x: {60u, 64u, 68u}) {
-                            PPR_TEST_ASSERT(texelDist_(gateTexel_(disk, x, y), gateTexel_(reference, x, y)) <= 4u);
-                        }
-                    }
-                };
-                check_disk(reference_native, disk_native);
-                check_disk(reference_post, disk_post);
-
-                saveGridQa_(
-                    disk_native, material == 1u ? "particle-solid-textured-element-1-native"
-                                                : "particle-solid-textured-element-2-native");
-                const auto moved = drawOpticalGrid_(grid, 21.015625f, 21.0f, 1.0f);
-                for (const u32 x: {60u, 64u, 68u}) {
-                    PPR_TEST_ASSERT(texelDist_(gateTexel_(moved, x - 2u, 64u), gateTexel_(disk_native, x, 64u)) <= 4u);
-                }
-
-                if (material == 1u) {
-                    PPR_TEST_ASSERT(
-                        texelDist_(gateTexel_(disk_native, 48u, 64u), gateTexel_(disk_native, 80u, 64u)) > 15u);
-                    first_element = disk_native;
-                } else {
-                    PPR_TEST_ASSERT(changedOpticalPixels_(first_element, disk_native) > 0u);
-                }
-            }
-        };
 
         PPR_UNIT_TEST (grid_surface_inventory_transitions_preserve_gas_visibility_and_single_blending) {
             const auto rhi = SharedGpu::rhiService();
@@ -4752,474 +4583,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(texelDist_(gateTexel_(returned, 102u, 64u), gas_pixel) <= 2u);
         };
 
-        PPR_UNIT_TEST (grid_solid_envelope_closes_nominal_interstices_without_bridging_sparse_grains) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            GridTerrainVisual blue{};
-            blue.m_material_id = 1u;
-            blue.m_color_rgba = 0x0000ffffu;
-            blue.m_ior = 1.0f;
-            blue.m_surface_flags = kGridSurfaceParticleSolid;
-            auto stage = opticalGridFixture_(blue, 0u);
-            stage.m_has_background = false;
-            stage.m_cell_size_m = 1.0f / 3.0f;
-            auto red = blue;
-            red.m_material_id = 2u;
-            red.m_color_rgba = 0xff0000ffu;
-            stage.m_terrain_visuals.push_back(red);
-            auto rows = std::make_shared<Array<GridParticleInstance>>();
-            for (u32 y = 0u; y < 6u; ++y) {
-                for (u32 x = 0u; x < 6u; ++x) {
-                    rows->push_back(
-                        {u64(y * 6u + x + 1u), 21.0 + (double(x) + 0.5) / 3.0, 21.0 + (double(y) + 0.5) / 3.0,
-                            1.0 / 9.0, 1.0, 300.0, x < 3u ? 1u : 2u});
-                }
-            }
 
-            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
-            rows->push_back({37u, 20.5, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
-            rows->push_back({38u, 23.0, 20.5, 1.0 / 9.0, 1.0, 300.0, 1u});
-            rows->push_back({39u, 23.0 + 4.5 * radius, 20.5, 1.0 / 9.0, 1.0, 300.0, 2u});
-            rows->push_back({40u, 20.4, 23.4, 1.0 / 9.0, 1.0, 300.0, 1u});
-            rows->push_back({41u, 20.9, 23.9, 1.0 / 36.0, 0.25, 300.0, 2u});
-            const std::array<double, 4u> angles{0.0, std::numbers::pi / 8.0, std::numbers::pi / 4.0, std::atan(0.85)};
-            for (u32 direction = 0u; direction < angles.size(); ++direction) {
-                const double angle = angles[direction];
-                const double y = 20.5 + double(direction) * 1.5;
-                rows->push_back({u64(42u + direction * 2u), 24.8, y, 1.0 / 9.0, 1.0, 300.0, 1u});
-                rows->push_back(
-                    {u64(43u + direction * 2u), 24.8 + 3.5 * radius * std::cos(angle),
-                        y + 3.5 * radius * std::sin(angle), 1.0 / 9.0, 1.0, 300.0, 1u});
-            }
 
-            stage.m_particle_batches = {GridParticleBatch{0u, std::move(rows)}};
-            for (const u32 policy: {0u, 2u, 3u}) {
-                GridPass grid;
-                PostProcessPass picture;
-                PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-                PPR_TEST_ASSERT(not picture.initialize(*shader, std::filesystem::current_path()));
-                PPR_DEFER {
-                    PPR_TEST_ASSERT(not renderer->waitOnHost());
-                    PPR_TEST_ASSERT(not picture.shutdown());
-                    PPR_TEST_ASSERT(not grid.shutdown());
-                };
-                PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-                const bool pixelized = policy == 2u;
-                const float roll = policy == 3u ? std::numbers::pi_v<float> * 0.25f : 0.0f;
-                PostProcessSettings settings{};
-                settings.m_auto_exposure = false;
-                const GatePixels pixels = drawOpticalGrid_(
-                    grid, 20.0f, 20.0f, 6.0f, 384u, nullptr, nullptr, &settings, pixelized ? 4u : 1u, &picture, false,
-                    0u, 0u, true, roll);
 
-                saveGridQa_(pixels, std::format("particle-solid-envelope-policy-{}", policy));
-                const auto sample = [&](const double x, const double y) {
-                    const double dx = x - 23.0;
-                    const double dy = y - 23.0;
-                    const double right = dx * std::cos(double(roll)) + dy * std::sin(double(roll));
-                    const double up = -dx * std::sin(double(roll)) + dy * std::cos(double(roll));
-                    return gateTexel_(pixels, u32((right + 3.0) * 64.0), u32((3.0 - up) * 64.0));
-                };
-                u32 holes = 0u;
-                for (u32 y = 1u; y < 6u; ++y) {
-                    for (u32 x = 1u; x < 6u; ++x) {
-                        const auto pixel = sample(21.0 + double(x) / 3.0, 21.0 + double(y) / 3.0);
-                        // A filtered red/blue interface can split full coverage
-                        // between channels; their sum preserves opaque energy.
-                        holes += u32(pixel[0]) + u32(pixel[2]) < 200u ? 1u : 0u;
-                    }
-                }
-
-                std::println("SOLID-ENVELOPE policy={} packed_samples=25 holes={}", policy, holes);
-                PPR_TEST_ASSERT(holes == 0u);
-                const auto left = sample(21.8, 22.0);
-                const auto right = sample(22.2, 22.0);
-                PPR_TEST_ASSERT(left[2] > left[0] + 80u and right[0] > right[2] + 80u);
-                // Sparse grains and the small/large diagonal pair retain real
-                // empty space. These samples are separated from dense material.
-                if (roll == 0.0f) {
-                    const auto clear = sample(25.8, 25.8);
-                    PPR_TEST_ASSERT(sample(20.5, 20.5)[2] > 150u);
-                    PPR_TEST_ASSERT(texelDist_(sample(23.0 + 2.25 * radius, 20.5), clear) <= 2u);
-                    const auto diagonal_gap = sample(20.7, 23.7);
-                    PPR_TEST_ASSERT(texelDist_(diagonal_gap, clear) <= 2u);
-                    for (u32 direction = 0u; direction < angles.size(); ++direction) {
-                        const double angle = angles[direction];
-                        const auto gap = sample(
-                            24.8 + 1.75 * radius * std::cos(angle),
-                            20.5 + double(direction) * 1.5 + 1.75 * radius * std::sin(angle));
-                        std::println(
-                            "SOLID-SPARSE-GAP policy={} separation_r=3.5 direction_degrees={} red={} blue={} clear_delta={}",
-                            policy, angle * 180.0 / std::numbers::pi, u32(gap[0]), u32(gap[2]), texelDist_(gap, clear));
-                        PPR_TEST_ASSERT(texelDist_(gap, clear) <= 2u);
-                    }
-                }
-            }
-        };
-
-        PPR_UNIT_TEST (grid_liquid_surface_connects_and_preserves_element_boundaries) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            GridPass grid;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-
-            GridTerrainVisual blue{};
-            blue.m_material_id = 1u;
-            blue.m_color_rgba = 0x0000ffffu;
-            blue.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
-            auto stage = opticalGridFixture_(blue, 0u);
-            stage.m_has_background = false;
-            stage.m_cell_size_m = 1.0f / 3.0f;
-            auto red = blue;
-            red.m_material_id = 2u;
-            red.m_color_rgba = 0xff0000ffu;
-            stage.m_terrain_visuals.push_back(red);
-            GridTerrainVisual wall{};
-            wall.m_material_id = 3u;
-            wall.m_color_rgba = 0x909090ffu;
-            wall.m_surface_flags = kGridSurfaceParticleSolid;
-            stage.m_terrain_visuals.push_back(wall);
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-            PostProcessSettings liquid_post{};
-            liquid_post.m_auto_exposure = false;
-            const auto background = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            const auto post_background = drawOpticalGrid_(
-                grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, &liquid_post, 4u);
-
-            const double radius = std::sqrt((1.0 / 9.0) / std::numbers::pi);
-            auto records = std::make_shared<Array<GridParticleInstance>>();
-            records->push_back({1u, 21.5 - 1.1 * radius, 21.5, 1.0 / 9.0, 1.0, 300.0, 1u});
-            records->push_back({2u, 21.5 + 1.1 * radius, 21.5, 1.0 / 9.0, 1.0, 300.0, 1u});
-            stage.m_particle_batches = {GridParticleBatch{0u, records}};
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto connected = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            saveGridQa_(connected, "particle-liquid-connected-native");
-
-            // The midpoint lies outside both physical disks. A visible neck
-            // therefore proves reconstruction rather than independent sprites.
-            for (const u32 x: {63u, 64u, 65u}) {
-                PPR_TEST_ASSERT(gateTexel_(connected, x, 64u)[2] > gateTexel_(background, x, 64u)[2] + 30u);
-            }
-            PPR_TEST_ASSERT(gateTexel_(connected, 64u, 28u) == gateTexel_(background, 64u, 28u));
-            const auto pixelized = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 128u, nullptr, nullptr, &liquid_post, 4u);
-            saveGridQa_(pixelized, "particle-liquid-connected-pixelized");
-
-            // The pixelized picture may darken blue. Compare the same pixel
-            // against the empty scene under the identical post policy.
-            PPR_TEST_ASSERT(texelDist_(gateTexel_(pixelized, 64u, 64u), gateTexel_(post_background, 64u, 64u)) > 20u);
-
-            auto distinct = std::make_shared<Array<GridParticleInstance>>(*records);
-            (*distinct)[0u].m_position_x_m = 21.5 - 0.9 * radius;
-            (*distinct)[1u].m_position_x_m = 21.5 + 0.9 * radius;
-            (*distinct)[1u].m_material_id = 2u;
-            stage.m_particle_batches.front().m_particles = distinct;
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto separated = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            const auto left = gateTexel_(separated, 42u, 64u);
-            const auto right = gateTexel_(separated, 86u, 64u);
-            PPR_TEST_ASSERT(left[2] > left[0] + 40u and right[0] > right[2] + 40u);
-
-            // These samples lie inside both physical disks at their interface.
-            // Foreign-material filtering must not open a background-coloured slit.
-            for (const u32 x: {62u, 63u, 64u, 65u}) {
-                PPR_TEST_ASSERT(texelDist_(gateTexel_(separated, x, 64u), gateTexel_(background, x, 64u)) > 30u);
-            }
-
-            saveGridQa_(separated, "particle-liquid-elements-native");
-
-            auto solid_records = std::make_shared<Array<GridParticleInstance>>();
-            solid_records->push_back({3u, 21.5, 21.5, 1.0 / 9.0, 1.0, 300.0, 3u});
-            stage.m_particle_batches.front().m_particles = solid_records;
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto solid_only = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            auto mixed = std::make_shared<Array<GridParticleInstance>>(*distinct);
-            mixed->push_back(solid_records->front());
-            stage.m_particle_batches.front().m_particles = std::move(mixed);
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            // A mobile opaque solid occupies the same layer as terrain. Liquid
-            // reconstruction beneath it must not paint over its textured face.
-            const auto mobile_occluded = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            PPR_TEST_ASSERT(gateTexel_(mobile_occluded, 64u, 64u) == gateTexel_(solid_only, 64u, 64u));
-            saveGridQa_(mobile_occluded, "particle-liquid-mobile-solid-occlusion");
-
-            stage.m_particle_batches.front().m_particles = distinct;
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            for (const u32 edge: {64u, 128u}) {
-                for (u32 frame = 0u; frame < 3u; ++frame) {
-                    drawOpticalGridOnly_(grid, 21.0f, 21.0f, 1.0f, edge);
-                }
-            }
-
-            stage.m_uploads.front().m_cell_materials[64u * 128u + 64u] = 3u;
-            stage.m_particle_batches.front().m_particles = std::make_shared<const Array<GridParticleInstance>>();
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto terrain = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-
-            stage.m_particle_batches.front().m_particles = distinct;
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto occluded = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-            PPR_TEST_ASSERT(gateTexel_(occluded, 64u, 64u) == gateTexel_(terrain, 64u, 64u));
-
-            stage.m_particle_batches.front().m_particles = std::make_shared<const Array<GridParticleInstance>>();
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-            for (u32 frame = 0u; frame < 3u; ++frame) {
-                const auto empty = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f);
-                PPR_TEST_ASSERT(changedOpticalPixels_(terrain, empty) == 0u);
-            }
-
-            stage.m_uploads.front().m_cell_materials[64u * 128u + 64u] = 0u;
-            auto dense = std::make_shared<Array<GridParticleInstance>>();
-            dense->reserve(70000u);
-            for (u64 id = 1u; id <= 70000u; ++id) {
-                // The centre aligns with a half-resolution texel centre in the
-                // 64-pixel target, making every kernel contribute its full 1.
-                dense->push_back({id, 21.515625, 21.484375, 1.0 / 9.0, 1.0, 300.0, 1u});
-            }
-
-            stage.m_particle_batches.front().m_particles = std::move(dense);
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto dense_pixels = drawOpticalGrid_(grid, 21.0f, 21.0f, 1.0f, 64u);
-            const auto dense_centre = gateTexel_(dense_pixels, 32u, 32u);
-            // The admitted overlap exceeds FP16's finite range. Overflow must
-            // not turn the normalized blue surface into a black/NaN result.
-            PPR_TEST_ASSERT(dense_centre[2] > 150u and dense_centre[2] > dense_centre[0] + 80u);
-            saveGridQa_(dense_pixels, "particle-liquid-dense-overlap");
-        };
-
-        PPR_UNIT_TEST (grid_liquid_optics_and_viewport_appearance) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            // One pass and one program/pipeline family for all three controls:
-            // the particle capture reuses the active world, and the changed
-            // catalogs travel through the supported world-candidate
-            // replacement. The background, optical, refraction-off and
-            // roughness captures stay comparable without a second pass paying
-            // its own initialization and first-use pipeline creation.
-            GridPass grid;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-
-            // The shipped water material's authored optical appearance, against
-            // an owned patterned backdrop that exposes refracted displacement.
-            GridTerrainVisual water{};
-            water.m_material_id = 1u;
-            water.m_color_rgba = 0x3989c970u;
-            water.m_texture_period_m = 2.0f;
-            water.m_roughness = 0.12f;
-            water.m_ior = 1.333f;
-            water.m_normal_scale = 0.8f;
-            water.m_refraction_depth_m = 0.2f;
-            water.m_emissive_strength = 1.0f;
-            water.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
-            auto stage = opticalGridFixture_(water, 0u);
-            stage.m_cell_size_m = 1.0f / 3.0f;
-            for (auto &layer: stage.m_background_layers) {
-                layer.m_repeat_period_m = 2.0f;
-            }
-
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-            const auto background = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
-
-            auto records = std::make_shared<Array<GridParticleInstance>>();
-            constexpr u32 columns = 12u;
-            constexpr u32 rows = 6u;
-            records->reserve(columns * rows);
-            for (u32 y = 0u; y < rows; ++y) {
-                for (u32 x = 0u; x < columns; ++x) {
-                    records->push_back(
-                        {u64(y * columns + x + 1u), 20.4 + 0.2 * x, 20.8 + 0.2 * y, 1.0 / 9.0, 1.0, 300.0, 1u});
-                }
-            }
-
-            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            const auto optical = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
-            saveGridQa_(optical, "particle-water-optical-native");
-            saveGridQa_(optical, "particle-water-glossy-native");
-            PPR_TEST_ASSERT(changedOpticalPixels_(background, optical) > 100u);
-            PPR_TEST_ASSERT(grid.observations().m_particle_instances == columns * rows);
-
-            auto unshifted = stage;
-            // Preserve Fresnel and highlight parameters; only backdrop
-            // displacement changes in this refraction control. A changed
-            // terrain catalog is a new world bundle, so it travels through the
-            // supported candidate replacement instead of a second pass.
-            unshifted.m_terrain_visuals.front().m_refraction_depth_m = 0.0f;
-            prepareOpticalGrid_(grid, unshifted, 2u);
-
-            const auto flat = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
-            saveGridQa_(flat, "particle-water-refraction-off-native");
-            PPR_TEST_ASSERT(changedOpticalPixels_(flat, optical) > 0u);
-
-            auto rough = stage;
-            rough.m_terrain_visuals.front().m_roughness = 1.0f;
-            prepareOpticalGrid_(grid, rough, 3u);
-
-            const auto matte = drawOpticalGrid_(grid, 19.5f, 20.0f, 4.0f, 512u);
-            saveGridQa_(matte, "particle-water-roughness-1-native");
-            PPR_TEST_ASSERT(changedOpticalPixels_(matte, optical) > 0u);
-        };
-
-        PPR_UNIT_TEST (grid_liquid_nominal_density_deformation_coverage) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            GridPass grid;
-            PostProcessPass picture;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_TEST_ASSERT(not picture.initialize(*shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not picture.shutdown());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-
-            GridTerrainVisual blue{};
-            blue.m_material_id = 1u;
-            blue.m_color_rgba = 0x0000ffffu;
-            blue.m_surface_flags = kGridSurfaceParticleLiquid;
-            auto stage = opticalGridFixture_(blue, 0u);
-            stage.m_has_background = false;
-            stage.m_cell_size_m = 1.0f / 3.0f;
-
-            constexpr double spacing = 1.0 / 3.0;
-            constexpr double volume = spacing * spacing;
-            const double radius = std::sqrt(volume / std::numbers::pi);
-            constexpr double cavity_radius = 2.0;
-            constexpr double cavity_centre = 21.5;
-            constexpr double min_x = 13.5;
-            constexpr double min_y = 21.5 - 16.0 / 3.0;
-            constexpr double max_x = min_x + 48.0 / 3.0;
-            constexpr double max_y = min_y + 32.0 / 3.0;
-            const double cavity_cut_radius = cavity_radius + 3.0 * radius;
-            // The extra radius also excludes the discretized particle edge;
-            // bulk checks remain at least five radii from the cavity surface.
-            const double cavity_exclusion_radius = cavity_cut_radius + 6.0 * radius;
-            auto records = std::make_shared<Array<GridParticleInstance>>();
-            records->reserve(48u * 32u + 3u);
-            for (u32 y = 0u; y < 32u; ++y) {
-                for (u32 x = 0u; x < 48u; ++x) {
-                    // This procedural stressed counterexample is not a replay:
-                    // a frozen 2x2 block expands by only 0.25 spacing per axis.
-                    const double px = min_x + (double(x) + 0.5) * spacing + ((x & 1u) == 0u ? -0.25 : 0.25) * spacing;
-                    const double py = min_y + (double(y) + 0.5) * spacing + ((y & 1u) == 0u ? -0.25 : 0.25) * spacing;
-                    const double dx = px - cavity_centre;
-                    const double dy = py - cavity_centre;
-                    if (dx * dx + dy * dy < cavity_cut_radius * cavity_cut_radius) {
-                        continue;
-                    }
-
-                    records->push_back({u64(records->size() + 1u), px, py, volume, 1.0, 300.0, 1u});
-                }
-            }
-
-            // An isolated disk and a pair separated by 4.5 physical radii must
-            // retain empty space; filling bulk interstices cannot fill all gaps.
-            records->push_back({u64(records->size() + 1u), 12.5, 13.5, volume, 1.0, 300.0, 1u});
-            records->push_back({u64(records->size() + 1u), 15.5, 13.5, volume, 1.0, 300.0, 1u});
-            records->push_back({u64(records->size() + 1u), 15.5 + 4.5 * radius, 13.5, volume, 1.0, 300.0, 1u});
-            const u32 particle_count = safe_narrowing(records->size());
-            stage.m_particle_batches = {GridParticleBatch{0u, std::move(records)}};
-            PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
-
-            std::array<u32, 2u> holes{}, interior_samples{}, cavity_painted{}, cavity_samples{};
-            std::array<u32, 2u> isolated_blue{}, isolated_gap_blue{}, left_blue{}, right_blue{}, pair_gap_blue{};
-            std::array<u32, 2u> isolated_gap_delta{}, pair_gap_delta{};
-            const auto sample = [](const GatePixels &pixels, const double x, const double y) {
-                const u32 px = static_cast<u32>((x - 11.5) * 512.0 / 20.0);
-                const u32 py = static_cast<u32>((31.5 - y) * 512.0 / 20.0);
-                return gateTexel_(pixels, px, py);
-            };
-
-            {
-                const u32 mode = 0u;
-                PostProcessSettings settings{};
-                settings.m_auto_exposure = false;
-                const GatePixels pixels = drawOpticalGrid_(
-                    grid, 11.5f, 11.5f, 20.0f, 512u, nullptr, nullptr, &settings, 1u, &picture);
-
-                saveGridQa_(pixels, "particle-liquid-nominal-deformation-native");
-
-                const auto empty_color = gateTexel_(pixels, 0u, 0u);
-                for (u32 y = 0u; y < 512u; ++y) {
-                    for (u32 x = 0u; x < 512u; ++x) {
-                        const double px = 11.5 + (double(x) + 0.5) * 20.0 / 512.0;
-                        const double py = 31.5 - (double(y) + 0.5) * 20.0 / 512.0;
-                        const double dx = px - cavity_centre;
-                        const double dy = py - cavity_centre;
-                        const double distance_squared = dx * dx + dy * dy;
-                        const auto pixel = gateTexel_(pixels, x, y);
-                        if (distance_squared < 1.5 * 1.5) {
-                            ++cavity_samples[mode];
-                            cavity_painted[mode] += texelDist_(pixel, empty_color) > 2u ? 1u : 0u;
-                        }
-
-                        if (px <= min_x + 5.0 * radius or
-                            px >= max_x - 5.0 * radius or
-                            py <= min_y + 5.0 * radius or
-                            py >= max_y - 5.0 * radius or
-                            distance_squared <= cavity_exclusion_radius * cavity_exclusion_radius) {
-                            continue;
-                        }
-
-                        ++interior_samples[mode];
-                        holes[mode] += pixel[2] < 200u ? 1u : 0u;
-                    }
-                }
-
-                isolated_blue[mode] = sample(pixels, 12.5, 13.5)[2];
-                isolated_gap_blue[mode] = sample(pixels, 12.5 + 2.5 * radius, 13.5)[2];
-                isolated_gap_delta[mode] = texelDist_(sample(pixels, 12.5 + 2.5 * radius, 13.5), empty_color);
-                left_blue[mode] = sample(pixels, 15.5, 13.5)[2];
-                right_blue[mode] = sample(pixels, 15.5 + 4.5 * radius, 13.5)[2];
-                pair_gap_blue[mode] = sample(pixels, 15.5 + 2.25 * radius, 13.5)[2];
-                pair_gap_delta[mode] = texelDist_(sample(pixels, 15.5 + 2.25 * radius, 13.5), empty_color);
-
-                std::println(
-                    "LIQUID-COVERAGE fixture=frozen-outward-2x2-not-replay nominal_fill=1 spacing_m={} "
-                    "jitter_fraction=0.25 particles={} blue_threshold=200 interior_samples={} "
-                    "holes={} cavity_radius_m={} cavity_checked_radius_m=1.5 cavity_exclusion_radius_m={} "
-                    "cavity_samples={} cavity_painted={} isolated_blue={} isolated_gap_blue={} "
-                    "isolated_gap_delta={} left_blue={} right_blue={} pair_gap_blue={} pair_gap_delta={}",
-                    spacing, particle_count, interior_samples[mode], holes[mode], cavity_radius,
-                    cavity_exclusion_radius, cavity_samples[mode], cavity_painted[mode], isolated_blue[mode],
-                    isolated_gap_blue[mode], isolated_gap_delta[mode], left_blue[mode], right_blue[mode],
-                    pair_gap_blue[mode], pair_gap_delta[mode]);
-            }
-
-            // Both modes emit their complete metrics and QA before a baseline
-            // failure, so this diagnostic never hides the second observation.
-            for (u32 mode = 0u; mode < 1u; ++mode) {
-                PPR_TEST_ASSERT(interior_samples[mode] > 0u and cavity_samples[mode] > 0u);
-                PPR_TEST_ASSERT(isolated_blue[mode] >= 200u and left_blue[mode] >= 200u and right_blue[mode] >= 200u);
-                PPR_TEST_ASSERT(isolated_gap_delta[mode] <= 2u and pair_gap_delta[mode] <= 2u);
-                PPR_TEST_ASSERT(cavity_painted[mode] == 0u);
-                PPR_TEST_ASSERT(holes[mode] == 0u);
-            }
-        };
 
         [[nodiscard]] GridPass::GridStagedFrame slantedSolidInterfaceFixture_() {
             GridTerrainVisual blue{};
@@ -5518,96 +4884,8 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             }
         }
 
-        PPR_UNIT_TEST (grid_liquid_five_pixel_features_survive_large_offset_viewport) {
-            checkFivePixelParticleFeatures_(kGridSurfaceParticleLiquid);
-        };
 
-        PPR_UNIT_TEST (grid_solid_five_pixel_features_survive_large_offset_viewport) {
-            checkFivePixelParticleFeatures_(kGridSurfaceParticleSolid);
-        };
 
-        PPR_UNIT_TEST (grid_solid_slanted_material_interface_reconstructs_narrow_color_band) {
-            const auto rhi = SharedGpu::rhiService();
-            const auto shader = SharedGpu::shaderService();
-            Renderer *const renderer = SharedGpu::renderer();
-            PPR_TEST_ASSERT(rhi.isValid() and shader.isValid() and renderer != nullptr);
-            // The alpha controls below only change the staged catalog; one
-            // picture owner keeps the post pipeline family warm and a changed
-            // catalog travels through the supported world-candidate replacement.
-            GridPass grid;
-            PostProcessPass picture;
-            PPR_TEST_ASSERT(not grid.initialize(*rhi, *shader, std::filesystem::current_path()));
-            PPR_TEST_ASSERT(not picture.initialize(*shader, std::filesystem::current_path()));
-            PPR_DEFER {
-                PPR_TEST_ASSERT(not renderer->waitOnHost());
-                PPR_TEST_ASSERT(not picture.shutdown());
-                PPR_TEST_ASSERT(not grid.shutdown());
-            };
-            // The fixture's image backing is identity-compared, so the staged
-            // object is reused instead of rebuilt.
-            const auto slanted = slantedSolidInterfaceFixture_();
-            {
-                PPR_TEST_ASSERT(not grid.applyStagedFrame(slanted));
-                PostProcessSettings settings{};
-                settings.m_auto_exposure = false;
-                const GatePixels pixels = drawOpticalGrid_(
-                    grid, 20.0f, 20.0f, 6.0f, 512u, nullptr, nullptr, &settings, 1u, &picture);
-                saveGridQa_(pixels, "particle-solid-slanted-interface-native");
-                checkSlantedSolidInterfacePixels_(pixels, 0u, 0u, 512u, 512u, 20.0, 20.0, 6.0, false);
-            }
-
-            checkFivePixelParticleFeatures_(kGridSurfaceParticleSolid, EParticleFeatureFixture::slanted_interface);
-
-            u64 alpha_generation = 2u;
-            const auto capture_alpha = [&](const GridPass::GridStagedFrame &stage) {
-                prepareOpticalGrid_(grid, stage, alpha_generation);
-                ++alpha_generation;
-                return drawOpticalGrid_(grid, 20.0f, 20.0f, 6.0f, 512u);
-            };
-
-            // No authored backdrop: compare final blending over the same clear
-            // color. A fully transparent material's RGB must have no influence.
-            auto partial = slantedSolidInterfaceFixture_();
-            partial.m_has_background = false;
-            partial.m_background_layers = {};
-            for (auto &visual: partial.m_terrain_visuals) {
-                visual.m_surface_flags |= kGridSurfaceOpticalBlend;
-                visual.m_opacity = 0.6f;
-                visual.m_color_rgba = 0xff0000ffu;
-            }
-
-            partial.m_terrain_visuals[1u].m_opacity = 0.0f;
-            auto contrasting = partial;
-            contrasting.m_terrain_visuals[1u].m_color_rgba = 0x0000ffffu;
-            const auto transparent_red = capture_alpha(partial);
-            const auto transparent_blue = capture_alpha(contrasting);
-            saveGridQa_(transparent_blue, "particle-solid-slanted-interface-transparent-blue");
-            PPR_TEST_ASSERT(changedOpticalPixels_(transparent_red, transparent_blue) == 0u);
-
-            // The right interior is fully transparent, while the left retains
-            // visible fractional opacity rather than becoming opaque or empty.
-            const auto clear = gateTexel_(transparent_blue, 495u, 17u);
-            const auto invisible = gateTexel_(transparent_blue, 341u, 256u);
-            const auto visible = gateTexel_(transparent_blue, 170u, 256u);
-            PPR_TEST_ASSERT(texelDist_(invisible, clear) <= 2u);
-            PPR_TEST_ASSERT(visible[0] > clear[0] + 20u and visible[0] < 240u);
-
-            // Equal fractional appearance under two IDs must match the same
-            // physical scene under one ID, including the internal seam. This
-            // catches applying opacity twice in the reconstructed material band.
-            partial.m_terrain_visuals[1u].m_opacity = 0.6f;
-            const auto two_ids = capture_alpha(partial);
-            auto one_id = partial;
-            auto unified = std::make_shared<Array<GridParticleInstance>>(*one_id.m_particle_batches[0u].m_particles);
-            for (auto &particle: *unified) {
-                particle.m_material_id = 1u;
-            }
-
-            one_id.m_particle_batches[0u].m_particles = std::move(unified);
-            const auto uniform = capture_alpha(one_id);
-            saveGridQa_(two_ids, "particle-solid-slanted-interface-fractional-opacity");
-            PPR_TEST_ASSERT(changedOpticalPixels_(two_ids, uniform) == 0u);
-        };
 
         // ------------------------------------------------------------------
         // terrain visibility and retained world publication
@@ -6943,7 +6221,7 @@ namespace pP::tests {
             detail::Gate::background_magnification_matches_wrapped_cubic_reference,
             detail::Gate::grid_particle_support_and_resource_repeat,
             detail::Gate::grid_stochastic_world_uvs_mips_and_chunk_seams,
-            detail::Gate::grid_translucent_solid_borders_and_internal_boundaries,
+            detail::Gate::grid_categorical_resolved_boundary_and_translucency,
         });
     };
 

@@ -1233,8 +1233,6 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(queue->submit(commands)));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, make_error_code(queue->waitOnHost()));
 
-        m_brdf_lut_program = std::move(program);
-        m_brdf_lut_pipeline = std::move(pipeline);
         m_brdf_lut = std::move(texture);
         m_brdf_lut_view = std::move(view);
         m_brdf_sampler = std::move(sampler);
@@ -3282,11 +3280,6 @@ namespace pP {
         return {};
     }
 
-    void GridPass::clearLightingBuffersForTest() noexcept {
-        m_test_resolved.setNull();
-        m_test_fine_ch.setNull();
-    }
-
     void GridPass::notifyWorldLightingSubmitted(const FenceCompletionValue value) noexcept {
         if (m_world.m_lighting) {
             m_world.m_lighting->notifySubmitted(value);
@@ -3333,29 +3326,36 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_terrain_visuals"].setBinding(
                           rhi::Binding(m_world.m_terrain_palette, makeFullRange(m_world.m_terrain_palette))));
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_source_materials"].setBinding(
-                          rhi::Binding(m_world.m_source_materials, makeFullRange(m_world.m_source_materials))));
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, cursor["g_thermal_lut"].setBinding(rhi::Binding(m_thermal_lut, makeFullRange(m_thermal_lut))));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_lut"].setBinding(rhi::Binding(m_brdf_lut_view)));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_sampler"].setBinding(rhi::Binding(m_brdf_sampler)));
 
-        if (m_test_resolved and m_test_fine_ch) {
-            auto *const resolved = m_test_resolved.get();
-            auto *const fine_ch = m_test_fine_ch.get();
-            PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved, makeFullRange(resolved))));
-            PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fine_ch, makeFullRange(fine_ch))));
-        } else if (m_world.m_lighting and m_world.m_lighting->resolvedCellsForTest() != nullptr) {
+        if (m_world.m_lighting and m_world.m_lighting->hasPublishedCells()) {
+            // The world-lighting owner is the single supplier of resolved cells,
+            // fine CH, source palette and thermal table.
             PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLighting(cursor));
         } else {
-            auto *const fallback = m_lighting_fallback.get();
+            if (m_test_resolved and m_test_fine_ch) {
+                auto *const resolved = m_test_resolved.get();
+                auto *const fine_ch = m_test_fine_ch.get();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved, makeFullRange(resolved))));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fine_ch, makeFullRange(fine_ch))));
+            } else {
+                auto *const fallback = m_lighting_fallback.get();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+            }
+
+            // GridPass's admitted world owns the fallback source/thermal pair.
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+                GridPass, cursor["g_source_materials"].setBinding(
+                              rhi::Binding(m_world.m_source_materials, makeFullRange(m_world.m_source_materials))));
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+                GridPass,
+                cursor["g_thermal_lut"].setBinding(rhi::Binding(m_thermal_lut, makeFullRange(m_thermal_lut))));
         }
 
         rhi::IBuffer *const descriptors = m_world.m_texture_inventory->m_cache->descriptorBuffer();
@@ -3626,16 +3626,16 @@ namespace pP {
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_resident_boundary_material_id;
         frame.m_cell_size_m = m_world.m_resident_cell_size_m;
-        frame.m_camera_world_x = m_camera_view.m_origin.x + m_camera_view.m_forward.x;
-        frame.m_camera_world_y = m_camera_view.m_origin.y + m_camera_view.m_forward.y;
-        frame.m_camera_world_z = m_camera_view.m_origin.z + m_camera_view.m_forward.z;
-        frame.m_surface_to_camera_x = m_camera_view.m_forward.x;
-        frame.m_surface_to_camera_y = m_camera_view.m_forward.y;
-        frame.m_surface_to_camera_z = m_camera_view.m_forward.z;
+        frame.m_camera_world_x = m_camera_view.m_origin.x;
+        frame.m_camera_world_y = m_camera_view.m_origin.y;
+        frame.m_camera_world_z = m_camera_view.m_origin.z;
+        frame.m_surface_to_camera_x = -m_camera_view.m_forward.x;
+        frame.m_surface_to_camera_y = -m_camera_view.m_forward.y;
+        frame.m_surface_to_camera_z = -m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
         frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
                                              (m_world.m_lighting and
-                                                 m_world.m_lighting->resolvedCellsForTest() != nullptr and
+                                                 m_world.m_lighting->hasPublishedCells() and
                                                  m_world.m_world_edge == WorldLightingPass::kWorldEdge)
                                          ? 1u
                                          : 0u;
@@ -3692,16 +3692,16 @@ namespace pP {
                                     ? 0u
                                     : static_cast<u32>(m_world.m_diagnostic_mode) << 2u;
         frame.m_boundary_material_id = m_world.m_boundary_material_id;
-        frame.m_camera_world_x = m_camera_view.m_origin.x + m_camera_view.m_forward.x;
-        frame.m_camera_world_y = m_camera_view.m_origin.y + m_camera_view.m_forward.y;
-        frame.m_camera_world_z = m_camera_view.m_origin.z + m_camera_view.m_forward.z;
-        frame.m_surface_to_camera_x = m_camera_view.m_forward.x;
-        frame.m_surface_to_camera_y = m_camera_view.m_forward.y;
-        frame.m_surface_to_camera_z = m_camera_view.m_forward.z;
+        frame.m_camera_world_x = m_camera_view.m_origin.x;
+        frame.m_camera_world_y = m_camera_view.m_origin.y;
+        frame.m_camera_world_z = m_camera_view.m_origin.z;
+        frame.m_surface_to_camera_x = -m_camera_view.m_forward.x;
+        frame.m_surface_to_camera_y = -m_camera_view.m_forward.y;
+        frame.m_surface_to_camera_z = -m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
         frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
                                              (m_world.m_lighting and
-                                                 m_world.m_lighting->resolvedCellsForTest() != nullptr and
+                                                 m_world.m_lighting->hasPublishedCells() and
                                                  m_world.m_world_edge == WorldLightingPass::kWorldEdge)
                                          ? 1u
                                          : 0u;
@@ -4339,8 +4339,6 @@ namespace pP {
         m_particle_mask_view.setNull();
         m_particle_mask.setNull();
         m_thermal_lut.setNull();
-        m_brdf_lut_program.setNull();
-        m_brdf_lut_pipeline.setNull();
         m_brdf_lut_view.setNull();
         m_brdf_lut.setNull();
         m_brdf_sampler.setNull();

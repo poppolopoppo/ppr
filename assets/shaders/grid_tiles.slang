@@ -661,27 +661,23 @@ CH sampleFineCH(float2 world_cell_position) {
     return result;
 }
 
-// V points from the world-plane sample to the camera. An orthographic camera
-// supplies its constant direction; a perspective camera uses the sample-to-eye
-// vector. The CH basis and the mapped normal both stay in world XY.
+// V points from the world-plane sample to the camera eye. The shared helper
+// applies the same formula the reviewed material probes exercise.
 float3 surfaceToCamera(float2 fine_position) {
+    float3 camera_origin = float3(
+        g_grid_frame.m_camera_world_x, g_grid_frame.m_camera_world_y, g_grid_frame.m_camera_world_z);
     float3 camera_forward = float3(
         g_grid_frame.m_surface_to_camera_x, g_grid_frame.m_surface_to_camera_y,
         g_grid_frame.m_surface_to_camera_z);
-    if (g_grid_frame.m_camera_ortho != 0u) {
-        return normalize(camera_forward);
-    }
-
-    float3 sample_world = float3(fine_position * g_grid_frame.m_cell_size_m, 0.0);
-    float3 camera = float3(
-        g_grid_frame.m_camera_world_x, g_grid_frame.m_camera_world_y, g_grid_frame.m_camera_world_z);
-    return normalize(camera - sample_world);
+    return planeSurfaceToCamera(
+        fine_position, g_grid_frame.m_cell_size_m, camera_origin, camera_forward,
+        g_grid_frame.m_camera_ortho != 0u);
 }
 
-float3 visibleBaseColor(GridVisual visual, TexturePatches patches, bool repeat_texture,
+// Raw weighted texture albedo before tint and filtered-mean normalization.
+float4 sampleVisibleAlbedo(GridVisual visual, TexturePatches patches, bool repeat_texture,
     float2 uv_gradient_x, float2 uv_gradient_y,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
-    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float4 a0 = nonuniform(textures[visual.m_texture_index]).SampleGrad(
         sampler, patches.uv0, uv_gradient_x, uv_gradient_y);
     float4 a1 = float4(0.0), a2 = float4(0.0);
@@ -692,15 +688,55 @@ float3 visibleBaseColor(GridVisual visual, TexturePatches patches, bool repeat_t
             sampler, patches.uv2, uv_gradient_x, uv_gradient_y);
     }
 
-    float4 albedo = a0 * patches.weights.x + a1 * patches.weights.y + a2 * patches.weights.z;
+    return a0 * patches.weights.x + a1 * patches.weights.y + a2 * patches.weights.z;
+}
+
+// Linear tint times the visible albedo. The filtered-mean variance normalization
+// is the approved approximation; alpha keeps ordinary barycentric blending.
+float4 normalizeVisibleAlbedo(
+    GridVisual visual, float4 albedo, float3 weights, bool repeat_texture) {
+    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
-    // Heitz/Neyret-style variance normalization in linear RGB, using the admitted
-    // filtered mean. This is an approximation, not Gaussian histogram transport.
     if (!repeat_texture) {
-        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(patches.weights, patches.weights)));
+        albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
     }
 
-    return float3(tint.rgb * albedo.rgb);
+    return float4(tint.rgb * albedo.rgb, albedo.a);
+}
+
+float4 visibleBaseColor(GridVisual visual, TexturePatches patches, bool repeat_texture,
+    float2 uv_gradient_x, float2 uv_gradient_y,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    float4 albedo = sampleVisibleAlbedo(
+        visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
+    return normalizeVisibleAlbedo(visual, albedo, patches.weights, repeat_texture);
+}
+
+// Authored normal-map decode, orientation and scale in the same world XY basis
+// as the CH field.
+float3 sampleVisibleNormal(GridVisual visual, TexturePatches patches, bool repeat_texture,
+    float2 uv_gradient_x, float2 uv_gradient_y,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    float3 normal = float3(0.0, 0.0, 1.0);
+    if (visual.m_normal_texture_index == 0xffffffffu) return normal;
+
+    float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+        sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
+    float3 n1 = float3(0.0), n2 = float3(0.0);
+    if (!repeat_texture) {
+        n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+            sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
+        n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
+            sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
+    }
+
+    float3 decoded = n0 * patches.weights.x + n1 * patches.weights.y + n2 * patches.weights.z;
+    decoded.xy *= visual.m_normal_scale;
+    if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
+        normal = normalize(decoded);
+    }
+
+    return normal;
 }
 
 // Occupancy is opaque classification, not brightness or a nonzero material ID:
@@ -737,38 +773,21 @@ float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_posi
 
     // Derivatives belong to the continuous world UV, before lattice/hash/fract.
     // All albedo and normal patches use these same gradients and translations.
-    float2 uv_gradient_x = gradient_x / period;
-    float2 uv_gradient_y = gradient_y / period;
+    float2 uv_gradient_x = textureUvGradient(gradient_x, period);
+    float2 uv_gradient_y = textureUvGradient(gradient_y, period);
 
     // Visible base color is sampled before metallic reduction selects kD.
-    float3 base = visibleBaseColor(
+    float4 base = visibleBaseColor(
         visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
-    float3 reflectance = saturate(base);
-    float metallic = saturate(visual.m_metallic);
-    float roughness = saturate(visual.m_roughness);
-    float eta = max(visual.m_ior, 1.0);
+    float metallic = visual.m_metallic;
+    float roughness = visual.m_roughness;
+    float eta = visual.m_ior;
 
-    float3 normal = float3(0.0, 0.0, 1.0);
-    if (visual.m_normal_texture_index != 0xffffffffu) {
-        float3 n0 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-            sampler, patches.uv0, uv_gradient_x, uv_gradient_y).xyz);
-        float3 n1 = float3(0.0), n2 = float3(0.0);
-        if (!repeat_texture) {
-            n1 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv1, uv_gradient_x, uv_gradient_y).xyz);
-            n2 = decodePatchNormal(nonuniform(textures[visual.m_normal_texture_index]).SampleGrad(
-                sampler, patches.uv2, uv_gradient_x, uv_gradient_y).xyz);
-        }
-
-        float3 decoded = n0 * patches.weights.x + n1 * patches.weights.y + n2 * patches.weights.z;
-        decoded.xy *= visual.m_normal_scale;
-        if (all(isfinite(decoded)) && decoded.z > 0.0 && dot(decoded, decoded) > 1.0e-8) {
-            normal = normalize(decoded);
-        }
-    }
+    float3 normal = sampleVisibleNormal(
+        visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
 
     float3 view = surfaceToCamera(fine_position);
-    float n_dot_v = max(dot(normal, view), 1.0e-5);
+    float n_dot_v = visibleNoV(normal, view);
     float2 environment = brdfLutPair(g_brdf_lut, g_brdf_sampler, n_dot_v, roughness);
     CH coefficients = sampleFineCH(fine_position);
     // The approved transport surface scope also bounds visible emission:
@@ -778,10 +797,10 @@ float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_posi
     float3 authored = occupied ? unpackSourceEmission(g_source_materials[material]) : float3(0.0);
     float3 thermal = occupied ? thermalRGB(unpackCellTemperature(resolved)) : float3(0.0);
     float3 hdr = visibleMaterialResponse(
-        base, metallic, roughness, eta, normal, view, coefficients, environment, authored, thermal);
+        base.rgb, metallic, roughness, eta, normal, view, coefficients, environment, authored, thermal);
 
     bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
-    float opacity = optical_blend ? saturate(tint.a * visual.m_opacity) : 1.0;
+    float opacity = optical_blend ? saturate(tint.a * base.a * visual.m_opacity) : 1.0;
     if (premultiplied) hdr *= opacity;
     return float4(hdr, opacity);
 }
@@ -901,6 +920,44 @@ float4 shadeGridReactive(
     reactive_coverage = 0;
     float2 world_pixel_x = ddx(input.fine_position);
     float2 world_pixel_y = ddy(input.fine_position);
+    // Beyond a world-sized footprint all admitted textures already select
+    // their coarsest LOD. Bound gradients before period division to keep the
+    // smallest supported positive period finite under extreme minification.
+    float2 gradient_x = clamp(world_pixel_x * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    float2 gradient_y = clamp(world_pixel_y * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
+    uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;
+    if (diagnostic_mode != 0u) reactive_coverage = 1;
+
+    // ------------------------------------------------------------------
+    // categorical resolved-cell path
+    // ------------------------------------------------------------------
+    // Each raster sample reconstructs its own continuous world-plane position
+    // and selects exactly one native packed cell. This runs before the retired
+    // contour/material selection so MSAA4 does not pay for work it discards.
+    if (g_grid_frame.m_has_resolved_cells != 0u && diagnostic_mode == 0u) {
+        uint resolved = resolvedCellAt(input.fine_position);
+        uint resolved_material = unpackCellMaterial(resolved);
+        if (resolved_material == 0u) discard;
+
+        GridVisual active = g_terrain_visuals[min(resolved_material, 65535u)];
+        if (active.m_material_id != resolved_material) discard;
+        const bool active_optical = (active.m_surface_flags & kSurfaceOpticalBlend) != 0u;
+        if ((g_grid_pass.pass == 1u && active_optical) || (g_grid_pass.pass == 2u && !active_optical)) {
+            discard;
+        }
+
+        if (active_optical) reactive_coverage = 1;
+        return categoricalMaterialSurface(
+            resolved_material, resolved, input.fine_position, gradient_x, gradient_y,
+            g_textures, g_sampler, point_sample);
+    }
+
+    // ------------------------------------------------------------------
+    // explicit legacy flat/contour fallback and diagnostics
+    // ------------------------------------------------------------------
+    // Temporary path for worlds without published resolved cells and for the
+    // diagnostic overlays. Task 14/15 owns removing it once all rendered worlds
+    // publish the categorical field.
     float2 contour_position = input.fine_position;
     if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
         contour_position += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);
@@ -910,16 +967,9 @@ float4 shadeGridReactive(
     float2 pixel_x = ddx(contour_position);
     float2 pixel_y = ddy(contour_position);
     float width = clamp(length(fwidth(contour_position)), 1.0e-6, 1.0);
-    // Beyond a world-sized footprint all admitted textures already select
-    // their coarsest LOD. Bound gradients before period division to keep the
-    // smallest supported positive period finite under extreme minification.
-    float2 gradient_x = clamp(world_pixel_x * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
-    float2 gradient_y = clamp(world_pixel_y * g_grid_frame.m_cell_size_m, -2048.0, 2048.0);
     uint material = input.material;
     float coverage = 1.0;
     float internal_outline = 0.0;
-    uint diagnostic_mode = g_grid_frame.m_surface_mode >> 2u;
-    if (diagnostic_mode != 0u) reactive_coverage = 1;
     int2 sample = int2(floor(input.fine_position));
     TerrainStencil stencil = {};
     if (diagnostic_mode == 2u) {
@@ -930,18 +980,18 @@ float4 shadeGridReactive(
     if ((input.flags & 1u) != 0u) {
         if ((g_grid_frame.m_surface_mode & 1u) != 0u) {
             stencil = terrainStencil(contour_position);
-            material = contourMaterial(contour_position, pixel_x, pixel_y, width, stencil, coverage, sample, internal_outline,
-                point_sample);
+            material = contourMaterial(contour_position, pixel_x, pixel_y, width, stencil, coverage, sample,
+                internal_outline, point_sample);
         } else {
-        // Rasterized quad edges may land exactly at 128 after interpolation;
-        // clamp them into the final cell rather than reading the next chunk.
-        uint2 cell = uint2(clamp(input.local_cell, float2(0.0), float2(127.999)));
-        uint index = cell.y * 128u + cell.x;
-        uint packed = g_cell_materials[input.cell_word_base + index / 2u];
-        material = ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
-        if (material == 0xffffu || material == 0u) {
-            discard;
-        }
+            // Rasterized quad edges may land exactly at 128 after interpolation;
+            // clamp them into the final cell rather than reading the next chunk.
+            uint2 cell = uint2(clamp(input.local_cell, float2(0.0), float2(127.999)));
+            uint index = cell.y * 128u + cell.x;
+            uint packed = g_cell_materials[input.cell_word_base + index / 2u];
+            material = ((index & 1u) != 0u) ? (packed >> 16u) : (packed & 0xffffu);
+            if (material == 0xffffu || material == 0u) {
+                discard;
+            }
         }
     }
 
@@ -966,31 +1016,6 @@ float4 shadeGridReactive(
         float4 diagnostic=diagnosticTint(g_diagnostic_colors[index].m_color_rgba,coverage);
         if (point_sample) diagnostic.rgb*=diagnostic.a;
         return diagnostic;
-    }
-
-    // ------------------------------------------------------------------
-    // categorical resolved-cell path
-    // ------------------------------------------------------------------
-    // Each raster sample reconstructs its own continuous world-plane position
-    // and selects exactly one native packed cell. Empty cells discard, so the
-    // occupancy boundary receives real per-sample coverage instead of one
-    // pixel-centre material reused for every sample.
-    if (g_grid_frame.m_has_resolved_cells != 0u && diagnostic_mode == 0u) {
-        uint resolved = resolvedCellAt(input.fine_position);
-        uint resolved_material = unpackCellMaterial(resolved);
-        if (resolved_material == 0u) discard;
-
-        GridVisual active = g_terrain_visuals[min(resolved_material, 65535u)];
-        if (active.m_material_id != resolved_material) discard;
-        const bool active_optical = (active.m_surface_flags & kSurfaceOpticalBlend) != 0u;
-        if ((g_grid_pass.pass == 1u && active_optical) || (g_grid_pass.pass == 2u && !active_optical)) {
-            discard;
-        }
-
-        if (active_optical) reactive_coverage = 1;
-        return categoricalMaterialSurface(
-            resolved_material, resolved, input.fine_position, gradient_x, gradient_y,
-            g_textures, g_sampler, point_sample);
     }
 
     // Lit empty samples cannot consume either decoration component: the exterior

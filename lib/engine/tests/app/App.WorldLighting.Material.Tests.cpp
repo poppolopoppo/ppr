@@ -8,6 +8,7 @@ module engine.tests.app;
 import std;
 import engine.core;
 import engine.app;
+import engine.image;
 import engine.math;
 import engine.rhi;
 import engine.shader;
@@ -276,7 +277,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     [[nodiscard]] std::vector<float4> runProbe(
         Fixture &fixture, const char *const entry, const std::span<const ProbeCase> cases,
-        rhi::ITextureView *const brdf_view = nullptr, rhi::IBuffer *const fine_ch_override = nullptr) {
+        rhi::ITextureView *const brdf_view = nullptr, rhi::IBuffer *const fine_ch_override = nullptr,
+        std::vector<float4> *const detail_out = nullptr) {
         auto &device = fixture.device();
         rhi::ITextureView *table_view = brdf_view;
         Array<float4> fields(cases.size() * 8u);
@@ -300,6 +302,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         rhi::ComPtr<rhi::IBuffer> ch_buffer = makeBuffer(
             device, packed.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH), packed.data());
         auto output = makeBuffer(device, cases.size() * sizeof(float4), sizeof(float4), nullptr, true);
+        auto detail = makeBuffer(device, cases.size() * 8u * sizeof(float4), sizeof(float4), nullptr, true);
 
         // The module declares the fine-CH buffer and BRDF table for every entry.
         // Bind zero-value defaults when the caller does not supply a real table.
@@ -347,6 +350,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_fields"].setBinding(rhi::Binding(fields_buffer))));
         PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_ch"].setBinding(rhi::Binding(ch_buffer))));
         PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_output"].setBinding(rhi::Binding(output))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_detail"].setBinding(rhi::Binding(detail))));
         PPR_TEST_ASSERT(not make_error_code(
             cursor["g_fine_ch"].setBinding(
                 rhi::Binding(fine_ch_override != nullptr ? fine_ch_override : fine_default.get()))));
@@ -375,11 +379,18 @@ namespace pP::tests::detail::WorldLightingMaterial {
             pass->dispatchCompute((static_cast<u32>(cases.size()) + 63u) / 64u, 1u, 1u);
         }
         encoder->setBufferState(output, rhi::ResourceState::CopySource);
+        encoder->setBufferState(detail, rhi::ResourceState::CopySource);
         fixture.submit(*encoder);
 
         std::vector<float4> result(cases.size());
         PPR_TEST_ASSERT(
             not make_error_code(device.readBuffer(output, 0u, result.size() * sizeof(float4), result.data())));
+        if (detail_out != nullptr) {
+            detail_out->resize(cases.size() * 8u);
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(detail, 0u, detail_out->size() * sizeof(float4), detail_out->data())));
+        }
+
         return result;
     }
 
@@ -551,6 +562,154 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         return result;
     }
+
+    // ------------------------------------------------------------------
+    // categorical texture/normal probe
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] image::ImageAsset makeConstantImage(const float4 rgba) noexcept {
+        constexpr u32 size = 4u;
+        Array<std::byte> pixels(size * size * 4u);
+        for (u32 y = 0u; y < size; ++y) {
+            for (u32 x = 0u; x < size; ++x) {
+                const auto byte = [](const float value) {
+                    return std::byte{static_cast<u8>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f))};
+                };
+                const auto offset = (y * size + x) * 4u;
+                pixels[offset + 0u] = byte(rgba.x);
+                pixels[offset + 1u] = byte(rgba.y);
+                pixels[offset + 2u] = byte(rgba.z);
+                pixels[offset + 3u] = byte(rgba.w);
+            }
+        }
+
+        image::ImageAsset image{};
+        image.m_width = size;
+        image.m_height = size;
+        image.m_storage = mem::SharedBuffer::clone(
+            mem::SharedBufferView{reinterpret_cast<const std::byte *>(pixels.data()), pixels.size()});
+        image.m_subresources.push_back(
+            image::ImageSubresource{
+                .m_view = image.m_storage, .m_row_pitch = size * 4u, .m_slice_pitch = pixels.size()});
+        PPR_TEST_ASSERT(
+            not image::generateMipChain(image, image::MipGenDesc{.m_full_chain = true, .m_normal_map = false}));
+        return image;
+    }
+
+    [[nodiscard]] float2 patchTranslationCpu(const int2 vertex) noexcept {
+        const uint2 bounded{static_cast<u32>(vertex.x) & 0xffffu, static_cast<u32>(vertex.y) & 0xffffu};
+        u32 value = bounded.x * 0x9e3779b9u ^ bounded.y * 0x85ebca6bu;
+        value ^= value >> 16u;
+        value *= 0x7feb352du;
+        value ^= value >> 15u;
+        value *= 0x846ca68bu;
+        value ^= value >> 16u;
+        return float2{static_cast<float>(value & 0xffffu) / 65536.0f, static_cast<float>(value >> 16u) / 65536.0f};
+    }
+
+    struct CpuPatches {
+        float2 m_uv0{}, m_uv1{}, m_uv2{};
+        float3 m_weights{};
+    };
+
+    [[nodiscard]] CpuPatches texturePatchesCpu(const float2 uv) noexcept {
+        const float2 half_lattice{uv.x * 0.5f - uv.y * 0.288675135f, uv.y * 0.577350269f};
+        const float2 lattice{
+            (half_lattice.x - std::floor(half_lattice.x / 32768.0f) * 32768.0f) * 2.0f,
+            (half_lattice.y - std::floor(half_lattice.y / 32768.0f) * 32768.0f) * 2.0f};
+        const int2 cell{static_cast<int>(std::floor(lattice.x)), static_cast<int>(std::floor(lattice.y))};
+        const float2 fraction{lattice.x - std::floor(lattice.x), lattice.y - std::floor(lattice.y)};
+        int2 vertices[3] = {int2{}, int2{}, int2{}};
+        CpuPatches result{};
+        if (fraction.x + fraction.y <= 1.0f) {
+            vertices[0] = cell;
+            vertices[1] = int2{cell.x + 1, cell.y};
+            vertices[2] = int2{cell.x, cell.y + 1};
+            result.m_weights = float3{1.0f - fraction.x - fraction.y, fraction.x, fraction.y};
+        } else {
+            vertices[0] = int2{cell.x + 1, cell.y + 1};
+            vertices[1] = int2{cell.x, cell.y + 1};
+            vertices[2] = int2{cell.x + 1, cell.y};
+            result.m_weights = float3{fraction.x + fraction.y - 1.0f, 1.0f - fraction.x, 1.0f - fraction.y};
+        }
+
+        const float2 repeat_uv{uv.x - std::floor(uv.x), uv.y - std::floor(uv.y)};
+        result.m_uv0 = repeat_uv + patchTranslationCpu(vertices[0]);
+        result.m_uv1 = repeat_uv + patchTranslationCpu(vertices[1]);
+        result.m_uv2 = repeat_uv + patchTranslationCpu(vertices[2]);
+        return result;
+    }
+
+    struct CategoricalCase {
+        float2 m_fine{};
+        float2 m_gradient_x{};
+        float2 m_gradient_y{};
+        float m_period{1.0f};
+        float m_cell_size{1.0f};
+        u32 m_material{1u};
+    };
+
+    [[nodiscard]] std::vector<float4> runCategoricalProbe(
+        Fixture &fixture, const std::span<const CategoricalCase> cases, rhi::IBuffer *const palette,
+        rhi::IBuffer *const descriptors, const rhi::DescriptorHandle sampler_handle) {
+        auto &device = fixture.device();
+        Array<float4> fields(cases.size() * 8u);
+        for (u32 index = 0u; index < cases.size(); ++index) {
+            const auto &item = cases[index];
+            fields[index * 8u + 0u] = float4{
+                item.m_gradient_x.x, item.m_gradient_x.y, item.m_gradient_y.x, item.m_gradient_y.y};
+            fields[index * 8u + 1u] = float4{item.m_period, item.m_cell_size, 0.0f, 0.0f};
+            fields[index * 8u + 2u] = float4{item.m_fine.x, item.m_fine.y, 0.0f, 0.0f};
+            fields[index * 8u + 3u] = float4{static_cast<float>(item.m_material), 0.0f, 0.0f, 0.0f};
+        }
+
+        auto fields_buffer = makeBuffer(device, fields.size() * sizeof(float4), sizeof(float4), fields.data());
+        auto detail = makeBuffer(device, cases.size() * 8u * sizeof(float4), sizeof(float4), nullptr, true);
+        auto program = fixture.makeProgram(
+            std::filesystem::current_path() / "shaders" / "tests" / "world_lighting_material_probe.slang",
+            "probeCategoricalBase");
+        rhi::ComPtr<rhi::IComputePipeline> pipeline{};
+        rhi::ComputePipelineDesc pipeline_description{};
+        pipeline_description.program = program.get();
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_description, pipeline.writeRef())));
+        rhi::ComPtr<rhi::IShaderObject> root{};
+        PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(program, root.writeRef())));
+
+        struct alignas(16) ProbeFrame {
+            u32 m_count{};
+            u32 m_reserved[3]{};
+        } frame{};
+        frame.m_count = static_cast<u32>(cases.size());
+        rhi::ShaderCursor cursor{root.get()};
+        rhi::ShaderCursor constants{};
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_material_probe"].getDereferenced(constants)));
+        PPR_TEST_ASSERT(not make_error_code(constants.setData(&frame, sizeof(frame))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_fields"].setBinding(rhi::Binding(fields_buffer))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_detail"].setBinding(rhi::Binding(detail))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_terrain_visuals"].setBinding(rhi::Binding(palette))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_textures"].setBinding(rhi::Binding(descriptors))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_sampler"].setDescriptorHandle(sampler_handle)));
+
+        rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+        encoder->setBufferState(detail, rhi::ResourceState::UnorderedAccess);
+        {
+            auto *const pass = encoder->beginComputePass();
+            PPR_TEST_ASSERT(pass != nullptr);
+            PPR_DEFER {
+                pass->end();
+            };
+            pass->bindPipeline(pipeline, root);
+            pass->dispatchCompute((static_cast<u32>(cases.size()) + 63u) / 64u, 1u, 1u);
+        }
+        encoder->setBufferState(detail, rhi::ResourceState::CopySource);
+        fixture.submit(*encoder);
+
+        std::vector<float4> result(cases.size() * 8u);
+        PPR_TEST_ASSERT(
+            not make_error_code(device.readBuffer(detail, 0u, result.size() * sizeof(float4), result.data())));
+        return result;
+    }
 }
 
 namespace pP::tests::detail::WorldLightingMaterial {
@@ -647,6 +806,63 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // ------------------------------------------------------------------
     // visible material response
     // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (perspective_and_orthographic_view_vectors_match_the_eye_contract) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        std::array<ProbeCase, 4u> cases{};
+        // Orthographic: V is -forward regardless of the sample position.
+        cases[0].m_base = float4{3.0f, 4.0f, 5.0f, 1.0f};
+        cases[0].m_parameters = float4{0.0f, 0.0f, -1.0f, 1.0f};
+        cases[0].m_direction = float4{100.0f, 100.0f, 0.0f, 0.0f};
+        cases[0].m_view = float4{0.0f, 0.0f, 1.0f, 0.0f};
+        // Perspective at the centre of the grid: eye = origin, V = +Z.
+        cases[1].m_base = float4{0.0f, 0.0f, 5.0f, 1.0f};
+        cases[1].m_parameters = float4{0.0f, 0.0f, -1.0f, 0.0f};
+        cases[1].m_direction = float4{0.0f, 0.0f, 0.0f, 0.0f};
+        cases[1].m_view = float4{0.0f, 0.0f, 1.0f, 0.0f};
+        // Perspective off-centre: the eye point, not eye+forward, sets NoV.
+        cases[2].m_base = float4{0.0f, 0.0f, 5.0f, 1.0f};
+        cases[2].m_parameters = float4{0.0f, 0.0f, -1.0f, 0.0f};
+        cases[2].m_direction = float4{1.0f, 1.0f, 0.0f, 0.0f};
+        cases[2].m_view = float4{0.0f, 0.0f, 1.0f, 0.0f};
+        // Orthographic with +Z forward: V = -Z, NoV clamps to 1e-5.
+        cases[3].m_base = float4{0.0f, 0.0f, 5.0f, 1.0f};
+        cases[3].m_parameters = float4{0.0f, 0.0f, 1.0f, 1.0f};
+        cases[3].m_direction = float4{0.0f, 0.0f, 0.0f, 0.0f};
+        cases[3].m_view = float4{0.0f, 0.0f, 1.0f, 0.0f};
+
+        std::vector<float4> detail;
+        const auto unused = runProbe(fixture, "probeView", cases, nullptr, nullptr, &detail);
+        PPR_TEST_ASSERT(unused.size() == cases.size());
+        PPR_TEST_ASSERT(detail.size() >= cases.size() * 2u);
+
+        PPR_TEST_ASSERT(close3(float3{detail[0].x, detail[0].y, detail[0].z}, float3{0.0f, 0.0f, 1.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(std::abs(float(detail[0].w) - 1.0f) <= 1.0e-5f);
+        PPR_TEST_ASSERT(std::abs(float(detail[1].x) - 0.04f) <= 1.0e-5f);
+
+        PPR_TEST_ASSERT(close3(float3{detail[2].x, detail[2].y, detail[2].z}, float3{0.0f, 0.0f, 1.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(std::abs(float(detail[2].w) - 1.0f) <= 1.0e-5f);
+
+        const float3 expected_off_centre = float3{-1.0f, -1.0f, 5.0f} / std::sqrt(27.0f);
+        PPR_TEST_ASSERT(close3(float3{detail[4].x, detail[4].y, detail[4].z}, expected_off_centre, 1.0e-5f));
+        const float expected_no_v = 5.0f / std::sqrt(27.0f);
+        PPR_TEST_ASSERT(std::abs(float(detail[4].w) - expected_no_v) <= 1.0e-5f);
+        PPR_TEST_ASSERT(std::abs(float(detail[4].w) - 4.0f / std::sqrt(18.0f)) > 0.01f);
+
+        PPR_TEST_ASSERT(close3(float3{detail[6].x, detail[6].y, detail[6].z}, float3{0.0f, 0.0f, -1.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(std::abs(float(detail[6].w) - 1.0e-5f) <= 1.0e-7f);
+
+        std::println(
+            "WORLD_LIGHTING_MATERIAL view ortho=({:.4f},{:.4f},{:.4f}) centre=({:.4f},{:.4f},{:.4f}) "
+            "offcentre=({:.4f},{:.4f},{:.4f}) noV={:.6f}",
+            float(detail[0].x), float(detail[0].y), float(detail[0].z), float(detail[2].x), float(detail[2].y),
+            float(detail[2].z), float(detail[4].x), float(detail[4].y), float(detail[4].z), float(detail[4].w));
+    };
 
     PPR_UNIT_TEST (black_environment_and_no_emission_is_black) {
         Fixture fixture{};
@@ -838,6 +1054,335 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(close3(
             float3{result[1].x, result[1].y, result[1].z}, float3{result[0].x, result[0].y, result[0].z} * 2.0f,
             1.0e-5f));
+    };
+
+    PPR_UNIT_TEST (categorical_base_color_normal_bombing_and_period_contracts) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        const auto red = makeConstantImage(float4{1.0f, 0.0f, 0.0f, 1.0f});
+        const auto green = makeConstantImage(float4{0.0f, 1.0f, 0.0f, 1.0f});
+        const auto normal_x = makeConstantImage(float4{0.725f, 0.5f, 0.9465f, 1.0f});
+        const auto normal_y = makeConstantImage(float4{0.5f, 0.725f, 0.9465f, 1.0f});
+        const auto normal_neg_x = makeConstantImage(float4{0.275f, 0.5f, 0.9465f, 1.0f});
+
+        const auto visual = [](const u32 id, const u32 texture, const u32 normal, const float period) {
+            GridTerrainVisual value{};
+            value.m_material_id = id;
+            value.m_color_rgba = 0xffff'ffffu;
+            value.m_texture_index = texture;
+            value.m_texture_period_m = period;
+            value.m_normal_texture_index = normal;
+            value.m_normal_scale = 2.0f;
+            value.m_ior = 1.5f;
+            value.m_roughness = 0.4f;
+            value.m_opacity = 1.0f;
+            return value;
+        };
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_content_fingerprint = 7u;
+        stage.m_terrain_images = {red, green, normal_x, normal_y, normal_neg_x};
+        stage.m_terrain_visuals = {
+            visual(1u, 0u, 0xffff'ffffu, 1.0f),
+            visual(2u, 1u, 0xffff'ffffu, 1.0f),
+            visual(3u, 0u, 2u, 1.0f),
+            visual(4u, 0u, 3u, 1.0f),
+            visual(5u, 0u, 4u, 1.0f),
+            visual(6u, 0u, 0xffff'ffffu, 2.0f),
+        };
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+
+        PPR_TEST_ASSERT(not grid.stageWorldCandidate(7u, 7u, stage));
+        bool prepared = false;
+        for (u32 step = 0u; step < 32u and not prepared; ++step) {
+            const auto progress = grid.advanceWorldCandidate(fixture.device(), renderer.completedFenceValue(), 8u);
+            PPR_TEST_ASSERT(progress.has_value());
+            prepared = *progress;
+        }
+
+        PPR_TEST_ASSERT(prepared);
+        PPR_TEST_ASSERT(not grid.activateWorldCandidate(7u, 7u, 7u));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{-0.5f, 0.0f, -0.5f};
+        model.m_ortho_scale = 1.0f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 4, 4}});
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot(), false));
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 4u, .height = 4u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        const auto viewport = rhi::Viewport::fromSize(4.0f, 4.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(4u, 4u);
+        const auto draw = [&](const DrawContext &context) -> std::error_code { return grid.render(context); };
+        DrawSubmission submission{"grid categorical palette", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {submission}));
+        grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+        PPR_TEST_ASSERT(not renderer.waitOnHost());
+
+        auto *const palette = grid.terrainPaletteForTest();
+        auto *const descriptors = grid.textureDescriptorsForTest();
+        PPR_TEST_ASSERT(palette != nullptr and descriptors != nullptr);
+
+        const auto make_case = [](const float2 fine, const float2 gradient_x, const float2 gradient_y,
+                                   const float period, const u32 material) {
+            CategoricalCase value{};
+            value.m_fine = fine;
+            value.m_gradient_x = gradient_x;
+            value.m_gradient_y = gradient_y;
+            value.m_period = period;
+            value.m_cell_size = 1.0f;
+            value.m_material = material;
+            return value;
+        };
+        const std::array<CategoricalCase, 7u> cases{
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 1u),
+            make_case(float2{0.75f, 0.75f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 1u),
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 2u),
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 3u),
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 4u),
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 1.0f, 5u),
+            make_case(float2{0.25f, 0.25f}, float2{0.01f, 0.02f}, float2{0.03f, 0.04f}, 2.0f, 6u),
+        };
+
+        const auto detail = runCategoricalProbe(
+            fixture, cases, palette, descriptors, grid.terrainSamplerHandleForTest());
+        PPR_TEST_ASSERT(detail.size() == cases.size() * 8u);
+        const auto field = [&](const u32 index, const u32 slot) { return detail[index * 8u + slot]; };
+
+        const auto base0 = field(0u, 0u);
+        const auto raw0 = field(0u, 1u);
+        const auto weights0 = field(0u, 2u);
+        const auto mean0 = field(0u, 7u);
+        PPR_TEST_ASSERT(float(base0.x) > 0.8f and float(base0.y) < 0.1f and float(base0.z) < 0.1f);
+        PPR_TEST_ASSERT(float(field(2u, 0u).y) > 0.8f and float(field(2u, 0u).x) < 0.1f);
+
+        const float3 raw_rgb{raw0.x, raw0.y, raw0.z};
+        const float3 mean_rgb{mean0.x, mean0.y, mean0.z};
+        const float3 weights{weights0.x, weights0.y, weights0.z};
+        const float3 expected = float3{
+            std::clamp(mean_rgb.x + (raw_rgb.x - mean_rgb.x) / std::sqrt(dot(weights, weights)), 0.0f, 1.0f),
+            std::clamp(mean_rgb.y + (raw_rgb.y - mean_rgb.y) / std::sqrt(dot(weights, weights)), 0.0f, 1.0f),
+            std::clamp(mean_rgb.z + (raw_rgb.z - mean_rgb.z) / std::sqrt(dot(weights, weights)), 0.0f, 1.0f)};
+        PPR_TEST_ASSERT(close3(float3{base0.x, base0.y, base0.z}, expected, 1.0e-4f));
+
+        const auto cpu_patches = texturePatchesCpu(float2{0.25f, 0.25f});
+        const auto uv01 = field(0u, 3u);
+        const auto uv2_normal = field(0u, 4u);
+        PPR_TEST_ASSERT(
+            close3(float3{uv01.x, uv01.y, 0.0f}, float3{cpu_patches.m_uv0.x, cpu_patches.m_uv0.y, 0.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(
+            close3(float3{uv01.z, uv01.w, 0.0f}, float3{cpu_patches.m_uv1.x, cpu_patches.m_uv1.y, 0.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(close3(
+            float3{uv2_normal.x, uv2_normal.y, 0.0f}, float3{cpu_patches.m_uv2.x, cpu_patches.m_uv2.y, 0.0f}, 1.0e-5f));
+        PPR_TEST_ASSERT(close3(
+            float3{weights0.x, weights0.y, weights0.z},
+            float3{cpu_patches.m_weights.x, cpu_patches.m_weights.y, cpu_patches.m_weights.z}, 1.0e-5f));
+        PPR_TEST_ASSERT(
+            std::abs(float(field(1u, 3u).x) - float(field(0u, 3u).x)) > 1.0e-3f or
+            std::abs(float(field(1u, 3u).y) - float(field(0u, 3u).y)) > 1.0e-3f);
+
+        const auto normal_x_result = field(3u, 4u);
+        const auto normal_y_result = field(4u, 4u);
+        const auto normal_neg_x_result = field(5u, 4u);
+        PPR_TEST_ASSERT(float(normal_x_result.z) > 0.3f and std::abs(float(normal_x_result.w)) < 0.1f);
+        PPR_TEST_ASSERT(float(normal_y_result.w) > 0.3f and std::abs(float(normal_y_result.z)) < 0.1f);
+        PPR_TEST_ASSERT(float(normal_neg_x_result.z) < -0.3f);
+
+        const float expected_gradient = 0.01f / 1.0f;
+        std::println(
+            "WORLD_LIGHTING_MATERIAL categorical detail5=({:.6f},{:.6f},{:.6f},{:.6f}) detail6=({:.6f},{:.6f},"
+            "{:.6f},{:.6f})",
+            float(field(0u, 5u).x), float(field(0u, 5u).y), float(field(0u, 5u).z), float(field(0u, 5u).w),
+            float(field(0u, 6u).x), float(field(0u, 6u).y), float(field(0u, 6u).z), float(field(0u, 6u).w));
+        PPR_TEST_ASSERT(std::abs(float(field(0u, 5u).y) - expected_gradient) <= 1.0e-6f);
+        PPR_TEST_ASSERT(std::abs(float(field(0u, 5u).z) - 0.02f) <= 1.0e-6f);
+        PPR_TEST_ASSERT(std::abs(float(field(6u, 5u).y) - 0.01f / 2.0f) <= 1.0e-6f);
+
+        std::println(
+            "WORLD_LIGHTING_MATERIAL categorical base=({:.4f},{:.4f},{:.4f}) normal_x={:.4f} normal_y={:.4f} "
+            "uv_gradient={:.6f} period2_gradient={:.6f}",
+            float(base0.x), float(base0.y), float(base0.z), float(normal_x_result.z), float(normal_y_result.w),
+            float(field(0u, 5u).y), float(field(6u, 5u).y));
+    };
+
+    PPR_UNIT_TEST (gas_uses_nonzero_ch_angular_mean_and_alpha_composition) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual gas_visual{};
+        gas_visual.m_material_id = 1u;
+        gas_visual.m_color_rgba = 0x00ff00ffu;
+        gas_visual.m_ior = 1.5f;
+        gas_visual.m_roughness = 0.5f;
+        gas_visual.m_opacity = 1.0f;
+
+        std::array<GridParticleMetadataRow, 1u> rows{};
+        rows[0].m_id_low = 1u;
+        rows[0].m_source_row = 0xffff'ffffu;
+        rows[0].m_gas_x = 1.5f;
+        rows[0].m_gas_y = 2.5f;
+        rows[0].m_radius = 1.0f;
+        const auto material_temperature = lighting::packCell(1u, 0.0);
+        PPR_TEST_ASSERT(material_temperature.has_value());
+        rows[0].m_material_temperature = *material_temperature;
+        const auto metadata = prepareGridParticleMetadata(fixture.device(), rows, 0u, 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+
+        GridParticleGpuView view{};
+        view.m_numerical = makeBuffer(
+            fixture.device(), kGridParticleNumericalStride, kGridParticleNumericalStride, nullptr);
+        view.m_readonly = makeBuffer(
+            fixture.device(), kGridParticleReadonlyStride, kGridParticleReadonlyStride, nullptr);
+        view.m_metadata = *metadata;
+        view.m_live_epoch = std::make_shared<std::atomic<u64>>(1u);
+        view.m_world = grid.activeWorldIdentity();
+        view.m_layout = kGridParticleNumericalLayout;
+        view.m_stride = kGridParticleNumericalStride;
+        view.m_readonly_stride = kGridParticleReadonlyStride;
+        view.m_origin = 3.0;
+        view.m_device_epoch = 1u;
+        view.m_publication = 1u;
+        view.m_terrain_revision = 1u;
+        view.m_joint_tick = 1u;
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {gas_visual};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        Array<u32> resolved(static_cast<std::size_t>(WorldLightingPass::kCellCount), 0u);
+        auto resolved_buffer = makeBuffer(
+            fixture.device(), resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        const auto make_ch = [&](const float3 radiance) {
+            Array<lighting::PackedCH> records(lighting::kFineCHRecordCount);
+            const auto packed = lighting::packCH(uniformCH(radiance));
+            PPR_TEST_ASSERT(packed.has_value());
+            for (auto &record: records)
+                record = *packed;
+            return makeBuffer(
+                fixture.device(), records.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH),
+                records.data());
+        };
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{-0.5f, 0.0f, -0.5f};
+        model.m_ortho_scale = 1.0f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 4, 4}});
+        const auto snapshot = camera.getSnapshot();
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 4u, .height = 4u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        const auto viewport = rhi::Viewport::fromSize(4.0f, 4.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(4u, 4u);
+
+        const auto capture = [&](rhi::ComPtr<rhi::IBuffer> fine_ch) {
+            PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(resolved_buffer, std::move(fine_ch)));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+            const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                return grid.prepareGpuParticles(context);
+            };
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                if (const auto ec = grid.render(context))
+                    return ec;
+                return grid.renderParticles(context);
+            };
+            DrawSubmission submission{"grid gas CH", DrawCallback{draw}};
+            submission.m_viewport = viewport;
+            submission.m_scissor = scissor;
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {submission}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            const auto readback = readTexture(fixture.device(), *target);
+            const auto *const words = reinterpret_cast<const u16 *>(
+                readback.m_bytes.data() + static_cast<std::size_t>(1u) * readback.m_row_pitch + 1u * 8u);
+            std::array<float, 4u> pixel{};
+            for (u32 channel = 0u; channel < 4u; ++channel)
+                pixel[channel] = halfToFloat(words[channel]);
+            return pixel;
+        };
+
+        const auto lit = capture(make_ch(float3{0.5f, 0.25f, 0.75f}));
+        const auto dark = capture(make_ch(float3{0.0f, 0.0f, 0.0f}));
+        // The cold-start render is exactly the clear color attenuated by the gas
+        // opacity, so it recovers alpha without guessing the mask's mip level.
+        const float alpha = 1.0f - dark[0] / 0.1f;
+        const std::array<float, 3u> expected{
+            0.1f * (1.0f - alpha), 0.25f * alpha + 0.1f * (1.0f - alpha), 0.2f * (1.0f - alpha)};
+        PPR_TEST_ASSERT(alpha > 0.5f and alpha < 0.9f);
+        PPR_TEST_ASSERT(std::abs(lit[0] - expected[0]) <= 0.01f);
+        PPR_TEST_ASSERT(std::abs(lit[1] - expected[1]) <= 0.01f);
+        PPR_TEST_ASSERT(std::abs(lit[2] - expected[2]) <= 0.01f);
+        PPR_TEST_ASSERT(lit[3] > 0.9f);
+        PPR_TEST_ASSERT(dark[3] > 0.9f);
+        PPR_TEST_ASSERT(lit[1] > dark[1] + 0.1f);
+        std::println(
+            "WORLD_LIGHTING_MATERIAL gas lit=({:.4f},{:.4f},{:.4f},{:.4f}) dark=({:.4f},{:.4f},{:.4f},{:.4f}) "
+            "alpha={:.4f} instances={} draws={}",
+            lit[0], lit[1], lit[2], lit[3], dark[0], dark[1], dark[2], dark[3], alpha,
+            grid.observations().m_particle_instances, grid.observations().m_draw_commands);
     };
 
     PPR_UNIT_TEST (grid_frame_reflection_matches_the_cpu_contract) {
@@ -1063,6 +1608,8 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::brdf_lut_matches_independent_binary64_integration,
                 detail::WorldLightingMaterial::brdf_lut_sampling_clamps_at_both_edges,
                 detail::WorldLightingMaterial::black_environment_and_no_emission_is_black,
+                detail::WorldLightingMaterial::perspective_and_orthographic_view_vectors_match_the_eye_contract,
+                detail::WorldLightingMaterial::categorical_base_color_normal_bombing_and_period_contracts,
                 detail::WorldLightingMaterial::doubling_environment_doubles_reflected_hdr,
                 detail::WorldLightingMaterial::metallic_and_roughness_endpoints_change_visible_response,
                 detail::WorldLightingMaterial::authored_albedo_and_normal_change_visible_response,
@@ -1070,6 +1617,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::zero_xy_normal_and_reflection_are_continuous,
                 detail::WorldLightingMaterial::authored_emission_is_added_once_and_thermal_matches_source,
                 detail::WorldLightingMaterial::gas_angular_mean_uses_the_decoded_dc_field,
+                detail::WorldLightingMaterial::gas_uses_nonzero_ch_angular_mean_and_alpha_composition,
                 detail::WorldLightingMaterial::grid_tiles_sample_rate_boundary_selects_distinct_cell_materials,
                 detail::WorldLightingMaterial::grid_frame_reflection_matches_the_cpu_contract,
                 detail::WorldLightingMaterial::opaque_thermal_glow_and_receive_only_thermal_exclusion,

@@ -79,6 +79,34 @@ float2 brdfLutPair(
     return lut.SampleLevel(sampler, float2(saturate(n_dot_v), saturate(roughness)), 0.0);
 }
 
+// V direction from a world-plane sample to the camera eye. The engine camera
+// eye is the origin and forward is eye->scene, so orthographic V is -forward and
+// perspective V is the sample-to-eye vector.
+float3 planeSurfaceToCamera(
+    float2 fine_position, float cell_size_m, float3 camera_origin, float3 camera_forward,
+    bool orthographic) {
+    if (orthographic) return normalize(-camera_forward);
+
+    float3 sample_world = float3(fine_position * cell_size_m, 0.0);
+    return normalize(camera_origin - sample_world);
+}
+
+// NoV uses the specified 1e-5 clamp. Authored metallic/roughness/IOR ranges are
+// validated on publication and are not repaired here.
+float visibleNoV(float3 normal, float3 view) {
+    return max(dot(normal, view), 1.0e-5);
+}
+
+float3 visibleFresnel(float3 f0, float roughness, float n_dot_v) {
+    return f0 + (max(float3(1.0 - roughness), f0) - f0) * materialPow5(1.0 - saturate(n_dot_v));
+}
+
+// The continuous world-UV derivative divided by the authored texture period.
+// Callers capture the gradient before any cell or material selection.
+float2 textureUvGradient(float2 world_gradient, float period) {
+    return world_gradient / period;
+}
+
 // Full visible response. base_color is linear texture RGB times linear tint,
 // saturated to [0,1]; authored and thermal emission are added once and are not
 // modulated by reflectance. environment is the sampled (b, e) BRDF pair.
@@ -87,14 +115,13 @@ float3 visibleMaterialResponse(
     float3 normal, float3 view, CH coefficients, float2 environment,
     float3 authored_emission, float3 thermal_emission) {
     float3 reflectance = saturate(base_color);
-    float m = saturate(metallic);
-    float r = saturate(roughness);
-    float bounded_eta = max(eta, 1.0);
+    float m = metallic;
+    float r = roughness;
 
-    float n_dot_v = max(dot(normal, view), 1.0e-5);
-    float dielectric_f0 = (bounded_eta - 1.0) / (bounded_eta + 1.0);
+    float n_dot_v = visibleNoV(normal, view);
+    float dielectric_f0 = (eta - 1.0) / (eta + 1.0);
     float3 f0 = lerp(float3(dielectric_f0 * dielectric_f0), reflectance, m);
-    float3 fresnel = f0 + (max(float3(1.0 - r), f0) - f0) * materialPow5(1.0 - saturate(n_dot_v));
+    float3 fresnel = visibleFresnel(f0, r, n_dot_v);
     float3 diffuse_weight = (1.0 - fresnel) * (1.0 - m) * reflectance / kMaterialPi;
 
     float3 reflection = reflect(-view, normal);

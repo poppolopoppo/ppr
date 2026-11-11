@@ -116,7 +116,7 @@ ppr_add_test_entry(TARGET engine.tests.asset
 )
 
 string(JOIN "," ppr_asset_gpu_grid_surface_filter
-    "asset/render/gates/grid_translucent_solid_borders_and_internal_boundaries"
+    "asset/render/gates/grid_categorical_resolved_boundary_and_translucency"
 )
 
 ppr_add_test_entry(TARGET engine.tests.asset

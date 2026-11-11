@@ -137,6 +137,12 @@ export namespace pP {
         // The cursor names are owner-private.
         [[nodiscard]] std::error_code bind(rhi::ShaderCursor &cursor) const;
 
+        // Normal availability query for production branching. True once the
+        // world's resolved-cell/CH storage exists.
+        [[nodiscard]] bool hasPublishedCells() const noexcept {
+            return m_resources and m_resources->m_resolved and m_resources->m_fine_ch;
+        }
+
         // Encodes the stage-end copy of this attempt's status records into its
         // completion-fenced readback storage. Called in the same submission
         // after the prepared dispatches.

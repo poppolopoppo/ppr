@@ -492,13 +492,26 @@ export namespace pP {
             return m_brdf_lut.get();
         }
 
+        // Read-only owners used by material probes that exercise the real
+        // palette/descriptor heap. They borrow the pass's active world.
+        [[nodiscard]] rhi::IBuffer *terrainPaletteForTest() const noexcept {
+            return m_world.m_terrain_palette.get();
+        }
+        [[nodiscard]] rhi::IBuffer *textureDescriptorsForTest() const noexcept {
+            return m_world.m_texture_inventory and m_world.m_texture_inventory->m_cache
+                       ? m_world.m_texture_inventory->m_cache->descriptorBuffer()
+                       : nullptr;
+        }
+        [[nodiscard]] rhi::DescriptorHandle terrainSamplerHandleForTest() const noexcept {
+            return m_terrain_sampler_handle;
+        }
+
         // Tests-only: binds externally prepared categorical state (resolved
         // cells + decoded fine CH) to the real material/gas program without
         // driving the full cascade transport. The pass retains strong owners
         // until shutdown/device loss. Production never calls these.
         [[nodiscard]] std::error_code setLightingBuffersForTest(
             rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch);
-        void clearLightingBuffersForTest() noexcept;
 
         // Test-only ownership observations for the terrain staging lifetime.
         [[nodiscard]] rhi::IBuffer *terrainStagingForTest() const noexcept {
@@ -884,13 +897,12 @@ export namespace pP {
         rhi::IDevice *m_device{}; // Actual allocator; device outlives the pass.
         // Generated thermal lookup uploaded once per GridPass device.
         rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
-        // One immutable 64x128 RG16F BRDF integration table per device, plus its
-        // clamp/linear sampler and boot-time generation program.
+        // One immutable 64x128 RG16F BRDF integration table per GridPass device,
+        // plus its clamp/linear sampler. The one-shot generation program and
+        // pipeline are released immediately after the boot dispatch.
         rhi::ComPtr<rhi::ITexture> m_brdf_lut{};
         rhi::ComPtr<rhi::ITextureView> m_brdf_lut_view{};
         rhi::ComPtr<rhi::ISampler> m_brdf_sampler{};
-        rhi::ComPtr<rhi::IShaderProgram> m_brdf_lut_program{};
-        rhi::ComPtr<rhi::IComputePipeline> m_brdf_lut_pipeline{};
         // Zero-valued fallback for worlds whose lighting owner has not published
         // resolved cells/CH yet, so binding stays valid while the scene is black.
         rhi::ComPtr<rhi::IBuffer> m_lighting_fallback{};

@@ -181,11 +181,14 @@ resulting immutable texture.
   cell (`material` in bits 0-15, FP16 Kelvin in 16-31). Empty samples discard, so
   MSAA internal boundaries receive real per-sample coverage instead of one
   pixel-centre ID. The material path samples linear texture RGB times linear tint,
-  authored normal/metallic/roughness/IOR, `diffuseIrradiance`/`specularRadiance`,
-  the shared BRDF pair and one authored+thermal term. Continuous world-UV
-  gradients are captured before cell selection. The older packed chunk-cell lane
-  remains only for explicit legacy/flat fixtures: it resolves the same single
-  packed material per fragment and its low-three-bit tint remains legacy-only.
+  authored normal/metallic/roughness/IOR (publication-validated), `V=-forward`
+  for orthographic or `normalize(origin-sample)` for perspective,
+  `diffuseIrradiance`/`specularRadiance`, the shared BRDF pair and one
+  authored+thermal term. Continuous world-UV gradients are captured before cell
+  selection, and the categorical branch returns before the retired contour /
+  cell-word / material work. The older packed chunk-cell lane remains only as a
+  temporary fallback for worlds with no published resolved cells; Task 14/15
+  owns its removal.
 - Catalog coverage follows the occupied-vs-empty marching-square contour, with
   material-specific quadratic Bezier arcs for diagonal cuts. Roundness 0 uses
   the straight chord; 1 places the control point at the dual-cell centre.

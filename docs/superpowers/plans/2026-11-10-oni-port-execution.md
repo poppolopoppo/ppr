@@ -1040,3 +1040,44 @@ and operational acceptance. No Task 4 work has begun.
   level via the shared merge.
 - **Known gates:** pre-existing `gpu_grid_surface` optical leaf (Task 11);
   Windows/D3D12 unmeasured.
+
+## Task 11 — sample-rate categorical PBR, shared BRDF LUT and lit gas complete
+
+- Commits: `e5e073e5` (initial categorical PBR/BRDF/gas), followed by the review
+  fix commit `fix: correct categorical view vector and retire legacy surface tests`.
+- Review: six Important findings addressed: engine-correct orthographic
+  (`V=-forward`) and perspective (`V=normalize(origin-sample)`) view vectors with
+  dedicated NoV/Fresnel probes; the categorical branch moved above the retired
+  contour/cell/material work; real categorical texture/albedo/normal/bombing/
+  filtered-mean/period-gradient probes; nine retired asset leaf bodies removed;
+  `gpu_grid_surface` genuinely covers resolved cells; and a non-zero-CH gas draw
+  composition test added. Related fixes restore `albedo.a` in authored opacity,
+  remove shader range repair, remove the unused clear seam, use
+  `hasPublishedCells()` for normal branching, keep one source/thermal binding
+  owner, and release the one-shot BRDF generation program/pipeline.
+- Delivered: exact §4 circular `diffuseIrradiance`/`specularRadiance`; approved
+  visible material formula with `kD/kS`, energy compensation, one
+  authored+thermal term and no key/ambient floor or specular cap; one immutable
+  64x128 RG16F VNDF/Smith table (32 KiB, 1,024 samples/texel,
+  `alpha=max(r,0.001)`) per GridPass device; sample-rate resolved-cell material
+  selection on the real `grid_tiles` program; transparent premultiplied
+  `tint.a*albedo.a*opacity` composition; CH-lit gas with no transport/thermal
+  emission; smooth solid/liquid shader families and entries retired.
+- Removed `App.Renderer.GridPass.Fluids.cpp`, `App.Renderer.GridPass.Solids.cpp`,
+  `grid_liquid_kernel.slang`, `grid_solid_kernel.slang` and
+  `grid_fluid_filter.slang`; removed the nine obsolete asset leaf bodies and the
+  `gpu_grid_liquid`/`solid_interface_gpu`/`solid_envelope_gpu` entries.
+- Evidence: `app/world_lighting_material/` 17 leaves pass routine and GPU
+  validation; actual-`grid_tiles` MSAA samples 0/2 vs 1/3 select distinct cells;
+  BRDF maximum binary64 error 0.000488; categorical probe verifies albedo,
+  normal orientation, bombing UV/weights, filtered-mean normalization and
+  period gradients; gas lit/clear composition and non-zero CH mean verified.
+  `engine.tests.asset.gpu_grid_surface` now runs the categorical resolved-cell
+  boundary/translucency leaf and passes; `gpu_grid_particles`, `gpu_misc`,
+  `spatial_grid_gpu`, `resident_particles_gpu` and projection routine/validation
+  pass.
+- **Task 14/15 obligation:** remove the temporary legacy flat/contour fallback
+  once every rendered world publishes resolved cells (including non-1024 edges
+  and the first-lighting-publication window). The shipped `gpu_grid_surface`
+  gate no longer claims that fallback as categorical coverage.
+- **Known gates:** Windows/D3D12 unmeasured.
