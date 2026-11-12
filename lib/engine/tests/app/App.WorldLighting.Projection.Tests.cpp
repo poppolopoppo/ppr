@@ -76,7 +76,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue{};
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -89,10 +89,12 @@ namespace pP::tests::detail::WorldLightingProjection {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_PROJECTION api={} adapter={} backend={}",
-                info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_PROJECTION api={} adapter={} backend={}",
+                    info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
+                    .c_str());
         }
 
         void shutdown() {
@@ -346,7 +348,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         // Committed positions are world-cell coordinates; the published origin
         // of 3.0 cells subtracts out. (13.5 - 3.0) is the center of native
@@ -392,7 +394,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         const std::array specs{
@@ -457,7 +459,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         // Two exact binary32 distance ties: mirror positions around each cell
         // center and two coincident particles. Stable IDs order the winners.
@@ -537,7 +539,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         const std::array specs{
@@ -596,7 +598,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         WorldLightingPass pass;
@@ -681,7 +683,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto nan = std::numeric_limits<float>::quiet_NaN();
         Scene scene;
@@ -741,7 +743,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto nan = std::numeric_limits<float>::quiet_NaN();
         Scene scene;
@@ -797,7 +799,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         scene.publishEmpty(fixture);
@@ -877,7 +879,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         const std::array armed_specs{
@@ -966,7 +968,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         const std::array specs{
@@ -1005,7 +1007,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         shader::SharedModule module{};
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -1037,7 +1039,10 @@ namespace pP::tests::detail::WorldLightingProjection {
                  {"g_numeric_status", 4u},
              }}) {
             const u32 measured = stride(name);
-            std::println("WORLD_LIGHTING_PROJECTION reflected name={} stride={} expected={}", name, measured, expected);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_PROJECTION reflected name={} stride={} expected={}", name, measured, expected)
+                    .c_str());
             PPR_TEST_ASSERT(measured == expected);
         }
 
@@ -1088,9 +1093,11 @@ namespace pP::tests::detail::WorldLightingProjection {
                  {"g_numerical", "positionY", 4u},
              }}) {
             const u32 measured = field_offset(element, field);
-            std::println(
-                "WORLD_LIGHTING_PROJECTION reflected field={}.{} offset={} expected={}", element, field, measured,
-                expected);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_PROJECTION reflected field={}.{} offset={} expected={}", element, field, measured,
+                    expected)
+                    .c_str());
             PPR_TEST_ASSERT(measured == expected);
         }
 
@@ -1109,7 +1116,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         GridPass grid;
         PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
@@ -1298,7 +1305,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Scene scene;
         scene.publish(fixture, std::span<const ParticleSpec>{});

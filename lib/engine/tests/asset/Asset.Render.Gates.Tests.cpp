@@ -2767,7 +2767,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             return captureSpatial_(family, width, height, mode, mapping, grid, camera);
         }
 
-        [[nodiscard]] std::array<u32, 4> qualifySpatialSamples_() {
+        [[nodiscard]] std::array<u32, 4> qualifySpatialSamples_(UnitTest::IRun &_) {
             SpatialPrograms family;
             initializeSpatialPrograms_(family);
 
@@ -2813,16 +2813,20 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
                 // Nominal +/-1/32 brackets also inherit rasterizer subpixel
                 // quantization; they do not establish exact/global locations.
-                std::println(
-                    "SPATIAL_MSAA4 native={} nominal_x_bracket=({},{}) nominal_y_bracket=({},{})", sample,
-                    (double(recovered[0]) - 0.5) / 16.0, (double(recovered[0]) + 0.5) / 16.0,
-                    (double(recovered[1]) - 0.5) / 16.0, (double(recovered[1]) + 0.5) / 16.0);
+                _.log(
+                    std::format(
+                        "SPATIAL_MSAA4 native={} nominal_x_bracket=({},{}) nominal_y_bracket=({},{})", sample,
+                        (double(recovered[0]) - 0.5) / 16.0, (double(recovered[0]) + 0.5) / 16.0,
+                        (double(recovered[1]) - 0.5) / 16.0, (double(recovered[1]) + 0.5) / 16.0)
+                        .c_str());
             }
 
             PPR_TEST_ASSERT(seen == 15u);
-            std::println(
-                "SPATIAL_MSAA4 measured canonical-to-native indices={},{},{},{}", mapping[0], mapping[1], mapping[2],
-                mapping[3]);
+            _.log(
+                std::format(
+                    "SPATIAL_MSAA4 measured canonical-to-native indices={},{},{},{}", mapping[0], mapping[1],
+                    mapping[2], mapping[3])
+                    .c_str());
 
             // The threshold sweep above only brackets each location. Mode 5
             // evaluates the pixel-coordinate plane at every sample, so it states
@@ -2850,8 +2854,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 }
             }
 
-            std::println(
-                "SPATIAL_MSAA4 exact sample positions confirmed for all pixels: (3/8,1/8)(7/8,3/8)(1/8,5/8)(5/8,7/8)");
+            _.log(
+                std::format(
+                    "SPATIAL_MSAA4 exact sample positions confirmed for all pixels: (3/8,1/8)(7/8,3/8)(1/8,5/8)(5/8,7/8)")
+                    .c_str());
             return mapping;
         }
 
@@ -2998,7 +3004,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             return stage;
         }
 
-        void checkActualGridSpatialSamples_() {
+        void checkActualGridSpatialSamples_(UnitTest::IRun &_) {
             const auto rhi = SharedGpu::rhiService();
             const auto shaders = SharedGpu::shaderService();
             Renderer *const renderer = SharedGpu::renderer();
@@ -3029,24 +3035,27 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                         if (const double mask = hdrChannel_(result.m_reactive, x, y, 0u); mask != 0.0) {
                             const auto &first = stage.m_terrain_visuals.front();
                             const auto &last = stage.m_terrain_visuals.back();
-                            std::println(
-                                "STATIC_REACTIVE_FIRST_MISMATCH capture={} generation={} pixel=({},{}) sample={} "
-                                "mask={} rawRGBA=({},{},{},{}) camera=({},{},{}) orthoScale={} "
-                                "first=(id={},flags={},tint={},normal={},roundness={},opacity={},ior={},S=({},{},{})) "
-                                "last=(id={},flags={},tint={},normal={},roundness={},opacity={},ior={},S=({},{},{}))",
-                                capture_count, generation, x / 4u, y, x % 4u, mask,
-                                hdrChannel_(result.m_samples, x, y, 0u), hdrChannel_(result.m_samples, x, y, 1u),
-                                hdrChannel_(result.m_samples, x, y, 2u), hdrChannel_(result.m_samples, x, y, 3u),
-                                view.m_origin.x, view.m_origin.y, view.m_origin.z, view.m_ortho_scale,
-                                first.m_material_id, first.m_surface_flags, first.m_color_rgba,
-                                first.m_normal_texture_index, first.m_roundness, first.m_opacity, first.m_ior,
-                                first.m_emissive_rgb[0] * first.m_emissive_strength,
-                                first.m_emissive_rgb[1] * first.m_emissive_strength,
-                                first.m_emissive_rgb[2] * first.m_emissive_strength, last.m_material_id,
-                                last.m_surface_flags, last.m_color_rgba, last.m_normal_texture_index, last.m_roundness,
-                                last.m_opacity, last.m_ior, last.m_emissive_rgb[0] * last.m_emissive_strength,
-                                last.m_emissive_rgb[1] * last.m_emissive_strength,
-                                last.m_emissive_rgb[2] * last.m_emissive_strength);
+                            _.log(
+                                std::format(
+                                    "STATIC_REACTIVE_FIRST_MISMATCH capture={} generation={} pixel=({},{}) sample={} "
+                                    "mask={} rawRGBA=({},{},{},{}) camera=({},{},{}) orthoScale={} "
+                                    "first=(id={},flags={},tint={},normal={},roundness={},opacity={},ior={},S=({},{},{})) "
+                                    "last=(id={},flags={},tint={},normal={},roundness={},opacity={},ior={},S=({},{},{}))",
+                                    capture_count, generation, x / 4u, y, x % 4u, mask,
+                                    hdrChannel_(result.m_samples, x, y, 0u), hdrChannel_(result.m_samples, x, y, 1u),
+                                    hdrChannel_(result.m_samples, x, y, 2u), hdrChannel_(result.m_samples, x, y, 3u),
+                                    view.m_origin.x, view.m_origin.y, view.m_origin.z, view.m_ortho_scale,
+                                    first.m_material_id, first.m_surface_flags, first.m_color_rgba,
+                                    first.m_normal_texture_index, first.m_roundness, first.m_opacity, first.m_ior,
+                                    first.m_emissive_rgb[0] * first.m_emissive_strength,
+                                    first.m_emissive_rgb[1] * first.m_emissive_strength,
+                                    first.m_emissive_rgb[2] * first.m_emissive_strength, last.m_material_id,
+                                    last.m_surface_flags, last.m_color_rgba, last.m_normal_texture_index,
+                                    last.m_roundness, last.m_opacity, last.m_ior,
+                                    last.m_emissive_rgb[0] * last.m_emissive_strength,
+                                    last.m_emissive_rgb[1] * last.m_emissive_strength,
+                                    last.m_emissive_rgb[2] * last.m_emissive_strength)
+                                    .c_str());
                         }
 
                         PPR_TEST_ASSERT(hdrChannel_(result.m_reactive, x, y, 0u) == 0.0);
@@ -3100,10 +3109,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             PPR_TEST_ASSERT(capture_count == 6u);
 
-            std::println(
-                "SPATIAL_GRID_SETUP families=1 programs=3 pipelines=3 world_producers=0 captures={} "
-                "discarded_legacy_draws_omitted=6 discarded_legacy_readbacks_omitted=6 wall_time_speedup=UNMEASURED",
-                capture_count);
+            _.log(
+                std::format(
+                    "SPATIAL_GRID_SETUP families=1 programs=3 pipelines=3 world_producers=0 captures={} "
+                    "discarded_legacy_draws_omitted=6 discarded_legacy_readbacks_omitted=6 wall_time_speedup=UNMEASURED",
+                    capture_count)
+                    .c_str());
         }
 
         void checkSpatialAllocationAdmission_() {
@@ -3233,11 +3244,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
         PPR_UNIT_TEST (spatial_msaa4_raster_thresholds_recover_indexed_pattern) {
             checkSpatialAllocationAdmission_();
 
-            std::ignore = qualifySpatialSamples_();
+            std::ignore = qualifySpatialSamples_(_);
         };
 
         PPR_UNIT_TEST (spatial_msaa4_matches_grid_reference_and_affine_moments) {
-            const auto measured = qualifySpatialSamples_();
+            const auto measured = qualifySpatialSamples_(_);
             const std::array<u32, 4> permuted{measured[2], measured[0], measured[3], measured[1]};
 
             for (const auto &mapping: {measured, permuted}) {
@@ -3300,12 +3311,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             }
         };
 
-        [[nodiscard]] bool admitSpatialIntegrationFixture_() {
+        [[nodiscard]] bool admitSpatialIntegrationFixture_(UnitTest::IRun &_) {
             const auto rhi = SharedGpu::rhiService();
             PPR_TEST_ASSERT(rhi.isValid());
             if (not rhi->getDevice().hasFeature("standard-sample-locations-4") or
                 not rhi->getDevice().hasFeature("sample-rate-shading")) {
-                std::println("SPATIAL_INTEGRATION unsupported: sample-rate shading is unavailable");
+                _.log(std::format("SPATIAL_INTEGRATION unsupported: sample-rate shading is unavailable").c_str());
                 return false;
             }
 
@@ -3317,11 +3328,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
         // ------------------------------------------------------------------
 
         PPR_UNIT_TEST (spatial_grid_samples_preserve_contours_materials_normals_and_emission) {
-            if (not admitSpatialIntegrationFixture_()) {
+            if (not admitSpatialIntegrationFixture_(_)) {
                 return;
             }
 
-            checkActualGridSpatialSamples_();
+            checkActualGridSpatialSamples_(_);
         };
 
         PPR_UNIT_TEST (spatial_hdr_grading_and_native_ui_follow_reconstruction) {
@@ -3908,10 +3919,13 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             const auto clear = gateTexel_(pixels, 0u, 0u);
             const auto opaque_pixel = gateTexel_(pixels, 32u, 32u);
             const auto glass_pixel = gateTexel_(pixels, 64u, 64u);
-            std::println(
-                "CATEGORICAL_BOUNDARY clear={},{},{} opaque={},{},{} glass={},{},{} palette={} desc={}", clear[0],
-                clear[1], clear[2], opaque_pixel[0], opaque_pixel[1], opaque_pixel[2], glass_pixel[0], glass_pixel[1],
-                glass_pixel[2], grid.terrainPaletteForTest() != nullptr, grid.textureDescriptorsForTest() != nullptr);
+            _.log(
+                std::format(
+                    "CATEGORICAL_BOUNDARY clear={},{},{} opaque={},{},{} glass={},{},{} palette={} desc={}", clear[0],
+                    clear[1], clear[2], opaque_pixel[0], opaque_pixel[1], opaque_pixel[2], glass_pixel[0],
+                    glass_pixel[1], glass_pixel[2], grid.terrainPaletteForTest() != nullptr,
+                    grid.textureDescriptorsForTest() != nullptr)
+                    .c_str());
             PPR_TEST_ASSERT(texelDist_(opaque_pixel, clear) > 10u);
             PPR_TEST_ASSERT(texelDist_(glass_pixel, opaque_pixel) > 10u);
             PPR_TEST_ASSERT(texelDist_(glass_pixel, clear) > 2u);
@@ -3998,14 +4012,16 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 3u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
-            std::println(
-                "grid resources decoded={} particle={} backdrop={} draws={} uploads={}", empty.m_texture_decoded_bytes,
-                stable.m_particle_buffer_bytes, empty.m_background_target_bytes, empty.m_draw_commands,
-                empty.m_particle_uploads);
+            _.log(
+                std::format(
+                    "grid resources decoded={} particle={} backdrop={} draws={} uploads={}",
+                    empty.m_texture_decoded_bytes, stable.m_particle_buffer_bytes, empty.m_background_target_bytes,
+                    empty.m_draw_commands, empty.m_particle_uploads)
+                    .c_str());
             const auto timing = renderer->lastGpuFrameTiming();
             PPR_TEST_ASSERT(timing.has_value());
             PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
-            std::println("grid completed GPU frame ms={}", timing->m_milliseconds);
+            _.log(std::format("grid completed GPU frame ms={}", timing->m_milliseconds).c_str());
             const auto empty_pixels = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
             for (u64 cycle = 0u; cycle < 3u; ++cycle) {
                 auto replacement = opticalGridFixture_(visual, 0u);
@@ -4502,13 +4518,15 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             check_rows(metric_census, expected_metric);
             check_rows(first_census, expected_census);
 
-            std::println(
-                "PARTICLE_CENSUS rows={} boundary_rows={} empty_rows={} cached_pack_capture=true "
-                "metadata_source_permutation=true later_tick_owned=true gas_cell_metres=one,one_third "
-                "final_fence={} device_bytes={} readback_bytes={} cpu_bytes={}",
-                first_census.m_rows.size(), boundary_census.m_rows.size(), empty_census.m_rows.size(),
-                metric_census.m_submission, metric_census.m_device_bytes, metric_census.m_readback_bytes,
-                metric_census.m_cpu_bytes);
+            _.log(
+                std::format(
+                    "PARTICLE_CENSUS rows={} boundary_rows={} empty_rows={} cached_pack_capture=true "
+                    "metadata_source_permutation=true later_tick_owned=true gas_cell_metres=one,one_third "
+                    "final_fence={} device_bytes={} readback_bytes={} cpu_bytes={}",
+                    first_census.m_rows.size(), boundary_census.m_rows.size(), empty_census.m_rows.size(),
+                    metric_census.m_submission, metric_census.m_device_bytes, metric_census.m_readback_bytes,
+                    metric_census.m_cpu_bytes)
+                    .c_str());
         };
 
         // ------------------------------------------------------------------
@@ -4698,9 +4716,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     const auto pixels = readback_(device, targetRef_(target), 128u);
                     PPR_TEST_ASSERT(pixels.has_value());
                     const auto centre = gateTexel_(*pixels, 32u, 96u);
-                    std::println(
-                        "grid scenario={} visible={} centre={},{},{},{}", scenario, args.instanceCount, centre[0],
-                        centre[1], centre[2], centre[3]);
+                    _.log(
+                        std::format(
+                            "grid scenario={} visible={} centre={},{},{},{}", scenario, args.instanceCount, centre[0],
+                            centre[1], centre[2], centre[3])
+                            .c_str());
                     if (scenario == 0u or scenario == 7u) {
                         PPR_TEST_ASSERT(centre[0] > 160u and centre[1] < 80u);
                         if (scenario == 7u) {

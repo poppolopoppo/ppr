@@ -377,9 +377,11 @@ namespace pP::game::tests::detail::worldgen_preview {
 
                     const auto layout = sim::compileBiomeLayout(*plan);
                     if (not layout) {
-                        std::println(
-                            "LAYOUT-COVERAGE profile={} edge={} seed={} error={}", profile, edge, seed,
-                            layout.error().message());
+                        _.log(
+                            std::format(
+                                "LAYOUT-COVERAGE profile={} edge={} seed={} error={}", profile, edge, seed,
+                                layout.error().message())
+                                .c_str());
                     }
                     PPR_TEST_ASSERT(layout.has_value());
 
@@ -615,16 +617,22 @@ namespace pP::game::tests::detail::worldgen_preview {
         PPR_TEST_ASSERT(prepared.has_value() and clock.m_calls > 0u);
         const auto &world = (*prepared)->m_world;
         for (std::size_t phase = 0u; phase < world.m_report.m_phase_times.size(); ++phase) {
-            std::println(
-                "Workshop exact production phase {}: {:.3f}s", phase,
-                time::seconds(world.m_report.m_phase_times[phase]));
+            _.log(
+                std::format(
+                    "Workshop exact production phase {}: {:.3f}s", phase,
+                    time::seconds(world.m_report.m_phase_times[phase]))
+                    .c_str());
         }
 
-        std::println(
-            "Workshop exact production checksums: terrain={:016x}, output={:016x}", world.m_report.m_terrain_checksum,
-            world.m_report.m_output_checksum);
-        std::println(
-            "Workshop exact production known cache payload: {} bytes", (*prepared)->m_known_retained_payload_bytes);
+        _.log(
+            std::format(
+                "Workshop exact production checksums: terrain={:016x}, output={:016x}",
+                world.m_report.m_terrain_checksum, world.m_report.m_output_checksum)
+                .c_str());
+        _.log(
+            std::format(
+                "Workshop exact production known cache payload: {} bytes", (*prepared)->m_known_retained_payload_bytes)
+                .c_str());
 
         PPR_TEST_ASSERT(world.m_grid.residentChunkCount() == sim::kChunkCount);
         PPR_TEST_ASSERT(world.m_report.m_output_checksum != 0u);

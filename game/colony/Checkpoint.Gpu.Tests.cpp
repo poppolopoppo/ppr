@@ -1438,7 +1438,7 @@ namespace pP::game::tests::detail::checkpoint {
     // ------------------------------------------------------------------
 
     void observeActualDugRendering(
-        const MatterState &state, ColonyDriver &driver, const WorldCheckpoint &checkpoint,
+        UnitTest::IRun &_, const MatterState &state, ColonyDriver &driver, const WorldCheckpoint &checkpoint,
         const ContentCatalog &catalog, const ContentPresentation &presentation, const u32 tick, const DigRect dig,
         const bool long_diagnostic = false, const bool long_focus = false, const bool seed_reference = false) {
         PPR_TEST_ASSERT(not seed_reference or long_diagnostic);
@@ -1488,28 +1488,34 @@ namespace pP::game::tests::detail::checkpoint {
             }
 
             packet->m_gpu_particles.reset();
-            std::println(
-                "DUG-REFERENCE-SOURCE source=frozen_rows_seed_reference endpoint={} rows={} driver_tick={} authored_material_first={} source_class_first={} physical_steps_after_dig=0",
-                tick, state.m_particles.size(), driver.tickCount(), state.m_records.front().m_material,
-                state.m_particles.front().m_material);
+            _.log(
+                std::format(
+                    "DUG-REFERENCE-SOURCE source=frozen_rows_seed_reference endpoint={} rows={} driver_tick={} authored_material_first={} source_class_first={} physical_steps_after_dig=0",
+                    tick, state.m_particles.size(), driver.tickCount(), state.m_records.front().m_material,
+                    state.m_particles.front().m_material)
+                    .c_str());
         } else {
             packet->m_gpu_particles = driver.particleView();
             PPR_TEST_ASSERT(packet->m_gpu_particles and packet->m_gpu_particles->current());
             const auto &view = *packet->m_gpu_particles;
-            std::println(
-                "ACTUAL-DUG-SOURCE tick={} state_rows={} metadata_count={} moving_count={} cell_m={} origin={} metadata_version={} device_epoch={} publication={} world_job={} world_generation={} catalog_fp={} render_fp={} view_fp={}",
-                tick, state.m_particles.size(), view.m_metadata->m_count, view.m_metadata->m_moving_count,
-                view.m_metadata->m_cell_metres, view.m_origin, view.m_metadata->m_version, view.m_device_epoch,
-                view.m_publication, view.m_world.m_job_id, view.m_world.m_world_generation,
-                descriptor.m_content_fingerprint, render_world.m_content_fingerprint,
-                view.m_world.m_content_fingerprint);
+            _.log(
+                std::format(
+                    "ACTUAL-DUG-SOURCE tick={} state_rows={} metadata_count={} moving_count={} cell_m={} origin={} metadata_version={} device_epoch={} publication={} world_job={} world_generation={} catalog_fp={} render_fp={} view_fp={}",
+                    tick, state.m_particles.size(), view.m_metadata->m_count, view.m_metadata->m_moving_count,
+                    view.m_metadata->m_cell_metres, view.m_origin, view.m_metadata->m_version, view.m_device_epoch,
+                    view.m_publication, view.m_world.m_job_id, view.m_world.m_world_generation,
+                    descriptor.m_content_fingerprint, render_world.m_content_fingerprint,
+                    view.m_world.m_content_fingerprint)
+                    .c_str());
             PPR_TEST_ASSERT(view.m_metadata->m_count == state.m_particles.size());
             PPR_TEST_ASSERT(view.m_metadata->m_moving_count == state.m_particles.size());
-            std::println(
-                "ACTUAL-DUG-VIEW current={} metadata_rows={} layout={} stride={} readonly_stride={} hot_element={} hot_bytes={} cold_element={} cold_bytes={}",
-                view.current(), view.m_metadata->m_rows.get() != nullptr, view.m_layout, view.m_stride,
-                view.m_readonly_stride, view.m_numerical->getDesc().elementSize, view.m_numerical->getDesc().size,
-                view.m_readonly->getDesc().elementSize, view.m_readonly->getDesc().size);
+            _.log(
+                std::format(
+                    "ACTUAL-DUG-VIEW current={} metadata_rows={} layout={} stride={} readonly_stride={} hot_element={} hot_bytes={} cold_element={} cold_bytes={}",
+                    view.current(), view.m_metadata->m_rows.get() != nullptr, view.m_layout, view.m_stride,
+                    view.m_readonly_stride, view.m_numerical->getDesc().elementSize, view.m_numerical->getDesc().size,
+                    view.m_readonly->getDesc().elementSize, view.m_readonly->getDesc().size)
+                    .c_str());
             PPR_TEST_ASSERT(view.m_world == render_world);
             PPR_TEST_ASSERT(view.m_metadata->m_rows.get() != nullptr and view.m_origin == 3.0);
             PPR_TEST_ASSERT(
@@ -1709,10 +1715,12 @@ namespace pP::game::tests::detail::checkpoint {
                                        : 0u;
             }
 
-            std::println(
-                "ACTUAL-DUG-DIAGNOSTIC-VIEW tick={} origin={},{} width_m={} grain_margin_m={} quad_coverage_oracle=not_run raw_rows={} focus={} visible_centres={} total_centres={} focus_window_centres={} source={}",
-                tick, origin_x, origin_y, width_m, long_focus ? 0.0 : margin, not long_focus and not seed_reference,
-                long_focus, visible_centres, points.size(), window_centres, source_name);
+            _.log(
+                std::format(
+                    "ACTUAL-DUG-DIAGNOSTIC-VIEW tick={} origin={},{} width_m={} grain_margin_m={} quad_coverage_oracle=not_run raw_rows={} focus={} visible_centres={} total_centres={} focus_window_centres={} source={}",
+                    tick, origin_x, origin_y, width_m, long_focus ? 0.0 : margin, not long_focus and not seed_reference,
+                    long_focus, visible_centres, points.size(), window_centres, source_name)
+                    .c_str());
         }
         CameraModel model{};
         model.m_camera_mode = ECameraProjection::orthographic;
@@ -1758,11 +1766,13 @@ namespace pP::game::tests::detail::checkpoint {
 
                 const auto observe = [&](const char *const phase, const bool admitted = true) {
                     const auto observations = grid.observations();
-                    std::println(
-                        "ACTUAL-DUG-GRID tick={} authored={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
-                        tick, appearance != 0u, phase, observations.m_particle_instances,
-                        observations.m_dispatch_commands, observations.m_draw_commands,
-                        observations.m_particle_buffer_bytes, source_name);
+                    _.log(
+                        std::format(
+                            "ACTUAL-DUG-GRID tick={} authored={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
+                            tick, appearance != 0u, phase, observations.m_particle_instances,
+                            observations.m_dispatch_commands, observations.m_draw_commands,
+                            observations.m_particle_buffer_bytes, source_name)
+                            .c_str());
                     if (admitted) {
                         PPR_TEST_ASSERT(observations.m_particle_instances == state.m_particles.size());
                     }
@@ -1872,11 +1882,14 @@ namespace pP::game::tests::detail::checkpoint {
                     PPR_TEST_ASSERT(ppm.good());
                 }
 
-                std::println(
-                    "ACTUAL-DUG tick={} hash={} rows={} authored={} core_samples={} core_holes={} packed_samples={} packed_holes={} oracle={} max_side_h=1.25 diagnostic={} oracle_run={} focus={} source={}",
-                    tick, hash, points.size(), appearance != 0u, core_samples[0u], core_holes[0u], interstices.size(),
-                    packed_holes[0u], long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores",
-                    long_diagnostic, not long_diagnostic, long_focus, source_name);
+                _.log(
+                    std::format(
+                        "ACTUAL-DUG tick={} hash={} rows={} authored={} core_samples={} core_holes={} packed_samples={} packed_holes={} oracle={} max_side_h=1.25 diagnostic={} oracle_run={} focus={} source={}",
+                        tick, hash, points.size(), appearance != 0u, core_samples[0u], core_holes[0u],
+                        interstices.size(), packed_holes[0u],
+                        long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores", long_diagnostic,
+                        not long_diagnostic, long_focus, source_name)
+                        .c_str());
             }
         }
 
@@ -1889,9 +1902,10 @@ namespace pP::game::tests::detail::checkpoint {
     }
 
     void exerciseDenseDigDiagnostic(
-        const DigRect dig, const bool confined, const bool observe_rendering = false, const u32 end_tick = 120u,
-        const std::span<const u32> capture_checkpoints = {}, const bool long_diagnostic = false,
-        const std::filesystem::path &reference_directory = {}, const bool compression_diagnostic = false) {
+        UnitTest::IRun &_, const DigRect dig, const bool confined, const bool observe_rendering = false,
+        const u32 end_tick = 120u, const std::span<const u32> capture_checkpoints = {},
+        const bool long_diagnostic = false, const std::filesystem::path &reference_directory = {},
+        const bool compression_diagnostic = false) {
         PPR_TEST_ASSERT(dig.m_width > 0u and dig.m_width <= 16u);
         PPR_TEST_ASSERT(dig.m_height > 0u and dig.m_height <= 16u);
 
@@ -1948,9 +1962,11 @@ namespace pP::game::tests::detail::checkpoint {
         }
 
         if (long_diagnostic) {
-            std::println(
-                "ACTUAL-DUG-LONG-FLOOR fine_x=[0,{}) fine_y=[{},{}) thickness_cells=4 sidewalls=false diagnostic_only=true",
-                checkpoint.m_descriptor.m_world_edge, dig.m_min.m_y - 8u, dig.m_min.m_y - 4u);
+            _.log(
+                std::format(
+                    "ACTUAL-DUG-LONG-FLOOR fine_x=[0,{}) fine_y=[{},{}) thickness_cells=4 sidewalls=false diagnostic_only=true",
+                    checkpoint.m_descriptor.m_world_edge, dig.m_min.m_y - 8u, dig.m_min.m_y - 4u)
+                    .c_str());
         }
 
         auto terrain_snapshot = sim::captureFull(terrain_grid, checkpoint.m_descriptor.m_seed);
@@ -2066,15 +2082,17 @@ namespace pP::game::tests::detail::checkpoint {
                 PPR_TEST_ASSERT(not validateMatterState(
                     reference, driver.preparedWorld()->generated().m_plan.recipe().m_materials, h,
                     reference.m_thickness_metres, kMatterGravityY));
-                std::println(
-                    "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi=GpuParticle88_same_host renderer_only=true physical_steps_after_dig=0",
-                    endpoint, hash, bytes.size(), reference.m_particles.size(), source.string());
+                _.log(
+                    std::format(
+                        "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi=GpuParticle88_same_host renderer_only=true physical_steps_after_dig=0",
+                        endpoint, hash, bytes.size(), reference.m_particles.size(), source.string())
+                        .c_str());
                 observeActualDugRendering(
-                    reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true, false,
-                    true);
+                    _, reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true,
+                    false, true);
                 observeActualDugRendering(
-                    reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true, true,
-                    true);
+                    _, reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true,
+                    true, true);
             }
 
             PPR_TEST_ASSERT(driver.tickCount() == checkpoint.m_tick and driver.digTotal() == particle_count);
@@ -2274,21 +2292,25 @@ namespace pP::game::tests::detail::checkpoint {
                 std::ranges::sort(plastic_logs);
                 const auto p99_index = static_cast<std::size_t>(std::ceil(0.99 * double(occupancy.size()))) - 1u;
                 const auto median_index = (plastic_logs.size() - 1u) / 2u;
-                std::println(
-                    "ACTUAL-DUG-COMPRESSION endpoint={} elapsed_since_dig_s={} dt_substep_s={} rows={} occupied_stencil_nodes={} nodal_reference_V_max={} nodal_reference_V_p99={} positive_excess_max={} positive_excess_p99={} positive_excess_sum={} positive_excess_squared_sum={} translational_KE_J={} APIC_KE_J={} momentum_kg_m_s={},{} COM_m={},{} logJp_min={} logJp_median={} logJp_max={} logJp_exact_zero={} retainedD_trace_min={} retainedD_trace_mean={} retainedD_trace_max={} retainedD_trace_negative_fraction={} nodal_unit=source_cell_area_1 percentile=nearest_rank_over_all_stencil_nodes detF_interpretation=elastic_only CPU_reference_weights=true",
-                    tick, double(tick) / 60.0, dt, count, occupancy.size(), occupancy.back(), occupancy[p99_index],
-                    excess.back(), excess[p99_index], excess_sum, excess_squared_sum, translational_ke, apic_ke,
-                    momentum_x, momentum_y, com_x / mass_kg, com_y / mass_kg, plastic_logs.front(),
-                    plastic_logs[median_index], plastic_logs.back(), zero_plastic_logs, trace_min,
-                    trace_sum / double(count), trace_max, double(negative_trace_count) / double(count));
+                _.log(
+                    std::format(
+                        "ACTUAL-DUG-COMPRESSION endpoint={} elapsed_since_dig_s={} dt_substep_s={} rows={} occupied_stencil_nodes={} nodal_reference_V_max={} nodal_reference_V_p99={} positive_excess_max={} positive_excess_p99={} positive_excess_sum={} positive_excess_squared_sum={} translational_KE_J={} APIC_KE_J={} momentum_kg_m_s={},{} COM_m={},{} logJp_min={} logJp_median={} logJp_max={} logJp_exact_zero={} retainedD_trace_min={} retainedD_trace_mean={} retainedD_trace_max={} retainedD_trace_negative_fraction={} nodal_unit=source_cell_area_1 percentile=nearest_rank_over_all_stencil_nodes detF_interpretation=elastic_only CPU_reference_weights=true",
+                        tick, double(tick) / 60.0, dt, count, occupancy.size(), occupancy.back(), occupancy[p99_index],
+                        excess.back(), excess[p99_index], excess_sum, excess_squared_sum, translational_ke, apic_ke,
+                        momentum_x, momentum_y, com_x / mass_kg, com_y / mass_kg, plastic_logs.front(),
+                        plastic_logs[median_index], plastic_logs.back(), zero_plastic_logs, trace_min,
+                        trace_sum / double(count), trace_max, double(negative_trace_count) / double(count))
+                        .c_str());
 
-                std::println(
-                    "ACTUAL-DUG-LONG-STATS endpoint={} elapsed_since_dig_s={} substeps_per_tick=8 rows={} physical_mass_kg={} solver_mass_sum={} nn_min_h={} nn_p10_h={} nn_p50_h={} nn_p90_h={} nn_p99_h={} nn_max_h={} pairs_lt_0_25h={} pairs_lt_0_5h={} detF_min={} detF_mean={} detF_max={} reference_volume_m3_min={} reference_volume_m3_mean={} reference_volume_m3_max={} bbox_source_x=[{},{}] bbox_source_y=[{},{}] speed_max_m_s={} speed_rms_m_s={} percentile=nearest_rank quad_coverage_oracle=not_run detF_interpretation=elastic_only",
-                    tick, static_cast<double>(tick) / 60.0, count, mass_kg, solver_mass_sum, nearest.front(),
-                    percentile(0.1), percentile(0.5), percentile(0.9), percentile(0.99), nearest.back(), pairs_quarter,
-                    pairs_half, min_det, sum_det / static_cast<double>(count), max_det, min_volume,
-                    sum_volume / static_cast<double>(count), max_volume, min_x, max_x, min_y, max_y, max_speed,
-                    std::sqrt(sum_speed_squared / static_cast<double>(count)));
+                _.log(
+                    std::format(
+                        "ACTUAL-DUG-LONG-STATS endpoint={} elapsed_since_dig_s={} substeps_per_tick=8 rows={} physical_mass_kg={} solver_mass_sum={} nn_min_h={} nn_p10_h={} nn_p50_h={} nn_p90_h={} nn_p99_h={} nn_max_h={} pairs_lt_0_25h={} pairs_lt_0_5h={} detF_min={} detF_mean={} detF_max={} reference_volume_m3_min={} reference_volume_m3_mean={} reference_volume_m3_max={} bbox_source_x=[{},{}] bbox_source_y=[{},{}] speed_max_m_s={} speed_rms_m_s={} percentile=nearest_rank quad_coverage_oracle=not_run detF_interpretation=elastic_only",
+                        tick, static_cast<double>(tick) / 60.0, count, mass_kg, solver_mass_sum, nearest.front(),
+                        percentile(0.1), percentile(0.5), percentile(0.9), percentile(0.99), nearest.back(),
+                        pairs_quarter, pairs_half, min_det, sum_det / static_cast<double>(count), max_det, min_volume,
+                        sum_volume / static_cast<double>(count), max_volume, min_x, max_x, min_y, max_y, max_speed,
+                        std::sqrt(sum_speed_squared / static_cast<double>(count)))
+                        .c_str());
             }
 
             const auto validity = validateMatterState(
@@ -2318,17 +2340,19 @@ namespace pP::game::tests::detail::checkpoint {
                         reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
                     output.close();
                     PPR_TEST_ASSERT(not output.fail());
-                    std::println("ACTUAL-DUG-COMPRESSION-RAW endpoint={} hash={} bytes={}", tick, hash, bytes.size());
+                    _.log(
+                        std::format("ACTUAL-DUG-COMPRESSION-RAW endpoint={} hash={} bytes={}", tick, hash, bytes.size())
+                            .c_str());
                 }
             }
 
             if (observe_rendering and capture_tick and (not compression_diagnostic or tick >= 120u)) {
                 observeActualDugRendering(
-                    state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, long_diagnostic);
+                    _, state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, long_diagnostic);
                 if (long_diagnostic and
                     (tick == 120u or tick == 600u or tick == 1800u or (compression_diagnostic and tick == 240u))) {
                     observeActualDugRendering(
-                        state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, true, true);
+                        _, state, driver, checkpoint, *fixture.m_catalog, *render_presentation, tick, dig, true, true);
                 }
             }
         }
@@ -2530,15 +2554,15 @@ namespace pP::game::tests::detail::checkpoint {
     // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (dense_dug_sand_cavity_preserves_valid_resident_state_for_120_ticks) {
-        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, true);
+        exerciseDenseDigDiagnostic(_, {{120u, 40u}, 16u, 16u}, true);
     };
 
     PPR_UNIT_TEST (dense_dug_sand_drop_preserves_valid_resident_state_for_120_ticks) {
-        exerciseDenseDigDiagnostic({{3274u, 482u}, 16u, 16u}, false);
+        exerciseDenseDigDiagnostic(_, {{3274u, 482u}, 16u, 16u}, false);
     };
 
     PPR_UNIT_TEST (actual_dug_solids_render_falling_and_late_pile_without_close_contact_holes) {
-        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, true);
+        exerciseDenseDigDiagnostic(_, {{120u, 40u}, 16u, 16u}, false, true);
     };
 
     PPR_UNIT_TEST (actual_dug_solids_long_settle_diagnostic) {
@@ -2546,15 +2570,17 @@ namespace pP::game::tests::detail::checkpoint {
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
         if (enabled != "1") {
-            std::println(
-                "ACTUAL-DUG-LONG skipped: set PPR_LONG_SETTLE_DIAGNOSTIC=1 and PPR_GRID_QA_DIR for explicit diagnostic capture");
+            _.log(
+                std::format(
+                    "ACTUAL-DUG-LONG skipped: set PPR_LONG_SETTLE_DIAGNOSTIC=1 and PPR_GRID_QA_DIR for explicit diagnostic capture")
+                    .c_str());
             return;
         }
 
         const char *const qa = std::getenv("PPR_GRID_QA_DIR");
         PPR_TEST_ASSERT(qa != nullptr and *qa != '\0');
         constexpr std::array<u32, 5u> checkpoints{1u, 120u, 240u, 600u, 1800u};
-        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, true, 1800u, checkpoints, true);
+        exerciseDenseDigDiagnostic(_, {{120u, 40u}, 16u, 16u}, false, true, 1800u, checkpoints, true);
     };
 
     PPR_UNIT_TEST (actual_dug_solids_short_compression_diagnostic) {
@@ -2562,28 +2588,30 @@ namespace pP::game::tests::detail::checkpoint {
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
         if (enabled != "1") {
-            std::println("ACTUAL-DUG-COMPRESSION skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1");
+            _.log(std::format("ACTUAL-DUG-COMPRESSION skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1").c_str());
             return;
         }
 
         const char *const qa = std::getenv("PPR_GRID_QA_DIR");
         const bool render = qa != nullptr and *qa != '\0';
         constexpr std::array<u32, 4u> checkpoints{1u, 30u, 120u, 240u};
-        exerciseDenseDigDiagnostic({{120u, 40u}, 16u, 16u}, false, render, 240u, checkpoints, true, {}, true);
+        exerciseDenseDigDiagnostic(_, {{120u, 40u}, 16u, 16u}, false, render, 240u, checkpoints, true, {}, true);
     };
 
     PPR_UNIT_TEST (render_frozen_actual_dug_solids_reference) {
         const char *const reference = std::getenv("PPR_FROZEN_DUG_REFERENCE_DIR");
         if (reference == nullptr or *reference == '\0') {
-            std::println(
-                "DUG-FROZEN-REFERENCE skipped: set PPR_FROZEN_DUG_REFERENCE_DIR and PPR_GRID_QA_DIR for explicit renderer-only capture");
+            _.log(
+                std::format(
+                    "DUG-FROZEN-REFERENCE skipped: set PPR_FROZEN_DUG_REFERENCE_DIR and PPR_GRID_QA_DIR for explicit renderer-only capture")
+                    .c_str());
             return;
         }
 
         const char *const qa = std::getenv("PPR_GRID_QA_DIR");
         PPR_TEST_ASSERT(qa != nullptr and *qa != '\0');
         exerciseDenseDigDiagnostic(
-            {{120u, 40u}, 16u, 16u}, false, true, 1800u, {}, true, std::filesystem::path{reference});
+            _, {{120u, 40u}, 16u, 16u}, false, true, 1800u, {}, true, std::filesystem::path{reference});
     };
 
     PPR_UNIT_TEST (dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain) {

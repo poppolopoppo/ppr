@@ -49,7 +49,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue{};
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -62,9 +62,12 @@ namespace pP::tests::detail::WorldLightingTrace {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_TRACE api={} adapter={} backend={}", info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_TRACE api={} adapter={} backend={}",
+                    info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
+                    .c_str());
         }
 
         void shutdown() {
@@ -525,7 +528,8 @@ namespace pP::tests::detail::WorldLightingTrace {
     // block and mask checks
     // ------------------------------------------------------------------
 
-    void verifyMasks(const std::vector<u32> &records, const std::vector<u8> &occupancy, const char *const label) {
+    void verifyMasks(
+        UnitTest::IRun &_, const std::vector<u32> &records, const std::vector<u8> &occupancy, const char *const label) {
         for (u32 level = 0u; level < lighting::kVisibilityLevelPitches.size(); ++level) {
             const u32 records_per_edge = lighting::kVisibilityLevelPitches[level];
             for (u32 record_y = 0u; record_y < records_per_edge; ++record_y) {
@@ -534,10 +538,12 @@ namespace pP::tests::detail::WorldLightingTrace {
                         const u32 measured = readMaskWord(records, level, record_x, record_y, high);
                         const u32 expected = expectedMask(occupancy, level, record_x, record_y, high);
                         if (measured != expected) {
-                            std::println(
-                                "WORLD_LIGHTING_TRACE mask_mismatch case={} level={} record=({}, {}) high={} "
-                                "measured={:x} expected={:x}",
-                                label, level, record_x, record_y, high, measured, expected);
+                            _.log(
+                                std::format(
+                                    "WORLD_LIGHTING_TRACE mask_mismatch case={} level={} record=({}, {}) high={} "
+                                    "measured={:x} expected={:x}",
+                                    label, level, record_x, record_y, high, measured, expected)
+                                    .c_str());
                         }
 
                         PPR_TEST_ASSERT(measured == expected);
@@ -548,7 +554,7 @@ namespace pP::tests::detail::WorldLightingTrace {
     }
 
     void verifyJumps(
-        const std::vector<u8> &jumps, const std::vector<u8> &occupancy, const SummedAreaTable &sums,
+        UnitTest::IRun &_, const std::vector<u8> &jumps, const std::vector<u8> &occupancy, const SummedAreaTable &sums,
         const char *const label) {
         PPR_TEST_ASSERT(jumps.size() == static_cast<std::size_t>(kEdge) * kEdge);
 
@@ -557,9 +563,11 @@ namespace pP::tests::detail::WorldLightingTrace {
                 const u32 expected = expectedJump(sums, occupancy, x, y);
                 const u32 measured = jumps[cellIndex(x, y)];
                 if (measured != expected) {
-                    std::println(
-                        "WORLD_LIGHTING_TRACE jump_mismatch case={} cell=({}, {}) measured={} expected={}", label, x, y,
-                        measured, expected);
+                    _.log(
+                        std::format(
+                            "WORLD_LIGHTING_TRACE jump_mismatch case={} cell=({}, {}) measured={} expected={}", label,
+                            x, y, measured, expected)
+                            .c_str());
                 }
 
                 PPR_TEST_ASSERT(measured == expected);
@@ -590,7 +598,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -619,13 +627,15 @@ namespace pP::tests::detail::WorldLightingTrace {
                 const u32 base = index * 5u;
                 if (result.m_words[base] != expected.m_hit or
                     std::bit_cast<float>(result.m_words[base + 4u]) != expected.m_interval.m_transmittance) {
-                    std::println(
-                        "WORLD_LIGHTING_TRACE oracle_mismatch case={} segment={} start=({}, {}) end=({}, {}) "
-                        "measured_cell={} expected_cell={} measured_t={} expected_t={}",
-                        label, index, static_cast<float>(segments[index].x), static_cast<float>(segments[index].y),
-                        static_cast<float>(segments[index].z), static_cast<float>(segments[index].w),
-                        result.m_words[base], expected.m_hit, std::bit_cast<float>(result.m_words[base + 4u]),
-                        expected.m_interval.m_transmittance);
+                    _.log(
+                        std::format(
+                            "WORLD_LIGHTING_TRACE oracle_mismatch case={} segment={} start=({}, {}) end=({}, {}) "
+                            "measured_cell={} expected_cell={} measured_t={} expected_t={}",
+                            label, index, static_cast<float>(segments[index].x), static_cast<float>(segments[index].y),
+                            static_cast<float>(segments[index].z), static_cast<float>(segments[index].w),
+                            result.m_words[base], expected.m_hit, std::bit_cast<float>(result.m_words[base + 4u]),
+                            expected.m_interval.m_transmittance)
+                            .c_str());
                 }
 
                 PPR_TEST_ASSERT(result.m_words[base] == expected.m_hit);
@@ -640,7 +650,9 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             PPR_TEST_ASSERT(result.m_status[0u] == kNoNumericIndex);
             PPR_TEST_ASSERT(result.m_status[1u] == kNoNumericIndex);
-            std::println("WORLD_LIGHTING_TRACE oracle case={} segments={} hits={}", label, segments.size(), hits);
+            _.log(
+                std::format("WORLD_LIGHTING_TRACE oracle case={} segments={} hits={}", label, segments.size(), hits)
+                    .c_str());
         };
 
         // Empty: every finite segment is clear.
@@ -792,7 +804,7 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             // The diagonal reaches the same black cell.
             PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[9u]) == 0.0f);
-            std::println("WORLD_LIGHTING_TRACE opaque_black radiance=(0,0,0) transmittance=0");
+            _.log(std::format("WORLD_LIGHTING_TRACE opaque_black radiance=(0,0,0) transmittance=0").c_str());
         }
 
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -807,7 +819,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -824,11 +836,13 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             const auto records = readVisibilityRecords(fixture, attempt.m_snapshot.m_visibility);
             const auto occupancy = map.occupancy(palette_values);
-            verifyMasks(records, occupancy, label);
-            std::println(
-                "WORLD_LIGHTING_TRACE masks case={} records={} bytes={} occupied={}", label,
-                WorldLightingPass::kVisibilityRecordCount, WorldLightingPass::kVisibilityBufferBytes,
-                std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }));
+            verifyMasks(_, records, occupancy, label);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_TRACE masks case={} records={} bytes={} occupied={}", label,
+                    WorldLightingPass::kVisibilityRecordCount, WorldLightingPass::kVisibilityBufferBytes,
+                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }))
+                    .c_str());
         };
 
         {
@@ -900,7 +914,7 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             const auto records = readVisibilityRecords(fixture, attempt.m_snapshot.m_visibility);
             const auto occupancy = map.occupancy(palette_values);
-            verifyMasks(records, occupancy, "one_per_tile");
+            verifyMasks(_, records, occupancy, "one_per_tile");
 
             // Explicit bit-position coverage in level 0.
             bool bit31 = false;
@@ -919,7 +933,8 @@ namespace pP::tests::detail::WorldLightingTrace {
             }
 
             PPR_TEST_ASSERT(bit31 and bit32 and bit63);
-            std::println("WORLD_LIGHTING_TRACE mask_bits bit31={} bit32={} bit63={}", bit31, bit32, bit63);
+            _.log(
+                std::format("WORLD_LIGHTING_TRACE mask_bits bit31={} bit32={} bit63={}", bit31, bit32, bit63).c_str());
         }
 
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -934,7 +949,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -953,15 +968,17 @@ namespace pP::tests::detail::WorldLightingTrace {
             const auto occupancy = map.occupancy(palette_values);
             const SummedAreaTable sums{occupancy};
             const auto jumps = readJumpTable(fixture, attempt.m_snapshot.m_jump);
-            verifyJumps(jumps, occupancy, sums, label);
+            verifyJumps(_, jumps, occupancy, sums, label);
             for (const u8 value: jumps) {
                 PPR_TEST_ASSERT(std::ranges::find(kJumpValues, static_cast<u32>(value)) != kJumpValues.end());
                 seen[value] = true;
             }
 
-            std::println(
-                "WORLD_LIGHTING_TRACE jumps case={} occupied={} domain=[0,1,2,4,8,16,32]", label,
-                std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_TRACE jumps case={} occupied={} domain=[0,1,2,4,8,16,32]", label,
+                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }))
+                    .c_str());
         };
 
         {
@@ -1020,7 +1037,7 @@ namespace pP::tests::detail::WorldLightingTrace {
             PPR_TEST_ASSERT(seen[value]);
         }
 
-        std::println("WORLD_LIGHTING_TRACE jump_domain all_seven=true");
+        _.log(std::format("WORLD_LIGHTING_TRACE jump_domain all_seven=true").c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1033,7 +1050,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -1187,7 +1204,7 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             const auto occupancy = map.occupancy(palette_values);
             const SummedAreaTable sums{occupancy};
-            verifyJumps(second_jumps, occupancy, sums, "one_per_tile_repeat");
+            verifyJumps(_, second_jumps, occupancy, sums, "one_per_tile_repeat");
         }
 
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -1202,7 +1219,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         shader::SharedModule module{};
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -1230,7 +1247,9 @@ namespace pP::tests::detail::WorldLightingTrace {
             auto *const type = element(name);
             PPR_TEST_ASSERT(type != nullptr);
             const u32 measured = safe_narrowing(type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM));
-            std::println("WORLD_LIGHTING_TRACE reflected name={} stride={} expected={}", name, measured, stride);
+            _.log(
+                std::format("WORLD_LIGHTING_TRACE reflected name={} stride={} expected={}", name, measured, stride)
+                    .c_str());
             PPR_TEST_ASSERT(measured == stride);
         }
 
@@ -1273,11 +1292,13 @@ namespace pP::tests::detail::WorldLightingTrace {
                                  static_cast<u32>(rhi::FormatSupport::ShaderUavStore);
         PPR_TEST_ASSERT((static_cast<u32>(support) & required) == required);
 
-        std::println(
-            "WORLD_LIGHTING_TRACE dispatch visibility={}x{}x1x256 jump={}x{}x1x256 mask_stride=8 mask_bytes={} "
-            "jump_format=r8uint jump_texels={}",
-            kVisibilityDispatchGroups, kVisibilityDispatchGroups, kJumpDispatchGroups, kJumpDispatchGroups,
-            WorldLightingPass::kVisibilityBufferBytes, kEdge * kEdge);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_TRACE dispatch visibility={}x{}x1x256 jump={}x{}x1x256 mask_stride=8 mask_bytes={} "
+                "jump_format=r8uint jump_texels={}",
+                kVisibilityDispatchGroups, kVisibilityDispatchGroups, kJumpDispatchGroups, kJumpDispatchGroups,
+                WorldLightingPass::kVisibilityBufferBytes, kEdge * kEdge)
+                .c_str());
 
         PPR_TEST_ASSERT(not pass.shutdown());
     };
@@ -1291,7 +1312,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -1356,7 +1377,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_TEST_ASSERT(later_result.m_status[0u] == 2u);
         PPR_TEST_ASSERT(std::bit_cast<float>(later_result.m_words[2u * 5u + 4u]) == 0.0f);
 
-        std::println("WORLD_LIGHTING_TRACE numeric_failure index_min=0 later_index=2 containment=(0,0)");
+        _.log(std::format("WORLD_LIGHTING_TRACE numeric_failure index_min=0 later_index=2 containment=(0,0)").c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1369,7 +1390,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto palette_values = makePalette();
         const auto palette = uploadPalette(fixture, palette_values);
@@ -1429,7 +1450,9 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[19u]) == 0.0f);
         PPR_TEST_ASSERT(result.m_status[0u] == 3u);
 
-        std::println("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3");
+        _.log(
+            std::format("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3")
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 }

@@ -490,7 +490,7 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT((init_io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) != 0);
                 PPR_TEST_ASSERT(init_io.ConfigNavCaptureKeyboard);
                 PPR_TEST_ASSERT(not init_io.NavActive);
-                std::println("[nav-evidence] init: nav_kb=1 nav_gp=1 capnavkb=1 navactive=0");
+                _.log(std::format("[nav-evidence] init: nav_kb=1 nav_gp=1 capnavkb=1 navactive=0").c_str());
 
                 // Empty frame: nothing focused, nothing captured.
                 PPR_TEST_ASSERT(not ui->update(frame, viewport));
@@ -500,7 +500,9 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not empty_io.WantCaptureMouseUnlessPopupClose);
                 PPR_TEST_ASSERT(not empty_io.NavActive);
                 PPR_TEST_ASSERT(ImGui::GetCurrentContext()->ActiveId == 0);
-                std::println("[nav-evidence] empty: capturekb=0 capturemouse=0 unlesspopup=0 navactive=0 activeid=0");
+                _.log(
+                    std::format("[nav-evidence] empty: capturekb=0 capturemouse=0 unlesspopup=0 navactive=0 activeid=0")
+                        .c_str());
                 ImGui::EndFrame();
 
                 // Text focus: ActiveId branch captures, independent of nav.
@@ -519,10 +521,12 @@ namespace pP::tests::detail {
                 // ActiveId below documents, not asserts, that.
                 PPR_TEST_ASSERT(text_io.NavActive);
                 if (ImGui::GetCurrentContext()->ActiveId != 0) {
-                    std::println("[nav-evidence] text: capturekb=1 navactive=1 activeid!=0");
+                    _.log(std::format("[nav-evidence] text: capturekb=1 navactive=1 activeid!=0").c_str());
                 } else {
-                    std::println(
-                        "[nav-evidence] text: capturekb=1 navactive=1 activeid=0 (focus primes nav; typing activates)");
+                    _.log(
+                        std::format(
+                            "[nav-evidence] text: capturekb=1 navactive=1 activeid=0 (focus primes nav; typing activates)")
+                            .c_str());
                 }
                 ImGui::Render();
 
@@ -538,10 +542,12 @@ namespace pP::tests::detail {
                 ImGui::Render();
                 PPR_TEST_ASSERT(not ui->update(frame, viewport));
                 const ImGuiIO &plain_io = ImGui::GetIO();
-                std::println(
-                    "[nav-evidence] plain-focus: capturekb={} navactive={} activeid={} (recorded)",
-                    plain_io.WantCaptureKeyboard ? 1 : 0, plain_io.NavActive ? 1 : 0,
-                    static_cast<unsigned long long>(ImGui::GetCurrentContext()->ActiveId));
+                _.log(
+                    std::format(
+                        "[nav-evidence] plain-focus: capturekb={} navactive={} activeid={} (recorded)",
+                        plain_io.WantCaptureKeyboard ? 1 : 0, plain_io.NavActive ? 1 : 0,
+                        static_cast<unsigned long long>(ImGui::GetCurrentContext()->ActiveId))
+                        .c_str());
                 ImGui::Render();
 
                 // Nav ladder (no new widgets; NavWindow persists): with
@@ -553,20 +559,24 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(not ui->update(frame, viewport));
                 PPR_TEST_ASSERT(ImGui::GetIO().NavActive);
                 if (ImGui::GetIO().WantCaptureKeyboard) {
-                    std::println("[nav-evidence] navoff-kb: navactive=1 capturekb=1 (unexpected: record for Gate 1)");
+                    _.log(
+                        std::format("[nav-evidence] navoff-kb: navactive=1 capturekb=1 (unexpected: record for Gate 1)")
+                            .c_str());
                 } else {
                     // Reference-doc line 101 live: gamepad-only nav does NOT
                     // set WantCaptureKeyboard without the keyboard bit — the
                     // split is by design (keys flow; gamepad stays captured
                     // via NavActive + NavEnableGamepad).
-                    std::println("[nav-evidence] navoff-kb: navactive=1 capturekb=0 (split by design)");
+                    _.log(std::format("[nav-evidence] navoff-kb: navactive=1 capturekb=0 (split by design)").c_str());
                 }
                 ImGui::EndFrame();
                 ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
                 PPR_TEST_ASSERT(not ui->update(frame, viewport));
                 PPR_TEST_ASSERT(not ImGui::GetIO().NavActive);
                 PPR_TEST_ASSERT(not ImGui::GetIO().WantCaptureKeyboard);
-                std::println("[nav-evidence] navoff-both: navactive=0 capturekb=0 (nav-off defaults to player)");
+                _.log(
+                    std::format("[nav-evidence] navoff-both: navactive=0 capturekb=0 (nav-off defaults to player)")
+                        .c_str());
 
                 PPR_TEST_ASSERT(not ui->shutdown());
                 PPR_TEST_ASSERT(not ui->shutdown());

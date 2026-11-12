@@ -82,7 +82,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue{};
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -95,10 +95,12 @@ namespace pP::tests::detail::WorldLightingCascade {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_CASCADE api={} adapter={} backend={}",
-                info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_CASCADE api={} adapter={} backend={}",
+                    info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
+                    .c_str());
         }
 
         void shutdown() {
@@ -901,7 +903,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         // Every level, group and local probe over the first two blocks and a
         // block far beyond 2^32. The oracle re-derives selection, age, validity
@@ -1048,9 +1050,11 @@ namespace pP::tests::detail::WorldLightingCascade {
             }
         }
 
-        std::println(
-            "WORLD_LIGHTING_CASCADE schedule levels={} frames={} gpu_queries=true blocks_visit_once=true",
-            lighting::kCascadeLevels, frames.size());
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE schedule levels={} frames={} gpu_queries=true blocks_visit_once=true",
+                lighting::kCascadeLevels, frames.size())
+                .c_str());
     };
 
     PPR_UNIT_TEST (counter_exhaustion_rejects_admission_before_encoding) {
@@ -1058,7 +1062,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1098,7 +1102,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         runFrame(fixture, pass, inputs.inputs(), 4u, 0, 2u);
         PPR_TEST_ASSERT(pass.acceptedFrameForTest() == 5u);
 
-        std::println("WORLD_LIGHTING_CASCADE counter_exhaustion rejected_before_encoding=true");
+        _.log(std::format("WORLD_LIGHTING_CASCADE counter_exhaustion rejected_before_encoding=true").c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1111,7 +1115,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1193,7 +1197,7 @@ namespace pP::tests::detail::WorldLightingCascade {
             pass.discardUnsubmitted();
         }
 
-        std::println("WORLD_LIGHTING_CASCADE source_contracts rejected_before_encoding=true");
+        _.log(std::format("WORLD_LIGHTING_CASCADE source_contracts rejected_before_encoding=true").c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1202,7 +1206,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         auto sources = makeSourcePalette();
@@ -1294,9 +1298,11 @@ namespace pP::tests::detail::WorldLightingCascade {
         pass.pendingStatusWordsForTest()[kNumericStageTerminal * kNumericStatusWords + 0u] = 3u;
         PPR_TEST_ASSERT(pass.shutdown() == std::errc::state_not_recoverable);
 
-        std::println(
-            "WORLD_LIGHTING_CASCADE numeric_status source_range=index source_invalid=index "
-            "terminal/cascade=readback_injection teardown=reported");
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE numeric_status source_range=index source_invalid=index "
+                "terminal/cascade=readback_injection teardown=reported")
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -1308,7 +1314,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1400,9 +1406,11 @@ namespace pP::tests::detail::WorldLightingCascade {
             PPR_TEST_ASSERT(source_words[cell] == 0u);
         }
 
-        std::println(
-            "WORLD_LIGHTING_CASCADE storage records={} stride=8 level_bytes={} total_bytes={} levels=5 l0=none",
-            lighting::kCascadeRecordCount, lighting::kCascadeLevelBytes, lighting::kCascadeBufferBytes);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE storage records={} stride=8 level_bytes={} total_bytes={} levels=5 l0=none",
+                lighting::kCascadeRecordCount, lighting::kCascadeLevelBytes, lighting::kCascadeBufferBytes)
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1415,7 +1423,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1555,10 +1563,12 @@ namespace pP::tests::detail::WorldLightingCascade {
         }
 
         PPR_TEST_ASSERT(compared == 3u * lighting::cascadeProbeEdge(kTerminal) * lighting::cascadeProbeEdge(kTerminal));
-        std::println(
-            "WORLD_LIGHTING_CASCADE terminal_sky hours=-1,0,23 transmittance=0 seam_subsector={} seam_phi={} "
-            "stored_dir={} narrow!=sorted",
-            seam_subsector, seam_phi, stored_directions);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE terminal_sky hours=-1,0,23 transmittance=0 seam_subsector={} seam_phi={} "
+                "stored_dir={} narrow!=sorted",
+                seam_subsector, seam_phi, stored_directions)
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1567,7 +1577,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1625,8 +1635,11 @@ namespace pP::tests::detail::WorldLightingCascade {
 
         // Outside start and re-entry: the corner probe's low-angle sectors start
         // beyond the map and must still enter it.
-        std::println(
-            "WORLD_LIGHTING_CASCADE terminal_exit hits={} farthest_cells={} finite_sentinel=1048.576", hits, farthest);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE terminal_exit hits={} farthest_cells={} finite_sentinel=1048.576", hits,
+                farthest)
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1639,7 +1652,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1666,7 +1679,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(words[cellIndex(200u, 100u)] == 0u);
         PPR_TEST_ASSERT(words[cellIndex(0u, 0u)] == 0u);
 
-        std::println("WORLD_LIGHTING_CASCADE source_cold_start emission_only=true feedback_zero=true");
+        _.log(std::format("WORLD_LIGHTING_CASCADE source_cold_start emission_only=true feedback_zero=true").c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1675,7 +1688,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1718,7 +1731,9 @@ namespace pP::tests::detail::WorldLightingCascade {
         // The opaque diffuse receiver does take the prior mean.
         PPR_TEST_ASSERT(words[cellIndex(600u, 300u)] != 0u);
 
-        std::println("WORLD_LIGHTING_CASCADE source_metal diffuse=0 receive_only=0 hot_metal=emission+thermal");
+        _.log(
+            std::format("WORLD_LIGHTING_CASCADE source_metal diffuse=0 receive_only=0 hot_metal=emission+thermal")
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1727,7 +1742,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1749,9 +1764,11 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(closeRGB9E5(actual, expected));
         PPR_TEST_ASSERT(expected.y > 0.0f);
 
-        std::println(
-            "WORLD_LIGHTING_CASCADE source_thermal kelvin=4000 sampled=({}, {}, {})", expected.x, expected.y,
-            expected.z);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE source_thermal kelvin=4000 sampled=({}, {}, {})", expected.x, expected.y,
+                expected.z)
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1760,7 +1777,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1842,7 +1859,9 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(supplied[0u] != 0u);
         PPR_TEST_ASSERT(pass.fineCHForTest() != nullptr);
 
-        std::println("WORLD_LIGHTING_CASCADE source_feedback emission+thermal+diffuse*previous_mean=y0_scale");
+        _.log(
+            std::format("WORLD_LIGHTING_CASCADE source_feedback emission+thermal+diffuse*previous_mean=y0_scale")
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1855,7 +1874,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -1920,8 +1939,10 @@ namespace pP::tests::detail::WorldLightingCascade {
         }
 
         PPR_TEST_ASSERT(compared > 0u);
-        std::println(
-            "WORLD_LIGHTING_CASCADE merge level=2 parent_sectors=4 spatial_weights=bilinear compared={}", compared);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE merge level=2 parent_sectors=4 spatial_weights=bilinear compared={}", compared)
+                .c_str());
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1930,7 +1951,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto visuals = makePalette();
         const auto sources = makeSourcePalette();
@@ -2016,10 +2037,12 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(retained_count == 3u * groups);
         PPR_TEST_ASSERT(retained_records == 5u * 3u * groups);
         PPR_TEST_ASSERT(not pass.shutdown());
-        std::println(
-            "WORLD_LIGHTING_CASCADE retention selected={} retained={} retained_records={} "
-            "source_before_tracing=true",
-            selected_count, retained_count, retained_records);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CASCADE retention selected={} retained={} retained_records={} "
+                "source_before_tracing=true",
+                selected_count, retained_count, retained_records)
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -2031,7 +2054,7 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         const auto stride_of = [&](const std::filesystem::path &file, const std::string_view name) -> u32 {
             shader::SharedModule module{};
@@ -2123,7 +2146,9 @@ namespace pP::tests::detail::WorldLightingCascade {
             }
         }
 
-        std::println("WORLD_LIGHTING_CASCADE reflected interval_stride=8 ch_stride=32 source_stride=8 constants=ok");
+        _.log(
+            std::format("WORLD_LIGHTING_CASCADE reflected interval_stride=8 ch_stride=32 source_stride=8 constants=ok")
+                .c_str());
     };
 }
 

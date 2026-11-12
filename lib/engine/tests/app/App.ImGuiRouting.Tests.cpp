@@ -3099,6 +3099,7 @@ namespace pP::tests::detail {
         // cleared on construction so a stale row from an earlier run can
         // never be mistaken for this one.
         struct Evidence final {
+            UnitTest::IRun &m_run;
             std::filesystem::path m_dir{};
             std::string m_build{};
             std::string m_loader{};
@@ -3108,7 +3109,7 @@ namespace pP::tests::detail {
             std::ofstream m_glyph_rows{};
             std::ofstream m_run_log{};
 
-            explicit Evidence(const std::string_view build, const std::string_view loader) {
+            Evidence(UnitTest::IRun &_, const std::string_view build, const std::string_view loader) : m_run(_) {
                 m_build = build;
                 m_loader = loader;
                 m_loader_tag = loader.starts_with("FreeType") ? "freetype" : "stb";
@@ -3146,7 +3147,7 @@ namespace pP::tests::detail {
             }
 
             void note(const std::string &line) {
-                std::println("[m4-rasterizer] {}", line);
+                m_run.log(std::format("[m4-rasterizer] {}", line).c_str());
                 m_run_log << line << '\n';
             }
 
@@ -3417,7 +3418,7 @@ namespace pP::tests::detail {
 #else
         constexpr std::string_view build_tag{"default"};
 #endif
-        FontRasterizer::Evidence evidence{build_tag, loader_name};
+        FontRasterizer::Evidence evidence{_, build_tag, loader_name};
 
         // Completes the open frame; the atlas is unlocked only afterwards.
         const auto bounce = [&](const int2 framebuffer) {

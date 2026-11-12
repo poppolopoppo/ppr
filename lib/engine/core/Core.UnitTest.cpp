@@ -375,9 +375,13 @@ namespace pP {
         if (m_context.m_log.has_value()) {
             (*m_context.m_log)(*this, msg, location);
         } else {
-            std::println(
-                m_retained_log, "{}: {}({}): {}", std::string_view(m_test.m_name), location.file_name(),
-                location.line(), std::string_view(msg));
+            // libc++ 23's ostream `std::println` growth path trips ASan's
+            // sized-delete check for long retained messages; format first and
+            // append through the string stream's ordinary insertion path.
+            const std::string line = std::format(
+                "{}: {}({}): {}", std::string_view(m_test.m_name), location.file_name(), location.line(),
+                std::string_view(msg));
+            m_retained_log << line;
         }
     }
 

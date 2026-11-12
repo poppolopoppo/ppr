@@ -253,10 +253,12 @@ namespace pP::tests::detail::WorldLightingCodec {
             makeInterval(1.0f, 1.0f, 1.0f, std::numeric_limits<float>::quiet_NaN()));
         PPR_TEST_ASSERT(not nan_transmittance.has_value());
 
-        std::println(
-            "WORLD_LIGHTING_CODEC interval_half=0x{:04x},0x{:04x},0x{:04x} max=0x{:04x}",
-            intervalHalf(*tie_low, 0u, false), intervalHalf(*tie_high, 0u, false),
-            intervalHalf(*min_subnormal, 0u, false), intervalHalf(*maximum, 0u, false));
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC interval_half=0x{:04x},0x{:04x},0x{:04x} max=0x{:04x}",
+                intervalHalf(*tie_low, 0u, false), intervalHalf(*tie_high, 0u, false),
+                intervalHalf(*min_subnormal, 0u, false), intervalHalf(*maximum, 0u, false))
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -304,7 +306,9 @@ namespace pP::tests::detail::WorldLightingCodec {
         const auto infinity = packRGB9E5(float3{std::numeric_limits<float>::infinity(), 0.0f, 0.0f});
         PPR_TEST_ASSERT(not infinity.has_value() and infinity.error() == std::errc::invalid_argument);
 
-        std::println("WORLD_LIGHTING_CODEC rgb9e5_one=0x{:08x} max=0x{:08x} tie=0x{:08x}", *one, *maximum, *tie_up);
+        _.log(
+            std::format("WORLD_LIGHTING_CODEC rgb9e5_one=0x{:08x} max=0x{:08x} tie=0x{:08x}", *one, *maximum, *tie_up)
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -385,9 +389,11 @@ namespace pP::tests::detail::WorldLightingCodec {
             PPR_TEST_ASSERT(std::abs(expected.z - actual.z) <= tolerance + 1.0e-6f);
         }
 
-        std::println(
-            "WORLD_LIGHTING_CODEC ch_endpoint_positive={} ch_endpoint_negative={} ch_zero_scale=true",
-            decoded_positive.m_coefficients[1].x, unpackCH(*packed_negative).m_coefficients[1].x);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC ch_endpoint_positive={} ch_endpoint_negative={} ch_zero_scale=true",
+                decoded_positive.m_coefficients[1].x, unpackCH(*packed_negative).m_coefficients[1].x)
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -422,7 +428,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         const auto infinity = packCell(1u, std::numeric_limits<double>::infinity());
         PPR_TEST_ASSERT(not infinity.has_value() and infinity.error() == std::errc::invalid_argument);
 
-        std::println("WORLD_LIGHTING_CODEC cell_zero=0x{:08x} cell_max=0x{:08x}", *zero, *maximum);
+        _.log(std::format("WORLD_LIGHTING_CODEC cell_zero=0x{:08x} cell_max=0x{:08x}", *zero, *maximum).c_str());
     };
 
     // ------------------------------------------------------------------
@@ -496,9 +502,11 @@ namespace pP::tests::detail::WorldLightingCodec {
         PPR_TEST_ASSERT(
             invalid(makeSourceMaterial(emission, strength, tint, mean, std::numeric_limits<float>::quiet_NaN())));
 
-        std::println(
-            "WORLD_LIGHTING_CODEC source_emission=0x{:08x} source_diffuse=0x{:08x} metal_diffuse=0x{:08x}",
-            material->m_emission, material->m_diffuse, pure_metal->m_diffuse);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC source_emission=0x{:08x} source_diffuse=0x{:08x} metal_diffuse=0x{:08x}",
+                material->m_emission, material->m_diffuse, pure_metal->m_diffuse)
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -538,7 +546,7 @@ namespace pP::tests::detail::WorldLightingCodec {
             }
         }
 
-        std::println("WORLD_LIGHTING_CODEC last_trace_frame_schedule=fixed4");
+        _.log(std::format("WORLD_LIGHTING_CODEC last_trace_frame_schedule=fixed4").c_str());
     };
 
     // ------------------------------------------------------------------
@@ -552,7 +560,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue;
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -565,9 +573,12 @@ namespace pP::tests::detail::WorldLightingCodec {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_CODEC api={} adapter={} backend={}", info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_CODEC api={} adapter={} backend={}",
+                    info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
+                    .c_str());
         }
 
         void shutdown() {
@@ -710,7 +721,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -748,7 +759,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         auto pipeline = makeComputePipeline(device, program);
         PPR_TEST_ASSERT(pipeline.m_pipeline.get() != nullptr and pipeline.m_root.get() != nullptr);
 
-        std::println("WORLD_LIGHTING_CODEC reflection_strides=8/32/8 word_offsets=0/4/8..28");
+        _.log(std::format("WORLD_LIGHTING_CODEC reflection_strides=8/32/8 word_offsets=0/4/8..28").c_str());
     };
 
     // ------------------------------------------------------------------
@@ -760,7 +771,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -929,7 +940,7 @@ namespace pP::tests::detail::WorldLightingCodec {
             PPR_TEST_ASSERT(gpu_rgb[index * 4u + 2u] == expected_rgb.z);
         }
 
-        std::println("WORLD_LIGHTING_CODEC cpu_gpu_decode_records={} agreement=true", kRecordCount);
+        _.log(std::format("WORLD_LIGHTING_CODEC cpu_gpu_decode_records={} agreement=true", kRecordCount).c_str());
     };
 
     // ------------------------------------------------------------------
@@ -1017,9 +1028,11 @@ namespace pP::tests::detail::WorldLightingCodec {
         PPR_TEST_ASSERT(std::abs(last_row_g - 110.264) <= 110.264 * 1.0e-3);
         PPR_TEST_ASSERT(std::abs(last_row_b - 238.496) <= 238.496 * 1.0e-3);
 
-        std::println(
-            "WORLD_LIGHTING_CODEC y6500={:.9f} table_bytes={} row65504=({:.5f},{:.5f},{:.5f})", reference_y,
-            table.size(), last_row_r, last_row_g, last_row_b);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC y6500={:.9f} table_bytes={} row65504=({:.5f},{:.5f},{:.5f})", reference_y,
+                table.size(), last_row_r, last_row_g, last_row_b)
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -1046,7 +1059,7 @@ namespace pP::tests::detail::WorldLightingCodec {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -1143,11 +1156,13 @@ namespace pP::tests::detail::WorldLightingCodec {
 
         PPR_TEST_ASSERT(maximum_relative_error <= 1.0e-3);
 
-        std::println(
-            "WORLD_LIGHTING_CODEC thermal_half_values={} max_relative={:.9f} at_kelvin={:.5f} max_absolute={:.9f} "
-            "rgb9e5_max_relative={:.9f}",
-            kFiniteHalfCount, maximum_relative_error, maximum_kelvin, maximum_absolute_error,
-            maximum_rgb9e5_relative_error);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC thermal_half_values={} max_relative={:.9f} at_kelvin={:.5f} max_absolute={:.9f} "
+                "rgb9e5_max_relative={:.9f}",
+                kFiniteHalfCount, maximum_relative_error, maximum_kelvin, maximum_absolute_error,
+                maximum_rgb9e5_relative_error)
+                .c_str());
     };
 }
 

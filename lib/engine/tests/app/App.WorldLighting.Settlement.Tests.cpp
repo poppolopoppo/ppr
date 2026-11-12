@@ -25,7 +25,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue{};
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -37,9 +37,11 @@ namespace pP::tests::detail::WorldLightingSettlement {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_SETTLEMENT api={} adapter={}", info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown");
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_SETTLEMENT api={} adapter={}", info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown")
+                    .c_str());
         }
 
         void shutdown() {
@@ -186,7 +188,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Renderer renderer{};
         PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
@@ -228,7 +230,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Renderer renderer{};
         PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
@@ -291,7 +293,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         Renderer renderer{};
         PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
@@ -390,7 +392,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         GridPass grid{};
         PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
@@ -439,7 +441,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         GridPass grid{};
         PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
@@ -494,7 +496,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         PostProcessPass post{};
         PPR_TEST_ASSERT(not post.initialize(*fixture.m_shaders, std::filesystem::current_path()));
@@ -735,7 +737,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         GridPass grid{};
         PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
@@ -782,7 +784,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         ReconstructionPass reconstruction{};
         PostProcessPass post{};

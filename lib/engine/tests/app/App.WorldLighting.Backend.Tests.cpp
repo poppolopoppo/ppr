@@ -71,7 +71,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         safe_ptr<IRhiService> m_rhi{IRhiService::get()};
         rhi::ComPtr<rhi::ICommandQueue> m_queue;
 
-        void initialize() {
+        void initialize(UnitTest::IRun &_) {
             PPR_TEST_ASSERT(not m_shaders->initialize());
 #ifdef _WIN32
             constexpr auto backend = rhi::DeviceType::D3D12;
@@ -84,11 +84,13 @@ namespace pP::tests::detail::WorldLightingBackend {
                 not make_error_code(m_rhi->getDevice().getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
 
             const rhi::DeviceInfo &info = m_rhi->getDevice().getInfo();
-            std::println(
-                "WORLD_LIGHTING_BACKEND api={} adapter={} backend={} timestamp_hz={}",
-                info.apiName != nullptr ? info.apiName : "unknown",
-                info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType),
-                info.timestampFrequency);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_BACKEND api={} adapter={} backend={} timestamp_hz={}",
+                    info.apiName != nullptr ? info.apiName : "unknown",
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType),
+                    info.timestampFrequency)
+                    .c_str());
         }
 
         void shutdown() {
@@ -284,7 +286,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         rhi::FormatSupport support{};
@@ -294,8 +296,10 @@ namespace pP::tests::detail::WorldLightingBackend {
                                  static_cast<u32>(rhi::FormatSupport::ShaderLoad) |
                                  static_cast<u32>(rhi::FormatSupport::ShaderUavLoad) |
                                  static_cast<u32>(rhi::FormatSupport::ShaderUavStore);
-        std::println(
-            "WORLD_LIGHTING_BACKEND r8_uint_support=0x{:x} required=0x{:x}", static_cast<u32>(support), required);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_BACKEND r8_uint_support=0x{:x} required=0x{:x}", static_cast<u32>(support), required)
+                .c_str());
         PPR_TEST_ASSERT((static_cast<u32>(support) & required) == required);
 
         shader::SharedModule module{};
@@ -376,9 +380,11 @@ namespace pP::tests::detail::WorldLightingBackend {
         }
 
         PPR_TEST_ASSERT(jump_values == std::array{0u, 1u, 2u, 4u, 8u, 16u, 32u});
-        std::println(
-            "WORLD_LIGHTING_BACKEND r8_texels={} jump_values={},{},{},{},{},{},{}", texels.size(), jump_values[0],
-            jump_values[1], jump_values[2], jump_values[3], jump_values[4], jump_values[5], jump_values[6]);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_BACKEND r8_texels={} jump_values={},{},{},{},{},{},{}", texels.size(), jump_values[0],
+                jump_values[1], jump_values[2], jump_values[3], jump_values[4], jump_values[5], jump_values[6])
+                .c_str());
     };
 
     // ------------------------------------------------------------------
@@ -462,7 +468,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
 
         shader::SharedModule module{};
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -491,10 +497,12 @@ namespace pP::tests::detail::WorldLightingBackend {
                 PPR_TEST_ASSERT(result.m_rows[cell] == expected_rows[cell]);
             }
 
-            std::println(
-                "WORLD_LIGHTING_BACKEND winner_order={} keys={:x},{:x},{:x},{:x} rows={},{},{},{}", order,
-                result.m_keys[0], result.m_keys[1], result.m_keys[2], result.m_keys[3], result.m_rows[0],
-                result.m_rows[1], result.m_rows[2], result.m_rows[3]);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_BACKEND winner_order={} keys={:x},{:x},{:x},{:x} rows={},{},{},{}", order,
+                    result.m_keys[0], result.m_keys[1], result.m_keys[2], result.m_keys[3], result.m_rows[0],
+                    result.m_rows[1], result.m_rows[2], result.m_rows[3])
+                    .c_str());
         };
 
         const auto forward = qualifyWinners(fixture, module, candidates);
@@ -527,7 +535,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -558,10 +566,12 @@ namespace pP::tests::detail::WorldLightingBackend {
              }}) {
             auto *const type = element(name);
             PPR_TEST_ASSERT(type != nullptr);
-            std::println(
-                "WORLD_LIGHTING_BACKEND reflected name={} stride={} size={} expected_stride={}", name,
-                type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM), type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                stride);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_BACKEND reflected name={} stride={} size={} expected_stride={}", name,
+                    type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM), type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM),
+                    stride)
+                    .c_str());
             PPR_TEST_ASSERT(type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == stride);
         }
 
@@ -607,7 +617,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         auto pipeline = makeComputePipeline(device, program);
         PPR_TEST_ASSERT(pipeline.m_pipeline.get() != nullptr and pipeline.m_root.get() != nullptr);
 
-        std::println("WORLD_LIGHTING_BACKEND strides=4/8/32 metadata_offsets=0/4/8/12/16/20/24/28");
+        _.log(std::format("WORLD_LIGHTING_BACKEND strides=4/8/32 metadata_offsets=0/4/8/12/16/20/24/28").c_str());
     };
 
     // ------------------------------------------------------------------
@@ -742,10 +752,12 @@ namespace pP::tests::detail::WorldLightingBackend {
         {5.0 / 8.0, 7.0 / 8.0},
     }};
 
-    void qualifySampleFeature(rhi::IDevice &device) {
-        std::println(
-            "WORLD_LIGHTING_BACKEND sample_rate_shading={} standard_sample_locations={}",
-            device.hasFeature("sample-rate-shading"), device.hasFeature("standard-sample-locations-4"));
+    void qualifySampleFeature(UnitTest::IRun &_, rhi::IDevice &device) {
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_BACKEND sample_rate_shading={} standard_sample_locations={}",
+                device.hasFeature("sample-rate-shading"), device.hasFeature("standard-sample-locations-4"))
+                .c_str());
         PPR_TEST_ASSERT(device.hasFeature("sample-rate-shading"));
         PPR_TEST_ASSERT(device.hasFeature("standard-sample-locations-4"));
     }
@@ -755,8 +767,8 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
-        qualifySampleFeature(fixture.device());
+        fixture.initialize(_);
+        qualifySampleFeature(_, fixture.device());
 
         SamplePrograms programs{fixture, "fragmentSamplePositions", 1.0f};
         const auto pixels = programs.run(fixture);
@@ -773,9 +785,11 @@ namespace pP::tests::detail::WorldLightingBackend {
                     PPR_TEST_ASSERT(std::abs(measured_y - expected_y) <= 1e-4);
                     PPR_TEST_ASSERT(readHalf(pixels, x * 4u + sample, y, 2u) == static_cast<float>(sample));
 
-                    std::println(
-                        "WORLD_LIGHTING_BACKEND sample_pixel=({}, {}) sample={} position=({:.6f}, {:.6f})", x, y,
-                        sample, measured_x, measured_y);
+                    _.log(
+                        std::format(
+                            "WORLD_LIGHTING_BACKEND sample_pixel=({}, {}) sample={} position=({:.6f}, {:.6f})", x, y,
+                            sample, measured_x, measured_y)
+                            .c_str());
                 }
             }
         }
@@ -786,8 +800,8 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
-        qualifySampleFeature(fixture.device());
+        fixture.initialize(_);
+        qualifySampleFeature(_, fixture.device());
 
         // Two half-pixel cells per pixel put a material boundary inside every
         // raster pixel: samples 0/2 select cell 2x, samples 1/3 select 2x+1.
@@ -812,9 +826,11 @@ namespace pP::tests::detail::WorldLightingBackend {
 
                 PPR_TEST_ASSERT(red[0] == red[2] and red[1] == red[3]);
                 PPR_TEST_ASSERT(red[0] != red[1]);
-                std::println(
-                    "WORLD_LIGHTING_BACKEND boundary_pixel=({}, {}) sample_colors={},{},{},{}", x, y, red[0], red[1],
-                    red[2], red[3]);
+                _.log(
+                    std::format(
+                        "WORLD_LIGHTING_BACKEND boundary_pixel=({}, {}) sample_colors={},{},{},{}", x, y, red[0],
+                        red[1], red[2], red[3])
+                        .c_str());
             }
         }
     };
@@ -828,7 +844,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -921,7 +937,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_TEST_ASSERT(read_pixel(history_a, 1u) == 0.5f);
         PPR_TEST_ASSERT(read_pixel(history_a, 2u) == 0.25f);
         PPR_TEST_ASSERT(read_pixel(history_a, 3u) == 1.0f);
-        std::println("WORLD_LIGHTING_BACKEND history_a_r=3 history_b_r=2 ordered=true");
+        _.log(std::format("WORLD_LIGHTING_BACKEND history_a_r=3 history_b_r=2 ordered=true").c_str());
     };
 
     PPR_UNIT_TEST (status_copy_reports_atomic_minima_and_reserved_zeroes) {
@@ -929,7 +945,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_DEFER {
             fixture.shutdown();
         };
-        fixture.initialize();
+        fixture.initialize(_);
         auto &device = fixture.device();
 
         shader::SharedModule module{};
@@ -999,9 +1015,11 @@ namespace pP::tests::detail::WorldLightingBackend {
             PPR_TEST_ASSERT(results[index] == (rejected ? 0u : 1u));
         }
 
-        std::println(
-            "WORLD_LIGHTING_BACKEND status_invalid_min={} status_range_min={} reserved_zero=true", record[0],
-            record[1]);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_BACKEND status_invalid_min={} status_range_min={} reserved_zero=true", record[0],
+                record[1])
+                .c_str());
     };
 } // namespace pP::tests::detail::WorldLightingBackend
 

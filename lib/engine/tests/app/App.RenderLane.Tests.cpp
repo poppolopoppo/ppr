@@ -916,11 +916,14 @@ namespace pP::tests::detail {
             const auto repeated_wait = lane.waitOperation(*next_ticket);
             PPR_TEST_ASSERT(not repeated_wait and repeated_wait.error() == std::errc::invalid_argument);
 
-            std::println(
-                "owned lane layout ticket={}/{} completion={}/{} lane={}/{} availability={}/{}",
-                sizeof(RenderLaneOperationTicket), alignof(RenderLaneOperationTicket),
-                sizeof(RenderLaneOperationCompletion), alignof(RenderLaneOperationCompletion), sizeof(RenderLane),
-                alignof(RenderLane), sizeof(RenderLaneOperationAvailability), alignof(RenderLaneOperationAvailability));
+            _.log(
+                std::format(
+                    "owned lane layout ticket={}/{} completion={}/{} lane={}/{} availability={}/{}",
+                    sizeof(RenderLaneOperationTicket), alignof(RenderLaneOperationTicket),
+                    sizeof(RenderLaneOperationCompletion), alignof(RenderLaneOperationCompletion), sizeof(RenderLane),
+                    alignof(RenderLane), sizeof(RenderLaneOperationAvailability),
+                    alignof(RenderLaneOperationAvailability))
+                    .c_str());
         };
 
         PPR_UNIT_TEST (queued_operation_cancel_destroys_captures_before_acknowledgement) {
@@ -1131,9 +1134,11 @@ namespace pP::tests::detail {
             PPR_TEST_ASSERT(probe.m_destructors.load() == running_destructors + 1u);
             PPR_TEST_ASSERT(probe.m_checks.load() >= 4u and not probe.m_failed.load());
 
-            std::println(
-                "small lane callable size={} align={} nothrow_move={}", sizeof(SmallCallable), alignof(SmallCallable),
-                std::is_nothrow_move_constructible_v<SmallCallable>);
+            _.log(
+                std::format(
+                    "small lane callable size={} align={} nothrow_move={}", sizeof(SmallCallable),
+                    alignof(SmallCallable), std::is_nothrow_move_constructible_v<SmallCallable>)
+                    .c_str());
         };
 
         PPR_UNIT_TEST (running_operation_cancel_retains_original_error_and_post_stop_take) {
