@@ -162,6 +162,48 @@ namespace pP {
             static_cast<double>(visual.m_emissive_strength), tint, texture_mean, visual.m_metallic);
     }
 
+    // ------------------------------------------------------------------
+    // per-instance particle descriptions
+    // ------------------------------------------------------------------
+
+    const GridTerrainVisual *particleMaterialVisual(
+        const std::span<const GridTerrainVisual> visuals, const u32 material_flags_temperature) noexcept {
+        const u32 material = material_flags_temperature & 0xfffu;
+        // The GPU palette is dense by material id and every unpopulated entry
+        // keeps m_material_id == 0, so this lookup is the same identity test as
+        // g_terrain_visuals[material].m_material_id == material in the shader.
+        const auto found = std::ranges::find(visuals, material, &GridTerrainVisual::m_material_id);
+        return found == visuals.end() ? nullptr : &*found;
+    }
+
+    GridParticleDescriptionSelection selectParticleDescription(
+        const std::span<const GridTerrainVisual> visuals, const u32 material_flags_temperature,
+        const EGridParticlePhase phase) noexcept {
+        GridParticleDescriptionSelection selection{};
+        const GridTerrainVisual *const visual = particleMaterialVisual(visuals, material_flags_temperature);
+        // Finding D9: an absent material rejects the instance. It never falls
+        // back to palette entry 0 or to the resolved destination cell's material.
+        if (visual == nullptr) {
+            selection.m_reject = EGridParticleDescriptionReject::unknown_material;
+            return selection;
+        }
+
+        // The phase is authored on the row's own material. An unauthored phase
+        // keeps the solid description, exactly as the draw-time branch does.
+        const bool liquid = (visual->m_surface_flags & kGridSurfaceParticleLiquid) != 0u and
+                            (visual->m_surface_flags & kGridSurfaceParticleSolid) == 0u;
+        if ((phase == EGridParticlePhase::liquid) != liquid) {
+            selection.m_reject = EGridParticleDescriptionReject::phase_mismatch;
+            return selection;
+        }
+
+        selection.m_description = GridParticleDescription{
+            .m_visual = visual,
+            .m_phase = phase,
+            .m_canonical_word = (material_flags_temperature & 0xfffu) | (material_flags_temperature & 0xffff'0000u)};
+        return selection;
+    }
+
     namespace {
         [[nodiscard]] std::array<float, 3u> filteredAlbedoMean_(const image::ImageAsset &source) {
             const auto &level = source.m_subresources.back();
@@ -382,9 +424,14 @@ namespace pP {
         m_visibility_prepared = false;
         m_background_ready = false;
         m_background_inputs_prepared = false;
-        for (auto *const pipeline:
-            {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
-                &m_background_spatial_pipeline}) {
+        // A frame's particle draws are admitted by that frame's preparation. The
+        // reset lives here so the opaque, optical and gas class draws can all
+        // share the one preparation this frame encoded.
+        if (m_world.m_gpu_particles) {
+            m_world.m_gpu_particles->m_prepared = false;
+        }
+
+        for (auto *const pipeline: cachedPipelines_()) {
             if (*pipeline) {
                 (**pipeline).m_slot_encoded.fill(false);
             }
@@ -1624,9 +1671,7 @@ namespace pP {
             m_background_slots[m_background_cursor].m_last_use = submit_value;
         }
 
-        for (auto *const pipeline:
-            {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
-                &m_background_spatial_pipeline}) {
+        for (auto *const pipeline: cachedPipelines_()) {
             if (*pipeline) {
                 for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
                     if ((**pipeline).m_slot_encoded[slot]) {
@@ -1653,9 +1698,7 @@ namespace pP {
             // releasing the retired bundle or admitting another candidate.
             // Active roots with unfinished readers remain untouched.
             bool roots_detached = true;
-            for (auto *const pipeline:
-                {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
-                    &m_background_spatial_pipeline}) {
+            for (auto *const pipeline: cachedPipelines_()) {
                 if (*pipeline) {
                     for (u32 slot = 0u; slot < kTileRingSize; ++slot) {
                         auto &entry = **pipeline;
@@ -2545,6 +2588,7 @@ namespace pP {
         }
         out.m_particle_uploads = m_particle_uploads;
         out.m_particle_uploaded_bytes = m_particle_uploaded_bytes;
+        out.m_particle_description_rejections = m_particle_description_rejections;
         const auto count_particles = [&](const WorldResources &world) {
             if (world.m_gpu_particles) {
                 const auto &particles = *world.m_gpu_particles;
@@ -2584,7 +2628,9 @@ namespace pP {
                 out.m_background_target_bytes += static_cast<u64>(slot.m_width) * slot.m_height * 8u;
             }
         }
-        for (const auto *const pipeline: {&m_gpu_particle_pipeline}) {
+        for (const auto *const pipeline:
+            {&m_particle_classes[0u].m_pipeline, &m_particle_classes[1u].m_pipeline,
+                &m_particle_classes[2u].m_pipeline}) {
             if (*pipeline) {
                 for (auto *const buffer: (*pipeline)->m_slot_particle_buffers) {
                     out.m_particle_root_bindings += buffer != nullptr ? 1u : 0u;
@@ -3449,17 +3495,22 @@ namespace pP {
         return {};
     }
 
-    std::error_code GridPass::bindGridPass_(rhi::ShaderCursor &cursor, const u32 pass) {
-        // CPU mirror of the Slang GridPassSwitch: scalar padding keeps the
-        // ConstantBuffer layout identical to the four-u32 shader struct.
+    std::error_code GridPass::bindGridPass_(
+        rhi::ShaderCursor &cursor, const u32 pass, const EGridParticleDrawClass particle_class) {
+        // CPU mirror of the Slang GridPassSwitch: the particle draw class rides
+        // the same 16-byte constant buffer as the terrain pass selector, so the
+        // particle vertex and fragment stages both read the class of this draw.
         struct GridPassSwitch {
             u32 m_pass{};
-            u32 m_pad0{}, m_pad1{}, m_pad2{};
+            u32 m_particle_class{};
+            u32 m_pad1{}, m_pad2{};
         };
         static_assert(sizeof(GridPassSwitch) == 16u and alignof(GridPassSwitch) == 4u);
+        static_assert(PPR_OFFSETOF(GridPassSwitch, m_particle_class) == 4u);
 
         GridPassSwitch sw{};
         sw.m_pass = pass;
+        sw.m_particle_class = static_cast<u32>(particle_class);
         rhi::ShaderCursor constants{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_grid_pass"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
@@ -3912,8 +3963,10 @@ namespace pP {
     std::error_code GridPass::ensureSpatialPrograms_(rhi::IDevice &device, const bool reactive) {
         auto &terrain_program = reactive ? m_reactive_shader_program : m_spatial_shader_program;
         auto &background_program = reactive ? m_reactive_background_program : m_background_spatial_program;
-        auto &particle_program = reactive ? m_reactive_particle_program : m_gpu_particle_spatial_program;
-        if (terrain_program and background_program and particle_program) {
+        auto &particle_gas_program = reactive ? m_reactive_particle_gas_program : m_gpu_particle_gas_spatial_program;
+        auto &particle_solid_liquid_program = reactive ? m_reactive_particle_solid_liquid_program
+                                                       : m_gpu_particle_solid_liquid_spatial_program;
+        if (terrain_program and background_program and particle_gas_program and particle_solid_liquid_program) {
             return {};
         }
 
@@ -3946,7 +3999,7 @@ namespace pP {
             return {};
         };
 
-        rhi::ComPtr<rhi::IShaderProgram> terrain, background, particles;
+        rhi::ComPtr<rhi::IShaderProgram> terrain, background, particles, solid_liquid;
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
                           "grid_tiles.slang", "grid_tiles", "vertexGridMain",
@@ -3960,8 +4013,13 @@ namespace pP {
             GridPass, create(
                           "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain",
                           reactive ? "fragmentParticleReactive" : "fragmentParticleSpatial", particles));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create(
+                          "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain",
+                          reactive ? "fragmentSolidLiquidReactive" : "fragmentSolidLiquidSpatial", solid_liquid));
 
-        particle_program = std::move(particles);
+        particle_gas_program = std::move(particles);
+        particle_solid_liquid_program = std::move(solid_liquid);
         terrain_program = std::move(terrain);
         background_program = std::move(background);
         return {};
@@ -3996,7 +4054,11 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
                           "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain", "fragmentParticleMain",
-                          m_gpu_particle_program));
+                          m_gpu_particle_gas_program));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create(
+                          "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain", "fragmentSolidLiquidMain",
+                          m_gpu_particle_solid_liquid_program));
 
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
@@ -4011,8 +4073,8 @@ namespace pP {
 
     Expected<GridPass::GridCachedPipeline *> GridPass::opticalPipeline_(
         rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *const program,
-        std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, const bool blend,
-        const bool premultiplied) {
+        std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, const GridPipelineState state,
+        rhi::IShaderProgram *const reactive_program) {
         const auto formats = signature.colorFormats();
         const bool reactive = formats.size() == 2u and
                               formats[0] == rhi::Format::RGBA16Float and
@@ -4030,15 +4092,15 @@ namespace pP {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::not_supported));
 
+        // A reactive signature needs the matching MRT entry point. The caller
+        // names it explicitly, so no pointer comparison decides the lane.
         auto *selected_program = program;
         if (reactive) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureSpatialPrograms_(device, true));
-            if (program == m_background_spatial_program.get())
-                selected_program = m_reactive_background_program.get();
-            else if (program == m_gpu_particle_spatial_program.get())
-                selected_program = m_reactive_particle_program.get();
-            else
-                PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, std::make_error_code(std::errc::invalid_argument));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GridPass,
+                reactive_program != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            selected_program = reactive_program;
         }
 
         if (cache and ((key and static_cast<const RenderPipelineSignature &>(*key) != signature) or
@@ -4053,8 +4115,8 @@ namespace pP {
             std::array<rhi::ColorTargetDesc, 2u> targets{};
             auto &target = targets[0];
             target.format = signature.colorFormats().front();
-            target.enableBlend = blend;
-            target.color.srcFactor = premultiplied ? rhi::BlendFactor::One : rhi::BlendFactor::SrcAlpha;
+            target.enableBlend = state.m_blend;
+            target.color.srcFactor = state.m_premultiplied ? rhi::BlendFactor::One : rhi::BlendFactor::SrcAlpha;
             target.color.dstFactor = rhi::BlendFactor::InvSrcAlpha;
             target.color.op = rhi::BlendOp::Add;
             target.alpha.srcFactor = rhi::BlendFactor::One;
@@ -4077,33 +4139,27 @@ namespace pP {
             desc.targetCount = reactive ? 2u : 1u;
             desc.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
             desc.depthStencil.format = signature.m_depth_stencil_format.value_or(rhi::Format::Undefined);
-            desc.depthStencil.depthTestEnable = false;
-            desc.depthStencil.depthWriteEnable = false;
+            // No depth attachment means no depth test: the declared state only
+            // applies when the pass supplies the format the signature names.
+            desc.depthStencil.depthTestEnable = state.m_depth_test and signature.m_depth_stencil_format.has_value();
+            desc.depthStencil.depthWriteEnable = state.m_depth_write and desc.depthStencil.depthTestEnable;
+            desc.depthStencil.depthFunc = rhi::ComparisonFunc::LessEqual;
             desc.rasterizer.cullMode = rhi::CullMode::None;
-            desc.label = "grid optical content pipeline";
+            desc.label = state.m_label;
 
             GridCachedPipeline value;
             const auto result = device.createRenderPipeline(desc, value.m_pipeline.writeRef());
             const auto pipeline_error = rhi::make_error_code(result);
             if (pipeline_error) {
-                const char *const program_name = selected_program == m_reactive_particle_program.get()
-                                                     ? "vertexParticleIndirectMain/fragmentParticleReactive"
-                                                 : selected_program == m_reactive_background_program.get()
-                                                     ? "vertexBackgroundMain/fragmentBackgroundReactive"
-                                                 : program == m_gpu_particle_spatial_program.get()
-                                                     ? "vertexParticleIndirectMain/fragmentParticleSpatial"
-                                                 : program == m_gpu_particle_program.get()
-                                                     ? "vertexParticleIndirectMain/fragmentParticleMain"
-                                                     : "other optical program";
                 const auto message = std::format(
-                    "Grid optical pipeline creation failed result={} category={} cause={} program={} "
+                    "Grid pipeline creation failed result={} category={} cause={} label={} "
                     "entries={} samples={} color_format={} depth_format={} topology={} blend={} "
                     "premultiplied={} depth_test={} depth_write={} input_layout={}",
-                    static_cast<int>(result), pipeline_error.category().name(), pipeline_error.message(), program_name,
+                    static_cast<int>(result), pipeline_error.category().name(), pipeline_error.message(), state.m_label,
                     selected_program->getDesc().slangEntryPointCount, desc.multisample.sampleCount,
                     static_cast<int>(target.format), static_cast<int>(desc.depthStencil.format),
-                    static_cast<int>(desc.primitiveTopology), blend, premultiplied, desc.depthStencil.depthTestEnable,
-                    desc.depthStencil.depthWriteEnable, desc.inputLayout != nullptr);
+                    static_cast<int>(desc.primitiveTopology), state.m_blend, state.m_premultiplied,
+                    desc.depthStencil.depthTestEnable, desc.depthStencil.depthWriteEnable, desc.inputLayout != nullptr);
                 PPR_LOG_RAW(GridPass, error, message);
             }
 
@@ -4114,6 +4170,73 @@ namespace pP {
         }
         PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensurePipelineRoots_(device, *cache));
         return &*cache;
+    }
+
+    Expected<GridPass::GridCachedPipeline *> GridPass::particlePipeline_(
+        rhi::IDevice &device, const RenderPipelineSignature &signature, const EGridParticleDrawClass draw_class) {
+        auto &entry = particleClass_(draw_class);
+        auto *const program = particleClassProgram_(draw_class);
+
+        // Plan §3: the gas lane keeps its existing depth-disabled premultiplied
+        // state; the restored particle classes test depth because every
+        // particle is coplanar with the terrain, and only the opaque one writes
+        // it. The optical class writes no depth and blends premultiplied.
+        //
+        // The gas fragment premultiplies only in the sample-rate entry
+        // (`point_sample ? color*opacity : color`), so its source factor follows
+        // the sampling policy exactly as the retired single lane did: Straight
+        // SrcAlpha for the x1 entry, One for the per-sample entry.
+        GridPipelineState state{};
+        switch (draw_class) {
+            case EGridParticleDrawClass::gas:
+                state = {
+                    .m_blend = true,
+                    .m_premultiplied = m_spatial_msaa,
+                    .m_depth_test = false,
+                    .m_depth_write = false,
+                    .m_label = "grid particle gas pipeline"};
+                break;
+            case EGridParticleDrawClass::opaque:
+                state = {
+                    .m_blend = false,
+                    .m_premultiplied = false,
+                    .m_depth_test = true,
+                    .m_depth_write = true,
+                    .m_label = "grid particle opaque pipeline"};
+                break;
+            case EGridParticleDrawClass::optical:
+                state = {
+                    .m_blend = true,
+                    .m_premultiplied = true,
+                    .m_depth_test = true,
+                    .m_depth_write = false,
+                    .m_label = "grid particle optical pipeline"};
+                break;
+        }
+
+        return opticalPipeline_(
+            device, signature, program, entry.m_key, entry.m_pipeline, state,
+            particleClassReactiveProgram_(draw_class));
+    }
+
+    rhi::IShaderProgram *GridPass::particleClassProgram_(const EGridParticleDrawClass draw_class) const noexcept {
+        const bool gas = draw_class == EGridParticleDrawClass::gas;
+        if (m_spatial_msaa) {
+            return gas ? m_gpu_particle_gas_spatial_program.get() : m_gpu_particle_solid_liquid_spatial_program.get();
+        }
+
+        return gas ? m_gpu_particle_gas_program.get() : m_gpu_particle_solid_liquid_program.get();
+    }
+
+    rhi::IShaderProgram *GridPass::particleClassReactiveProgram_(
+        const EGridParticleDrawClass draw_class) const noexcept {
+        return draw_class == EGridParticleDrawClass::gas ? m_reactive_particle_gas_program.get()
+                                                         : m_reactive_particle_solid_liquid_program.get();
+    }
+
+    rhi::IRenderPipeline *GridPass::particlePipelineForTest(const EGridParticleDrawClass draw_class) const noexcept {
+        const auto &entry = particleClass_(draw_class);
+        return entry.m_pipeline ? entry.m_pipeline->m_pipeline.get() : nullptr;
     }
 
     std::error_code GridPass::prepareBackgroundInputs(
@@ -4212,7 +4335,7 @@ namespace pP {
         const u32 height = static_cast<u32>(std::ceil(m_background_viewport.extentY));
         if (not slot.m_texture or slot.m_width != width or slot.m_height != height) {
             // This slot's last reader completed; roots may still retain its view.
-            for (auto *const cache: {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_copy_pipeline}) {
+            for (auto *const cache: cachedPipelines_()) {
                 if (*cache) {
                     for (u32 index = 0u; index < kTileRingSize; ++index) {
                         auto &pipeline = **cache;
@@ -4258,7 +4381,8 @@ namespace pP {
         signature.m_color_formats[0] = rhi::Format::RGBA16Float;
         signature.m_color_format_count = 1u;
         const auto pipeline = opticalPipeline_(
-            context.m_device, signature, m_background_program, m_background_key, m_background_pipeline, false);
+            context.m_device, signature, m_background_program, m_background_key, m_background_pipeline,
+            GridPipelineState{.m_label = "grid background pipeline"});
         PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
         auto *const root = (*pipeline)->m_slot_roots[selected].get();
         rhi::ShaderCursor cursor{root};
@@ -4332,7 +4456,8 @@ namespace pP {
             const hal::ProfileScope scope{"App.Grid.Background.Spatial"};
             const auto pipeline = opticalPipeline_(
                 context.m_device, context.m_render_pipeline_key, m_background_spatial_program, m_background_spatial_key,
-                m_background_spatial_pipeline, false);
+                m_background_spatial_pipeline, GridPipelineState{.m_label = "grid background spatial pipeline"},
+                m_reactive_background_program.get());
             PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
             const u32 slot = m_background_cursor;
             auto *const root = (*pipeline)->m_slot_roots[slot].get();
@@ -4368,7 +4493,7 @@ namespace pP {
 
         const auto pipeline = opticalPipeline_(
             context.m_device, context.m_render_pipeline_key, m_background_copy_program, m_background_copy_key,
-            m_background_copy_pipeline, false);
+            m_background_copy_pipeline, GridPipelineState{.m_label = "grid background copy pipeline"});
         PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
         const u32 slot = m_background_cursor;
         auto *const root = (*pipeline)->m_slot_roots[slot].get();
@@ -4394,14 +4519,11 @@ namespace pP {
     }
 
     std::error_code GridPass::renderParticles(const DrawContext &context) {
-        if (m_spatial_msaa) {
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
-        }
-
-        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or not m_world.m_gpu_particles)
-            return {};
-
-        return renderGpuParticles_(context);
+        // Single-pass convenience order for capture and fixtures: opaque, then
+        // optical, then gas. The Editor calls the two entries separately so
+        // terrain opaque draws between the particle classes and the gas lane.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderSolidLiquidParticles(context));
+        return renderGasParticles(context);
     }
 
     void GridPass::clearOpticalResources_() noexcept {
@@ -4415,17 +4537,23 @@ namespace pP {
         m_spatial_shader_program.setNull();
         m_reactive_shader_program.setNull();
         m_reactive_background_program.setNull();
-        m_reactive_particle_program.setNull();
+        m_reactive_particle_gas_program.setNull();
+        m_reactive_particle_solid_liquid_program.setNull();
         m_shader_service = nullptr;
         m_content_dir.clear();
         m_device = nullptr;
         m_spatial_msaa = false;
         m_cached_spatial_msaa = false;
         m_spatial_supported = false;
-        m_gpu_particle_pipeline.reset();
-        m_gpu_particle_key.reset();
-        m_gpu_particle_program.setNull();
-        m_gpu_particle_spatial_program.setNull();
+        for (auto &particles: m_particle_classes) {
+            particles.m_pipeline.reset();
+            particles.m_key.reset();
+        }
+
+        m_gpu_particle_gas_program.setNull();
+        m_gpu_particle_gas_spatial_program.setNull();
+        m_gpu_particle_solid_liquid_program.setNull();
+        m_gpu_particle_solid_liquid_spatial_program.setNull();
         m_particle_prepare_programs = {};
         m_world.m_gpu_particles.reset();
         m_particle_census_program = {};

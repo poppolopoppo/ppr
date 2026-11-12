@@ -143,6 +143,119 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
     static_assert(std::is_standard_layout_v<ParticleGpu> and std::is_trivially_copyable_v<ParticleGpu>);
 
+    // ------------------------------------------------------------------
+    // particle presentation shapes
+    // ------------------------------------------------------------------
+    // One constant set, mirrored by grid_particle_native.slang (the prepare cull
+    // and the draw geometry read it there). r is the packed physical radius
+    // h*sqrt(V/pi); R = 1.25 r is the support radius both phases share; the cull
+    // margin in the prepare `visible()` test is 1.5 r.
+    inline constexpr float kGridParticleSupportScale{1.25f};
+    inline constexpr float kGridParticleCullRadiusScale{1.5f};
+
+    // Solid: a rounded square inscribed in the R circle. It is the Minkowski sum
+    // of a square of half-extent a-c and a disk of radius c, so its support is
+    // S = sqrt(2)*a - c*(sqrt(2)-1). With c = 0.25 a, S = 1.3106 a, giving
+    // a = R/1.3106 = 0.9538 r (0.2690 cell at r = 0.2821 cell) and
+    // c = 0.25 a (0.0673 cell). Liquid: a disk of radius R, support exactly R.
+    inline constexpr float kGridParticleRoundedSquareSupport{1.3106f};
+    inline constexpr float kGridParticleSolidHalfExtentScale{
+        kGridParticleSupportScale / kGridParticleRoundedSquareSupport};
+    inline constexpr float kGridParticleSolidCornerFraction{0.25f};
+    inline constexpr float kGridParticleSolidCornerScale{
+        kGridParticleSolidCornerFraction * kGridParticleSolidHalfExtentScale};
+    inline constexpr float kGridParticleSolidInnerHalfExtentScale{
+        kGridParticleSolidHalfExtentScale - kGridParticleSolidCornerScale};
+
+    // Support radius of a rounded square of half-extent `half_extent` and corner
+    // radius `corner`, in units of r.
+    [[nodiscard]] constexpr float gridParticleRoundedSquareSupport(
+        const float half_extent, const float corner) noexcept {
+        constexpr float root_two = 1.41421356237309505f;
+        return root_two * half_extent - corner * (root_two - 1.0f);
+    }
+
+    // Every shape's support must stay inside the 1.5 r cull margin, and the
+    // rounded square must be inscribed exactly in the disk's support circle. A
+    // future shape that outgrows the bound fails here instead of clipping
+    // silently at the frustum edge.
+    //
+    // Rejected variants, recorded so they cannot return unnoticed: a rounded
+    // square with half-extent a = R has support 1.638 r (1.09x the margin) and
+    // the unrounded square with a = R has 1.768 r (1.18x); both would clip.
+    static_assert(
+        gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) <=
+            kGridParticleCullRadiusScale,
+        "the solid rounded square must fit the shared 1.5 r cull margin");
+    static_assert(
+        gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) <=
+            kGridParticleSupportScale + 1.0e-4f,
+        "the solid rounded square is inscribed in the R support circle");
+    static_assert(
+        gridParticleRoundedSquareSupport(kGridParticleSupportScale, 0.0f) > kGridParticleCullRadiusScale,
+        "the rejected a = R half-extent variant would clip; keep it rejected");
+    static_assert(
+        1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale,
+        "the rejected unrounded a = R variant would clip; keep it rejected");
+
+    // ------------------------------------------------------------------
+    // per-instance particle descriptions
+    // ------------------------------------------------------------------
+    // Draw class of one instanced particle draw. It is a per-draw depth/blend
+    // state, not a description family: gas keeps the mask disk lane, and the
+    // other two differ only in depth and blend. The material's own phase flags
+    // choose the description, independently of this class.
+    enum class EGridParticleDrawClass : u32 {
+        gas = 0u,
+        opaque = 1u,
+        optical = 2u
+    };
+
+    // Phase of a particle material, read from the authored surface flags of the
+    // instance's own material. An unauthored phase keeps the solid description.
+    enum class EGridParticlePhase : u8 {
+        solid,
+        liquid
+    };
+
+    // One per-instance presentation description. m_visual borrows the palette
+    // record for the row's own material id; it is never entry 0 or the resolved
+    // destination cell's material.
+    struct GridParticleDescription {
+        const GridTerrainVisual *m_visual{};
+        EGridParticlePhase m_phase{EGridParticlePhase::solid};
+        // Canonical packCell word rebuilt from the row: material | temperature << 16.
+        u32 m_canonical_word{};
+    };
+
+    enum class EGridParticleDescriptionReject : u8 {
+        none,
+        unknown_material,
+        phase_mismatch,
+    };
+
+    struct GridParticleDescriptionSelection {
+        GridParticleDescription m_description{};
+        EGridParticleDescriptionReject m_reject{EGridParticleDescriptionReject::none};
+        [[nodiscard]] bool selected() const noexcept {
+            return m_reject == EGridParticleDescriptionReject::none;
+        }
+    };
+
+    // The palette record for a row's own material, or nullptr when the palette
+    // does not carry that id (finding D9). Never a fallback entry.
+    [[nodiscard]] const GridTerrainVisual *particleMaterialVisual(
+        std::span<const GridTerrainVisual> visuals, u32 material_flags_temperature) noexcept;
+
+    // Nonvisual selection of the phase-appropriate description for one row.
+    // The family is derived from the row's own surface flags, never from the
+    // draw class, so an opaque liquid (liquid phase without the optical-blend
+    // bit) still resolves to the liquid description and an optical solid to the
+    // solid one. Asking for the other family is a reject, which is how the
+    // "no liquid through the solid description" invariant is asserted.
+    [[nodiscard]] GridParticleDescriptionSelection selectParticleDescription(
+        std::span<const GridTerrainVisual> visuals, u32 material_flags_temperature, EGridParticlePhase phase) noexcept;
+
     // Derived eight-byte transport source for one admitted visible row. Linear
     // texture_mean is the existing filtered albedo mean; missing albedo passes
     // white. Receive-only transparent rows and the empty entry are all zero.
@@ -347,6 +460,10 @@ export namespace pP {
         u64 m_particle_uploaded_bytes{};
         u64 m_particle_instances{};
         u64 m_particle_buffer_bytes{};
+        // Distinct published materials the palette does not carry. Those rows
+        // discard at shading time (identity guard D9); nothing falls back to
+        // palette entry 0. Counted once per successful pack.
+        u64 m_particle_description_rejections{};
         u64 m_background_target_bytes{};
         u32 m_background_targets{};
         u32 m_particle_root_bindings{};
@@ -443,6 +560,23 @@ export namespace pP {
             const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
             const rhi::ScissorRect &scissor);
         [[nodiscard]] std::error_code renderBackground(const DrawContext &context);
+
+        // Restored instanced particle classes in plan order: the opaque
+        // (depth-writing) class, then the optical (premultiplied) class. Both
+        // draw the same ids and indirect arguments as the gas lane, and each
+        // instance shades from its own material's phase flags — the class selects
+        // only depth/blend, so an opaque liquid still takes the liquid
+        // description. Terrain opaque must be drawn after this and before
+        // renderGasParticles.
+        [[nodiscard]] std::error_code renderSolidLiquidParticles(const DrawContext &context);
+
+        // The gas lane at its existing slot in the scene order. Its vertex entry
+        // explicitly rejects every moving row; the retired fragment discard used
+        // to do that.
+        [[nodiscard]] std::error_code renderGasParticles(const DrawContext &context);
+
+        // Convenience for single-pass callers (capture and fixtures): all three
+        // classes in the same order, gas last.
         [[nodiscard]] std::error_code renderParticles(const DrawContext &context);
 
         // A host selects this view only after joint CPU/GPU commit. Old packets
@@ -597,6 +731,11 @@ export namespace pP {
             const auto &slot = particles.m_slots[particles.m_selected_slot];
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
         }
+
+        // Test-only: the cached pipeline of one particle draw class, or nullptr
+        // before that class first drew in this pass. Its reflected description
+        // carries the declaration order and depth/blend state.
+        [[nodiscard]] rhi::IRenderPipeline *particlePipelineForTest(EGridParticleDrawClass draw_class) const noexcept;
 
         // Diagnostic-only timestamp pairs: pack/cull, element splat, density
         // splat, filter, composite, ordinary particles. The caller permits one
@@ -805,6 +944,22 @@ export namespace pP {
 
         [[nodiscard]] std::error_code ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline);
 
+        // Every signature-keyed render pipeline cache this pass owns. Update,
+        // submission accounting, retirement and backdrop release walk this one
+        // list so a new lane cannot be missed by one of them.
+        [[nodiscard]] std::array<std::optional<GridCachedPipeline> *, 7u> cachedPipelines_() noexcept {
+            return {
+                &m_cached_pipeline, &m_particle_classes[0u].m_pipeline, &m_particle_classes[1u].m_pipeline,
+                &m_particle_classes[2u].m_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
+                &m_background_spatial_pipeline};
+        }
+        [[nodiscard]] std::array<const std::optional<GridCachedPipeline> *, 7u> cachedPipelines_() const noexcept {
+            return {
+                &m_cached_pipeline, &m_particle_classes[0u].m_pipeline, &m_particle_classes[1u].m_pipeline,
+                &m_particle_classes[2u].m_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
+                &m_background_spatial_pipeline};
+        }
+
         struct ParticleChunk {
             std::shared_ptr<const Array<GridParticleInstance>> m_source{};
             bool m_dirty{};
@@ -860,14 +1015,36 @@ export namespace pP {
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
         [[nodiscard]] std::error_code ensureGpuParticleStorage_(rhi::IDevice &device, u32 count);
-        [[nodiscard]] std::error_code renderGpuParticles_(const DrawContext &context);
+        [[nodiscard]] std::error_code renderGpuParticleClass_(
+            const DrawContext &context, EGridParticleDrawClass draw_class);
         void prepareChunkSlotMap_(bool retained_table);
         [[nodiscard]] std::error_code createOpticalPrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+
+        // Blend and depth state of one signature-keyed render pipeline. The
+        // terrain and background lanes keep the depth-disabled defaults; the
+        // restored particle classes declare their own.
+        struct GridPipelineState {
+            bool m_blend{false};
+            bool m_premultiplied{false};
+            bool m_depth_test{false};
+            bool m_depth_write{false};
+            const char *m_label{"grid optical content pipeline"};
+        };
+
+        // Every caller supplies the state explicitly: a `= {}` default would
+        // need this nested type's default member initializers while GridPass is
+        // still incomplete at this declaration.
         [[nodiscard]] Expected<GridCachedPipeline *> opticalPipeline_(
             rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *program,
-            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend,
-            bool premultiplied = false);
+            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, GridPipelineState state,
+            rhi::IShaderProgram *reactive_program = nullptr);
+        // One of the three particle draw classes with the state in plan §3: gas
+        // keeps its depth-disabled lane with the blend state its fragment entry
+        // implies, opaque tests and writes depth with blending off, optical
+        // tests depth without writing it and blends premultiplied.
+        [[nodiscard]] Expected<GridCachedPipeline *> particlePipeline_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature, EGridParticleDrawClass draw_class);
         void fillOpticalFrame_(GridFrame &frame) const noexcept;
         // Ensures the zero resolved-cell/CH fallback the background and
         // material roots always declare. Idempotent; owns the creation so a
@@ -897,7 +1074,8 @@ export namespace pP {
             rhi::IDevice &device, const RenderPipelineSignature &signature);
 
         // Binds the terrain pass selector into a shader cursor.
-        [[nodiscard]] std::error_code bindGridPass_(rhi::ShaderCursor &cursor, u32 pass);
+        [[nodiscard]] std::error_code bindGridPass_(
+            rhi::ShaderCursor &cursor, u32 pass, EGridParticleDrawClass particle_class = EGridParticleDrawClass::gas);
 
         // Reclaims deferred pipelines/roots at or below `completed`.
         void reclaimCompleted_(FenceCompletionValue completed) noexcept;
@@ -961,7 +1139,6 @@ export namespace pP {
 
         // Optional native MRT variants share the same fenced roots and caches.
         rhi::ComPtr<rhi::IShaderProgram> m_reactive_shader_program{}, m_reactive_background_program{};
-        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_program{};
         safe_ptr<IShaderService> m_shader_service{};
         std::filesystem::path m_content_dir{};
         rhi::IDevice *m_device{}; // Actual allocator; device outlives the pass.
@@ -997,10 +1174,38 @@ export namespace pP {
         };
         std::array<GpuParticleProgram, 4u> m_particle_prepare_programs{};
         GpuParticleProgram m_particle_census_program{};
-        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_program{};
-        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_spatial_program{};
-        std::optional<RenderPipelineKey> m_gpu_particle_key{};
-        std::optional<GridCachedPipeline> m_gpu_particle_pipeline{};
+        // Particle programs: the gas lane and the restored solid/liquid lane.
+        // The opaque and optical draw classes share one solid/liquid program
+        // because the phase and the class are read from the draw constants; only
+        // their pipeline depth/blend state differs.
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_gas_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_gas_spatial_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_gas_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_solid_liquid_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_gpu_particle_solid_liquid_spatial_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_reactive_particle_solid_liquid_program{};
+
+        // One signature-keyed pipeline per particle draw class. All three draw
+        // the same ids and indirect arguments and differ in program and state.
+        struct ParticleClassCache {
+            std::optional<RenderPipelineKey> m_key{};
+            std::optional<GridCachedPipeline> m_pipeline{};
+        };
+        static_assert(static_cast<u32>(EGridParticleDrawClass::optical) + 1u == 3u);
+        std::array<ParticleClassCache, 3u> m_particle_classes{};
+
+        [[nodiscard]] ParticleClassCache &particleClass_(const EGridParticleDrawClass draw_class) noexcept {
+            return m_particle_classes[static_cast<u32>(draw_class)];
+        }
+        [[nodiscard]] const ParticleClassCache &particleClass_(const EGridParticleDrawClass draw_class) const noexcept {
+            return m_particle_classes[static_cast<u32>(draw_class)];
+        }
+
+        // The program of one particle draw class for the current sampling policy.
+        [[nodiscard]] rhi::IShaderProgram *particleClassProgram_(EGridParticleDrawClass draw_class) const noexcept;
+        [[nodiscard]] rhi::IShaderProgram *particleClassReactiveProgram_(
+            EGridParticleDrawClass draw_class) const noexcept;
+
         rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
 
@@ -1242,6 +1447,9 @@ export namespace pP {
 
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
+        // Distinct published materials the palette does not carry; those rows
+        // discard at shading time (identity guard D9). Counted once per pack.
+        u64 m_particle_description_rejections{};
         bool m_cached_spatial_msaa{};
         bool m_spatial_msaa{};
         bool m_spatial_supported{};

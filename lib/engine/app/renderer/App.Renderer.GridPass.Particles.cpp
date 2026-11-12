@@ -876,6 +876,24 @@ namespace pP {
                           storage.m_packed_epoch != view.m_device_epoch or
                           storage.m_packed_metadata != metadata.m_version;
         if (pack) {
+            // D9: the material id is the shading key. Rows whose material the
+            // palette does not carry discard at shading time, so count those
+            // distinct published materials here, once per pack, where the host
+            // already holds the whole catalogue. No GPU counter and no readback.
+            const std::span<const GridTerrainVisual> palette{
+                m_world.m_terrain_visuals.data(), m_world.m_terrain_visuals.size()};
+            const u64 rejected = static_cast<u64>(
+                std::ranges::count_if(metadata.m_materials, [palette](const u32 material) {
+                    return particleMaterialVisual(palette, material) == nullptr;
+                }));
+            m_particle_description_rejections += rejected;
+            if (rejected != 0u) {
+                PPR_LOG(
+                    GridPass, debug, "particle presentation carries materials the palette does not define",
+                    {{"materials", rejected}, {"rejected_total", m_particle_description_rejections},
+                        {"publication_materials", metadata.m_materials.size()}});
+            }
+
             context.m_encoder.setBufferState(view.m_numerical, rhi::ResourceState::ShaderResource);
             context.m_encoder.setBufferState(metadata.m_rows, rhi::ResourceState::ShaderResource);
             context.m_encoder.setBufferState(view.m_readonly, rhi::ResourceState::ShaderResource);
@@ -964,44 +982,16 @@ namespace pP {
         return result;
     }
 
-    std::error_code GridPass::renderGpuParticles_(const DrawContext &context) {
-        context.m_pass.pushDebugGroup("Particles.Draw", {});
-        PPR_DEFER {
-            context.m_pass.popDebugGroup();
-        };
-
+    std::error_code GridPass::renderGpuParticleClass_(
+        const DrawContext &context, const EGridParticleDrawClass draw_class) {
         auto &storage = *m_world.m_gpu_particles;
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass,
-            storage.m_prepared ? std::error_code{} : std::make_error_code(std::errc::operation_not_permitted));
-
-        storage.m_prepared = false;
         const u32 particle_slot = storage.m_selected_slot;
-        // Retired solid/liquid envelopes no longer draw. The remaining disk pass
-        // contains only gases and explicit legacy phase fixtures.
-        // Match the disk fragment's phase rejection against this prepared source
-        // inventory. Unknown visuals retain the legacy lane conservatively.
-        const auto &materials = storage.m_slots[particle_slot].m_reader->m_metadata->m_materials;
-        const bool envelopes_only = std::ranges::all_of(materials, [&](const u32 material) {
-            const auto visual = std::ranges::find(
-                m_world.m_terrain_visuals, material, &GridTerrainVisual::m_material_id);
-            return visual != m_world.m_terrain_visuals.end() and
-                   (visual->m_surface_flags & (kGridSurfaceParticleSolid | kGridSurfaceParticleLiquid)) != 0u;
-        });
 
-        if (envelopes_only) {
-            if (m_particle_timing_queries) {
-                context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
-                context.m_pass.writeTimestamp(m_particle_timing_queries, 11u);
-            }
-
-            return {};
-        }
-
-        const auto pipeline = opticalPipeline_(
-            context.m_device, context.m_render_pipeline_key,
-            m_spatial_msaa ? m_gpu_particle_spatial_program.get() : m_gpu_particle_program.get(), m_gpu_particle_key,
-            m_gpu_particle_pipeline, true, m_spatial_msaa);
+        // Plan §3: the class pipeline declares its own depth/blend state. The
+        // gas lane keeps the retained depth-disabled lane with the blend state
+        // its fragment entry implies; the restored opaque and optical classes
+        // test depth, and only the opaque one writes it.
+        const auto pipeline = particlePipeline_(context.m_device, context.m_render_pipeline_key, draw_class);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
 
         auto *const root = (*pipeline)->m_slot_roots[particle_slot].get();
@@ -1012,15 +1002,25 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*pipeline)->m_slot_frame_cursors[particle_slot]["m_inverse_view_projection"].setData(
                           &m_camera_view.m_invert_view_projection, sizeof(m_camera_view.m_invert_view_projection)));
+        // The full surface set the descriptions need: g_terrain_visuals,
+        // g_source_materials, g_textures/g_sampler, g_brdf_lut/g_brdf_sampler,
+        // g_resolved_cells/g_fine_ch and g_backdrop. A missing binding fails
+        // here rather than shading from a default.
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table, *pipeline, particle_slot));
+        // The class is this draw's constant; bindSurfaceBuffers_ wrote the
+        // terrain pass selector in the same buffer, so set both together.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u, draw_class));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureParticleMask_(context.m_device));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_mask"].setBinding(rhi::Binding(m_particle_mask_view)));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_particle_mask_sampler"].setBinding(rhi::Binding(m_particle_mask_sampler)));
-        const bool has_cells = m_surface_retained_table ? m_world.m_visibility_has_cells
-                                                        : m_world.m_cell_atlas != nullptr;
+        // The restored order draws the particle classes before terrain, so the
+        // terrain staging flag is not yet this frame's value here. The cell
+        // source is chosen from the world's own state: the retained visibility
+        // atlas when it carries cells, otherwise the legacy cell atlas.
+        const bool has_cells = m_world.m_visibility_has_cells or m_world.m_cell_atlas != nullptr;
         auto *const cells = has_cells ? m_world.m_cell_atlas.get() : m_world.m_cell_dummy.get();
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, particleRange(cells))));
@@ -1051,5 +1051,52 @@ namespace pP {
         ++m_draw_commands;
 
         return {};
+    }
+
+    std::error_code GridPass::renderSolidLiquidParticles(const DrawContext &context) {
+        if (m_spatial_msaa) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
+        }
+
+        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or not m_world.m_gpu_particles) {
+            return {};
+        }
+
+        context.m_pass.pushDebugGroup("Particles.SolidLiquid", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
+
+        // One preparation feeds every particle class of this frame. `update()`
+        // reset it, so all three class draws share the ids and indirect
+        // arguments that preparation produced: no second compaction and no
+        // extra buffer.
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
+                                                          : std::make_error_code(std::errc::operation_not_permitted));
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::opaque));
+        return renderGpuParticleClass_(context, EGridParticleDrawClass::optical);
+    }
+
+    std::error_code GridPass::renderGasParticles(const DrawContext &context) {
+        if (m_spatial_msaa) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
+        }
+
+        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or not m_world.m_gpu_particles) {
+            return {};
+        }
+
+        context.m_pass.pushDebugGroup("Particles.Gas", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
+                                                          : std::make_error_code(std::errc::operation_not_permitted));
+
+        return renderGpuParticleClass_(context, EGridParticleDrawClass::gas);
     }
 }

@@ -4003,7 +4003,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             // The particles remain alive but offscreen. Resizing every old slot
             // must detach their completed roots without requiring another draw.
             PPR_TEST_ASSERT(grid.observations().m_particle_instances == 2u);
-            PPR_TEST_ASSERT(grid.observations().m_particle_root_bindings <= 3u);
+            // Three class pipelines (gas, opaque, optical) each retain at most
+            // one binding per ring slot.
+            PPR_TEST_ASSERT(grid.observations().m_particle_root_bindings <= 9u);
             stage.m_particle_batches[0].m_particles = std::make_shared<const Array<GridParticleInstance>>();
             PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
             for (u32 frame = 0u; frame < 6u; ++frame) {
@@ -4011,7 +4013,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             }
             const auto empty = grid.observations();
             PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 260u);
-            PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 3u);
+            PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 9u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
             _.log(
@@ -4090,10 +4092,17 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 PPR_TEST_ASSERT(not renderer->waitOnHost());
                 PPR_TEST_ASSERT(not grid.shutdown());
             };
+            // The restored particle classes shade a blended instance through the
+            // optical liquid description (a seed row is a moving row, never a gas
+            // row). A black tint keeps the composite exactly `clear * (1 - a)`,
+            // which is what the retired mask lane produced with its black CH
+            // environment, so every probe below keeps its expected value.
             GridTerrainVisual visual{};
             visual.m_material_id = 1u;
-            visual.m_color_rgba = 0xffffffffu;
+            visual.m_color_rgba = 0x000000ffu;
             visual.m_opacity = 0.5f;
+            visual.m_ior = 1.0f;
+            visual.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
             auto stage = opticalGridFixture_(visual, 0u);
             stage.m_has_background = false;
             auto terrain_visual = visual;
@@ -4101,6 +4110,8 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             terrain_visual.m_color_rgba = 0x0000ffffu;
             terrain_visual.m_opacity = 1.0f;
             terrain_visual.m_roundness = 0.0f;
+            // Terrain, not a particle material: no phase and no optical blend.
+            terrain_visual.m_surface_flags = 0u;
             stage.m_terrain_visuals.push_back(terrain_visual);
             PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
 
@@ -4113,11 +4124,17 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 24u);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
+            // The restored liquid disk's support is R = 1.25 r, where the retired
+            // mask filled the whole authored radius (its 64/62 quad padding only
+            // extended the transparent border). Scaling the authored volume by
+            // 1/1.25^2 keeps every drawn footprint at the previously probed
+            // extent, so the pixel assertions below stay exact.
+            constexpr float kMaskSupportMatch = 0.64f;
             for (u32 row = 0u; row < 2u; ++row) {
                 hot[row].fields[0u] = 67.0f;
                 hot[row].fields[1u] = 67.0f;
                 hot[row].fields[15u] = 1.0f;
-                cold[row].fields[1u] = std::numbers::pi_v<float>;
+                cold[row].fields[1u] = std::numbers::pi_v<float> * kMaskSupportMatch;
                 cold[row].fields[3u + row] = 1.0f;
             }
 
@@ -4169,9 +4186,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             const auto centre = gateTexel_(circle, 64u, 64u);
             const auto clear = gateTexel_(background, 64u, 64u);
-            // The gas disk is CH-lit by the cold-start black environment, so its
-            // premultiplied color is black. Straight alpha0.5 over the captured
-            // clear leaves half of every clear channel.
+            // The optical liquid's authored black tint keeps its premultiplied
+            // color black, so alpha0.5 over the captured clear leaves half of
+            // every clear channel.
             for (u32 channel = 0u; channel < 3u; ++channel) {
                 PPR_TEST_ASSERT(std::abs(int(centre[channel]) - int(std::lround(clear[channel] * 0.5))) <= 2);
             }
@@ -4203,10 +4220,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             saveGridQa_(overlap, "particle-overlap-native");
 
             // The later green disk sits inside an earlier quad's transparent
-            // corner. Mask-zero fragments must neither paint nor occlude it.
+            // corner. Fragments the analytic shape rejects must neither paint nor
+            // occlude it.
             hot[1u].fields[0u] = 67.85f;
             hot[1u].fields[1u] = 67.85f;
-            cold[1u].fields[1u] = std::numbers::pi_v<float> * 0.0625f;
+            cold[1u].fields[1u] = std::numbers::pi_v<float> * 0.0625f * kMaskSupportMatch;
             publish(2u);
             const auto corner = drawOpticalGrid_(grid, 60.0f, 60.0f, 8.0f);
             PPR_TEST_ASSERT(gateTexel_(corner, 77u, 50u)[1] < gateTexel_(background, 77u, 50u)[1]);
@@ -4555,13 +4573,18 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             stage.m_cell_size_m = 1.0f / 3.0f;
             auto liquid = solid;
             liquid.m_material_id = 2u;
-            liquid.m_surface_flags = kGridSurfaceParticleLiquid;
+            liquid.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
             stage.m_terrain_visuals.push_back(liquid);
-            auto gas = solid;
-            gas.m_material_id = 3u;
-            gas.m_color_rgba = 0x00ff0080u;
-            gas.m_surface_flags = kGridSurfaceOpticalBlend;
-            stage.m_terrain_visuals.push_back(gas);
+            // Seed rows are moving rows, so under the restored path they are
+            // never gas-class: a blended particle is authored as an optical
+            // liquid. The visual is named `blended` because this fixture's
+            // subject (and its CMake filter) predates the solid/liquid split.
+            auto blended = solid;
+            blended.m_material_id = 3u;
+            blended.m_color_rgba = 0x00ff0080u;
+            blended.m_opacity = 0.5f;
+            blended.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+            stage.m_terrain_visuals.push_back(blended);
             const auto capture = [&](const std::initializer_list<GridParticleInstance> particles) {
                 stage.m_particle_batches.clear();
                 if (particles.size() != 0u) {
@@ -4575,20 +4598,20 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             const GridParticleInstance solid_row{1u, 21.4, 22.0, 1.0 / 9.0, 1.0, 300.0, 1u};
             const GridParticleInstance liquid_row{2u, 21.8, 22.0, 1.0 / 9.0, 1.0, 300.0, 2u};
-            const GridParticleInstance gas_row{3u, 22.6, 22.0, 1.0 / 9.0, 1.0, 300.0, 3u};
+            const GridParticleInstance blended_row{3u, 22.6, 22.0, 1.0 / 9.0, 1.0, 300.0, 3u};
             const auto empty = capture({});
-            const auto reference = capture({gas_row});
+            const auto reference = capture({blended_row});
             const auto gas_pixel = gateTexel_(reference, 102u, 64u);
             const auto clear_pixel = gateTexel_(empty, 102u, 64u);
-            // Gas is CH-lit; the fixture's cold-start environment is black, so a
-            // live gas disk darkens the clear color rather than brightening it.
-            // Visibility is proven by a real per-pixel change, not a fixed color.
+            // The blended liquid composites its own tint over the clear color
+            // once. Visibility is proven by a real per-pixel change, not a fixed
+            // color.
             PPR_TEST_ASSERT(texelDist_(gas_pixel, clear_pixel) > 2u);
 
             std::ignore = capture({solid_row, liquid_row});
-            const auto appended = capture({solid_row, liquid_row, gas_row});
+            const auto appended = capture({solid_row, liquid_row, blended_row});
             PPR_TEST_ASSERT(texelDist_(gateTexel_(appended, 102u, 64u), gas_pixel) <= 2u);
-            auto replacement = gas_row;
+            auto replacement = blended_row;
             replacement.m_id = 101u;
             const auto replaced = capture({replacement});
             PPR_TEST_ASSERT(texelDist_(gateTexel_(replaced, 102u, 64u), gas_pixel) <= 2u);

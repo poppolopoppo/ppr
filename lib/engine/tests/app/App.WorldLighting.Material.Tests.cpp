@@ -2794,6 +2794,700 @@ namespace pP::tests::detail::WorldLightingMaterial {
         verify("grid_particle_prepare.slang", "grid_particle_prepare", "g_packed", writer_fields);
         verify("grid_tiles.slang", "grid_tiles", "g_particles", reader_fields);
     };
+
+    // ------------------------------------------------------------------
+    // per-instance particle descriptions and shapes
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_descriptions_use_the_rows_own_phase_material) {
+        // Nonvisual selection-helper assertions: no device, no pixels. Two
+        // solids in one cell and two liquids in one cell resolve to their own
+        // palette entries, and the helper takes no cell argument, so no resolved
+        // destination cell or winner material can substitute for the row's id.
+        GridTerrainVisual solid_a{};
+        solid_a.m_material_id = 11u;
+        solid_a.m_texture_index = 3u;
+        solid_a.m_normal_texture_index = 7u;
+        solid_a.m_color_rgba = 0xff8040ffu;
+        solid_a.m_roughness = 0.2f;
+        solid_a.m_metallic = 0.1f;
+        solid_a.m_surface_flags = kGridSurfaceParticleSolid;
+
+        GridTerrainVisual solid_b = solid_a;
+        solid_b.m_material_id = 12u;
+        solid_b.m_texture_index = 4u;
+        solid_b.m_normal_texture_index = 8u;
+        solid_b.m_color_rgba = 0x40ff80ffu;
+        solid_b.m_roughness = 0.7f;
+        solid_b.m_metallic = 0.9f;
+
+        GridTerrainVisual liquid_a{};
+        liquid_a.m_material_id = 21u;
+        liquid_a.m_texture_index = 5u;
+        liquid_a.m_color_rgba = 0x2040ffffu;
+        liquid_a.m_ior = 1.333f;
+        liquid_a.m_refraction_depth_m = 0.2f;
+        liquid_a.m_sigma_per_m[0] = 0.1f;
+        liquid_a.m_sigma_per_m[1] = 0.2f;
+        liquid_a.m_sigma_per_m[2] = 0.3f;
+        liquid_a.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+
+        GridTerrainVisual liquid_b = liquid_a;
+        liquid_b.m_material_id = 22u;
+        liquid_b.m_texture_index = 6u;
+        liquid_b.m_color_rgba = 0xffff40ffu;
+        liquid_b.m_ior = 1.51f;
+        liquid_b.m_refraction_depth_m = 0.35f;
+        liquid_b.m_sigma_per_m[0] = 0.9f;
+        liquid_b.m_sigma_per_m[1] = 0.8f;
+        liquid_b.m_sigma_per_m[2] = 0.7f;
+
+        // The blend class and the phase are independent: an opaque liquid (the
+        // magma-like case) carries the liquid phase without the optical-blend
+        // bit, and an optical solid carries the solid phase with it.
+        GridTerrainVisual opaque_liquid = liquid_a;
+        opaque_liquid.m_material_id = 23u;
+        opaque_liquid.m_color_rgba = 0xff2000ffu;
+        opaque_liquid.m_ior = 1.2f;
+        opaque_liquid.m_surface_flags = kGridSurfaceParticleLiquid;
+
+        GridTerrainVisual optical_solid = solid_a;
+        optical_solid.m_material_id = 13u;
+        optical_solid.m_color_rgba = 0x80ffffffu;
+        optical_solid.m_opacity = 0.6f;
+        optical_solid.m_surface_flags = kGridSurfaceParticleSolid | kGridSurfaceOpticalBlend;
+
+        const std::array<GridTerrainVisual, 6u> palette{
+            solid_a, solid_b, liquid_a, liquid_b, opaque_liquid, optical_solid};
+        // A class nibble rides bits 12..15 of the same word; the description
+        // selection must read the material from its own row regardless.
+        const auto row = [](const u32 material, const u32 class_flags) {
+            const auto canonical = lighting::packCell(static_cast<u16>(material), 300.0);
+            PPR_TEST_ASSERT(canonical.has_value());
+            return (*canonical & 0xfffu) | (class_flags << 12u) | (*canonical & 0xffff'0000u);
+        };
+
+        const u32 row_a = row(11u, 0u);
+        const u32 row_b = row(12u, 0u);
+        const u32 row_liquid_a = row(21u, 2u);
+        const u32 row_liquid_b = row(22u, 2u);
+
+        // Two solids in one cell: distinct sampled albedo identity (texture
+        // index), tint and roughness, each from its own entry.
+        const auto first = selectParticleDescription(palette, row_a, EGridParticlePhase::solid);
+        const auto second = selectParticleDescription(palette, row_b, EGridParticlePhase::solid);
+        PPR_TEST_ASSERT(first.selected() and second.selected());
+        PPR_TEST_ASSERT(first.m_description.m_visual == &palette[0u]);
+        PPR_TEST_ASSERT(second.m_description.m_visual == &palette[1u]);
+        PPR_TEST_ASSERT(first.m_description.m_phase == EGridParticlePhase::solid);
+        PPR_TEST_ASSERT(
+            first.m_description.m_visual->m_texture_index != second.m_description.m_visual->m_texture_index and
+            first.m_description.m_visual->m_color_rgba != second.m_description.m_visual->m_color_rgba and
+            first.m_description.m_visual->m_roughness != second.m_description.m_visual->m_roughness);
+        // The canonical packCell word is rebuilt from the row, never a cell word.
+        const auto expected_a = lighting::packCell(11u, 300.0);
+        PPR_TEST_ASSERT(expected_a.has_value());
+        PPR_TEST_ASSERT(first.m_description.m_canonical_word == *expected_a);
+
+        // Two liquids: distinct IOR, absorption and tint identity.
+        const auto liquid_first = selectParticleDescription(palette, row_liquid_a, EGridParticlePhase::liquid);
+        const auto liquid_second = selectParticleDescription(palette, row_liquid_b, EGridParticlePhase::liquid);
+        PPR_TEST_ASSERT(liquid_first.selected() and liquid_second.selected());
+        PPR_TEST_ASSERT(liquid_first.m_description.m_visual == &palette[2u]);
+        PPR_TEST_ASSERT(liquid_second.m_description.m_visual == &palette[3u]);
+        PPR_TEST_ASSERT(
+            liquid_first.m_description.m_visual->m_ior != liquid_second.m_description.m_visual->m_ior and
+            liquid_first.m_description.m_visual->m_color_rgba != liquid_second.m_description.m_visual->m_color_rgba);
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            PPR_TEST_ASSERT(
+                liquid_first.m_description.m_visual->m_sigma_per_m[channel] !=
+                liquid_second.m_description.m_visual->m_sigma_per_m[channel]);
+        }
+
+        // The phase flags choose the description family: a liquid passed to the
+        // solid branch is a reject, never a solid shade, and vice versa.
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row_liquid_a, EGridParticlePhase::solid).m_reject ==
+            EGridParticleDescriptionReject::phase_mismatch);
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row_a, EGridParticlePhase::liquid).m_reject ==
+            EGridParticleDescriptionReject::phase_mismatch);
+
+        // The family follows the material's phase, never the blend/draw class.
+        // An opaque liquid (liquid phase, no optical-blend bit, so the opaque
+        // depth-writing class draws it) still takes the liquid description and is
+        // never selected as solid.
+        const auto opaque_liquid_liquid = selectParticleDescription(palette, row(23u, 0u), EGridParticlePhase::liquid);
+        PPR_TEST_ASSERT(opaque_liquid_liquid.selected());
+        PPR_TEST_ASSERT(opaque_liquid_liquid.m_description.m_visual == &palette[4u]);
+        PPR_TEST_ASSERT(opaque_liquid_liquid.m_description.m_phase == EGridParticlePhase::liquid);
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row(23u, 0u), EGridParticlePhase::solid).m_reject ==
+            EGridParticleDescriptionReject::phase_mismatch);
+        // An optical solid (solid phase with the optical-blend bit, so the
+        // blended class draws it) still takes the solid description.
+        const auto optical_solid_solid = selectParticleDescription(palette, row(13u, 2u), EGridParticlePhase::solid);
+        PPR_TEST_ASSERT(optical_solid_solid.selected());
+        PPR_TEST_ASSERT(optical_solid_solid.m_description.m_visual == &palette[5u]);
+        PPR_TEST_ASSERT(optical_solid_solid.m_description.m_phase == EGridParticlePhase::solid);
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row(13u, 2u), EGridParticlePhase::liquid).m_reject ==
+            EGridParticleDescriptionReject::phase_mismatch);
+
+        // D9 identity guard: an id the palette does not carry rejects instead of
+        // falling back to entry 0 or to another material's description.
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row(77u, 0u), EGridParticlePhase::solid).m_reject ==
+            EGridParticleDescriptionReject::unknown_material);
+        PPR_TEST_ASSERT(
+            selectParticleDescription(palette, row(0u, 0u), EGridParticlePhase::solid).m_reject ==
+            EGridParticleDescriptionReject::unknown_material);
+        PPR_TEST_ASSERT(particleMaterialVisual(palette, row(77u, 0u)) == nullptr);
+        // Every row resolves through its own id, never a shared entry.
+        PPR_TEST_ASSERT(particleMaterialVisual(palette, row_b)->m_material_id == 12u);
+        PPR_TEST_ASSERT(particleMaterialVisual(palette, row_liquid_b)->m_material_id == 22u);
+    };
+
+    PPR_UNIT_TEST (particle_classes_declare_their_state_and_draw_once_per_class) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual solid{};
+        solid.m_material_id = 1u;
+        solid.m_color_rgba = 0xff8040ffu;
+        solid.m_ior = 1.0f;
+        solid.m_roughness = 0.4f;
+        solid.m_opacity = 1.0f;
+        solid.m_surface_flags = kGridSurfaceParticleSolid;
+
+        GridTerrainVisual liquid{};
+        liquid.m_material_id = 2u;
+        liquid.m_color_rgba = 0x2040ffffu;
+        liquid.m_ior = 1.333f;
+        liquid.m_roughness = 0.1f;
+        liquid.m_opacity = 0.6f;
+        liquid.m_refraction_depth_m = 0.2f;
+        liquid.m_surface_flags = kGridSurfaceParticleLiquid | kGridSurfaceOpticalBlend;
+
+        // The magma-like case: liquid phase without the optical-blend bit, so the
+        // packer routes it to the opaque (depth-writing) class while the
+        // description family stays liquid.
+        GridTerrainVisual opaque_liquid = liquid;
+        opaque_liquid.m_material_id = 3u;
+        opaque_liquid.m_color_rgba = 0xff2000ffu;
+        opaque_liquid.m_ior = 1.2f;
+        opaque_liquid.m_opacity = 1.0f;
+        opaque_liquid.m_refraction_depth_m = 0.0f;
+        opaque_liquid.m_surface_flags = kGridSurfaceParticleLiquid;
+
+        // One solid row, one optical liquid row, one opaque liquid row and one
+        // gas row over the same ids and indirect arguments. Every published
+        // material must exist in the palette: admission already enforces that
+        // identity rule, and the shader's D9 guard is the second line of defence.
+        std::array<GridParticleMetadataRow, 4u> rows{};
+        for (u32 row = 0u; row < 3u; ++row) {
+            const auto cell = lighting::packCell(static_cast<u16>(row + 1u), 300.0);
+            PPR_TEST_ASSERT(cell.has_value());
+            rows[row].m_id_low = row + 1u;
+            rows[row].m_source_row = row;
+            rows[row].m_material_temperature = *cell;
+            rows[row].m_radius = 0.5f;
+        }
+        const auto gas_cell = lighting::packCell(1u, 300.0);
+        PPR_TEST_ASSERT(gas_cell.has_value());
+        rows[3u].m_id_low = 4u;
+        rows[3u].m_source_row = 0xffff'ffffu;
+        rows[3u].m_material_temperature = *gas_cell;
+        rows[3u].m_gas_x = 1.5f;
+        rows[3u].m_gas_y = 2.5f;
+        rows[3u].m_radius = 0.5f;
+        const auto metadata = prepareGridParticleMetadata(fixture.device(), rows, 3u, 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+
+        // Three moving rows: hot position + enabled in native cells (the packer
+        // subtracts the view's 3-cell origin), cold volume -> radius 1 m.
+        std::array<std::array<float, 16u>, 3u> hot{};
+        hot[0u][0u] = 4.5f;
+        hot[0u][1u] = 5.5f;
+        hot[0u][15u] = 1.0f;
+        hot[1u][0u] = 6.5f;
+        hot[1u][1u] = 5.5f;
+        hot[1u][15u] = 1.0f;
+        hot[2u][0u] = 8.5f;
+        hot[2u][1u] = 5.5f;
+        hot[2u][15u] = 1.0f;
+        std::array<std::array<float, 6u>, 3u> cold{};
+        cold[0u][1u] = std::numbers::pi_v<float>;
+        cold[1u][1u] = std::numbers::pi_v<float>;
+        cold[2u][1u] = std::numbers::pi_v<float>;
+
+        GridParticleGpuView view{};
+        view.m_numerical = makeBuffer(fixture.device(), sizeof(hot), kGridParticleNumericalStride, hot.data());
+        view.m_readonly = makeBuffer(fixture.device(), sizeof(cold), kGridParticleReadonlyStride, cold.data());
+        view.m_metadata = *metadata;
+        view.m_live_epoch = std::make_shared<std::atomic<u64>>(1u);
+        view.m_world = grid.activeWorldIdentity();
+        view.m_layout = kGridParticleNumericalLayout;
+        view.m_stride = kGridParticleNumericalStride;
+        view.m_readonly_stride = kGridParticleReadonlyStride;
+        view.m_origin = 3.0;
+        view.m_device_epoch = 1u;
+        view.m_publication = 1u;
+        view.m_terrain_revision = 1u;
+        view.m_joint_tick = 1u;
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {solid, liquid, opaque_liquid};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{-0.5f, 0.0f, -0.5f};
+        model.m_ortho_scale = 8.0f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+        const auto snapshot = camera.getSnapshot();
+
+        // The class states are only meaningful with a depth attachment, so the
+        // pass supplies the D32Float surface the signature names.
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+
+        rhi::TextureDesc depth_description = target_description;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        rhi::ComPtr<rhi::ITexture> depth{};
+        rhi::ComPtr<rhi::ITextureView> depth_view{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(depth_description, nullptr, depth.writeRef())));
+        PPR_TEST_ASSERT(not make_error_code(depth->getDefaultView(depth_view.writeRef())));
+
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+            return grid.prepareGpuParticles(context);
+        };
+        // The frame draws like the scene families: the legacy tile first, then
+        // the restored particle classes. The terrain draw also creates the cell
+        // atlas/dummy the surface bindings require (a particle-only frame would
+        // bind a null diagnostic buffer).
+        // Measure the particle classes exactly: the legacy CPU-staged tile draw
+        // does not bump m_draw_commands (only the GPU-visibility/indirect and
+        // particle lanes do), so the delta below is the per-class count.
+        u64 particle_draws_before{};
+        u64 particle_draws_after{};
+        const auto draw = [&](const DrawContext &context) -> std::error_code {
+            if (const auto ec = grid.render(context)) {
+                return ec;
+            }
+            particle_draws_before = grid.observations().m_draw_commands;
+            if (const auto ec = grid.renderSolidLiquidParticles(context)) {
+                return ec;
+            }
+            if (const auto ec = grid.renderGasParticles(context)) {
+                return ec;
+            }
+            particle_draws_after = grid.observations().m_draw_commands;
+            return {};
+        };
+
+        DrawSubmission submission{"grid particle classes", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        rhi::ComPtr<rhi::ITextureView> target_view{};
+        PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+        rhi::RenderPassColorAttachment color{};
+        color.view = target_view.get();
+        color.clearValue[3] = 1.0f;
+        rhi::RenderPassDepthStencilAttachment depth_attachment{};
+        depth_attachment.view = depth_view.get();
+        depth_attachment.depthClearValue = 1.0f;
+        rhi::RenderPassDesc pass_description{};
+        pass_description.colorAttachments = &color;
+        pass_description.colorAttachmentCount = 1u;
+        pass_description.depthStencilAttachment = &depth_attachment;
+
+        const auto before = grid.observations();
+        PPR_TEST_ASSERT(not renderer.render(
+            string_literal{std::in_place, "grid particle classes"}, pass_description, {submission},
+            PreRenderCallback{prepare}));
+        grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+        PPR_TEST_ASSERT(not renderer.waitOnHost());
+        PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+        const auto after = grid.observations();
+        // One draw per particle class over the same prepared ids/arguments: the
+        // opaque class (solid and opaque-liquid rows), the blended class and the
+        // gas lane.
+        PPR_TEST_ASSERT(particle_draws_after == particle_draws_before + 3u);
+        // Every published material is in the palette, so the identity guard has
+        // nothing to count here; an absent id is covered by the selection
+        // helper's `unknown_material` case.
+        PPR_TEST_ASSERT(after.m_particle_description_rejections == 0u);
+
+        // The packed class follows kSurfaceOpticalBlend only, and the description
+        // family follows the phase: the opaque liquid row is packed into the
+        // opaque class (the pipeline that draws it) while its family is liquid,
+        // and the optical liquid row is packed into the blended class.
+        std::array<ParticleGpu, 4u> packed{};
+        const auto particle_buffers = grid.particleBuffersForTest();
+        PPR_TEST_ASSERT(not make_error_code(
+            fixture.device().readBuffer(particle_buffers[0u], 0u, packed.size() * sizeof(ParticleGpu), packed.data())));
+        const auto class_of = [](const ParticleGpu &row) { return (row.m_material_flags_temperature >> 12u) & 0xfu; };
+        PPR_TEST_ASSERT(class_of(packed[0u]) == 0u and class_of(packed[2u]) == 0u);
+        PPR_TEST_ASSERT(class_of(packed[1u]) == 2u);
+        PPR_TEST_ASSERT(class_of(packed[3u]) == 1u);
+        PPR_TEST_ASSERT((packed[2u].m_material_flags_temperature & 0xfffu) == 3u);
+        const auto opaque_liquid_description = selectParticleDescription(
+            stage.m_terrain_visuals, packed[2u].m_material_flags_temperature, EGridParticlePhase::liquid);
+        PPR_TEST_ASSERT(
+            opaque_liquid_description.selected() and
+            opaque_liquid_description.m_description.m_phase == EGridParticlePhase::liquid);
+
+        auto *const gas = grid.particlePipelineForTest(EGridParticleDrawClass::gas);
+        auto *const opaque = grid.particlePipelineForTest(EGridParticleDrawClass::opaque);
+        auto *const optical = grid.particlePipelineForTest(EGridParticleDrawClass::optical);
+        PPR_TEST_ASSERT(gas != nullptr and opaque != nullptr and optical != nullptr);
+        PPR_TEST_ASSERT(gas != opaque and opaque != optical and gas != optical);
+
+        // Gas keeps the retained depth-disabled lane. This fixture renders the
+        // x1 entry, whose fragment writes straight alpha, so its source factor
+        // is SrcAlpha; the sample-rate entry premultiplies and uses One.
+        const rhi::RenderPipelineDesc &gas_desc = gas->getDesc();
+        PPR_TEST_ASSERT(not gas_desc.depthStencil.depthTestEnable and not gas_desc.depthStencil.depthWriteEnable);
+        PPR_TEST_ASSERT(gas_desc.targets[0u].enableBlend);
+        PPR_TEST_ASSERT(gas_desc.targets[0u].color.srcFactor == rhi::BlendFactor::SrcAlpha);
+        PPR_TEST_ASSERT(gas_desc.targets[0u].color.dstFactor == rhi::BlendFactor::InvSrcAlpha);
+
+        // Opaque: LessEqual, depth writes on, blending off.
+        const rhi::RenderPipelineDesc &opaque_desc = opaque->getDesc();
+        PPR_TEST_ASSERT(opaque_desc.depthStencil.depthTestEnable and opaque_desc.depthStencil.depthWriteEnable);
+        PPR_TEST_ASSERT(opaque_desc.depthStencil.depthFunc == rhi::ComparisonFunc::LessEqual);
+        PPR_TEST_ASSERT(not opaque_desc.targets[0u].enableBlend);
+
+        // Optical: LessEqual, no depth writes, premultiplied blending.
+        const rhi::RenderPipelineDesc &optical_desc = optical->getDesc();
+        PPR_TEST_ASSERT(optical_desc.depthStencil.depthTestEnable and not optical_desc.depthStencil.depthWriteEnable);
+        PPR_TEST_ASSERT(optical_desc.depthStencil.depthFunc == rhi::ComparisonFunc::LessEqual);
+        PPR_TEST_ASSERT(optical_desc.targets[0u].enableBlend);
+        PPR_TEST_ASSERT(optical_desc.targets[0u].color.srcFactor == rhi::BlendFactor::One);
+        PPR_TEST_ASSERT(optical_desc.targets[0u].color.dstFactor == rhi::BlendFactor::InvSrcAlpha);
+        PPR_TEST_ASSERT(
+            opaque_desc.multisample.sampleCount == 1u and
+            optical_desc.multisample.sampleCount == 1u and
+            gas_desc.multisample.sampleCount == 1u);
+
+        // Declaration order of the per-draw selector both particle stages read:
+        // pass, particle_class, pad1, pad2.
+        shader::SharedModule module{};
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "grid_tiles.slang", "grid_tiles", module.writeRef()));
+        auto *const layout = module->getLayout();
+        PPR_TEST_ASSERT(layout != nullptr);
+        slang::TypeLayoutReflection *switch_layout = nullptr;
+        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_grid_pass") {
+                switch_layout = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(switch_layout != nullptr);
+        PPR_TEST_ASSERT(switch_layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 16u);
+        constexpr std::array<std::pair<const char *, u32>, 4u> switch_fields{{
+            {"pass", 0u},
+            {"particle_class", 4u},
+            {"pad1", 8u},
+            {"pad2", 12u},
+        }};
+        PPR_TEST_ASSERT(switch_layout->getFieldCount() == static_cast<unsigned>(switch_fields.size()));
+        for (u32 index = 0u; index < switch_fields.size(); ++index) {
+            auto *const field = switch_layout->getFieldByIndex(index);
+            PPR_TEST_ASSERT(std::string_view{field->getName()} == switch_fields[index].first);
+            PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == switch_fields[index].second);
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_classes draws={} rejections={} opaque_depth=({},{}) "
+                "optical_depth=({},{})",
+                after.m_draw_commands - before.m_draw_commands, after.m_particle_description_rejections,
+                opaque_desc.depthStencil.depthTestEnable, opaque_desc.depthStencil.depthWriteEnable,
+                optical_desc.depthStencil.depthTestEnable, optical_desc.depthStencil.depthWriteEnable));
+    };
+
+    PPR_UNIT_TEST (excavated_vacuum_survives_and_opaque_terrain_clips_the_particle) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual particle_material{};
+        particle_material.m_material_id = 1u;
+        particle_material.m_color_rgba = 0xff8040ffu;
+        particle_material.m_ior = 1.0f;
+        particle_material.m_roughness = 0.4f;
+        particle_material.m_opacity = 1.0f;
+        particle_material.m_surface_flags = kGridSurfaceParticleSolid;
+        // The solid description composites CH irradiance, the BRDF term and the
+        // material's own authored emission. This world publishes no fine CH, so
+        // the authored emission is what makes the painted pixel a deterministic
+        // non-clear colour.
+        particle_material.m_emissive_rgb[0] = 1.0f;
+        particle_material.m_emissive_rgb[1] = 0.5f;
+        particle_material.m_emissive_rgb[2] = 0.2f;
+        particle_material.m_emissive_strength = 4.0f;
+
+        // Opaque terrain, not on the optical-blend path: drawn by the
+        // depth-writing terrain pass and never by the translucent one.
+        GridTerrainVisual terrain{};
+        terrain.m_material_id = 2u;
+        terrain.m_color_rgba = 0x00ff00ffu;
+        terrain.m_ior = 1.0f;
+        terrain.m_opacity = 1.0f;
+        terrain.m_roundness = 0.0f;
+
+        // 1/16 m per pixel: the 64 px target spans 4 m from the camera origin,
+        // so both probe stations are on screen and a 0.25 m drawn support covers
+        // a handful of pixels.
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{-0.5f, 0.0f, -0.5f};
+        model.m_ortho_scale = 1.0f / 16.0f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+        const auto snapshot = camera.getSnapshot();
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+
+        // One terrain stage for every capture: cell (1, 2) is an opaque terrain
+        // cell; cell (2, 1) stays excavated vacuum.
+        GridPass::GridStagedUpload upload{};
+        upload.m_payload.m_rect[2] = upload.m_payload.m_rect[3] = 128.0f;
+        upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 0u);
+        upload.m_cell_materials[2u * 128u + 1u] = 2u;
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {particle_material, terrain};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_uploads.push_back(std::move(upload));
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        const auto live = std::make_shared<std::atomic<u64>>(1u);
+        u64 publication = 0u;
+        // The particle positions are the only variable: (2.5, 1.5) is an
+        // excavated vacuum cell, (1.5, 2.5) sits under the opaque cell above.
+        const auto publish = [&](const std::optional<float2> position) {
+            GridParticleGpuView view{};
+            std::array<std::array<float, 16u>, 1u> hot{};
+            std::array<std::array<float, 6u>, 1u> cold{};
+            if (position) {
+                // Hot rows are native cells and the packer subtracts the view's
+                // 3-cell origin, so the authored world metre position lands at
+                // `position + 3` with a 1 m cell.
+                hot[0u][0u] = position->x + 3.0f;
+                hot[0u][1u] = position->y + 3.0f;
+                hot[0u][15u] = 1.0f;
+                // r = 0.2 m, so the drawn support (R = 1.25 r = 0.25 m) sits
+                // entirely inside one native cell: the per-pixel terrain hard
+                // clip then covers the whole footprint of the occupied probe.
+                cold[0u][1u] = std::numbers::pi_v<float> * 0.04f;
+            }
+
+            Array<GridParticleMetadataRow> rows{};
+            GridParticleMetadataRow row{};
+            if (position) {
+                const auto cell = lighting::packCell(1u, 300.0);
+                PPR_TEST_ASSERT(cell.has_value());
+                row.m_id_low = 1u;
+                row.m_source_row = 0u;
+                row.m_material_temperature = *cell;
+                row.m_radius = 0.5f;
+                rows.push_back(row);
+            }
+
+            const std::span<const GridParticleMetadataRow> published{
+                position ? rows.data() : nullptr, position ? rows.size() : 0u};
+            const auto metadata = prepareGridParticleMetadata(
+                fixture.device(), published, position ? 1u : 0u, 1.0, ++publication);
+            PPR_TEST_ASSERT(metadata.has_value());
+            view.m_numerical = makeBuffer(fixture.device(), sizeof(hot), kGridParticleNumericalStride, hot.data());
+            view.m_readonly = makeBuffer(fixture.device(), sizeof(cold), kGridParticleReadonlyStride, cold.data());
+            view.m_metadata = *metadata;
+            view.m_live_epoch = live;
+            view.m_world = grid.activeWorldIdentity();
+            view.m_layout = kGridParticleNumericalLayout;
+            view.m_stride = kGridParticleNumericalStride;
+            view.m_readonly_stride = kGridParticleReadonlyStride;
+            view.m_origin = 3.0;
+            view.m_device_epoch = publication;
+            view.m_publication = publication;
+            view.m_terrain_revision = 1u;
+            view.m_joint_tick = publication;
+            live->store(publication, std::memory_order_release);
+            PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        };
+
+        const auto capture = [&]() {
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+            for (;;) {
+                PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                const auto prepared = grid.tryPrepareCellUploads(fixture.device(), renderer.completedFenceValue());
+                PPR_TEST_ASSERT(prepared.has_value());
+                if (*prepared) {
+                    break;
+                }
+
+                PPR_TEST_ASSERT(not renderer.waitOnHost());
+            }
+
+            const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                return grid.prepareGpuParticles(context);
+            };
+            // Terrain first, particles second: the particle in an opaque cell can
+            // only stay hidden through the per-pixel opaque-terrain hard clip,
+            // and the vacuum particle has no terrain to hide behind.
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                if (const auto ec = grid.render(context)) {
+                    return ec;
+                }
+                return grid.renderParticles(context);
+            };
+
+            DrawSubmission submission{"grid vacuum clip", DrawCallback{draw}};
+            submission.m_viewport = viewport;
+            submission.m_scissor = scissor;
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {submission}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            return readTexture(fixture.device(), *target);
+        };
+
+        publish(std::nullopt);
+        const TextureReadback baseline = capture();
+        publish(float2{2.5f, 1.5f});
+        const TextureReadback vacuum = capture();
+        publish(float2{1.5f, 2.5f});
+        const TextureReadback occupied = capture();
+
+        const auto pixel = [](const TextureReadback &image, const u32 x, const u32 y) {
+            return reinterpret_cast<const u16 *>(image.m_bytes.data() + y * image.m_row_pitch + x * 8u);
+        };
+        const auto different_pixels = [&](const TextureReadback &left, const TextureReadback &right) {
+            u32 count = 0u;
+            for (u32 y = 0u; y < 64u; ++y) {
+                for (u32 x = 0u; x < 64u; ++x) {
+                    const auto *const a = pixel(left, x, y);
+                    const auto *const b = pixel(right, x, y);
+                    if (a[0u] != b[0u] or a[1u] != b[1u] or a[2u] != b[2u] or a[3u] != b[3u]) {
+                        ++count;
+                    }
+                }
+            }
+            return count;
+        };
+
+        const u32 vacuum_changed = different_pixels(vacuum, baseline);
+        const u32 occupied_changed = different_pixels(occupied, baseline);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_terrain_clip vacuum_pixels={} occupied_pixels={} draws={}",
+                vacuum_changed, occupied_changed, grid.observations().m_draw_commands));
+        // A particle in an excavated vacuum cell survives the terrain draw.
+        PPR_TEST_ASSERT(vacuum_changed > 0u);
+        // A particle under an opaque terrain cell is clipped, and terrain wins.
+        PPR_TEST_ASSERT(occupied_changed == 0u);
+    };
+
+    PPR_UNIT_TEST (particle_shapes_share_one_support_bound) {
+        // One arithmetic probe for the adopted geometry: the solid rounded
+        // square is inscribed in the liquid disk's support circle and both fit
+        // the 1.5 r cull margin the prepare pass uses. The same constants are
+        // mirrored in grid_particle_native.slang for the draw geometry and the
+        // prepare cull.
+        constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
+        const float rounded_support = gridParticleRoundedSquareSupport(
+            kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale);
+
+        PPR_TEST_ASSERT(kGridParticleSupportScale == 1.25f);
+        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 1.5f);
+        PPR_TEST_ASSERT(std::abs(rounded_support - kGridParticleSupportScale) <= 1.0e-4f);
+        PPR_TEST_ASSERT(rounded_support <= kGridParticleCullRadiusScale);
+        // Cell units at the reference radius: a = 0.2690 cell, c = 0.0673 cell.
+        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidHalfExtentScale) * r_cell - 0.2690) <= 5.0e-4);
+        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidCornerScale) * r_cell - 0.0673) <= 5.0e-4);
+        // Rejected variants would clip at the frustum edge: a = R needs 1.638x
+        // the cull margin and the unrounded square needs 1.768x.
+        PPR_TEST_ASSERT(
+            gridParticleRoundedSquareSupport(kGridParticleSupportScale, 0.0f) > kGridParticleCullRadiusScale);
+        PPR_TEST_ASSERT(1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_shape support={:.4f} cull={:.4f} half_extent={:.4f} "
+                "corner={:.4f} half_extent_cell={:.4f} corner_cell={:.4f}",
+                rounded_support, kGridParticleCullRadiusScale, kGridParticleSolidHalfExtentScale,
+                kGridParticleSolidCornerScale, double(kGridParticleSolidHalfExtentScale) * r_cell,
+                double(kGridParticleSolidCornerScale) * r_cell));
+    };
 }
 
 namespace pP::tests {
@@ -2829,6 +3523,10 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::presentation_material_word_reconstructs_the_canonical_pack_cell_word,
                 detail::WorldLightingMaterial::presentation_position_precision_budget_pins_the_far_corner_quantum,
                 detail::WorldLightingMaterial::presentation_row_layout_matches_the_cpu_twin,
+                detail::WorldLightingMaterial::particle_descriptions_use_the_rows_own_phase_material,
+                detail::WorldLightingMaterial::particle_shapes_share_one_support_bound,
+                detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
+                detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,
             });
         };
         return group;

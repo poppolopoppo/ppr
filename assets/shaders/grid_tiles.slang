@@ -1,4 +1,6 @@
 #include "world_lighting_codec.slang"
+// The one particle shape constant set, shared with the prepare cull.
+#include "grid_particle_native.slang"
 
 // Grid tile pass: flat tinted or per-cell quads, one instance per visible chunk-sized
 // tile. Row-major, row-vector convention: transforms call
@@ -100,9 +102,17 @@ StructuredBuffer<GridVisual> g_terrain_visuals;
 // reference lanes), 1 discards optical-blend (translucent) cells for the
 // depth-writing opaque pass, 2 discards opaque cells for the blended
 // translucent pass. The same 128x128 chunk quad geometry is drawn twice.
+//
+// `particle_class` is the particle draw class of the current draw: 0 gas,
+// 1 opaque (depth-writing), 2 optical (blended). The class selects depth and
+// blend only; the material's own phase flags select the description family.
+// The particle vertex entry rejects every instance whose packed class bits are
+// not the class this draw owns, before rasterisation, so one draw list serves
+// all three classes.
 struct GridPassSwitch {
     uint pass;
-    uint pad0, pad1, pad2;
+    uint particle_class;
+    uint pad1, pad2;
 };
 ConstantBuffer<GridPassSwitch> g_grid_pass;
 Texture2D<float4> g_boundary_noise;
@@ -121,6 +131,17 @@ struct ParticleGpu {
     half2 m_motion;                       // 20: native cells per solver step
 };
 static const uint kParticleMaterialMask = 0xfffu;
+// Class nibble of material_flags_temperature. It sits beside the material id
+// because a gas row and a solid particle can share one material id. Bits 2..3
+// are reserved; solid versus liquid is selected by the material's own surface
+// flags at shading time.
+static const uint kParticleClassGas = 1u;
+static const uint kParticleClassOptical = 2u;
+// Particle draw class, the per-draw constant in g_grid_pass.particle_class.
+// The class is a depth/blend state; it never selects the description family.
+static const uint kParticleDrawGas = 0u;
+static const uint kParticleDrawOpaque = 1u;
+static const uint kParticleDrawOptical = 2u;
 
 // Shared-exponent RGB9E5 decode, matching the host lighting::unpackRGB9E5.
 float3 unpackParticleTint(uint word) {
@@ -765,7 +786,7 @@ bool categoricalCellOccupied(uint resolved, GridVisual visual) {
 }
 
 float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_position,
-    float2 gradient_x, float2 gradient_y,
+    float2 gradient_x, float2 gradient_y, CH coefficients,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler,
     bool premultiplied) {
     GridVisual visual = g_terrain_visuals[min(material, 65535u)];
@@ -802,7 +823,9 @@ float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_posi
     float3 view = surfaceToCamera(fine_position);
     float n_dot_v = visibleNoV(normal, view);
     float2 environment = brdfLutPair(g_brdf_lut, g_brdf_sampler, n_dot_v, roughness);
-    CH coefficients = sampleFineCH(fine_position);
+    // `coefficients` is supplied by the caller: the terrain path requires a
+    // published fine CH, while a particle world without one shades from an
+    // explicit zero field instead of indexing the one-element fallback.
     // The approved transport surface scope also bounds visible emission:
     // receive-only transparent cells and gas never acquire a thermal or authored
     // glow, while opaque surfaces and the approved emissive-liquid class do.
@@ -962,7 +985,7 @@ float4 shadeGridReactive(
         if (active_optical) reactive_coverage = 1;
         return categoricalMaterialSurface(
             resolved_material, resolved, input.fine_position, gradient_x, gradient_y,
-            g_textures, g_sampler, point_sample);
+            sampleFineCH(input.fine_position), g_textures, g_sampler, point_sample);
     }
 
     // ------------------------------------------------------------------
@@ -1152,29 +1175,57 @@ struct ParticleVertexOutput {
     float2 uv:TEXCOORD1;
     nointerpolation uint material:TEXCOORD2;
     nointerpolation float4 color:COLOR0;
+    // Quad corner in units of the row's physical radius r: 64/62 for the gas
+    // mask, 1.25 for the liquid disk, 0.9538 for the solid rounded square.
+    nointerpolation float shape_scale:TEXCOORD3;
+    // Canonical packCell word rebuilt from the row: material | temperature << 16.
+    nointerpolation uint canonical:TEXCOORD4;
 };
 
 ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
         float2(-1,-1),float2(1,1),float2(-1,1)};
     ParticleGpu particle=g_particles[instance];
+    ParticleVertexOutput output=(ParticleVertexOutput)0;
     // The row does not keep the canonical packCell word: material (12 bits),
     // class flags (4 bits) and the binary16 temperature share one word, so
     // shading reconstructs canonical = material | (temperature << 16). Alpha is
     // not stored either; the material's own alpha supplies opacity.
     uint material=particle.m_material_flags_temperature&kParticleMaterialMask;
+    uint class_bits=(particle.m_material_flags_temperature>>12u)&0xfu;
+    bool is_gas=(class_bits&kParticleClassGas)!=0u;
+    bool is_optical=(class_bits&kParticleClassOptical)!=0u;
+    uint draw_class=g_grid_pass.particle_class;
+
+    // One branch, no new buffer and no second compaction: a draw rejects the
+    // classes it does not own before rasterisation. The gas draw therefore
+    // rejects every moving row explicitly, which is what the retired fragment
+    // discard used to do.
+    bool owned = draw_class==kParticleDrawGas ? is_gas
+        : draw_class==kParticleDrawOpaque ? (!is_gas&&!is_optical)
+        : (draw_class==kParticleDrawOptical&&!is_gas&&is_optical);
+    if (!owned) {
+        output.position=float4(2.0,2.0,2.0,1.0);
+        return output;
+    }
+
+    // Gas keeps the shared mask texture and its two-texel transparent border;
+    // the restored classes use the analytic shapes. Both shapes are inscribed in
+    // the same support circle R = 1.25 r, so one quad encloses either and the
+    // fragment's phase test selects the actual silhouette. Sizing the quad from
+    // the draw class instead would clip an opaque liquid's disk.
+    float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
+        : particle.m_radius_m*kParticleSupportScale;
     float3 right=normalize(mul(float4(1,0,0,0),g_grid_frame.m_inverse_view_projection).xyz);
     float3 up=normalize(mul(float4(0,1,0,0),g_grid_frame.m_inverse_view_projection).xyz);
-    // The mask's disk radius is62 texels in a128-square texture. Its two-texel
-    // transparent border extends support without changing the physical radius.
-    float halfExtent=particle.m_radius_m*(64.0/62.0);
-    float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*halfExtent;
-    ParticleVertexOutput output;
+    float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;
     output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
     output.uv=corners[vertex]*0.5+0.5;
     output.material=material;
     output.color=float4(unpackParticleTint(particle.m_color_rgb9e5),1.0);
+    output.shape_scale=extent/particle.m_radius_m;
+    output.canonical=material|(particle.m_material_flags_temperature&0xffff0000u);
     return output;
 }
 
@@ -1246,9 +1297,11 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
     geometric_support=0;
-    // Phase is constant over each primitive: both reconstructed surfaces are already drawn.
+    // D9: the material id is the shading key and is never substituted. A row
+    // whose id the palette does not carry discards here instead of reading the
+    // empty entry 0; the host counts rejected materials once per publication.
     GridVisual visual = g_terrain_visuals[input.material];
-    if ((visual.m_surface_flags & (kSurfaceParticleLiquid | kSurfaceParticleSolid)) != 0u) discard;
+    if (visual.m_material_id != input.material) discard;
 
     ParticleTerrainFootprint footprint = particleTerrainFootprint(input.fine_position, g_sampler);
     // Actual alpha texture, with filtered mip levels. No analytic circle mask.
@@ -1322,6 +1375,143 @@ GridReactiveOutput fragmentParticleReactive(ParticleVertexOutput input,uint inde
     input.position.xy = floor(input.position.xy) + positions[index];
     GridReactiveOutput output;
     output.color=shadeParticleReactive(input,g_textures,g_sampler,true,output.reactive);
+    return output;
+}
+
+// ------------------------------------------------------------------
+// per-instance solid and liquid descriptions
+// ------------------------------------------------------------------
+// The restored instanced classes shade from the instance's own packed material
+// field. The phase flags on that same material choose the description family:
+// solid -> the material's PBR surface, liquid -> its optical surface. That
+// choice is independent of the draw class, which selects only depth/blend: an
+// opaque liquid (liquid phase without kSurfaceOpticalBlend) is drawn by the
+// opaque class and still shades through the liquid description, and an optical
+// solid is drawn by the optical class and still shades through the solid one.
+
+// Signed distance to the adopted support boundary, in units of the row's
+// physical radius. This is a distance-to-inset-rect comparison for the solid
+// and a radius comparison for the liquid, never a mask texture fetch.
+float particleShapeDistance(float2 local, bool liquid) {
+    if (liquid) return length(local)-kParticleSupportScale;
+
+    // Rounded box: the inner square half-extent is a-c and the corner radius c,
+    // so the outside distance is to the inset rectangle and its arc.
+    float2 offset=abs(local)-float2(kParticleSolidInnerHalfExtentScale,kParticleSolidInnerHalfExtentScale);
+    return length(max(offset,float2(0.0)))+min(max(offset.x,offset.y),0.0)-kParticleSolidCornerScale;
+}
+
+float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
+    geometric_support=0;
+    // The draw class is the depth/blend state only; it never selects the
+    // description family.
+    bool blend_class=g_grid_pass.particle_class==kParticleDrawOptical;
+
+    // D9: the material is the row's own id in its canonical packCell word. An
+    // absent id discards this instance and is counted on the host; it never
+    // falls back to entry 0 or to the resolved destination cell's material.
+    uint material=input.canonical&kParticleMaterialMask;
+    GridVisual visual=g_terrain_visuals[material];
+    if (visual.m_material_id!=material) discard;
+
+    // The description family is authored on this material's own phase flags, so
+    // a liquid is never shaded through the solid description and a solid never
+    // through the liquid one. An unauthored phase keeps the solid description,
+    // so every committed particle is drawn.
+    bool authored_liquid=(visual.m_surface_flags&kSurfaceParticleLiquid)!=0u;
+    bool authored_solid=(visual.m_surface_flags&kSurfaceParticleSolid)!=0u;
+    bool liquid=authored_liquid&&!authored_solid;
+
+    // Derivatives are prepared before any per-pixel reject so the texture
+    // gradients and the analytic edge width stay coherent across the quad.
+    float2 world_gradient_x=clamp(ddx(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
+    float2 world_gradient_y=clamp(ddy(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
+    ParticleTerrainFootprint footprint=particleTerrainFootprint(input.fine_position,g_sampler);
+    float2 local=(input.uv*2.0-1.0)*input.shape_scale;
+    float distance=particleShapeDistance(local,liquid);
+    float shape_coverage=saturate(0.5-distance/max(fwidth(distance),1.0e-6));
+    if (shape_coverage<=0.0) discard;
+
+    // The per-pixel terrain hard clip is kept as the second line of defence for
+    // pixels where draw order alone is not enough.
+    float terrain_coverage=particleOpaqueCoverage(footprint,point_sample);
+    if (terrain_coverage==1.0) discard;
+
+    geometric_support=1;
+
+    if (liquid) {
+        // Liquid description: the material's own albedo/normal, IOR, optical
+        // thickness and absorption sigmas through the optical surface, which
+        // refracts the backdrop copy and applies Beer-Lambert absorption. The
+        // surface is premultiplied only when the draw class blends; an opaque
+        // liquid is written straight by the depth-writing opaque class.
+        float4 surface=materialSurface(material,input.fine_position,world_gradient_x,world_gradient_y,
+            input.position.xy,float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,
+            input.fine_position,false,blend_class);
+        if (!blend_class) return surface;
+
+        // A blended instance covers `shape_coverage` of the pixel and yields to
+        // partial terrain coverage, so the premultiplied result is scaled by
+        // both for the optical pipeline's One/InvSrcAlpha blend.
+        float coverage_scale=shape_coverage*(1.0-terrain_coverage);
+        return float4(surface.rgb*coverage_scale,surface.a*coverage_scale);
+    }
+
+    // Solid description: the material's own albedo texture with its period and
+    // patching, normal map and scale, tint, metallic, roughness, authored
+    // emission and the temperature classification carried in the canonical
+    // word, through the PBR surface so the CH/BRDF response is preserved. A
+    // world with no published fine CH shades from an explicit zero field. An
+    // optical solid is premultiplied for the blending class; the opaque class
+    // writes it straight.
+    CH coefficients={};
+    if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(input.fine_position);
+    return categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,
+        world_gradient_y,coefficients,g_textures,g_sampler,blend_class);
+}
+
+[shader("fragment")]
+float4 fragmentSolidLiquidMain(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    float unused_reactive;
+    return shadeSolidLiquidReactive(input,g_textures,g_sampler,false,unused_reactive);
+}
+
+[shader("fragment")]
+float4 fragmentSolidLiquidSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    // Evaluate the entry's actual varyings before mutating either member.
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, index);
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    float unused_reactive;
+    return shadeSolidLiquidReactive(input,g_textures,g_sampler,true,unused_reactive);
+}
+
+[shader("fragment")]
+GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) {
+    // Evaluate the entry's actual varyings before mutating either member.
+    float2 fine = EvaluateAttributeAtSample(input.fine_position, index);
+    float2 uv = EvaluateAttributeAtSample(input.uv, index);
+    static const float2 positions[4] = {
+        float2(0.375, 0.125), float2(0.875, 0.375), float2(0.125, 0.625), float2(0.625, 0.875)};
+
+    input.fine_position = fine;
+    input.uv = uv;
+    input.position.xy = floor(input.position.xy) + positions[index];
+    GridReactiveOutput output;
+    output.color=shadeSolidLiquidReactive(input,g_textures,g_sampler,true,output.reactive);
     return output;
 }
 

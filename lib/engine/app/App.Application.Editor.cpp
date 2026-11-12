@@ -1956,13 +1956,22 @@ namespace pP {
 
             {
                 const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
-                // Production submission order: background, opaque materials,
-                // particles/gas, then translucent materials. Particles have
-                // depth test/write disabled while translucent terrain still
-                // depth-tests, so this order is visual behavior and must not be
-                // rearranged for profiling. The material marker is therefore
-                // split into the two contiguous material draw groups.
+                // Plan §3 draw order: background, particles (opaque then
+                // optical), opaque terrain, other opaque work, gas, translucent
+                // terrain. Particles live on z = 0 with the terrain, so they are
+                // drawn first and terrain's LessEqual test wins every depth tie;
+                // the optical particle class writes no depth, the opaque one
+                // does. The gas lane keeps its existing depth-disabled slot and
+                // blend. Do not rearrange this for profiling.
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
+                {
+                    const hal::ProfileScope scope{"Scene.Particles"};
+                    context.m_pass.pushDebugGroup("Scene.Particles", {});
+                    PPR_DEFER {
+                        context.m_pass.popDebugGroup();
+                    };
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderSolidLiquidParticles(context));
+                }
                 {
                     const hal::ProfileScope scope{"Scene.Materials"};
                     context.m_pass.pushDebugGroup("Scene.Materials", {});
@@ -1977,7 +1986,7 @@ namespace pP {
                     PPR_DEFER {
                         context.m_pass.popDebugGroup();
                     };
-                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderParticles(context));
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGasParticles(context));
                 }
                 {
                     const hal::ProfileScope scope{"Scene.Materials"};

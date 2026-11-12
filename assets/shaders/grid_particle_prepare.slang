@@ -220,9 +220,10 @@ bool visible(PresentationRow particle) {
     // count excludes them and the vertex stage never loads such a row.
     if (!all(isfinite(particle.position)) || !(particle.radius>0.0))
         return false;
-    // Enclose the disk billboard quad corners; retired solid/liquid envelopes are
-    // no longer drawn, so their wider support cannot hide a live gas disk.
-    float radius=particle.radius*1.5;
+    // Enclose the drawn support, not only the disk quad: liquid is a disk of
+    // radius R = 1.25 r and the solid rounded square is inscribed in the same
+    // circle, so both stay inside this shared 1.5 r cull margin.
+    float radius=particle.radius*kParticleCullRadiusScale;
     for (uint plane=0u;plane<6u;++plane) {
         float4 p=g_particle_prepare.planes[plane];
         if (dot(float4(particle.position,0,1),p)+radius*length(p.xyz)<0) return false;

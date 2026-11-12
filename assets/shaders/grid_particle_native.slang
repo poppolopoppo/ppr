@@ -28,6 +28,31 @@ struct MetadataRow {
 };
 struct ParticleNativeCell { uint x,y,status; };
 
+// ------------------------------------------------------------------
+// presentation support and the two phase shapes
+// ------------------------------------------------------------------
+// One constant set, read by the prepare cull and the draw geometry so the two
+// sides cannot drift: r is the packed physical radius h*sqrt(V/pi), R = 1.25 r
+// is the support radius both phases share, and the cull margin is 1.5 r.
+//
+// Solid: a rounded square inscribed in the R circle. It is the Minkowski sum of
+// a square of half-extent a-c and a disk of radius c, so its support radius is
+// S = sqrt(2)*a - c*(sqrt(2)-1). With c = 0.25 a, S = 1.3106 a, therefore
+// a = R/1.3106 = 0.9538 r (0.2690 cell at r = 0.2821 cell) and c = 0.25 a
+// (0.0673 cell). Liquid: a disk of radius R, whose support is exactly R.
+//
+// Every shape's support must stay at or below 1.5 r. Rejected variants, kept so
+// they cannot return unnoticed: a rounded square of half-extent a = R has
+// support 1.638 r (1.09x the margin) and the unrounded square of half-extent
+// a = R has 1.768 r (1.18x); both would clip at the frustum edge.
+static const float kParticleSupportScale = 1.25;
+static const float kParticleCullRadiusScale = 1.5;
+static const float kParticleRoundedSquareSupport = 1.3106;
+static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kParticleRoundedSquareSupport;
+static const float kParticleSolidCornerFraction = 0.25;
+static const float kParticleSolidCornerScale = kParticleSolidCornerFraction*kParticleSolidHalfExtentScale;
+static const float kParticleSolidInnerHalfExtentScale = kParticleSolidHalfExtentScale-kParticleSolidCornerScale;
+
 // The caller proves the sourceRow before loading Hot. Gas never uses a Hot row.
 // This is shared by census and immutable optical snapshot, before any culling.
 ParticleNativeCell particleNativeCell(MetadataRow metadata,float2 movingPosition,float enabled,bool sourceValid,
