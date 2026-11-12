@@ -51,7 +51,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 15 | complete (commits `c5db57be` and the review-fix follow-up; review issues fixed; Task 16 fallback removal recorded) |
 | 16 | complete (commits `be0a29d6`, `7e017cc4`; leak evidence NVIDIA-only; Windows/D3D12 pending) |
 | 17 | complete (commits `871c25b6`, `f89043fc`, `363b5acf`, `900c84ae`, `177b46cb`; reviews clean; 6 host minimize/restore cases incomplete) |
-| 18–19 | pending |
+| 18 | complete (commits `bfc16206`, `ba3eba49`, `59110f8e`, `506d750f`, `079f94e5`, `5b74a17b`; reviews clean; real captures/analysis complete) |
+| 19 | pending — final integration, evidence and owner visual acceptance |
 
 ## Task 0 — evidence
 
@@ -1719,3 +1720,49 @@ and operational acceptance. No Task 4 work has begun.
   twice per frame), 8/8 A/B/C frames, 93 counters/744 samples, `missing_markers
   = []`, `PBMPM.Tick` optional for frozen; Systems completes on its own checks
   with `metric_set: null`. Analyze-twice identical; comparison `like-for-like`.
+
+## Task 18 — bounded Nsight profiling complete
+
+- Commits: `bfc16206` (CLI/state machine/adapters), `ba3eba49` (contract
+  markers), `59110f8e` (capture/export reliability), `506d750f` (evidence),
+  `079f94e5` (restore draw order + re-capture), `5b74a17b` (fixture docs).
+- Review: initial review found the required §8 marker set missing (Critical)
+  plus lifecycle/normalization defects; fix round added all contract markers and
+  fixed final-state/termination/units/manifest/stop/backend/identity issues.
+  A second review found the marker work had silently reordered translucent vs
+  gas/particles; `079f94e5` restored the exact pre-marker draw order while
+  splitting `Scene.Materials` ranges around the real opaque/translucent draws.
+  Final scoped review: all findings addressed, no new Critical/Important
+  breakage.
+- Markers present: `WorldLighting.ResolveCells`, Visibility, Jump, Source,
+  Cascade.L5..L1, FineCH, Scene.Materials/Gas, Hable.Resolve,
+  Post.Exposure/Bloom/AgX, Present.Scene/UI; `PBMPM.Tick` preserved and optional
+  for the frozen workload (no first tick). Graphics analysis complete,
+  `missing_markers=[]`, 8/8 complete A/B/C frames, 93 counters/744 samples, 0
+  unavailable families; Systems complete on its own checks; analyze twice
+  byte-identical; compare like-for-like.
+- Real captures: actual named `nsys` session + SQLite export and SDK-controlled
+  `ngfx` GPU Trace with finalized `.ngfx-gputrace`; real vendor fixtures and
+  pinned adapter schemas; isolated settings and bounded readiness (>=120 frames,
+  >=2 s active, tick0 frozen).
+- Reliability fixes: cleanup-error final-state rewrite, SIGTERM→SIGKILL,
+  exact metric families/units, manifest completion after artifacts, Systems
+  marker scoping, content dirty hash + tooling hash, stop.request in all phases,
+  backend guard (D3D12 explicit unsupported), stop→export→quit, acceptance
+  selector exclusion, active-time baseline at first accepted frame.
+- **Unavailable gates:** Windows/D3D12 capture/adapter, real decimal-comma
+  vendor export, nsys GPU-metrics sampling, multipass/replay, profiler-overhead
+  baseline, live `PBMPM.Tick` capture, owner visual acceptance (Task 19).
+- Deferred minors: fixture README per-cycle suffix wording; docs "two ranges per
+  frame" unconditional; report trace-byte/A-B log wording; final-state staging
+  trace path; `.pct` unit suffix; test-local old `post.present` label.
+
+## Task 19 — final verification and owner visual gate (in progress)
+
+- Scope: spec/YAGNI/naming audit, clean `clang-dev` and `clang-rel` builds with
+  zero warnings/errors, full routine + GPU-validation matrix, complete
+  normal-game/Lab/display-exercise/profiler execution-log audit for warnings,
+  errors and flooding at every enabled severity, real display exercise, Lab
+  captures (sky -1/12, manual EV0/bloom-off then defaults, cases, gameplay),
+  live/frozen profiling, and explicit owner visual acceptance.
+- No final delivery claim before the owner records visual acceptance.
