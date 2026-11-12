@@ -1810,9 +1810,9 @@ and operational acceptance. No Task 4 work has begun.
 
 - Commits: `0abca2e6` `fix: finalize validation evidence and shader warning`,
   `9ab0690` `fix: repair matter and checkpoint GPU validation gates`,
-  `c433315` `refactor: route test diagnostics through the unit-test log`, and
+  `c433315` `refactor: route test diagnostics through the unit-test log`,
   `9c3318e` `refactor: add formatted retained test log and complete diagnostic
-  audit`.
+  audit`, and `e8120f8` `fix: apply final whole-branch review corrections`.
 - Gate repairs: the liquid-pool leaf now asserts the approved categorical
   resolved-cell presentation (terrain precedence included) instead of the
   retired envelope draw; every matter-runtime fixture releases its graphics
@@ -1831,6 +1831,20 @@ and operational acceptance. No Task 4 work has begun.
   output is 21 harness lines with 0 diagnostics; a forced failure prints the
   formatted retained message with the test call-site line. Focused
   `Core.TestHarness` coverage passes 17/17.
+- Final whole-branch review (approved for owner acceptance, no merge-blocking
+  findings) corrections: interval encode category now permits the FP16 maximum
+  65,504 (GPU boundary leaf added); `ReconstructionHistoryStamp` reordered
+  88→80 bytes with a static assertion; pre-integration wording refreshed in
+  `third_party/README.md`, `third_party/HableMSAA/README.md`, the shader and
+  renderer codemaps; the raw-overload harness test renamed; OS-suspend active
+  time recorded as a known limitation. Codec/cascade/trace, reconstruction
+  routine+GPU, settlement routine+GPU and display-exercise tests re-ran green.
+- Final clean builds at review-fix HEAD `e8120f8`: `cmake --preset clang-dev`
+  + `cmake --build --preset clang-dev --clean-first -j16` exit 0 (1,738 edges);
+  `cmake --preset clang-rel` + `cmake --build --preset clang-rel --clean-first
+  -j16` exit 0 (1,738 edges). Zero project warnings/errors; only the two known
+  libc++ std-module dependency diagnostics remain. Logs retained under
+  `task-19-artifacts/build-clang-{dev,rel}-final/`.
 - Zero-warning build gate remains **unmet** for the two libc++
   `-Wreserved-module-identifier` warnings on CMake's std-module object edge;
   exact diagnostics and bounded options are recorded in the acceptance report.

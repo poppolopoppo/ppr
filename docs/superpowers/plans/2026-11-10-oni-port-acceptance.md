@@ -2,8 +2,9 @@
 
 Date: 2026-11-12
 Branch: `particles`, verification base `dee0168221af7db162f39c7be582b68f32bda4b2`
-(`docs: record profiling completion and begin final verification`); the Task 19
-gate-fix and final-review commits are listed in the execution ledger.
+(`docs: record profiling completion and begin final verification`); final review
+HEAD `e8120f8c` (`fix: apply final whole-branch review corrections`). The
+follow-up commit list is in the execution ledger.
 Host: Linux `pPd` (CachyOS), 32 logical CPUs, 62 GiB RAM, NVIDIA GeForce RTX 2080
 (TU104), Vulkan, driver `620.70.06` (Vulkan API 1.4.357).
 Status: **owner visual acceptance pending.** This document records verification
@@ -118,6 +119,23 @@ for `clang-dev`, `PPR_WARNINGS_AS_ERRORS=ON` for `clang-rel`).
 | `clang-rel` | `cmake --preset clang-rel` | 0 | configure | `/tmp/opencode/task19/build-clang-rel/configure.log` |
 | `clang-rel` | `cmake --build --preset clang-rel --clean-first -j 16` | 0 | 1738 | `/tmp/opencode/task19/build-clang-rel/build.log` |
 
+### Final clean builds at the review-fix HEAD
+
+At `e8120f8` (`fix: apply final whole-branch review corrections`), both presets
+were configured and rebuilt from scratch with complete logs:
+
+| Preset | Command | Exit | Edges | Warnings |
+| --- | --- | --- | --- | --- |
+| `clang-dev` | `cmake --preset clang-dev`, `cmake --build --preset clang-dev --clean-first -j16` | 0 | 1,738 | only the two libc++ std-module diagnostics below |
+| `clang-rel` | `cmake --preset clang-rel`, `cmake --build --preset clang-rel --clean-first -j16` | 0 | 1,738 | only the two libc++ std-module diagnostics below |
+
+Zero project warnings/errors under `-Werror`; the literal zero-warning gate
+remains **unmet** for the same two dependency-only diagnostics. The full
+GPU-validation matrix was then run on this clean `clang-dev` binary and passed
+32/32 (1734.02 s). Logs are
+retained at `.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/
+build-clang-{dev,rel}-final/` and `/tmp/opencode/task19/build-*-final/`.
+
 Full-log inspection result:
 
 - **Zero compilation/link errors** and **zero warnings from project code** in
@@ -176,6 +194,7 @@ leaves) with `-LE gpu_validation`.
 | Routine | `ctest --test-dir out/build/clang-dev -j4 --output-on-failure -LE gpu_validation` | 0 | **36/36 passed**, 1036.35 s wall; log `…/ctest-routine.log` |
 | GPU validation (pre-fix) | `ctest --test-dir out/build/clang-dev -L gpu_validation --output-on-failure` | 8 | 28/32 passed, 1510.93 s; log `…/ctest-gpu-validation.log` |
 | GPU validation (final) | same command, serialized, after all Task 19 fixes | **0** | **32/32 passed**, 1680.73 s wall; log `…/ctest-gpu-validation-final.log` |
+| GPU validation (review-fix HEAD) | same command on the clean `e8120f8` `clang-dev` binary | **0** | **32/32 passed**, 1734.02 s wall; log `…/ctest-gpu-validation-review-head.log` |
 
 GPU-validation failures and disposition (all four repaired; see commits
 `0abca2e6` and `9ab0690`):
@@ -527,7 +546,7 @@ merge-blocking findings and a small set of cheap corrections, all applied:
 
 | Item | Correction | Evidence |
 | --- | --- | --- |
-| Interval codec threshold | `intervalPackCategory` accepted only `<= 65408` while the host mirror and spec §4 accept FP16 maximum `65,504`; the shader now uses `65504.0` (RGB9E5/CH stay at 65408). A GPU probe entry `intervalCategories` tests 65,504 accepted (`0`), 65,504.5 rejected (`2`), 65,408 accepted (`0`), negative/NaN/transmittance rejected (`1`). | `gpu_interval_category_accepts_fp16_maximum_and_rejects_above`; codec 13/13 leaves pass |
+| Interval codec threshold | `intervalPackCategory` accepted only `<= 65408` while the host mirror and spec §4 accept FP16 maximum `65,504`; the shader now uses `65504.0` (RGB9E5/CH stay at 65408). A GPU probe entry `intervalCategories` tests 65,504 accepted (`0`), 65,504.5 rejected (`2`), 65,408 accepted (`0`), negative/NaN/transmittance rejected (`1`). | `gpu_interval_category_accepts_fp16_maximum_and_rejects_above`; codec entry 13/13 nodes (12 leaves) pass |
 | `ReconstructionHistoryStamp` layout | Reordered `m_frame` before `m_grid` to remove 8 bytes of padding: **88 → 80 bytes**, static-asserted (`sizeof == 80`, `alignof == 8`); designated initializers updated. | `engine.tests.app.reconstruction` routine + GPU, `world_lighting_settlement` routine + GPU, display-exercise 22/22 all pass |
 | Stale pre-integration docs | `third_party/README.md`, `third_party/HableMSAA/README.md`, `assets/shaders/codemap.md` and `lib/engine/app/renderer/codemap.md` now describe the completed Tasks 11–14 integration instead of "remain separate work". | Docs-only; no code change |
 | Mislabeled test | `formatted_log_label_keeps_the_original_value` renamed `single_literal_binds_the_raw_overload` and now asserts the raw path's call-site line, keeping raw/formatted coverage distinct. | `core/test_harness` 17/17 |
@@ -603,7 +622,7 @@ includes the reason. Nothing below silently drops a task report item.
 | --- | --- | --- |
 | Windows MSVC Dev/Release and D3D12 render/validation/capture | **Owner gate / unmeasured** | Linux host; all cross-backend claims explicitly pending |
 | libc++ `-Wreserved-module-identifier` (two warnings per preset) | **Blocking literal zero-warning gate** | Exact file/line/edge in "Clean builds"; bounded options listed |
-| Remaining GPU-validation failures | **None** after the gate-fix lane | `ctest-gpu-validation-final.log`: 32/32 passed, exit 0; was 28/32 before fixes |
+| Remaining GPU-validation failures | **None** after the gate-fix lane | `ctest-gpu-validation-review-head.log`: 32/32 passed at `e8120f8`, exit 0; was 28/32 before fixes |
 | Display-exercise host-incomplete minimize/restore/focus | **Owner gate**: six incomplete cases | XWayland accepts the intent but emits no iconified/focus-loss event |
 | Real decimal-comma vendor export | **Not run**: synthetic declared-locale fixture only | Fixture labelled synthetic |
 | nsys GPU-metrics sampling, multipass/replay | **Not run** | Capability recorded; no claim |
@@ -625,8 +644,12 @@ docs and test label; complete test diagnostic routing to
 `_.log` (all active-code test occurrences, including pre-existing ones); the
 narrow `IRun` formatted retained-log overload with call-site location; retained
 log stream serialization and format-under-lock (fixing the libc++ ostream-print
-sized-delete/UAF exposure); and the `matter_pressure_gpu` deadline raised from
-600 s to 900 s after a 591 s measured run timed out with no assertion failure.
+sized-delete/UAF exposure); the `matter_pressure_gpu` deadline raised from 600 s
+to 900 s after a 591 s measured run timed out with no assertion failure; the
+interval encode category aligned to the FP16 maximum with a GPU boundary case;
+the `ReconstructionHistoryStamp` 88→80-byte layout; the stale pre-integration
+docs; and the raw-overload test rename. The final-review correction table above
+is the authoritative disposition for those items.
 Evidence is in the sections above and `/tmp/opencode/task19/logs/` plus the
 durable `.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/` copy.
 
@@ -661,8 +684,10 @@ durable `.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/` copy.
 
 Spec coverage, YAGNI/naming, ordinary/Lab/display-exercise log cleanliness,
 runtime warning resolution, the complete test-diagnostic audit, the full GPU
-matrix (32/32) and Lab/visual capture evidence are recorded above with the exact
-commands, exits and artifacts. The remaining gates are:
+matrix (**32/32 at review-fix HEAD `e8120f8`**) and Lab/visual capture evidence
+are recorded above with the exact commands, exits and artifacts. Both presets
+were rebuilt clean at that HEAD (exit 0, 1,738 edges, zero project warnings).
+The remaining gates are:
 
 1. **Zero-warning builds** — unmet only for the two system libc++ std-module
    object-edge diagnostics per preset; project code is warning-free under
