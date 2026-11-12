@@ -1663,3 +1663,40 @@ and operational acceptance. No Task 4 work has begun.
   report.
 - **Unavailable gates:** Windows/D3D12; real minimize/focus events; GPU driver
   version unavailable in RHI; owner visual acceptance remains Task 19.
+
+## Task 18 — bounded profiling capture and normalized Nsight analysis
+
+- Commits: `bfc16206` (tooling, real fixtures, first capture evidence) plus the
+  review follow-ups below.
+- Delivered: `game.profile_capture` bounded state machine; permanent
+  `--profile-capture=systems|graphics --profile-output=DIR
+  --profile-workload=frozen|live`; readiness (120 accepted fresh scene frames
+  and 2 s active presentation), atomic `ready.json`/`final-state.json`,
+  session-token stop rendezvous; Systems named-session launch/start/stop/export;
+  Graphics SDK initialize/activate/start on the device-owner lane through the
+  new `rhi::getNativeQueueObject` seam, nonblocking status/file polling and
+  tool-bounded 8-frame/2000 ms capture; `scripts/profile_lighting.py`
+  discover/capture/analyze/compare with machine-local lock, bounded cleanup,
+  manifest identity, schema-1 normalized analysis and matched comparison.
+- Re-captured after the review: fresh frozen Systems and Graphics captures from
+  the same `clang-rel-profile` binary (ready at tick 0, ~360 accepted frames /
+  2.0 s active, no advance while frozen), 8/8 complete A/B/C Graphics frames,
+  93 counters / 744 samples, one finalized `.ngfx-gputrace`, byte-identical
+  repeated analysis and a `like-for-like` comparison.
+- Contract markers now emitted by their owning passes:
+  `WorldLighting.ResolveCells`, `.Visibility`, `.Jump`, `.Source`,
+  `Cascade.L5`..`L1`, `FineCH`, `Scene.Materials`, `Scene.Gas`,
+  `Hable.Resolve`, `Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`,
+  `Present.UI`; `PBMPM.Tick` remains and is optional for the frozen workload
+  (it pauses before the first simulation tick).
+- Review fixes: shutdown/cleanup error rewrites final-state to incomplete;
+  stop-request polling in every phase (ordinary quit, not force-kill);
+  backend-guarded Vulkan-only adapter; exact metric-family matching and rate/
+  peak units; manifest `complete` only after export/finalization; Systems
+  validation independent of GPU markers; content-based dirty hash plus tooling
+  identity; stop→export→quit ordering; seeded active-time baseline; report and
+  fixture refresh.
+- **Unavailable gates:** Windows/D3D12 capture and adapter; a real
+  decimal-comma vendor export; nsys GPU-metrics sampling; multipass/replay;
+  profiler-overhead baseline; an actual live-workload capture exercising
+  `PBMPM.Tick` was not run (frozen classifies it optional).

@@ -267,12 +267,28 @@ identical normalized numbers.
 
 The normalized analysis is `schema_version: 1` and independent of vendor
 formats: `identity`, `collection`, `ranges[]`, `metrics[]` and `validation`.
+Identity includes the working-tree content hash (`git diff HEAD --binary` plus
+untracked bytes) and the profiling tool's own SHA-256, so two different edits
+with the same file list never share an identity.
 CPU API-call duration is always labelled `cpu.api.*` with nanosecond units;
 GPU workload/submission windows are separate and are not claimed as per-pass
 GPU execution. Unsupported or not-collected metric families are `null` with a
 reason, never zero. Nested marker ranges carry `parent_id` and are never summed
 as independent work (interval unions are used for busy time). Vendor metric
 names, units and aggregation suffixes are retained verbatim.
+
+Marker validation is scoped by tool: only a Graphics GPU trace can carry GPU
+pass ranges and requires the contract set plus at least one complete A/B/C
+frame; a Systems capture completes on its own checks (validated schema,
+nonempty API/workload trace, clean shutdown). `PBMPM.Tick` is optional for a
+frozen workload, which pauses before the first simulation tick.
+
+Metric-family availability is decided by exact vendor tag families
+(`dramc__`/`dram__` traffic, `*hit_rate`, `*__warps_active` occupancy), never by
+loose substrings; a CPU `vkAllocateMemory` call or an `l1tex__throughput` unit
+metric is not memory throughput or a cache hit rate. Rate and peak suffixes
+(`.sum.per_second`, `.avg.per_cycle_elapsed`, `.avg.peak_sustained`, …) keep
+their unit and aggregation.
 
 The pinned adapters validate the actual observed export schemas: Nsight Systems
 SQLite `EXPORT_SCHEMA_VERSION` 3.31.0 and the Nsight Graphics
@@ -288,17 +304,20 @@ settings, camera, workload, backend, clocks or collection mode differ; it lists
 the differences and still emits a descriptive distribution comparison
 (count/min/median/max/mean) with the profiler-overhead caveat.
 
-### Known marker naming gap
+### Contract marker set
 
-The capture validates the *observed* production RHI debug-group ranges. On this
-host the Lighting Lab emits `WorldLighting.Projection`, `.Visibility`, `.Jump`,
-`.Source`, `.Terminal`, `.Cascade`, `.Fine`, `.Status`, `Particles.*`,
-`scene.stage`, `scene.content`, `post.agx`, `post.present` and `ui.detached`
-(plus `ppr`). The design contract's exact names
-`WorldLighting.ResolveCells`, `WorldLighting.Cascade.L1..L5`,
+The owning passes emit the design contract names as stable RHI GPU ranges (and
+matching CPU `hal::ProfileScope` boundaries where the pass has no enclosing
+CPU scope): `WorldLighting.ResolveCells` (projection/resolve),
+`WorldLighting.Visibility`, `.Jump`, `.Source`, `WorldLighting.Cascade.L5`
+through `.L1` (the terminal dispatch is L5, then one dispatch per level),
 `WorldLighting.FineCH`, `Scene.Materials`, `Scene.Gas`, `Hable.Resolve`,
-`Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`, `Present.UI` and
-`PBMPM.Tick` are not all emitted, so the analysis reports them as missing and
-the overall validation is `incomplete`. Renaming/adding those pass ranges is a
-renderer change outside the profiling tooling and is tracked as an open gate,
-not hidden by an alias map.
+`Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`, `Present.UI` and the
+existing `PBMPM.Tick`. `WorldLighting.Status` and `Particles.*` remain as
+additional production ranges.
+
+The frozen workload pauses before the first simulation tick, so `PBMPM.Tick`
+cannot appear there; the analysis reports it under `missing_optional_markers`.
+A live workload must emit it. On a backend or tool that cannot observe GPU pass
+ranges (Systems), the marker check is not applicable and the capture is judged
+by its own evidence.
