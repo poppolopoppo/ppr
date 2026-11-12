@@ -58,7 +58,8 @@ namespace pP {
         values.m_material_count = inputs.m_material_count;
 
         rhi::ICommandEncoder &encoder = context.m_encoder;
-        encoder.pushDebugGroup("WorldLighting.Projection", {});
+        const hal::ProfileScope scope{"WorldLighting.ResolveCells"};
+        encoder.pushDebugGroup("WorldLighting.ResolveCells", {});
         PPR_DEFER {
             encoder.popDebugGroup();
         };

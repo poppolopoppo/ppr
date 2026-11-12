@@ -823,8 +823,20 @@ namespace pP {
 
         m_pending_settings = settings;
         m_pending_active_elapsed = active_elapsed;
-        PPR_RETURN_ERROR_ON_FAIL(PostProcess, encodeMetering_(context, slot));
+        {
+            // Exposure metering/adaptation is encoded by its own dispatches; the
+            // stable GPU marker attributes them without touching the algorithm.
+            context.m_encoder.pushDebugGroup("Post.Exposure", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(PostProcess, encodeMetering_(context, slot));
+        }
         if (settings.m_bloom_enabled) {
+            context.m_encoder.pushDebugGroup("Post.Bloom", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, encodeBloom_(context, slot));
         } else {
             context.m_encoder.setTextureState(slot.m_bloom[0], baseRange(), rhi::ResourceState::ShaderResource);

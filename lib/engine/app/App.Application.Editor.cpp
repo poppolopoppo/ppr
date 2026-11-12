@@ -1955,9 +1955,23 @@ namespace pP {
             {
                 const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderParticles(context));
-                PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderTranslucent(context));
+                {
+                    const hal::ProfileScope scope{"Scene.Materials"};
+                    context.m_pass.pushDebugGroup("Scene.Materials", {});
+                    PPR_DEFER {
+                        context.m_pass.popDebugGroup();
+                    };
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderTranslucent(context));
+                }
+                {
+                    const hal::ProfileScope scope{"Scene.Gas"};
+                    context.m_pass.pushDebugGroup("Scene.Gas", {});
+                    PPR_DEFER {
+                        context.m_pass.popDebugGroup();
+                    };
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderParticles(context));
+                }
             }
 
             const CpuObservationScope cpu_draw{clock, cpu.m_triangle_draw};
@@ -2051,7 +2065,7 @@ namespace pP {
             const auto resolved_draw = [&](const DrawContext &context) -> std::error_code {
                 return m_post_process->render(context);
             };
-            DrawSubmission resolve_draws{string_literal{std::in_place, "post.agx"}, resolved_draw};
+            DrawSubmission resolve_draws{string_literal{std::in_place, "Post.AgX"}, resolved_draw};
 
             rhi::ITexture &output_texture = m_post_process->outputTexture();
             const CpuObservationScope cpu_surface{clock, cpu.m_surface};
@@ -2104,8 +2118,8 @@ namespace pP {
                 PPR_ASSERT(m_ui_service != nullptr);
                 return m_ui_service->renderDetachedUiFrame(ui, draw_context);
             };
-            DrawSubmission present_submission{string_literal{std::in_place, "post.present"}, present_draw};
-            DrawSubmission ui_draws{string_literal{std::in_place, "ui.detached"}, ui_encode};
+            DrawSubmission present_submission{string_literal{std::in_place, "Present.Scene"}, present_draw};
+            DrawSubmission ui_draws{string_literal{std::in_place, "Present.UI"}, ui_encode};
 
             // The retained inspection overlay is read-only C-stage work drawn
             // from the same submitted world/camera as a fresh picture. A

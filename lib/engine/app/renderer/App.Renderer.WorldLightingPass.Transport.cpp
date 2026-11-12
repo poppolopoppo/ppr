@@ -426,6 +426,7 @@ namespace pP {
         const u32 cascade_groups = lighting::kCascadeDomainEdge / lighting::kCascadeDispatchThreads;
 
         {
+            const hal::ProfileScope scope{"App.Pass.WorldLighting.Source"};
             encoder.pushDebugGroup("WorldLighting.Source", {});
             PPR_DEFER {
                 encoder.popDebugGroup();
@@ -439,8 +440,11 @@ namespace pP {
         encoder.setBufferState(resources.m_source, rhi::ResourceState::ShaderResource);
         encoder.setBufferState(resources.m_cascades, rhi::ResourceState::UnorderedAccess);
 
+        // The terminal dispatch writes the coarsest retained cascade level; it
+        // is the L5 pass of the same contract range set.
         {
-            encoder.pushDebugGroup("WorldLighting.Terminal", {});
+            const hal::ProfileScope scope{"WorldLighting.Cascade.L5"};
+            encoder.pushDebugGroup("WorldLighting.Cascade.L5", {});
             PPR_DEFER {
                 encoder.popDebugGroup();
             };
@@ -451,10 +455,18 @@ namespace pP {
         // Terminal write -> L4 parent read dependency, then one dependency per
         // level. Each level reads the already-merged parent intervals and writes
         // only its own probe/atlas records.
+        constexpr std::array<const char *, kCascadeLevels> kCascadeMarkerNames{
+            "WorldLighting.Cascade.L1",
+            "WorldLighting.Cascade.L2",
+            "WorldLighting.Cascade.L3",
+            "WorldLighting.Cascade.L4",
+            "WorldLighting.Cascade.L5",
+        };
         for (u32 level = kCascadeLevels - 1u; level >= 1u; --level) {
             encoder.globalBarrier();
             {
-                encoder.pushDebugGroup("WorldLighting.Cascade", {});
+                const hal::ProfileScope scope{kCascadeMarkerNames[level - 1u]};
+                encoder.pushDebugGroup(kCascadeMarkerNames[level - 1u], {});
                 PPR_DEFER {
                     encoder.popDebugGroup();
                 };
@@ -500,7 +512,8 @@ namespace pP {
         values.m_current_weight = first_field ? 0.0f : lighting::fineAccumulationWeight(delta_seconds);
         values.m_first_field = first_field ? 1u : 0u;
 
-        encoder.pushDebugGroup("WorldLighting.Fine", {});
+        const hal::ProfileScope scope{"WorldLighting.FineCH"};
+        encoder.pushDebugGroup("WorldLighting.FineCH", {});
         PPR_DEFER {
             encoder.popDebugGroup();
         };

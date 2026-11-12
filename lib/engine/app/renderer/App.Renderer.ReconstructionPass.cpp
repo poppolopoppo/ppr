@@ -512,6 +512,11 @@ namespace pP {
         context.m_encoder.setTextureState(previous, range, rhi::ResourceState::ShaderResource);
         context.m_encoder.setTextureState(next, range, rhi::ResourceState::UnorderedAccess);
 
+        const hal::ProfileScope scope{"Hable.Resolve"};
+        context.m_encoder.pushDebugGroup("Hable.Resolve", {});
+        PPR_DEFER {
+            context.m_encoder.popDebugGroup();
+        };
         auto *const pass = context.m_encoder.beginComputePass();
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
