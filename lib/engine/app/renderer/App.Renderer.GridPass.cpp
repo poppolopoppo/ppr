@@ -2957,7 +2957,29 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::ensureLightingFallback_(rhi::IDevice &device) {
+        if (m_lighting_fallback) {
+            return {};
+        }
+
+        // Zero-valued resolved-cell/CH fallback. The shader never reads it while
+        // m_has_resolved_cells is clear; it keeps every static binding valid for
+        // worlds whose lighting owner has not published an attempt yet.
+        rhi::BufferDesc fallback{};
+        fallback.size = sizeof(u32) * 16u;
+        fallback.elementSize = sizeof(u32);
+        fallback.memoryType = rhi::MemoryType::Upload;
+        fallback.usage = rhi::BufferUsage::ShaderResource;
+        fallback.defaultState = rhi::ResourceState::ShaderResource;
+        fallback.label = "grid lighting binding fallback";
+        const std::array<u32, 16u> zeros{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, make_error_code(device.createBuffer(fallback, zeros.data(), m_lighting_fallback.writeRef())));
+        return {};
+    }
+
     std::error_code GridPass::ensureSurfaceBuffers_(rhi::IDevice &device) {
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(device));
         if (m_contour_cases) {
             return {};
         }
@@ -2993,22 +3015,6 @@ namespace pP {
         m_contour_cases = std::move(cases);
         m_chunk_slot_buffers = std::move(maps);
         m_chunk_slot_mapped = mapped;
-
-        // Zero-valued resolved-cell/CH fallback. The shader never reads it while
-        // m_has_resolved_cells is clear; it keeps every static binding valid for
-        // worlds whose lighting owner has not published an attempt yet.
-        if (not m_lighting_fallback) {
-            rhi::BufferDesc fallback{};
-            fallback.size = sizeof(u32) * 16u;
-            fallback.elementSize = sizeof(u32);
-            fallback.memoryType = rhi::MemoryType::Upload;
-            fallback.usage = rhi::BufferUsage::ShaderResource;
-            fallback.defaultState = rhi::ResourceState::ShaderResource;
-            fallback.label = "grid lighting binding fallback";
-            const std::array<u32, 16u> zeros{};
-            PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, make_error_code(device.createBuffer(fallback, zeros.data(), m_lighting_fallback.writeRef())));
-        }
 
         return {};
     }
@@ -3372,6 +3378,7 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fine_ch, makeFullRange(fine_ch))));
             } else {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(device));
                 auto *const fallback = m_lighting_fallback.get();
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
@@ -3865,7 +3872,8 @@ namespace pP {
         fillOpticalFrame_(frame);
     }
 
-    std::error_code GridPass::bindBackgroundFineCH_(rhi::ShaderCursor &cursor, u32 &has_resolved_cells) const {
+    std::error_code GridPass::bindBackgroundFineCH_(
+        rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &has_resolved_cells) {
         // The narrow binder reads only this attempt's fine CH; the full
         // world-lighting bind would require material/source/thermal resources
         // the background root does not carry.
@@ -3886,8 +3894,10 @@ namespace pP {
             return {};
         }
 
-        // No current field: keep the authored unlit fallback. The clear gate
-        // means the shader never indexes this zero buffer.
+        // No current field: keep the authored unlit fallback. The ensure owns
+        // creation so this path is valid even when only a background frame was
+        // prepared; the clear gate means the shader never indexes the buffer.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(device));
         auto *const fallback = m_lighting_fallback.get();
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
@@ -4124,6 +4134,7 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(context.m_device));
         reclaimCompleted_(context.m_completed_fence_value);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, admitParticleSeeds_(context.m_device));
         if (not m_world.m_has_background) {
@@ -4256,7 +4267,7 @@ namespace pP {
         frame.m_has_background = 1u;
         frame.m_viewport[0] = 0.0f;
         frame.m_viewport[1] = 0.0f;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(cursor, frame.m_has_resolved_cells));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(context.m_device, cursor, frame.m_has_resolved_cells));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[selected].setData(&frame, sizeof(frame)));
         rhi::ShaderCursor surface;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_surface_profile"].getDereferenced(surface));
@@ -4328,7 +4339,8 @@ namespace pP {
             rhi::ShaderCursor cursor{root};
             GridFrame frame{};
             fillBackgroundFrame_(frame);
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(cursor, frame.m_has_resolved_cells));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, bindBackgroundFineCH_(context.m_device, cursor, frame.m_has_resolved_cells));
             PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[slot].setData(&frame, sizeof(frame)));
             rhi::ShaderCursor surface;
             PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_surface_profile"].getDereferenced(surface));

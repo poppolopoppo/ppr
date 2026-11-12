@@ -580,6 +580,11 @@ export namespace pP {
         [[nodiscard]] rhi::IBuffer *terrainStagingForTest() const noexcept {
             return m_world.m_terrain_staging.get();
         }
+        // Tests-only: the zero resolved-cell/CH fallback bound when no current
+        // field exists. It is created on first background/material binding.
+        [[nodiscard]] rhi::IBuffer *lightingFallbackForTest() const noexcept {
+            return m_lighting_fallback.get();
+        }
         [[nodiscard]] u32 pendingDeferredReleaseCountForTest() const noexcept {
             return m_deferred_releases.pendingCount();
         }
@@ -864,13 +869,18 @@ export namespace pP {
             std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend,
             bool premultiplied = false);
         void fillOpticalFrame_(GridFrame &frame) const noexcept;
+        // Ensures the zero resolved-cell/CH fallback the background and
+        // material roots always declare. Idempotent; owns the creation so a
+        // background-only path cannot reach a null buffer.
+        [[nodiscard]] std::error_code ensureLightingFallback_(rhi::IDevice &device);
         // Background frame tail: captured camera position, forward and
         // orthographic flag, plus the shared optical frame fields.
         void fillBackgroundFrame_(GridFrame &frame) const noexcept;
         // Binds the background receiver's fine CH input and reports whether the
-        // field is live. With no current field the zero fallback is bound and
-        // the gate stays clear, so no unlit layer indexes it.
-        [[nodiscard]] std::error_code bindBackgroundFineCH_(rhi::ShaderCursor &cursor, u32 &has_resolved_cells) const;
+        // field is live. With no current field the zero fallback is ensured and
+        // bound, and the gate stays clear, so no unlit layer indexes it.
+        [[nodiscard]] std::error_code bindBackgroundFineCH_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &has_resolved_cells);
         void clearOpticalResources_() noexcept;
         [[nodiscard]] std::error_code ensureSpatialPrograms_(rhi::IDevice &device, bool reactive = false);
 

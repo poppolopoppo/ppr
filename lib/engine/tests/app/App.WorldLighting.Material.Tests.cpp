@@ -1855,6 +1855,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // A nonunit uniform field must appear exactly once: squaring it or
         // applying it to alpha fails these values.
         const auto lit = capture(snapshot, uniformCH(float3{0.5f, 0.25f, 0.125f}));
+        // This fixture never runs the categorical draw, so the fallback buffer
+        // can only have come from the background preparation path.
+        PPR_TEST_ASSERT(grid.lightingFallbackForTest() != nullptr);
         const auto lit_center = pixel(lit, kEdge / 2u, kEdge / 2u);
         _.log(
             std::format(
