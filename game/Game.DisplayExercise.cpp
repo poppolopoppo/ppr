@@ -1841,7 +1841,9 @@ namespace pP::game {
                 entry->m_presented_frame = observed.m_presented_frame;
                 entry->m_trial_armed = entry->m_trial_armed or observed.m_confirm_armed;
                 entry->m_trial_seconds_left = observed.m_confirm_seconds_left;
-                if (step.m_kind == EDisplayExerciseActionKind::live_picture) {
+                if (step.m_kind == EDisplayExerciseActionKind::live_picture or
+                    step.m_kind == EDisplayExerciseActionKind::reset_live_picture or
+                    step.m_kind == EDisplayExerciseActionKind::restore_live_baseline) {
                     if (const auto grid = makePresentationGrid(
                             observed.m_framebuffer_extent, observed.m_live_pixel.m_pixel_scale)) {
                         entry->m_presentation_grid = *grid;
