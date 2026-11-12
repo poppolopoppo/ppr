@@ -270,8 +270,8 @@ namespace pP::game {
 
     void DisplayExercise::addLive_(
         std::string case_id, const bool keep_world_light, WorldLightDisplaySettings world_light, const bool keep_pixel,
-        PixelDisplaySettings pixel, const bool keep_post, PostDisplaySettings post,
-        const bool require_inspection_stamp, const bool completes_case) {
+        PixelDisplaySettings pixel, const bool keep_post, PostDisplaySettings post, const bool require_inspection_stamp,
+        const bool completes_case) {
         Step step{};
         step.m_kind = EDisplayExerciseActionKind::live_picture;
         step.m_case = std::move(case_id);
@@ -1567,8 +1567,10 @@ namespace pP::game {
                     const int2 expected_backing{
                         axis(observed.m_framebuffer_extent.x), axis(observed.m_framebuffer_extent.y)};
                     if (grid->m_window.x != observed.m_framebuffer_extent.x or
-                        grid->m_window.y != observed.m_framebuffer_extent.y or grid->m_pixel_scale != scale or
-                        grid->m_backing.x != expected_backing.x or grid->m_backing.y != expected_backing.y) {
+                        grid->m_window.y != observed.m_framebuffer_extent.y or
+                        grid->m_pixel_scale != scale or
+                        grid->m_backing.x != expected_backing.x or
+                        grid->m_backing.y != expected_backing.y) {
                         completeStep_(
                             step, EDisplayExerciseStatus::failed,
                             "observed presentation grid does not match exact W/P/R/S/B", observed, now);
@@ -1588,14 +1590,14 @@ namespace pP::game {
                     const ReconstructionHistoryStamp &reset = observed.m_history_last_reset;
                     if (reset.m_grid != *grid) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::failed,
-                            "history reset used a different presentation grid", observed, now);
+                            step, EDisplayExerciseStatus::failed, "history reset used a different presentation grid",
+                            observed, now);
                         return true;
                     }
                     if (reset.m_world != m_baseline_world) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::failed,
-                            "history reset changed the world-lighting identity", observed, now);
+                            step, EDisplayExerciseStatus::failed, "history reset changed the world-lighting identity",
+                            observed, now);
                         return true;
                     }
                 }
@@ -1627,14 +1629,12 @@ namespace pP::game {
                     not samePixel(observed.m_live_pixel, expected_pixel)) {
                     return false;
                 }
-                const bool pixel_changed =
-                    observed.m_live_pixel.m_pixel_scale != m_await_pixel.m_pixel_scale;
-                const bool history_reset =
-                    observed.m_history_reset_count > m_await_history_reset_count;
+                const bool pixel_changed = observed.m_live_pixel.m_pixel_scale != m_await_pixel.m_pixel_scale;
+                const bool history_reset = observed.m_history_reset_count > m_await_history_reset_count;
                 if (not pixel_changed and history_reset) {
                     completeStep_(
-                        step, EDisplayExerciseStatus::failed,
-                        "live reset/restore reset reconstruction history", observed, now);
+                        step, EDisplayExerciseStatus::failed, "live reset/restore reset reconstruction history",
+                        observed, now);
                     return true;
                 }
                 if (pixel_changed) {
@@ -1658,8 +1658,8 @@ namespace pP::game {
                     if (observed.m_history_last_reset.m_grid != *grid or
                         observed.m_history_last_reset.m_world != m_baseline_world) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::failed,
-                            "live reset/restore history evidence mismatch", observed, now);
+                            step, EDisplayExerciseStatus::failed, "live reset/restore history evidence mismatch",
+                            observed, now);
                         return true;
                     }
                 }
