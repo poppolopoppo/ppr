@@ -20,8 +20,9 @@ export of the real `app.game` on this host (RTX 2080 / TU104, driver
   eight per-frame samples. Vendor tag names (including
   `.avg.pct_of_peak_sustained_elapsed`, `.avg.per_cycle_elapsed` and `.sum`
   suffixes) and values are unmodified.
-- `D3DPERF_EVENTS.xls` — the observed marker table: 28 rows with eight
-  per-frame durations (milliseconds). It retains the production nesting
+- `D3DPERF_EVENTS.xls` — the observed marker table: 30 rows (28 distinct
+  names; `Scene.Materials` and `ppr` occur twice) with eight per-frame
+  durations (milliseconds). It retains the production nesting
   (`scene.stage → scene.content → Scene.Materials/Scene.Gas → Particles.Draw`,
   `ppr → Present.Scene`, `ppr → Present.UI`) and every design-contract range:
   `WorldLighting.ResolveCells`, `.Visibility`, `.Jump`, `.Source`,
