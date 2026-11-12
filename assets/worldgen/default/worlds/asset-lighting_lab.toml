@@ -3,6 +3,10 @@ semantic_key = "lighting_lab"
 
 [profile]
 
+# These compile-time profile fields keep an ordinary valid world descriptor.
+# The fixed lab recipe owns runtime cells, matter and the actor start; the
+# boundaries material also supplies the protected construction wall/palette.
+# Layout sites, biome choices and rules are not rasterized for this world.
 [profile.layout]
 min_sites = 120
 max_sites = 150

@@ -955,11 +955,13 @@ float4 shadeGridReactive(
     // ------------------------------------------------------------------
     // retained diagnostic and test-fixture path
     // ------------------------------------------------------------------
-    // Rendered 1024 worlds publish resolved cells and take the categorical
-    // path above. This contour path remains only for the diagnostic overlays
-    // (replaced by retained inspection views in Task 16) and explicit
-    // test-fixture grids with no lighting publication. A frame without an
-    // admitted catalog draws no terrain and never reaches these tiles.
+    // All rendered 1024 worlds publish resolved cells and take the categorical
+    // path above. This contour path remains for: diagnostic overlays (Task 16
+    // replaces them with retained inspection views), explicit test-fixture grids
+    // with no lighting publication, the first-publication window before the
+    // lighting owner has bound cells, and a publication failure that keeps the
+    // last valid categorical field unavailable. It is not a flat/ambient
+    // substitute for a supported rendered world.
     float2 contour_position = input.fine_position;
     if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
         contour_position += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);

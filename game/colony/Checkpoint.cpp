@@ -139,4 +139,16 @@ namespace pP::colony {
                                     checkpoint.m_initial_matter_valid, checkpoint.m_controlled, &execution));
         return driver;
     }
+
+    std::error_code admitRenderedWorldCheckpoint(const WorldCheckpoint &checkpoint) noexcept {
+        return validateRenderedWorldEdge(checkpoint.m_descriptor.m_world_edge);
+    }
+
+    Expected<std::unique_ptr<ColonyDriver>> restoreRenderedWorldCheckpoint(
+        std::shared_ptr<const ContentCatalog> catalog, WorldCheckpoint checkpoint, const u64 world_generation,
+        const sim::GenerationExecution &execution, std::shared_ptr<const ContentPresentation> presentation) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(WorldCheckpointLog, admitRenderedWorldCheckpoint(checkpoint));
+        return restoreWorldCheckpoint(
+            std::move(catalog), std::move(checkpoint), world_generation, execution, std::move(presentation));
+    }
 }

@@ -56,7 +56,7 @@ The authored `lighting_lab` world record adds eleven ordinary material records
 flat-normal texture pair, and the fixed-room world palette. All are normal pack
 assets with catalog-assigned numeric IDs; there is no second lighting palette
 or renderer-only content branch. The pack manifest remains the single shipped
-list, now within its 96 KiB manifest bound.
+list (66,872 B, 65.3 KiB), within its 72 KiB manifest bound.
 
 The two pipe normal maps use physical world slopes for radius=half the texture
 period, with the existing full height field and 128² sample phase preserved.

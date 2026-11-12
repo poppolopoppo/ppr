@@ -973,7 +973,7 @@ biome = "{}"
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
         WorkspaceFixture fixture{false};
-        PPR_TEST_ASSERT(fixture.m_state.m_world_edge == 2048u);
+        PPR_TEST_ASSERT(fixture.m_state.m_world_edge == 1024u);
         std::ignore = fixture.frame();
         std::ignore = fixture.frame();
         auto *const settings = workspaceChild(*context, "Preview settings");
@@ -1198,6 +1198,58 @@ biome = "{}"
                 return intent.m_kind == colony::EWorkshopIntent::edit_definition;
             }));
         }
+    };
+
+    PPR_UNIT_TEST (workshop_start_is_withheld_for_unsupported_rendered_extents) {
+        ImGuiContext *const context = ImGui::CreateContext();
+        PPR_DEFER {
+            ImGui::DestroyContext(context);
+        };
+        auto &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2{1280.0f, 720.0f};
+        io.DeltaTime = 1.0f / 60.0f;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+        unsigned char *pixels{};
+        int width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        WorkspaceFixture fixture{false};
+        std::ignore = fixture.frame();
+        std::ignore = fixture.frame();
+
+        const auto click = [&](const char *const identity) {
+            ImGuiWindow *const window = ImGui::FindWindowByName("Authoring Workspace###Worldgen Workshop");
+            PPR_TEST_ASSERT(window != nullptr);
+            ImGui::FocusWindow(window);
+            ImGui::SetNavID(window->GetID(identity), ImGuiNavLayer_Main, 0u, ImRect{});
+            std::ignore = fixture.frame();
+            const auto rect = window->NavRectRel[ImGuiNavLayer_Main];
+            PPR_TEST_ASSERT(rect.GetWidth() > 0.0f and rect.GetHeight() > 0.0f);
+            const ImVec2 position = ImGui::WindowRectRelToAbs(window, rect).GetCenter();
+            io.AddMousePosEvent(position.x, position.y);
+            std::ignore = fixture.frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            std::ignore = fixture.frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            return fixture.frame();
+        };
+
+        for (const u32 edge: {2048u, 4096u}) {
+            fixture.m_state.m_world_edge = edge;
+            std::ignore = fixture.frame();
+            const auto withheld = click("###workshop_game");
+            PPR_TEST_ASSERT(std::ranges::none_of(withheld, [](const auto &intent) {
+                return intent.m_kind == colony::EWorkshopIntent::start_game;
+            }));
+        }
+
+        fixture.m_state.m_world_edge = 1024u;
+        std::ignore = fixture.frame();
+        const auto allowed = click("###workshop_game");
+        PPR_TEST_ASSERT(std::ranges::any_of(allowed, [](const auto &intent) {
+            return intent.m_kind == colony::EWorkshopIntent::start_game;
+        }));
     };
 
     PPR_UNIT_TEST (workspace_identity_survives_filter_revision_and_native_game_actions_are_distinct) {
@@ -1576,6 +1628,7 @@ namespace pP::game::tests {
             detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
             detail::presentation::workspace_map_size_selects_each_extent_clamps_crop_and_disables_during_owned_work,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,
+            detail::presentation::workshop_start_is_withheld_for_unsupported_rendered_extents,
             detail::presentation::workspace_identity_survives_filter_revision_and_native_game_actions_are_distinct,
             detail::presentation::workspace_preview_choices_follow_current_draft_profile_and_replacement_source,
             detail::presentation::snapshot_distinguishes_absence_unresident_vacuum_and_material,

@@ -107,12 +107,18 @@ export namespace pP::colony {
 
     /// The lab is one fixed 1024-square authored recipe. Initial overview
     /// framing uses these cell constants as ordinary client camera values.
-    inline constexpr u32 kLightingLabEdge = 1024u;
+    /// The lab's fixed square extent coincides with rendered admission.
+    inline constexpr u32 kLightingLabEdge = kRenderedWorldEdge;
     inline constexpr float kLightingLabOverviewCentreCell = 512.0f;
     inline constexpr float kLightingLabOverviewVerticalSpanCells = 1056.0f;
 
     /// True for the local name of the authored lab profile (qualified or not).
     [[nodiscard]] bool isLightingLabProfile(std::string_view profile) noexcept;
+
+    /// True only when the selected catalog also carries the complete lab
+    /// semantic material set, so another pack's same-named world still takes
+    /// ordinary generation.
+    [[nodiscard]] bool isLightingLabWorld(const ContentCatalog &catalog, std::string_view profile) noexcept;
     [[nodiscard]] std::error_code validateRenderedWorldEdge(u32 world_edge) noexcept;
 
     /// Fills the ordinary grid, initial matter and start of the fixed Lighting

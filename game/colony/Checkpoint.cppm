@@ -34,7 +34,7 @@ export namespace pP::colony {
         Array<CheckpointMaterial> m_materials{};
         Array<sim::GenerationSite> m_sites{};
         sim::GenerationGeometry m_geometry{};
-        sim::InitialMatter m_matter{}; // Historical generation metadata only.
+        sim::InitialMatter m_matter{}; // Historical generation metadata only; sub-cell seed subdivision is not encoded.
         sim::MatterParticleSnapshot m_particles{};
         MatterState m_current_matter{};
         sim::GenerationStart m_start{};
@@ -67,6 +67,14 @@ export namespace pP::colony {
     /// A supplied presentation must belong to this exact catalog and carry the
     /// explicitly requested world_generation stamp. Absence is numeric/headless.
     [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> restoreWorldCheckpoint(
+        std::shared_ptr<const ContentCatalog> catalog, WorldCheckpoint checkpoint, u64 world_generation,
+        const sim::GenerationExecution &execution = {}, std::shared_ptr<const ContentPresentation> presentation = {});
+
+    /// Rendered-host admission. Rejects unsupported checkpoint bounds before
+    /// any driver restoration or GPU preparation. Generic sim-size restore
+    /// remains available through `restoreWorldCheckpoint`.
+    [[nodiscard]] std::error_code admitRenderedWorldCheckpoint(const WorldCheckpoint &checkpoint) noexcept;
+    [[nodiscard]] Expected<std::unique_ptr<ColonyDriver>> restoreRenderedWorldCheckpoint(
         std::shared_ptr<const ContentCatalog> catalog, WorldCheckpoint checkpoint, u64 world_generation,
         const sim::GenerationExecution &execution = {}, std::shared_ptr<const ContentPresentation> presentation = {});
 }

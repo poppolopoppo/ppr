@@ -37,8 +37,6 @@ namespace pP::colony {
         constexpr CellRect floorRect{0u, 0u, kLabEdge, 2u};
 
         // Two-cell shells except the explicitly identified one-cell enclosure.
-        // The colored L is present only so its outer shell is filled; its carve
-        // union is authored separately.
         constexpr ShellRoom shellRooms[]{
             {32u, 768u, 208u, 176u, 2u},
             {272u, 768u, 208u, 176u, 2u},
@@ -51,10 +49,10 @@ namespace pP::colony {
             {32u, 32u, 208u, 176u, 2u},
             {272u, 32u, 208u, 176u, 2u},
             {512u, 32u, 208u, 176u, 2u},
-            {752u, 768u, 208u, 176u, 2u},
         };
 
-        constexpr CellRect coloredLShell{752u, 768u, 208u, 176u};
+        // The colored L owns a separate shell identity and carve union.
+        constexpr ShellRoom coloredLShellRoom{752u, 768u, 208u, 176u, 2u};
         constexpr CellRect coloredLHorizontalCorridor{754u, 770u, 204u, 48u};
         constexpr CellRect coloredLVerticalCorridor{910u, 770u, 48u, 172u};
         constexpr CellRect coloredLRedWall{800u, 818u, 110u, 2u};
@@ -81,10 +79,6 @@ namespace pP::colony {
         constexpr CellRect thermalSlab{512u, 256u, 448u, 2u};
         constexpr u32 kHotMetalTemperatureCount = 5u;
         constexpr u32 kPbrSquareCount = 4u;
-
-        [[nodiscard]] constexpr bool contains(const CellRect &rect, const u32 x, const u32 y) noexcept {
-            return x >= rect.m_x and y >= rect.m_y and x - rect.m_x < rect.m_width and y - rect.m_y < rect.m_height;
-        }
 
         [[nodiscard]] std::error_code fillRect(
             sim::ChunkGrid &grid, const CellRect &rect, const u16 material, const float temperature) {
@@ -166,6 +160,7 @@ namespace pP::colony {
                 .m_subdivision = kBasinSubdivision};
             const u32 origin_x = basin.m_x + 8u;
             const u32 origin_y = basin.m_y + 80u;
+
             for (u32 row = 0u; row < kBasinHeightCells; ++row) {
                 const u32 y = origin_y + row;
                 region.m_spans.push_back({y, origin_x, origin_x + kBasinWidthCells});
@@ -176,6 +171,7 @@ namespace pP::colony {
                     region.m_volume_m3 += *area * recipe.m_reference_thickness_m;
                 }
             }
+
             region.m_mass_kg = region.m_volume_m3 * region.m_bulk_density_kg_m3;
             matter.m_regions.push_back(std::move(region));
             return {};
@@ -190,6 +186,7 @@ namespace pP::colony {
                 .m_temperature_k = static_cast<double>(kNormalTemperatureK),
                 .m_bulk_density_kg_m3 = material.m_reference_density_kg_m3,
                 .m_spans = {}};
+
             for (u32 row = 0u; row < kGasRows; ++row) {
                 const u32 y = 80u + 2u * row;
                 for (u32 column = 0u; column < kGasColumns; ++column) {
@@ -201,6 +198,7 @@ namespace pP::colony {
                     region.m_volume_m3 += *area * recipe.m_reference_thickness_m;
                 }
             }
+
             region.m_mass_kg = region.m_volume_m3 * region.m_bulk_density_kg_m3;
             matter.m_regions.push_back(std::move(region));
             return {};
@@ -254,6 +252,33 @@ namespace pP::colony {
         return local == "lighting_lab";
     }
 
+    bool isLightingLabWorld(const ContentCatalog &catalog, const std::string_view profile) noexcept {
+        if (not isLightingLabProfile(profile)) {
+            return false;
+        }
+
+        constexpr std::array<std::string_view, 11u> terrain_keys{
+            "lab_wall", "lab_red", "lab_green", "lab_emitter", "lab_glass", "lab_hot_metal", "lab_pbr_0", "lab_pbr_1",
+            "lab_pbr_2", "lab_pbr_3", "lab_magma"};
+        for (const auto key: terrain_keys) {
+            const auto *const material = catalog.findMaterial(key);
+            const auto expected = key == "lab_magma" ? EMaterialRepresentation::particle
+                                                     : EMaterialRepresentation::terrain;
+            if (material == nullptr or material->m_representation != expected) {
+                return false;
+            }
+        }
+
+        for (const auto key: {"sand", "water", "oxygen"}) {
+            const auto *const material = catalog.findMaterial(key);
+            if (material == nullptr or material->m_representation != EMaterialRepresentation::particle) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     std::error_code validateRenderedWorldEdge(const u32 world_edge) noexcept {
         PPR_RETURN_ERROR_ON_FAIL(
             WorldPreparation,
@@ -289,14 +314,17 @@ namespace pP::colony {
                                       grid, {room.m_x, room.m_y, room.m_width, room.m_height},
                                       materials.m_wall->m_numeric_id, kNormalTemperatureK));
         }
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation,
+            fillRect(
+                grid,
+                {coloredLShellRoom.m_x, coloredLShellRoom.m_y, coloredLShellRoom.m_width, coloredLShellRoom.m_height},
+                materials.m_wall->m_numeric_id, kNormalTemperatureK));
 
         // ------------------------------------------------------------------
         // carve
         // ------------------------------------------------------------------
         for (const auto &room: shellRooms) {
-            if (contains(coloredLShell, room.m_x, room.m_y)) {
-                continue;
-            }
             PPR_RETURN_ERROR_ON_FAIL(
                 WorldPreparation,
                 clearRect(
@@ -406,6 +434,10 @@ namespace pP::colony {
         // ------------------------------------------------------------------
         const sim::GenerationStart start{(744.0 + 0.5) * cell, (16.0 + 0.5) * cell, 2.0 * cell, {}};
         auto report = summarizeLab(catalog, grid, start, world.m_plan.seed());
+        report.m_retained_known_payload_bytes += matter.m_regions.capacity() * sizeof(sim::InitialMatterRegion);
+        for (const auto &region: matter.m_regions) {
+            report.m_retained_known_payload_bytes += region.m_spans.capacity() * sizeof(sim::InitialMatterSpan);
+        }
 
         world.m_grid = std::move(grid);
         world.m_geometry = {};

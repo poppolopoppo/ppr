@@ -5,7 +5,7 @@ diggable = true
 
 [appearance]
 display_name = "Lighting lab emitter"
-color_rgba = "999999FF"
+color_rgba = "CBCBCBFF"
 albedo_texture = "lab_white"
 normal_texture = "lab_flat_normal"
 texture_period_m = 2.0

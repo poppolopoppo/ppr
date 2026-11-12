@@ -5,7 +5,7 @@ diggable = true
 
 [appearance]
 display_name = "Lighting lab green"
-color_rgba = "0DB30DFF"
+color_rgba = "3FDA3FFF"
 albedo_texture = "lab_white"
 normal_texture = "lab_flat_normal"
 texture_period_m = 2.0

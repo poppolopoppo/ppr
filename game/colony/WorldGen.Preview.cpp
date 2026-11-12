@@ -254,7 +254,7 @@ namespace pP::colony {
         auto plan = compileWorldPlan(catalog, spec.m_profile, spec.m_seed);
         PPR_RETURN_UNEXPECTED_ON_FAIL(BiomeSamplePreview, plan);
 
-        auto world = isLightingLabProfile(spec.m_profile)
+        auto world = isLightingLabWorld(catalog, spec.m_profile)
                          ? buildLightingLabWorld(std::move(*plan), catalog)
                          : sim::generateWorld(
                                std::move(*plan), clock, {.m_scheduler = generation_pool, .m_context = context});

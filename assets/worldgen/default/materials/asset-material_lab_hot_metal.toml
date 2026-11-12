@@ -5,7 +5,7 @@ diggable = true
 
 [appearance]
 display_name = "Lighting lab hot metal"
-color_rgba = "B3B3B3FF"
+color_rgba = "DADADAFF"
 albedo_texture = "lab_white"
 normal_texture = "lab_flat_normal"
 texture_period_m = 2.0

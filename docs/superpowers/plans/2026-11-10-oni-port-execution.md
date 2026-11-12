@@ -48,7 +48,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 12 | complete (commits `6418d663`, `2e0f7ec5`, `b82877b7`; reviews clean; background coverage re-scoped to Task 14) |
 | 13 | complete (commit `2f46ae40`; independent review approved) |
 | 14 | complete (commits `8c5cf6b0`, `fd03d4c6`; reviews clean; credit ruling recorded) |
-| 15–19 | pending |
+| 15 | complete (commits `c5db57be` and the review-fix follow-up; review issues fixed; Task 16 fallback removal recorded) |
+| 16–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1337,3 +1338,30 @@ and operational acceptance. No Task 4 work has begun.
   rendered worlds publish resolved cells; the lab supplies the ordinary visual
   acceptance scene.
 - **Unavailable gate:** Windows/D3D12 unmeasured.
+
+## Task 15 — Lighting Lab review fixes complete
+
+- Commits: `c5db57be` (feature) and the review-fix follow-up
+  `fix: make the Lighting Lab receive-only and link the app tests`.
+- Review fixes: registered `WorldGen.LightingLab.cpp` in the directly compiled
+  app-test colony subset (fixes the `engine.tests.app` link); lab/shared glass
+  strength 0 for the engine's receive-only rule; sRGB-authored linear bases;
+  rendered checkpoint admission API (`admitRenderedWorldCheckpoint` /
+  `restoreRenderedWorldCheckpoint`) with a discriminating lab test; corrected
+  manifest-cap evidence and tightened the bound to 72 KiB; paired sky -1/12
+  manual-EV0/bloom-off and default-auto/bloom captures; 1024 defaults in the
+  editor and workshop state; lab-world identity requires the semantic material
+  set; explicit colored-L identity; acceptance seam targets the specified
+  `[127,129)×[344,352)` barrier; receive-only/gas/magma/zero-velocity assertions;
+  Start-withheld UI coverage.
+- **Task 16 handoff:** remove the remaining non-categorical grid path (diagnostic
+  overlays, synthetic fixtures, first-publication window, publication failure)
+  when the retained inspection views replace the temporary grid probe. All
+  rendered 1024 production worlds already publish resolved cells.
+- Evidence: `game/lighting_lab/` 5 leaves, full `game.tests`, link/run of
+  `engine.tests.app`, sim/checkpoint/worldgen/app-profile entries, four paired
+  captures, and `--worldgen-acceptance` PASS with seam target (127,344).
+- **Known gates:** Windows/D3D12 unmeasured; no interactive checkpoint load UI
+  (API + tests only); per-case closeups/image-level sky comparison and
+  interactive save/reload remain owner/Task 19 gates. Default LSan reports the
+  pre-existing GTK/dbus 23-allocation leak set on both lab and frontier runs.

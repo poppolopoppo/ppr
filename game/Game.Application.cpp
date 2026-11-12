@@ -219,7 +219,7 @@ namespace demo {
         TimePoint m_observation_start{};
         std::optional<TimePoint> m_last_update_observed{}, m_last_presentation_observed{};
         u32 m_last_update_phase{};
-        u32 m_map_size{2048u}, m_requested_map_size{2048u};
+        u32 m_map_size{1024u}, m_requested_map_size{1024u};
         TimeSpan m_last_update_work{};
         std::optional<TimePoint> m_first_loading_observed{}, m_first_world_observed{};
         TimeSpan m_max_control_work{};
@@ -682,6 +682,37 @@ namespace demo {
             const auto *const prepared = m_driver->preparedWorld();
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, prepared ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+            const auto begin = [&](const sim::GlobalCellPos target) -> std::error_code {
+                PPR_LOG(Demo, info, "acceptance seam target", {{"x", target.m_x}, {"y", target.m_y}});
+                m_acceptance_seam = target;
+                m_acceptance_dig_before = m_driver->digTotal();
+                m_driver->setPaused(true);
+                m_pan_controller->focusOn(
+                    float2{
+                        static_cast<float>(target.m_x + 1u) / static_cast<float>(m_driver->cellsPerMetre()),
+                        static_cast<float>(target.m_y) / static_cast<float>(m_driver->cellsPerMetre())});
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->requestDig(target, 2u, 1u));
+                beginAcceptancePhase_(AcceptancePhase::seam);
+                return {};
+            };
+
+            // The authored lab's specified barrier straddles x=128 at y=344.
+            // Exercise that exact byte-scale seam rather than a generic floor cell.
+            if (colony::isLightingLabWorld(prepared->catalog(), prepared->descriptor().m_profile)) {
+                constexpr sim::GlobalCellPos lab_seam{127u, 344u};
+                const auto a = m_driver->grid().getCell(lab_seam);
+                const auto b = m_driver->grid().getCell({lab_seam.m_x + 1u, lab_seam.m_y});
+                PPR_RETURN_ERROR_ON_FAIL(Demo, a ? std::error_code{} : a.error());
+                PPR_RETURN_ERROR_ON_FAIL(Demo, b ? std::error_code{} : b.error());
+                const auto *const ma = prepared->catalog().findMaterial(a->m_element);
+                const auto *const mb = prepared->catalog().findMaterial(b->m_element);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Demo, ma and mb and ma->m_diggable.value_or(false) and mb->m_diggable.value_or(false)
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::state_not_recoverable));
+                return begin(lab_seam);
+            }
+
             const auto &start = prepared->generated().m_start;
             const auto start_x = static_cast<u32>(start.m_spawn_x_m * m_driver->cellsPerMetre());
             const auto floor_y = static_cast<u32>(start.m_floor_y_m * m_driver->cellsPerMetre());
@@ -701,16 +732,7 @@ namespace demo {
                     const auto *const ma = prepared->catalog().findMaterial(a->m_element);
                     const auto *const mb = prepared->catalog().findMaterial(b->m_element);
                     if (ma and mb and ma->m_diggable.value_or(false) and mb->m_diggable.value_or(false)) {
-                        m_acceptance_seam = target;
-                        m_acceptance_dig_before = m_driver->digTotal();
-                        m_driver->setPaused(true);
-                        m_pan_controller->focusOn(
-                            float2{
-                                static_cast<float>(seam) / static_cast<float>(m_driver->cellsPerMetre()),
-                                static_cast<float>(target.m_y) / static_cast<float>(m_driver->cellsPerMetre())});
-                        PPR_RETURN_ERROR_ON_FAIL(Demo, m_driver->requestDig(target, 2u, 1u));
-                        beginAcceptancePhase_(AcceptancePhase::seam);
-                        return {};
+                        return begin(target);
                     }
                 }
             }
@@ -1361,7 +1383,7 @@ namespace demo {
                     auto &presentation = m_world_job->presentation();
 
                     if (const auto *const prepared = m_driver->preparedWorld(); prepared and m_pan_controller) {
-                        if (colony::isLightingLabProfile(prepared->descriptor().m_profile)) {
+                        if (colony::isLightingLabWorld(prepared->catalog(), prepared->descriptor().m_profile)) {
                             PPR_RETURN_ERROR_ON_FAIL(Demo, frameRenderedOverview_());
                         } else {
                             const float extent = static_cast<float>(m_driver->grid().edge()) /

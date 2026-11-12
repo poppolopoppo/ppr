@@ -35,7 +35,10 @@ The required synchronous `DescriptorReader` supports edited owned bytes through
 that same path: a missing record is an error, never a fallback to disk. Callback
 views do not escape importing. Source locations and typed values remain owned.
 
-Per-file limits are 96 KiB per manifest and 1 MiB per descriptor. The combined
+Per-file limits are 72 KiB per manifest and 1 MiB per descriptor. The base
+`ppr_frontier` manifest is 66,872 B (65.3 KiB) after the Lighting Lab records and
+the cap leaves bounded room for authored pack variants; the schema, keys and
+order are unchanged. The combined
 retained-text limit is `7 * asset::kMaxDescriptorBytes + asset::kMaxManifestBytes`
 across all mounted manifests/descriptors. This is a logical source cap, not a
 process-peak or history-memory bound. Canonical containment, physical file aliases

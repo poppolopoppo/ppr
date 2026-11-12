@@ -47,6 +47,18 @@ namespace pP::game::tests::detail::lighting_lab {
         return *cell;
     }
 
+    [[nodiscard]] double decodeSrgbChannel(const u32 byte) noexcept {
+        const double encoded = static_cast<double>(byte & 0xffu) / 255.0;
+        return encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
+    }
+
+    void expectLinearColor(
+        const u32 rgba, const double red, const double green, const double blue, const double tolerance = 0.005) {
+        PPR_TEST_ASSERT(std::abs(decodeSrgbChannel(rgba >> 24u) - red) <= tolerance);
+        PPR_TEST_ASSERT(std::abs(decodeSrgbChannel(rgba >> 16u) - green) <= tolerance);
+        PPR_TEST_ASSERT(std::abs(decodeSrgbChannel(rgba >> 8u) - blue) <= tolerance);
+    }
+
     void expectCell(const PreparedWorld &world, const u32 x, const u32 y, const u16 material, const float temperature) {
         const auto cell = cellAt(world, x, y);
         PPR_TEST_ASSERT(cell.m_element == material);
@@ -77,6 +89,8 @@ namespace pP::game::tests::detail::lighting_lab {
         PPR_TEST_ASSERT(prepared.has_value());
         const auto &world = *prepared;
         PPR_TEST_ASSERT(isLightingLabProfile(world.descriptor().m_profile));
+        PPR_TEST_ASSERT(isLightingLabWorld(world.catalog(), world.descriptor().m_profile));
+        PPR_TEST_ASSERT(not isLightingLabWorld(world.catalog(), "ppr_frontier:frontier"));
         PPR_TEST_ASSERT(
             world.descriptor().m_profile.ends_with(":lighting_lab") or world.descriptor().m_profile == "lighting_lab");
         PPR_TEST_ASSERT(world.descriptor().m_world_edge == kLightingLabEdge);
@@ -214,18 +228,18 @@ namespace pP::game::tests::detail::lighting_lab {
             hot_material and
             magma_material);
 
-        PPR_TEST_ASSERT((wall_material->m_color_rgba >> 24u & 0xffu) == 0x99u);
+        expectLinearColor(wall_material->m_color_rgba, 0.6, 0.6, 0.6);
         PPR_TEST_ASSERT(wall_material->m_metallic == 0.0 and wall_material->m_roughness == 0.8);
         PPR_TEST_ASSERT(wall_material->m_ior == 1.5 and wall_material->m_alpha_mode == EMaterialAlphaMode::opaque);
         PPR_TEST_ASSERT(wall_material->m_albedo_texture and wall_material->m_albedo_texture->ends_with(":lab_white"));
         PPR_TEST_ASSERT(
             wall_material->m_normal_texture and wall_material->m_normal_texture->ends_with(":lab_flat_normal"));
         PPR_TEST_ASSERT(wall_material->m_emissive_strength == 1.0 and wall_material->m_emissive_rgb[0u] == 0.0);
+        PPR_TEST_ASSERT(wall_material->m_emissive_rgb[1u] == 0.0 and wall_material->m_emissive_rgb[2u] == 0.0);
 
-        PPR_TEST_ASSERT((red_material->m_color_rgba >> 24u & 0xffu) == 0xb3u);
-        PPR_TEST_ASSERT((red_material->m_color_rgba >> 16u & 0xffu) == 0x0du);
-        PPR_TEST_ASSERT((green_material->m_color_rgba >> 16u & 0xffu) == 0xb3u);
-        PPR_TEST_ASSERT((green_material->m_color_rgba >> 24u & 0xffu) == 0x0du);
+        expectLinearColor(red_material->m_color_rgba, 0.7, 0.05, 0.05);
+        expectLinearColor(green_material->m_color_rgba, 0.05, 0.7, 0.05);
+        expectLinearColor(emitter_material->m_color_rgba, 0.6, 0.6, 0.6);
 
         PPR_TEST_ASSERT(emitter_material->m_emissive_rgb == std::array{1.0, 0.7, 0.35});
         PPR_TEST_ASSERT(emitter_material->m_emissive_strength == 8.0);
@@ -236,18 +250,27 @@ namespace pP::game::tests::detail::lighting_lab {
             green_material->m_numeric_id == green);
 
         PPR_TEST_ASSERT(glass_material->m_alpha_mode == EMaterialAlphaMode::blend);
+        expectLinearColor(glass_material->m_color_rgba, 1.0, 1.0, 1.0);
         PPR_TEST_ASSERT((glass_material->m_color_rgba & 0xffu) == 0x40u);
         PPR_TEST_ASSERT(glass_material->m_roughness == 0.1 and glass_material->m_metallic == 0.0);
         PPR_TEST_ASSERT(glass_material->m_ior == 1.5);
+        PPR_TEST_ASSERT(glass_material->m_emissive_strength == 0.0);
         PPR_TEST_ASSERT(glass_material->m_transport.has_value());
         PPR_TEST_ASSERT(glass_material->m_transport->m_model == EMaterialOpticalModel::absorbing);
         PPR_TEST_ASSERT(
             glass_material->m_transport->m_sigma_r_per_m == 0.0 and
             glass_material->m_transport->m_sigma_g_per_m == 0.0 and
             glass_material->m_transport->m_sigma_b_per_m == 0.0);
+        // The engine's receive-only rule: optical blend with zero authored strength.
+        PPR_TEST_ASSERT(
+            glass_material->m_alpha_mode == EMaterialAlphaMode::blend and glass_material->m_emissive_strength == 0.0);
+        PPR_TEST_ASSERT(
+            lighting::receiveOnlyCell(
+                kGridSurfaceOpticalBlend, static_cast<float>(glass_material->m_emissive_strength)));
+        PPR_TEST_ASSERT(not lighting::receiveOnlyCell(kGridSurfaceOpticalBlend, 1.0f));
 
+        expectLinearColor(hot_material->m_color_rgba, 0.7, 0.7, 0.7);
         PPR_TEST_ASSERT(hot_material->m_metallic == 1.0 and hot_material->m_roughness == 0.4);
-        PPR_TEST_ASSERT((hot_material->m_color_rgba >> 24u & 0xffu) == 0xb3u);
 
         constexpr std::array<std::pair<double, double>, 4u> pbr_values{
             std::pair{0.2, 0.0}, std::pair{0.8, 0.0}, std::pair{0.2, 1.0}, std::pair{0.8, 1.0}};
@@ -259,14 +282,22 @@ namespace pP::game::tests::detail::lighting_lab {
             PPR_TEST_ASSERT(material->m_albedo_texture and material->m_albedo_texture->ends_with(":bay_tread_albedo"));
             PPR_TEST_ASSERT(material->m_normal_texture and material->m_normal_texture->ends_with(":bay_tread_normal"));
             PPR_TEST_ASSERT(material->m_texture_period_m == 1.0 and material->m_normal_scale == 1.0);
-            PPR_TEST_ASSERT((material->m_color_rgba >> 24u & 0xffu) == 0xffu);
+            expectLinearColor(material->m_color_rgba, 1.0, 1.0, 1.0);
         }
 
         PPR_TEST_ASSERT(magma_material->m_representation == EMaterialRepresentation::particle);
+        PPR_TEST_ASSERT(magma_material->m_phase == EMaterialPhase::liquid);
         PPR_TEST_ASSERT(magma_material->m_emissive_rgb == std::array{1.0, 0.25, 0.02});
         PPR_TEST_ASSERT(magma_material->m_emissive_strength == 8.0);
         PPR_TEST_ASSERT(magma_material->m_transport.has_value());
         PPR_TEST_ASSERT(magma_material->m_transport->m_model == EMaterialOpticalModel::opaque);
+
+        const auto *const oxygen_material = catalog.findMaterial("oxygen");
+        PPR_TEST_ASSERT(oxygen_material != nullptr);
+        PPR_TEST_ASSERT(
+            oxygen_material->m_emissive_rgb[0u] == 0.0 and
+            oxygen_material->m_emissive_rgb[1u] == 0.0 and
+            oxygen_material->m_emissive_rgb[2u] == 0.0);
     };
 
     // ------------------------------------------------------------------
@@ -356,6 +387,16 @@ namespace pP::game::tests::detail::lighting_lab {
             sim::validateMatterParticles(
                 *seeded, recipe.m_materials, recipe.m_cell_size_m, nullptr, recipe.m_reference_thickness_m,
                 recipe.m_world_edge) != std::error_code{});
+
+        auto state = makeMatterState(
+            *seeded, recipe.m_cell_size_m, recipe.m_reference_thickness_m, kMatterGravityY, 1u, recipe.m_world_edge);
+        PPR_TEST_ASSERT(state.has_value());
+        for (const auto &particle: state->m_particles) {
+            // The initial solver state carries zero displacement, which is the
+            // zero-velocity starting condition; no velocity sidecar is seeded.
+            PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+            PPR_TEST_ASSERT(particle.m_enabled == 1.0f);
+        }
     };
 
     // ------------------------------------------------------------------
@@ -454,7 +495,14 @@ namespace pP::game::tests::detail::lighting_lab {
         PPR_TEST_ASSERT(bytes.has_value());
         auto decoded = decodeWorldCheckpoint(*bytes, *catalog);
         PPR_TEST_ASSERT(decoded.has_value());
-        auto restored = restoreWorldCheckpoint(catalog, std::move(*decoded), 2u);
+        PPR_TEST_ASSERT(admitRenderedWorldCheckpoint(*decoded) == std::error_code{});
+        auto unsupported = *decoded;
+        unsupported.m_descriptor.m_world_edge = 2048u;
+        PPR_TEST_ASSERT(admitRenderedWorldCheckpoint(unsupported) == std::errc::not_supported);
+        const auto rejected = restoreRenderedWorldCheckpoint(catalog, std::move(unsupported), 2u);
+        PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::not_supported);
+
+        auto restored = restoreRenderedWorldCheckpoint(catalog, std::move(*decoded), 2u);
         PPR_TEST_ASSERT(restored.has_value());
         auto &dug = **restored;
         PPR_DEFER {
