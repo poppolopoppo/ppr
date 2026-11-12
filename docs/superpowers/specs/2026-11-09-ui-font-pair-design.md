@@ -163,6 +163,22 @@ Structural consequences, not just values:
   a subtle lightening rather than a darkening; the comment that explains why it
   stopped using `kRaised` must be restated for a dark surface.
 
+### Chrome ribbon and the Inspector overrides
+
+Two surfaces are styled by `game/ui/ColonyPanel.cpp` rather than by the shared
+style, and both are re-pointed for the dark theme:
+
+- **Top ribbon** (`drawTopBar_`): previously an opaque amber band with ink
+  text. It becomes a flat `kPanel` band with square corners
+  (`WindowRounding = 0`), tighter padding (`WindowPadding 8,4`,
+  `FramePadding 6,2`, `ItemSpacing 6,0`) and cream `kTextPrimary` labels; the
+  elapsed-time status uses `kTextSecondary`. Amber is no longer the band
+  ground, so it stays available as a highlight.
+- **Cursor Inspector**: previously `kTextPrimary`-as-ink at 82 % with cream
+  text. It becomes `kCanvas` at 82 % with `kTextPrimary` values,
+  `kTextSecondary` keys and a `kRaised` field inset, which keeps the read-out
+  dark over bright terrain now that the shared tokens flipped.
+
 ### Style geometry
 
 Density is the correction the previous draft got wrong: the reference interface

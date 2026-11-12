@@ -55,10 +55,10 @@ namespace pP::colony {
                                                      ImGuiWindowFlags_NoDocking |
                                                      ImGuiWindowFlags_AlwaysAutoResize;
 
-        /// Cursor inspector surface: the authored ink token as a dark
+        /// Cursor inspector surface: the deep canvas token as a dark
         /// translucent tooltip, so the scene reads through while the cream
         /// value text keeps its contrast. The old fixed Inspector panel used
-        /// the opaque tan surface; a pointer-following readout needs the dark
+        /// the opaque panel surface; a pointer-following readout needs the dark
         /// one to stay legible over bright terrain.
         constexpr float kInspectorSurfaceAlpha = 0.82f;
 
@@ -491,12 +491,16 @@ namespace pP::colony {
             const ImGuiIO &io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2{0.0f, 0.0f}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{io.DisplaySize.x, 0.0f}, ImGuiCond_Always);
-            // Concept ribbon: one opaque accent-yellow band carrying ink text
-            // across the full width. It deliberately keeps the default window
-            // alpha (no floating-panel translucency) and the chrome flags'
-            // NoTitleBar, so it never grows a window title or a second header.
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kAccent.vec4());
-            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kAccentText.vec4());
+            // Chrome ribbon: a flat dark band rather than a floating panel. It
+            // stays square-cornered with tight padding so it reads as app
+            // furniture above the scene, and it deliberately keeps the default
+            // window alpha and the NoTitleBar flag so it never grows a title.
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.0f, 4.0f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{6.0f, 2.0f});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{6.0f, 0.0f});
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kPanel.vec4());
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextPrimary.vec4());
             ImGui::Begin("##topbar", nullptr, kChromeFlags);
             const float fs = ImGui::GetFontSize();
             BarFlow flow{.m_avail = ImGui::GetContentRegionAvail().x, .m_gap = ImGui::GetStyle().ItemSpacing.x};
@@ -535,7 +539,9 @@ namespace pP::colony {
                 status, sizeof(status), "Time %.0fs | %llu colonists", colony.m_simulated_ms / 1000.0,
                 static_cast<unsigned long long>(colony.m_agents.size()));
             flow.place(plainWidth(status));
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextSecondary.vec4());
             ImGui::TextUnformatted(status);
+            ImGui::PopStyleColor();
 
             if (view.m_service_door_available) {
                 const char *const label = view.m_service_door_closed ? "Open service door" : "Close service door";
@@ -628,6 +634,7 @@ namespace pP::colony {
             const float height = ImGui::GetCursorPosY() + ImGui::GetStyle().WindowPadding.y;
             ImGui::End();
             ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar(4);
             return height;
         }
 
@@ -639,14 +646,14 @@ namespace pP::colony {
         /// value renders as a disabled edit control rather than plain text, so
         /// the read-out reads as a compact form; the Inspector window is
         /// input-transparent, so the field can never take the pick the read-out
-        /// describes. Keys use the panel tan, not the shared secondary ink,
-        /// which is authored for the light tan panels and all but vanishes on
-        /// this dark surface. `row` only namespaces the widget ids.
+        /// describes. Keys use the shared secondary text colour: it is authored
+        /// for dark surfaces and stays distinguishable from the cream values.
+        /// `row` only namespaces the widget ids.
         void fieldRow(const int row, const char *const label, const char *const value) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kPanel.vec4());
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextSecondary.vec4());
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
             ImGui::TableNextColumn();
@@ -1266,14 +1273,16 @@ namespace pP::colony {
                 ImGuiCond_Always, ImVec2{flip_x ? 1.0f : 0.0f, flip_y ? 1.0f : 0.0f});
             ImGui::SetNextWindowSizeConstraints(ImVec2{fs * 14.0f, 0.0f}, ImVec2{fs * 26.0f, io.DisplaySize.y});
 
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kTextPrimary.vec4(kInspectorSurfaceAlpha));
-            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kPaper.vec4());
-            ImGui::PushStyleColor(ImGuiCol_TextDisabled, ui::theme::kRaised.vec4(0.88f));
-            // Value fields: the theme's cream frame is authored for the light
-            // tan surfaces and washes the dimmed read-only text out here, so
-            // the read-out insets them with the ink surface and lets the single
-            // control border carry the field outline.
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, ui::theme::kTextPrimary.vec4());
+            // The read-out is its own dark surface: a translucent deep canvas
+            // with cream text, so it reads over bright terrain without turning
+            // into a light tooltip.
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kCanvas.vec4(kInspectorSurfaceAlpha));
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextPrimary.vec4());
+            ImGui::PushStyleColor(ImGuiCol_TextDisabled, ui::theme::kTextSecondary.vec4(0.92f));
+            // Value fields inset with the raised surface and let the single
+            // control border carry the field outline; a bright frame would
+            // out-shout the dimmed read-only text.
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ui::theme::kRaised.vec4());
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{fs * 0.6f, fs * 0.45f});
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{fs * 0.35f, fs * 0.15f});
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2{fs * 0.25f, fs * 0.12f});
