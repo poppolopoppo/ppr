@@ -537,7 +537,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u}};
         const auto plan = GridPass::planTiles(snapshot, planned_submissions, 1.0f);
         PPR_TEST_ASSERT(plan.has_value());
-        _.log(std::format("WORLD_LIGHTING_MATERIAL planned_tiles={}", plan->m_tiles.size()).c_str());
+        _.log(std::format("WORLD_LIGHTING_MATERIAL planned_tiles={}", plan->m_tiles.size()));
         PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, true));
 
         rhi::TextureDesc target_description{};
@@ -845,8 +845,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL brdf_lut={}x{} rg16f bytes={} max_binary64_error={:.6f}", kWidth, kHeight,
-                bytes, maximum_error)
-                .c_str());
+                bytes, maximum_error));
         PPR_TEST_ASSERT(not grid.shutdown());
         PPR_TEST_ASSERT(grid.brdfLutForTest() == nullptr);
     };
@@ -883,8 +882,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL brdf_clamp low=({:.6f},{:.6f}) high=({:.6f},{:.6f})", float(sampled[0].x),
-                float(sampled[0].y), float(sampled[2].x), float(sampled[2].y))
-                .c_str());
+                float(sampled[0].y), float(sampled[2].x), float(sampled[2].y)));
     };
 
     // ------------------------------------------------------------------
@@ -946,8 +944,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL view ortho=({:.4f},{:.4f},{:.4f}) centre=({:.4f},{:.4f},{:.4f}) "
                 "offcentre=({:.4f},{:.4f},{:.4f}) noV={:.6f}",
                 float(detail[0].x), float(detail[0].y), float(detail[0].z), float(detail[2].x), float(detail[2].y),
-                float(detail[2].z), float(detail[4].x), float(detail[4].y), float(detail[4].z), float(detail[4].w))
-                .c_str());
+                float(detail[2].z), float(detail[4].x), float(detail[4].y), float(detail[4].z), float(detail[4].w)));
     };
 
     PPR_UNIT_TEST (black_environment_and_no_emission_is_black) {
@@ -1088,8 +1085,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             std::format(
                 "WORLD_LIGHTING_MATERIAL uniform_diffuse=({:.6f},{:.6f},{:.6f}) specular=({:.6f},{:.6f},{:.6f})",
                 float(diffuse[0].x), float(diffuse[0].y), float(diffuse[0].z), float(specular[0].x),
-                float(specular[0].y), float(specular[0].z))
-                .c_str());
+                float(specular[0].y), float(specular[0].z)));
         PPR_TEST_ASSERT(close3(float3{diffuse[0].x, diffuse[0].y, diffuse[0].z}, expected_diffuse, 0.01f));
         PPR_TEST_ASSERT(close3(float3{specular[0].x, specular[0].y, specular[0].z}, expected_specular, 0.01f));
     };
@@ -1314,8 +1310,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL categorical detail5=({:.6f},{:.6f},{:.6f},{:.6f}) detail6=({:.6f},{:.6f},"
                 "{:.6f},{:.6f})",
                 float(field(0u, 5u).x), float(field(0u, 5u).y), float(field(0u, 5u).z), float(field(0u, 5u).w),
-                float(field(0u, 6u).x), float(field(0u, 6u).y), float(field(0u, 6u).z), float(field(0u, 6u).w))
-                .c_str());
+                float(field(0u, 6u).x), float(field(0u, 6u).y), float(field(0u, 6u).z), float(field(0u, 6u).w)));
         PPR_TEST_ASSERT(std::abs(float(field(0u, 5u).y) - expected_gradient) <= 1.0e-6f);
         PPR_TEST_ASSERT(std::abs(float(field(0u, 5u).z) - 0.02f) <= 1.0e-6f);
         PPR_TEST_ASSERT(std::abs(float(field(6u, 5u).y) - 0.01f / 2.0f) <= 1.0e-6f);
@@ -1325,8 +1320,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL categorical base=({:.4f},{:.4f},{:.4f}) normal_x={:.4f} normal_y={:.4f} "
                 "uv_gradient={:.6f} period2_gradient={:.6f}",
                 float(base0.x), float(base0.y), float(base0.z), float(normal_x_result.z), float(normal_y_result.w),
-                float(field(0u, 5u).y), float(field(6u, 5u).y))
-                .c_str());
+                float(field(0u, 5u).y), float(field(6u, 5u).y)));
     };
 
     PPR_UNIT_TEST (gas_uses_nonzero_ch_angular_mean_and_alpha_composition) {
@@ -1475,8 +1469,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL gas lit=({:.4f},{:.4f},{:.4f},{:.4f}) dark=({:.4f},{:.4f},{:.4f},{:.4f}) "
                 "alpha={:.4f} instances={} draws={}",
                 lit[0], lit[1], lit[2], lit[3], dark[0], dark[1], dark[2], dark[3], alpha,
-                grid.observations().m_particle_instances, grid.observations().m_draw_commands)
-                .c_str());
+                grid.observations().m_particle_instances, grid.observations().m_draw_commands));
     };
 
     PPR_UNIT_TEST (categorical_view_vector_matches_the_literal_grid_frame_path) {
@@ -1593,8 +1586,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL ortho_end_to_end pixel=({:.4f},{:.4f},{:.4f}) literal={:.4f} wrong={:.4f} "
                 "NoV={:.6f} diffuse={:.4f}",
                 ortho_pixel[0], ortho_pixel[1], ortho_pixel[2], literal_channels, wrong_channels, ortho_n_dot_v,
-                (1.0 - fresnel) * 0.5)
-                .c_str());
+                (1.0 - fresnel) * 0.5));
 
         // --------------------------------------------------------------
         // perspective tilted camera: centre ray hits (0.5,0.5,0); literal
@@ -1661,8 +1653,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL perspective_end_to_end pixel=({:.4f},{:.4f},{:.4f}) literal=({:.4f},{:.4f},"
                 "{:.4f}) wrong=({:.4f},{:.4f},{:.4f})",
                 perspective_pixel[0], perspective_pixel[1], perspective_pixel[2], literal_response.x,
-                literal_response.y, literal_response.z, wrong_response.x, wrong_response.y, wrong_response.z)
-                .c_str());
+                literal_response.y, literal_response.z, wrong_response.x, wrong_response.y, wrong_response.z));
     };
 
     PPR_UNIT_TEST (grid_frame_reflection_matches_the_cpu_contract) {
@@ -1690,15 +1681,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL grid_frame size={} cpu={}", frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                sizeof(GridPass::GridFrame))
-                .c_str());
+                sizeof(GridPass::GridFrame)));
         for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
             auto *const field = frame->getFieldByIndex(index);
             _.log(
                 std::format(
                     "WORLD_LIGHTING_MATERIAL grid_frame field[{}] name={} offset={}", index, field->getName(),
-                    field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM))
-                    .c_str());
+                    field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM)));
         }
 
         PPR_TEST_ASSERT(frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridPass::GridFrame));
@@ -1765,8 +1754,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 samples.m_rgba[0][0], samples.m_rgba[0][1], samples.m_rgba[0][2], samples.m_rgba[0][3],
                 samples.m_rgba[1][0], samples.m_rgba[1][1], samples.m_rgba[1][2], samples.m_rgba[1][3],
                 samples.m_rgba[2][0], samples.m_rgba[2][1], samples.m_rgba[2][2], samples.m_rgba[2][3],
-                samples.m_rgba[3][0], samples.m_rgba[3][1], samples.m_rgba[3][2], samples.m_rgba[3][3])
-                .c_str());
+                samples.m_rgba[3][0], samples.m_rgba[3][1], samples.m_rgba[3][2], samples.m_rgba[3][3]));
         for (const u32 sample: {0u, 2u}) {
             PPR_TEST_ASSERT(samples.m_rgba[sample][0] > 0.5f and samples.m_rgba[sample][1] < 0.05f);
         }
@@ -1851,8 +1839,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             std::format(
                 "WORLD_LIGHTING_MATERIAL thermal opaque_cold={:.4f} opaque_hot={:.4f} transparent_hot={:.4f} "
                 "transparent_cold={:.4f}",
-                opaque_cold_luma, opaque_hot_luma, transparent_hot.m_rgba[0][0], transparent_cold.m_rgba[0][0])
-                .c_str());
+                opaque_cold_luma, opaque_hot_luma, transparent_hot.m_rgba[0][0], transparent_cold.m_rgba[0][0]));
     };
 
     PPR_UNIT_TEST (gas_angular_mean_uses_the_decoded_dc_field) {
@@ -1880,8 +1867,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL gas_mean actual=({:.6f},{:.6f},{:.6f})", float(result[0].x),
-                float(result[0].y), float(result[0].z))
-                .c_str());
+                float(result[0].y), float(result[0].z)));
         PPR_TEST_ASSERT(close3(float3{result[0].x, result[0].y, result[0].z}, float3{0.25f, 0.5f, 0.75f}, 0.005f));
         PPR_TEST_ASSERT(close3(float3{result[1].x, result[1].y, result[1].z}, float3{0.25f, 0.5f, 0.75f}, 0.005f));
     };
@@ -2087,8 +2073,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                     _.log(
                         std::format(
                             "INSPECT categorical mismatch channel={} actual={} expected={}", channel,
-                            static_cast<int>(actual[channel]), encoded)
-                            .c_str());
+                            static_cast<int>(actual[channel]), encoded));
                 }
                 PPR_TEST_ASSERT(std::abs(static_cast<int>(actual[channel]) - encoded) <= tolerance);
             }
@@ -2105,8 +2090,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                         std::format(
                             "INSPECT mismatch channel={} actual={} expected={} linear=({},{},{})", channel,
                             static_cast<int>(actual[channel]), encoded, float(linear.x), float(linear.y),
-                            float(linear.z))
-                            .c_str());
+                            float(linear.z)));
                 }
                 PPR_TEST_ASSERT(std::abs(static_cast<int>(actual[channel]) - encoded) <= tolerance);
             }

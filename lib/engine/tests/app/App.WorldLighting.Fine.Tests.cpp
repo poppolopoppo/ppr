@@ -93,8 +93,7 @@ namespace pP::tests::detail::WorldLightingFine {
                 std::format(
                     "WORLD_LIGHTING_FINE api={} adapter={} backend={}",
                     info.apiName != nullptr ? info.apiName : "unknown",
-                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
-                    .c_str());
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType)));
         }
 
         void shutdown() {
@@ -1020,7 +1019,7 @@ namespace pP::tests::detail::WorldLightingFine {
             PPR_TEST_ASSERT(pass.fineCHForTest()->getDesc().size == lighting::kFineCHBytes);
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE uniform c0=y0_normalized ac=0 edges=clamped").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE uniform c0=y0_normalized ac=0 edges=clamped"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1106,7 +1105,7 @@ namespace pP::tests::detail::WorldLightingFine {
             }());
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE harmonics signed=true rotated=true window_once=true").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE harmonics signed=true rotated=true window_once=true"));
     };
 
     PPR_UNIT_TEST (zero_weight_and_invalid_total_weight_are_not_promoted) {
@@ -1171,7 +1170,7 @@ namespace pP::tests::detail::WorldLightingFine {
             PPR_TEST_ASSERT(failure[0u][8u] == 1u);
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE zero_weight skipped=true nonpositive_total=failure").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE zero_weight skipped=true nonpositive_total=failure"));
     };
 
     // ------------------------------------------------------------------
@@ -1227,8 +1226,7 @@ namespace pP::tests::detail::WorldLightingFine {
         runFrame(fixture, pass, inputs.inputs(), 3u, 1.0, -1, 4u);
         PPR_TEST_ASSERT(closeRGB9E5(fineAngularMean(readFineRecord(fixture, pass, 100u, 100u)), expected2));
 
-        _.log(
-            std::format("WORLD_LIGHTING_FINE ema alpha={} first=fresh pause=advances suspended=holds", alpha).c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE ema alpha={} first=fresh pause=advances suspended=holds", alpha));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1287,7 +1285,7 @@ namespace pP::tests::detail::WorldLightingFine {
         packed.m_words = records[0u];
         PPR_TEST_ASSERT(closeRGB9E5(fineAngularMean(packed), expected));
 
-        _.log(std::format("WORLD_LIGHTING_FINE rejection phase=frozen timing=carried validity=held").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE rejection phase=frozen timing=carried validity=held"));
     };
 
     // ------------------------------------------------------------------
@@ -1328,7 +1326,7 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(lighting::unpackCH(outside).m_coefficients[0].x == 0.0f);
         PPR_TEST_ASSERT(outside.m_words[1u] == 0u);
 
-        _.log(std::format("WORLD_LIGHTING_FINE near_hit far_uninitialized=not_suppressing cold_far=zero").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE near_hit far_uninitialized=not_suppressing cold_far=zero"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1373,8 +1371,7 @@ namespace pP::tests::detail::WorldLightingFine {
                 "WORLD_LIGHTING_FINE geometry c0=({}, {}, {}) cc1=({}, {}, {}) cs1=({}, {}, {}) scale={}",
                 decoded.m_coefficients[0u].x, decoded.m_coefficients[0u].y, decoded.m_coefficients[0u].z,
                 decoded.m_coefficients[1u].x, decoded.m_coefficients[1u].y, decoded.m_coefficients[1u].z,
-                decoded.m_coefficients[2u].x, decoded.m_coefficients[2u].y, decoded.m_coefficients[2u].z, scale)
-                .c_str());
+                decoded.m_coefficients[2u].x, decoded.m_coefficients[2u].y, decoded.m_coefficients[2u].z, scale));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1434,8 +1431,7 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(lighting::unpackCH(record).m_coefficients[0u].x > 0.0f);
         _.log(
             std::format(
-                "WORLD_LIGHTING_FINE far_merge edge_taps=clamped weights=1 nonzero_far={} oracle=match", nonzero_far)
-                .c_str());
+                "WORLD_LIGHTING_FINE far_merge edge_taps=clamped weights=1 nonzero_far={} oracle=match", nonzero_far));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1490,7 +1486,7 @@ namespace pP::tests::detail::WorldLightingFine {
                 PPR_TEST_ASSERT(std::abs(actual.z - expected.z) <= tolerance);
             }
 
-            _.log(std::format("WORLD_LIGHTING_FINE window_once {} retention={}", label, retention).c_str());
+            _.log(std::format("WORLD_LIGHTING_FINE window_once {} retention={}", label, retention));
         };
 
         assertStep(first_decoded, second, second_decoded, "frame1");
@@ -1524,8 +1520,7 @@ namespace pP::tests::detail::WorldLightingFine {
         _.log(
             std::format(
                 "WORLD_LIGHTING_FINE window_once ratio={} expected={} coefficient={} channel={}", ratio, 1.0f - alpha,
-                strongest_coefficient, strongest_channel)
-                .c_str());
+                strongest_coefficient, strongest_channel));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1594,8 +1589,7 @@ namespace pP::tests::detail::WorldLightingFine {
         _.log(
             std::format(
                 "WORLD_LIGHTING_FINE retained_direction probes={} retained={} frame=current_vs_trace", queries.size(),
-                retained_directions)
-                .c_str());
+                retained_directions));
     };
 
     PPR_UNIT_TEST (fine_writes_all_bytes_and_reads_only_its_own_prior) {
@@ -1667,9 +1661,7 @@ namespace pP::tests::detail::WorldLightingFine {
         runFrame(fixture, pass, inputs.inputs(), 2u, dt + 0.1, -1, 3u);
         PPR_TEST_ASSERT(pass.fineCHForTest() == stable);
 
-        _.log(
-            std::format("WORLD_LIGHTING_FINE in_place all_32_bytes=true own_prior_only=true single_allocation=true")
-                .c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE in_place all_32_bytes=true own_prior_only=true single_allocation=true"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1720,7 +1712,7 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(closeRGB9E5(warm_source, emission * 2.0f));
         PPR_TEST_ASSERT(not closeRGB9E5(warm_source, emission * 3.0f));
 
-        _.log(std::format("WORLD_LIGHTING_FINE barriers source_pre_update=true fine_then_next_source=true").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE barriers source_pre_update=true fine_then_next_source=true"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1763,7 +1755,7 @@ namespace pP::tests::detail::WorldLightingFine {
             PPR_TEST_ASSERT(word == 0u);
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE status range=7 index=0 containment=zero").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE status range=7 index=0 containment=zero"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1827,7 +1819,7 @@ namespace pP::tests::detail::WorldLightingFine {
             PPR_TEST_ASSERT(closeRGB9E5(actual[index], expected, 2.0e-3f));
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE angular_mean y0_normalized=true extra_factors=none").c_str());
+        _.log(std::format("WORLD_LIGHTING_FINE angular_mean y0_normalized=true extra_factors=none"));
     };
 
     // ------------------------------------------------------------------
@@ -1898,8 +1890,7 @@ namespace pP::tests::detail::WorldLightingFine {
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_FINE reflected ch_stride=32 cascade_stride=8 constants=32 entry=reconstructFine")
-                .c_str());
+                "WORLD_LIGHTING_FINE reflected ch_stride=32 cascade_stride=8 constants=32 entry=reconstructFine"));
     };
 }
 

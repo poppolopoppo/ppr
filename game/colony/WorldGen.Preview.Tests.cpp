@@ -380,8 +380,7 @@ namespace pP::game::tests::detail::worldgen_preview {
                         _.log(
                             std::format(
                                 "LAYOUT-COVERAGE profile={} edge={} seed={} error={}", profile, edge, seed,
-                                layout.error().message())
-                                .c_str());
+                                layout.error().message()));
                     }
                     PPR_TEST_ASSERT(layout.has_value());
 
@@ -620,19 +619,17 @@ namespace pP::game::tests::detail::worldgen_preview {
             _.log(
                 std::format(
                     "Workshop exact production phase {}: {:.3f}s", phase,
-                    time::seconds(world.m_report.m_phase_times[phase]))
-                    .c_str());
+                    time::seconds(world.m_report.m_phase_times[phase])));
         }
 
         _.log(
             std::format(
                 "Workshop exact production checksums: terrain={:016x}, output={:016x}",
-                world.m_report.m_terrain_checksum, world.m_report.m_output_checksum)
-                .c_str());
+                world.m_report.m_terrain_checksum, world.m_report.m_output_checksum));
         _.log(
             std::format(
-                "Workshop exact production known cache payload: {} bytes", (*prepared)->m_known_retained_payload_bytes)
-                .c_str());
+                "Workshop exact production known cache payload: {} bytes",
+                (*prepared)->m_known_retained_payload_bytes));
 
         PPR_TEST_ASSERT(world.m_grid.residentChunkCount() == sim::kChunkCount);
         PPR_TEST_ASSERT(world.m_report.m_output_checksum != 0u);

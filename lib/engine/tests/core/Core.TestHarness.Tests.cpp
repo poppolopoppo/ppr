@@ -26,6 +26,67 @@ namespace pP::tests::detail::harness {
             std::span<const std::string_view>{args.data(), args.size()}, "core-tests", diagnostics);
     }
 
+    // ------------------------------------------------------------------
+    // retained test evidence
+    // ------------------------------------------------------------------
+
+    struct RecordingRun final : UnitTest::IRun {
+        UnitTest::Id m_id;
+        std::string m_message{};
+        std::source_location m_location{};
+
+        explicit RecordingRun(const UnitTest::Id id) : m_id(id) {
+        }
+
+        [[nodiscard]] UnitTest::Id getTestId() const noexcept override {
+            return m_id;
+        }
+
+        void log(const char *msg, const std::source_location &location) override {
+            m_message = msg != nullptr ? msg : "";
+            m_location = location;
+        }
+
+        void failWith(const char *, const std::source_location &) override {
+        }
+
+        void recurse(const UnitTest &) override {
+        }
+
+        void recurse(std::initializer_list<const UnitTest>) override {
+        }
+
+        void success() override {
+        }
+    };
+
+    PPR_UNIT_TEST (formatted_log_forwards_text_and_call_site) {
+        RecordingRun recorder{_.getTestId()};
+        UnitTest::IRun &run = recorder;
+        const auto line = static_cast<u32>(__LINE__) + 1u;
+        run.log(std::format("formatted value={} label={}", 7, "x"));
+        PPR_TEST_ASSERT(recorder.m_message == "formatted value=7 label=x");
+        PPR_TEST_ASSERT(recorder.m_location.line() == line);
+        PPR_TEST_ASSERT(std::string_view{recorder.m_location.file_name()}.ends_with("Core.TestHarness.Tests.cpp"));
+    };
+
+    PPR_UNIT_TEST (raw_log_forwards_text_and_call_site) {
+        RecordingRun recorder{_.getTestId()};
+        UnitTest::IRun &run = recorder;
+        const auto line = static_cast<u32>(__LINE__) + 1u;
+        run.log("raw retained evidence");
+        PPR_TEST_ASSERT(recorder.m_message == "raw retained evidence");
+        PPR_TEST_ASSERT(recorder.m_location.line() == line);
+        PPR_TEST_ASSERT(std::string_view{recorder.m_location.file_name()}.ends_with("Core.TestHarness.Tests.cpp"));
+    };
+
+    PPR_UNIT_TEST (formatted_log_label_keeps_the_original_value) {
+        RecordingRun recorder{_.getTestId()};
+        UnitTest::IRun &run = recorder;
+        run.log("literal without formatting");
+        PPR_TEST_ASSERT(recorder.m_message == "literal without formatting");
+    };
+
     PPR_UNIT_TEST (defaults_match_legacy) {
         Diagnostics diagnostics{};
         auto parsed = parse({}, diagnostics);
@@ -248,6 +309,9 @@ namespace pP::tests {
             detail::harness::help_suppresses_execution_regardless_of_position,
             detail::harness::malformed_inputs_are_errors,
             detail::harness::explicit_seed_preserved_for_first_iteration,
+            detail::harness::formatted_log_forwards_text_and_call_site,
+            detail::harness::raw_log_forwards_text_and_call_site,
+            detail::harness::formatted_log_label_keeps_the_original_value,
         });
     };
 

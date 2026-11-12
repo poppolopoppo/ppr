@@ -93,8 +93,7 @@ namespace pP::tests::detail::WorldLightingProjection {
                 std::format(
                     "WORLD_LIGHTING_PROJECTION api={} adapter={} backend={}",
                     info.apiName != nullptr ? info.apiName : "unknown",
-                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
-                    .c_str());
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType)));
         }
 
         void shutdown() {
@@ -1041,8 +1040,7 @@ namespace pP::tests::detail::WorldLightingProjection {
             const u32 measured = stride(name);
             _.log(
                 std::format(
-                    "WORLD_LIGHTING_PROJECTION reflected name={} stride={} expected={}", name, measured, expected)
-                    .c_str());
+                    "WORLD_LIGHTING_PROJECTION reflected name={} stride={} expected={}", name, measured, expected));
             PPR_TEST_ASSERT(measured == expected);
         }
 
@@ -1096,8 +1094,7 @@ namespace pP::tests::detail::WorldLightingProjection {
             _.log(
                 std::format(
                     "WORLD_LIGHTING_PROJECTION reflected field={}.{} offset={} expected={}", element, field, measured,
-                    expected)
-                    .c_str());
+                    expected));
             PPR_TEST_ASSERT(measured == expected);
         }
 

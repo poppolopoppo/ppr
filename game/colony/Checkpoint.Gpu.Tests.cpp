@@ -1492,8 +1492,7 @@ namespace pP::game::tests::detail::checkpoint {
                 std::format(
                     "DUG-REFERENCE-SOURCE source=frozen_rows_seed_reference endpoint={} rows={} driver_tick={} authored_material_first={} source_class_first={} physical_steps_after_dig=0",
                     tick, state.m_particles.size(), driver.tickCount(), state.m_records.front().m_material,
-                    state.m_particles.front().m_material)
-                    .c_str());
+                    state.m_particles.front().m_material));
         } else {
             packet->m_gpu_particles = driver.particleView();
             PPR_TEST_ASSERT(packet->m_gpu_particles and packet->m_gpu_particles->current());
@@ -1505,8 +1504,7 @@ namespace pP::game::tests::detail::checkpoint {
                     view.m_metadata->m_cell_metres, view.m_origin, view.m_metadata->m_version, view.m_device_epoch,
                     view.m_publication, view.m_world.m_job_id, view.m_world.m_world_generation,
                     descriptor.m_content_fingerprint, render_world.m_content_fingerprint,
-                    view.m_world.m_content_fingerprint)
-                    .c_str());
+                    view.m_world.m_content_fingerprint));
             PPR_TEST_ASSERT(view.m_metadata->m_count == state.m_particles.size());
             PPR_TEST_ASSERT(view.m_metadata->m_moving_count == state.m_particles.size());
             _.log(
@@ -1514,8 +1512,7 @@ namespace pP::game::tests::detail::checkpoint {
                     "ACTUAL-DUG-VIEW current={} metadata_rows={} layout={} stride={} readonly_stride={} hot_element={} hot_bytes={} cold_element={} cold_bytes={}",
                     view.current(), view.m_metadata->m_rows.get() != nullptr, view.m_layout, view.m_stride,
                     view.m_readonly_stride, view.m_numerical->getDesc().elementSize, view.m_numerical->getDesc().size,
-                    view.m_readonly->getDesc().elementSize, view.m_readonly->getDesc().size)
-                    .c_str());
+                    view.m_readonly->getDesc().elementSize, view.m_readonly->getDesc().size));
             PPR_TEST_ASSERT(view.m_world == render_world);
             PPR_TEST_ASSERT(view.m_metadata->m_rows.get() != nullptr and view.m_origin == 3.0);
             PPR_TEST_ASSERT(
@@ -1719,8 +1716,7 @@ namespace pP::game::tests::detail::checkpoint {
                 std::format(
                     "ACTUAL-DUG-DIAGNOSTIC-VIEW tick={} origin={},{} width_m={} grain_margin_m={} quad_coverage_oracle=not_run raw_rows={} focus={} visible_centres={} total_centres={} focus_window_centres={} source={}",
                     tick, origin_x, origin_y, width_m, long_focus ? 0.0 : margin, not long_focus and not seed_reference,
-                    long_focus, visible_centres, points.size(), window_centres, source_name)
-                    .c_str());
+                    long_focus, visible_centres, points.size(), window_centres, source_name));
         }
         CameraModel model{};
         model.m_camera_mode = ECameraProjection::orthographic;
@@ -1771,8 +1767,7 @@ namespace pP::game::tests::detail::checkpoint {
                             "ACTUAL-DUG-GRID tick={} authored={} phase={} instances={} dispatches={} draws={} particle_bytes={} source={}",
                             tick, appearance != 0u, phase, observations.m_particle_instances,
                             observations.m_dispatch_commands, observations.m_draw_commands,
-                            observations.m_particle_buffer_bytes, source_name)
-                            .c_str());
+                            observations.m_particle_buffer_bytes, source_name));
                     if (admitted) {
                         PPR_TEST_ASSERT(observations.m_particle_instances == state.m_particles.size());
                     }
@@ -1888,8 +1883,7 @@ namespace pP::game::tests::detail::checkpoint {
                         tick, hash, points.size(), appearance != 0u, core_samples[0u], core_holes[0u],
                         interstices.size(), packed_holes[0u],
                         long_diagnostic ? "not_run" : "convex-close-contact-quads-not-all-pores", long_diagnostic,
-                        not long_diagnostic, long_focus, source_name)
-                        .c_str());
+                        not long_diagnostic, long_focus, source_name));
             }
         }
 
@@ -1965,8 +1959,7 @@ namespace pP::game::tests::detail::checkpoint {
             _.log(
                 std::format(
                     "ACTUAL-DUG-LONG-FLOOR fine_x=[0,{}) fine_y=[{},{}) thickness_cells=4 sidewalls=false diagnostic_only=true",
-                    checkpoint.m_descriptor.m_world_edge, dig.m_min.m_y - 8u, dig.m_min.m_y - 4u)
-                    .c_str());
+                    checkpoint.m_descriptor.m_world_edge, dig.m_min.m_y - 8u, dig.m_min.m_y - 4u));
         }
 
         auto terrain_snapshot = sim::captureFull(terrain_grid, checkpoint.m_descriptor.m_seed);
@@ -2085,8 +2078,7 @@ namespace pP::game::tests::detail::checkpoint {
                 _.log(
                     std::format(
                         "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi=GpuParticle88_same_host renderer_only=true physical_steps_after_dig=0",
-                        endpoint, hash, bytes.size(), reference.m_particles.size(), source.string())
-                        .c_str());
+                        endpoint, hash, bytes.size(), reference.m_particles.size(), source.string()));
                 observeActualDugRendering(
                     _, reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true,
                     false, true);
@@ -2299,8 +2291,7 @@ namespace pP::game::tests::detail::checkpoint {
                         excess.back(), excess[p99_index], excess_sum, excess_squared_sum, translational_ke, apic_ke,
                         momentum_x, momentum_y, com_x / mass_kg, com_y / mass_kg, plastic_logs.front(),
                         plastic_logs[median_index], plastic_logs.back(), zero_plastic_logs, trace_min,
-                        trace_sum / double(count), trace_max, double(negative_trace_count) / double(count))
-                        .c_str());
+                        trace_sum / double(count), trace_max, double(negative_trace_count) / double(count)));
 
                 _.log(
                     std::format(
@@ -2309,8 +2300,7 @@ namespace pP::game::tests::detail::checkpoint {
                         percentile(0.1), percentile(0.5), percentile(0.9), percentile(0.99), nearest.back(),
                         pairs_quarter, pairs_half, min_det, sum_det / static_cast<double>(count), max_det, min_volume,
                         sum_volume / static_cast<double>(count), max_volume, min_x, max_x, min_y, max_y, max_speed,
-                        std::sqrt(sum_speed_squared / static_cast<double>(count)))
-                        .c_str());
+                        std::sqrt(sum_speed_squared / static_cast<double>(count))));
             }
 
             const auto validity = validateMatterState(
@@ -2341,8 +2331,8 @@ namespace pP::game::tests::detail::checkpoint {
                     output.close();
                     PPR_TEST_ASSERT(not output.fail());
                     _.log(
-                        std::format("ACTUAL-DUG-COMPRESSION-RAW endpoint={} hash={} bytes={}", tick, hash, bytes.size())
-                            .c_str());
+                        std::format(
+                            "ACTUAL-DUG-COMPRESSION-RAW endpoint={} hash={} bytes={}", tick, hash, bytes.size()));
                 }
             }
 
@@ -2572,8 +2562,7 @@ namespace pP::game::tests::detail::checkpoint {
         if (enabled != "1") {
             _.log(
                 std::format(
-                    "ACTUAL-DUG-LONG skipped: set PPR_LONG_SETTLE_DIAGNOSTIC=1 and PPR_GRID_QA_DIR for explicit diagnostic capture")
-                    .c_str());
+                    "ACTUAL-DUG-LONG skipped: set PPR_LONG_SETTLE_DIAGNOSTIC=1 and PPR_GRID_QA_DIR for explicit diagnostic capture"));
             return;
         }
 
@@ -2588,7 +2577,7 @@ namespace pP::game::tests::detail::checkpoint {
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
         if (enabled != "1") {
-            _.log(std::format("ACTUAL-DUG-COMPRESSION skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1").c_str());
+            _.log(std::format("ACTUAL-DUG-COMPRESSION skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1"));
             return;
         }
 
@@ -2603,8 +2592,7 @@ namespace pP::game::tests::detail::checkpoint {
         if (reference == nullptr or *reference == '\0') {
             _.log(
                 std::format(
-                    "DUG-FROZEN-REFERENCE skipped: set PPR_FROZEN_DUG_REFERENCE_DIR and PPR_GRID_QA_DIR for explicit renderer-only capture")
-                    .c_str());
+                    "DUG-FROZEN-REFERENCE skipped: set PPR_FROZEN_DUG_REFERENCE_DIR and PPR_GRID_QA_DIR for explicit renderer-only capture"));
             return;
         }
 

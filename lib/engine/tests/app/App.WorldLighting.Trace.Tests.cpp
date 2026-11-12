@@ -66,8 +66,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                 std::format(
                     "WORLD_LIGHTING_TRACE api={} adapter={} backend={}",
                     info.apiName != nullptr ? info.apiName : "unknown",
-                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType))
-                    .c_str());
+                    info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType)));
         }
 
         void shutdown() {
@@ -542,8 +541,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                                 std::format(
                                     "WORLD_LIGHTING_TRACE mask_mismatch case={} level={} record=({}, {}) high={} "
                                     "measured={:x} expected={:x}",
-                                    label, level, record_x, record_y, high, measured, expected)
-                                    .c_str());
+                                    label, level, record_x, record_y, high, measured, expected));
                         }
 
                         PPR_TEST_ASSERT(measured == expected);
@@ -566,8 +564,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                     _.log(
                         std::format(
                             "WORLD_LIGHTING_TRACE jump_mismatch case={} cell=({}, {}) measured={} expected={}", label,
-                            x, y, measured, expected)
-                            .c_str());
+                            x, y, measured, expected));
                 }
 
                 PPR_TEST_ASSERT(measured == expected);
@@ -634,8 +631,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                             label, index, static_cast<float>(segments[index].x), static_cast<float>(segments[index].y),
                             static_cast<float>(segments[index].z), static_cast<float>(segments[index].w),
                             result.m_words[base], expected.m_hit, std::bit_cast<float>(result.m_words[base + 4u]),
-                            expected.m_interval.m_transmittance)
-                            .c_str());
+                            expected.m_interval.m_transmittance));
                 }
 
                 PPR_TEST_ASSERT(result.m_words[base] == expected.m_hit);
@@ -650,9 +646,7 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             PPR_TEST_ASSERT(result.m_status[0u] == kNoNumericIndex);
             PPR_TEST_ASSERT(result.m_status[1u] == kNoNumericIndex);
-            _.log(
-                std::format("WORLD_LIGHTING_TRACE oracle case={} segments={} hits={}", label, segments.size(), hits)
-                    .c_str());
+            _.log(std::format("WORLD_LIGHTING_TRACE oracle case={} segments={} hits={}", label, segments.size(), hits));
         };
 
         // Empty: every finite segment is clear.
@@ -804,7 +798,7 @@ namespace pP::tests::detail::WorldLightingTrace {
 
             // The diagonal reaches the same black cell.
             PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[9u]) == 0.0f);
-            _.log(std::format("WORLD_LIGHTING_TRACE opaque_black radiance=(0,0,0) transmittance=0").c_str());
+            _.log(std::format("WORLD_LIGHTING_TRACE opaque_black radiance=(0,0,0) transmittance=0"));
         }
 
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -841,8 +835,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                 std::format(
                     "WORLD_LIGHTING_TRACE masks case={} records={} bytes={} occupied={}", label,
                     WorldLightingPass::kVisibilityRecordCount, WorldLightingPass::kVisibilityBufferBytes,
-                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }))
-                    .c_str());
+                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; })));
         };
 
         {
@@ -933,8 +926,7 @@ namespace pP::tests::detail::WorldLightingTrace {
             }
 
             PPR_TEST_ASSERT(bit31 and bit32 and bit63);
-            _.log(
-                std::format("WORLD_LIGHTING_TRACE mask_bits bit31={} bit32={} bit63={}", bit31, bit32, bit63).c_str());
+            _.log(std::format("WORLD_LIGHTING_TRACE mask_bits bit31={} bit32={} bit63={}", bit31, bit32, bit63));
         }
 
         PPR_TEST_ASSERT(not pass.shutdown());
@@ -977,8 +969,7 @@ namespace pP::tests::detail::WorldLightingTrace {
             _.log(
                 std::format(
                     "WORLD_LIGHTING_TRACE jumps case={} occupied={} domain=[0,1,2,4,8,16,32]", label,
-                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; }))
-                    .c_str());
+                    std::ranges::count_if(occupancy, [](const u8 value) { return value != 0u; })));
         };
 
         {
@@ -1037,7 +1028,7 @@ namespace pP::tests::detail::WorldLightingTrace {
             PPR_TEST_ASSERT(seen[value]);
         }
 
-        _.log(std::format("WORLD_LIGHTING_TRACE jump_domain all_seven=true").c_str());
+        _.log(std::format("WORLD_LIGHTING_TRACE jump_domain all_seven=true"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1247,9 +1238,7 @@ namespace pP::tests::detail::WorldLightingTrace {
             auto *const type = element(name);
             PPR_TEST_ASSERT(type != nullptr);
             const u32 measured = safe_narrowing(type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM));
-            _.log(
-                std::format("WORLD_LIGHTING_TRACE reflected name={} stride={} expected={}", name, measured, stride)
-                    .c_str());
+            _.log(std::format("WORLD_LIGHTING_TRACE reflected name={} stride={} expected={}", name, measured, stride));
             PPR_TEST_ASSERT(measured == stride);
         }
 
@@ -1297,8 +1286,7 @@ namespace pP::tests::detail::WorldLightingTrace {
                 "WORLD_LIGHTING_TRACE dispatch visibility={}x{}x1x256 jump={}x{}x1x256 mask_stride=8 mask_bytes={} "
                 "jump_format=r8uint jump_texels={}",
                 kVisibilityDispatchGroups, kVisibilityDispatchGroups, kJumpDispatchGroups, kJumpDispatchGroups,
-                WorldLightingPass::kVisibilityBufferBytes, kEdge * kEdge)
-                .c_str());
+                WorldLightingPass::kVisibilityBufferBytes, kEdge * kEdge));
 
         PPR_TEST_ASSERT(not pass.shutdown());
     };
@@ -1377,7 +1365,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_TEST_ASSERT(later_result.m_status[0u] == 2u);
         PPR_TEST_ASSERT(std::bit_cast<float>(later_result.m_words[2u * 5u + 4u]) == 0.0f);
 
-        _.log(std::format("WORLD_LIGHTING_TRACE numeric_failure index_min=0 later_index=2 containment=(0,0)").c_str());
+        _.log(std::format("WORLD_LIGHTING_TRACE numeric_failure index_min=0 later_index=2 containment=(0,0)"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -1450,9 +1438,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[19u]) == 0.0f);
         PPR_TEST_ASSERT(result.m_status[0u] == 3u);
 
-        _.log(
-            std::format("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3")
-                .c_str());
+        _.log(std::format("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 }

@@ -71,6 +71,16 @@ namespace pP {
 
             virtual void log(const char *msg, const std::source_location &location = std::source_location::current()) = 0; // NOLINT(*-default-arguments)
 
+            /// Formatted retained test evidence. The defaulted location is
+            /// evaluated at this call site, so a failure report points at the
+            /// test line that produced the message. The raw overload remains
+            /// for callers that already have a string.
+            void log(
+                const std::string &message,
+                const std::source_location &location = std::source_location::current()) { // NOLINT(*-default-arguments)
+                log(message.c_str(), location);
+            }
+
             virtual void failWith(const char *msg, const std::source_location &location = std::source_location::current()) noexcept(false) = 0; // NOLINT(*-default-arguments)
 
             virtual void recurse(const UnitTest &test) = 0;
@@ -182,6 +192,9 @@ namespace pP {
 
             std::unique_ptr<Watchdog> m_watchdog{};
             std::stringstream m_retained_log{};
+            // The logger's background worker can deliver entries while the test
+            // thread logs or prints the retained evidence.
+            mutable std::mutex m_retained_log_mutex{};
 
             std::optional<Log::Policy> m_prev_logger_policy{};
             std::optional<Log::ELevel> m_prev_logger_verbosity{};

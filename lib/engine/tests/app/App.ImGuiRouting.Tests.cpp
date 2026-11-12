@@ -3147,7 +3147,7 @@ namespace pP::tests::detail {
             }
 
             void note(const std::string &line) {
-                m_run.log(std::format("[m4-rasterizer] {}", line).c_str());
+                m_run.log(std::format("[m4-rasterizer] {}", line));
                 m_run_log << line << '\n';
             }
 

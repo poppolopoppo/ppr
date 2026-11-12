@@ -40,8 +40,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
             _.log(
                 std::format(
                     "WORLD_LIGHTING_SETTLEMENT api={} adapter={}", info.apiName != nullptr ? info.apiName : "unknown",
-                    info.adapterName != nullptr ? info.adapterName : "unknown")
-                    .c_str());
+                    info.adapterName != nullptr ? info.adapterName : "unknown"));
         }
 
         void shutdown() {

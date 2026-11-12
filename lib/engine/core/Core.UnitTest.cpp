@@ -381,7 +381,8 @@ namespace pP {
             const std::string line = std::format(
                 "{}: {}({}): {}", std::string_view(m_test.m_name), location.file_name(), location.line(),
                 std::string_view(msg));
-            m_retained_log << line;
+            const std::lock_guard guard{m_retained_log_mutex};
+            m_retained_log << line << '\n';
         }
     }
 
@@ -481,7 +482,10 @@ namespace pP {
         m_prev_assert_policy = Assertion::setFailurePolicy(std::move(new_policy));
 #endif
 
-        m_retained_log.clear();
+        {
+            const std::lock_guard guard{m_retained_log_mutex};
+            m_retained_log.clear();
+        }
 
         m_prev_logger_verbosity = Log::setMinimumVerboseLevel(Log::ELevel::warning);
         m_prev_logger_policy = Log::setWriterPolicy({std23::nontype<&RunImpl::logEntry>, this});
@@ -511,6 +515,7 @@ namespace pP {
         const TimeSpan test_duration{m_end_time - m_start_time};
 
         PPR_DEFER {
+            const std::lock_guard guard{m_retained_log_mutex};
             m_retained_log.clear();
         };
 
@@ -546,7 +551,12 @@ namespace pP {
             test_id, test_duration);
 
         if (m_status == fail) {
-            std::cout << m_retained_log.rdbuf();
+            std::string retained{};
+            {
+                const std::lock_guard guard{m_retained_log_mutex};
+                retained = m_retained_log.str();
+            }
+            std::cout << retained;
 
             if (m_failure.has_value()) {
                 std::println(

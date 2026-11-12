@@ -1513,8 +1513,7 @@ namespace pP::tests::detail::MatterGpu {
             const auto submitted = fixture.m_solver.submitResidentTick(epoch, 8u, 2u);
             if (submitted) {
                 _.log(
-                    std::format("[dense1024] submit failed tick={} epoch={} error={}", tick, epoch, submitted.value())
-                        .c_str());
+                    std::format("[dense1024] submit failed tick={} epoch={} error={}", tick, epoch, submitted.value()));
             }
 
             PPR_TEST_ASSERT(not submitted);
@@ -1542,8 +1541,8 @@ namespace pP::tests::detail::MatterGpu {
         status.close();
         PPR_TEST_ASSERT(not manifest.fail() and not status.fail());
         _.log(
-            std::format("[dense1024] completed_ticks={} particles={} validation={}", ticks, particle_count, validation)
-                .c_str());
+            std::format(
+                "[dense1024] completed_ticks={} particles={} validation={}", ticks, particle_count, validation));
     };
 
     PPR_UNIT_TEST (opt_in_stage_timing_follows_completed_fence_and_epoch) {
@@ -1609,7 +1608,7 @@ namespace pP::tests::detail::MatterGpu {
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
         if (enabled != "1") {
-            _.log(std::format("SAND-GPU-COST skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1").c_str());
+            _.log(std::format("SAND-GPU-COST skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1"));
             return;
         }
 
@@ -1675,8 +1674,7 @@ namespace pP::tests::detail::MatterGpu {
                     "SAND-GPU-COST-PROFILE workload={} rows={} grid={}x{} dt_substep_s={} source_substeps=8 source_iterations=2 volume_channel={} gravity_strength={} terrain={} source_cell_m=0.3333333333333333 reference_thickness_m=1 cold_volume=1 cold_mass=2 logJp=0 validation=false warm={} samples={} instrumented={} internal_timestamp_queries={} timestamp_payload_bytes={} ordinary_status_bytes=24 frozen_replacement_outside_timed_tick=true particle_snapshots_in_sample_loop=false candidate_shared_delta_model_bytes=512",
                     workload, initial.size(), profile.m_grid_width, profile.m_grid_height, profile.m_delta_time,
                     profile.m_use_grid_volume_for_liquid, profile.m_gravity_strength, terrain_scene, warm_frames,
-                    sample_frames, instrumented, query_count, query_count * sizeof(u64))
-                    .c_str());
+                    sample_frames, instrumented, query_count, query_count * sizeof(u64)));
             for (u32 frame = 0u; frame < warm_frames + sample_frames; ++frame) {
                 // Every timed batch starts with identical owned rows and terrain.
                 // Replacement allocation/upload completion precedes either timing boundary.
@@ -1747,8 +1745,7 @@ namespace pP::tests::detail::MatterGpu {
                         "SAND-GPU-COST-SAMPLE workload={} sample={} {}={} epoch={} diagnostic_signal={} device_bytes={} readback_capacity_bytes={} dispatches={} timestamp_first={} timestamp_last={} timestamp_frequency={}",
                         workload, sample, sample_metric, elapsed_ms, epoch, timing.m_signal, after.m_device_bytes,
                         after.m_readback_capacity_bytes, dispatches, timing.m_first_gpu_timestamp,
-                        timing.m_last_gpu_timestamp, frequency)
-                        .c_str());
+                        timing.m_last_gpu_timestamp, frequency));
             }
 
             std::ranges::sort(samples);
@@ -1760,8 +1757,7 @@ namespace pP::tests::detail::MatterGpu {
                     "SAND-GPU-COST workload={} rows={} warm={} samples={} {}_min_ms={} {}_median_ms={} {}_max_ms={} device_bytes={} dispatches={} instrumented={} validation=false",
                     workload, particle_count, warm_frames, sample_frames, summary_metric, samples.front(),
                     summary_metric, median, summary_metric, samples.back(), expected_bytes, expected_dispatches,
-                    instrumented)
-                    .c_str());
+                    instrumented));
         }
     };
 
@@ -1852,7 +1848,7 @@ namespace pP::tests::detail::MatterGpu {
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
         if (enabled != "1") {
-            _.log(std::format("SAND-COMPRESSION-CONTROLS skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1").c_str());
+            _.log(std::format("SAND-COMPRESSION-CONTROLS skipped: set PPR_PBMPM_COMPRESSION_DIAGNOSTIC=1"));
             return;
         }
 
@@ -1973,8 +1969,7 @@ namespace pP::tests::detail::MatterGpu {
                     pairs_quarter, pairs_half, translational_ke, apic_ke, momentum_x, momentum_y, com_x / count,
                     com_y / count, plastic_logs.front(), plastic_logs[(plastic_logs.size() - 1u) / 2u],
                     plastic_logs.back(), zero_plastic_logs, trace_min, trace_sum / count, trace_max,
-                    double(negative_trace_count) / count, min_det, max_det, physical_grain_mass * count, h)
-                    .c_str());
+                    double(negative_trace_count) / count, min_det, max_det, physical_grain_mass * count, h));
         };
         const auto run = [&](const std::string_view scene, const float phase, const Array<GpuParticle> &initial,
                              const TerrainView terrain = {}) {
@@ -1986,8 +1981,7 @@ namespace pP::tests::detail::MatterGpu {
                 std::format(
                     "SAND-COMPRESSION-SCENE scene={} phase={} gravity_strength={} volume_channel={} terrain={} source_floor_top=11.5 no_overlap_recovery=true",
                     scene, phase, fixture.m_solver.profile().m_gravity_strength,
-                    fixture.m_solver.profile().m_use_grid_volume_for_liquid, not terrain.m_masks.empty())
-                    .c_str());
+                    fixture.m_solver.profile().m_use_grid_volume_for_liquid, not terrain.m_masks.empty()));
             observe(scene, phase, 0u, initial);
             const u32 end_substep = scene == "compressed_4x4" ? 128u : 64u;
             for (u32 substep = 1u; substep <= end_substep; ++substep) {
@@ -2207,8 +2201,7 @@ namespace pP::tests::detail::MatterGpu {
             _.log(
                 std::format(
                     "SAND-DENSITY-REGRESSION phase={} initial_excess_sum={} late128_excess_sum={}", phase,
-                    excess(initial), excess(late))
-                    .c_str());
+                    excess(initial), excess(late)));
             PPR_TEST_ASSERT(excess(initial) > 0.0 and excess(late) == 0.0);
             const auto off = evolve(disabled, initial, 128u);
             same_physical_state(initial, off);
@@ -2286,8 +2279,7 @@ namespace pP::tests::detail::MatterGpu {
             _.log(
                 std::format(
                     "SAND-TERRAIN-FRICTION case={} input={},{} base={},{} sand={},{} base_mass={} flags={}", name, dx,
-                    dy, values[0u], values[1u], values[4u], values[5u], values[2u], result.m_errors[0u])
-                    .c_str());
+                    dy, values[0u], values[1u], values[4u], values[5u], values[2u], result.m_errors[0u]));
             return values;
         };
         const auto near = [&](const float actual, const float expected) {
@@ -2814,8 +2806,8 @@ namespace pP::tests::detail::MatterGpu {
                         // Authored appearance is visual QA, never a false-color
                         // coverage classification or an automatic aesthetic claim.
                         _.log(
-                            std::format("SOLVER-POOL-GLOSSY epoch={} hash={} authored_water=true", epochs[state], hash)
-                                .c_str());
+                            std::format(
+                                "SOLVER-POOL-GLOSSY epoch={} hash={} authored_water=true", epochs[state], hash));
                         continue;
                     }
 
@@ -2824,8 +2816,7 @@ namespace pP::tests::detail::MatterGpu {
                             "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={}",
                             epochs[state], state == 0u ? 1u : 120u, frozen[state].size(), hash,
                             std::sqrt(rms_motion_squared / double(frozen[state].size())), samples[index], holes[index],
-                            outside_painted[index])
-                            .c_str());
+                            outside_painted[index]));
                 }
             }
         }
@@ -3736,8 +3727,7 @@ namespace pP::tests::detail::MatterGpu {
         compare_group({}, 0u);
         _.log(
             std::format(
-                "[terrain-wave-check] threads=64 wave_lanes_min={} wave_lanes_max={}", minimum_width, maximum_width)
-                .c_str());
+                "[terrain-wave-check] threads=64 wave_lanes_min={} wave_lanes_max={}", minimum_width, maximum_width));
     };
 
     // ------------------------------------------------------------------
@@ -3767,8 +3757,7 @@ namespace pP::tests::detail::MatterGpu {
                         probe.m_contacts[2u], probe.m_contacts[3u], std::bit_cast<float>(probe.m_contacts[4u]),
                         std::bit_cast<float>(probe.m_contacts[5u]), std::bit_cast<float>(probe.m_contacts[6u]),
                         std::bit_cast<float>(probe.m_contacts[7u]), probe.m_contacts[8u], probe.m_errors[0u],
-                        probe.m_errors[3u])
-                        .c_str());
+                        probe.m_errors[3u]));
                 exterior_passed = exterior_passed and probe.m_errors[0u] == 0u and probe.m_contacts[8u] == 1u;
                 if (probe.m_contacts[2u] == 1u) {
                     ++certified_starts;
@@ -3799,8 +3788,7 @@ namespace pP::tests::detail::MatterGpu {
                     "TERRAIN-V-TRANSPORT motion={},{} point={},{} carry={},{} first_hit={} full_flags={} final_flags={} field={} outside={}",
                     motion[0u], motion[1u], x, y, std::bit_cast<float>(probe.m_contacts[2u]),
                     std::bit_cast<float>(probe.m_contacts[3u]), probe.m_contacts[4u], probe.m_contacts[11u],
-                    probe.m_errors[0u], probe.m_errors[3u], outside)
-                    .c_str());
+                    probe.m_errors[0u], probe.m_errors[3u], outside));
             // The helper subsequently runs a separate one-contact-budget probe;
             // contacts[11] is the ordinary full transport's prior error result.
             transport_passed = transport_passed and probe.m_contacts[11u] == 0u and outside;
@@ -3827,8 +3815,7 @@ namespace pP::tests::detail::MatterGpu {
                     _.log(
                         std::format(
                             "TERRAIN-V-RESIDENT resting={} substep={} epoch={} flags={} field={} rejected=true",
-                            resting, substep, epoch, failure.m_flags, failure.m_field)
-                            .c_str());
+                            resting, substep, epoch, failure.m_flags, failure.m_field));
                     PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
                     resident_passed = false;
                     break;
@@ -3850,8 +3837,7 @@ namespace pP::tests::detail::MatterGpu {
                         particle.m_deformation_gradient.m_c1x, particle.m_deformation_gradient.m_c1y,
                         particle.m_deformation_displacement.m_c0x, particle.m_deformation_displacement.m_c0y,
                         particle.m_deformation_displacement.m_c1x, particle.m_deformation_displacement.m_c1y,
-                        particle.m_log_jp)
-                        .c_str());
+                        particle.m_log_jp));
                 for (const float field: std::bit_cast<std::array<float, 22u>>(particle)) {
                     PPR_TEST_ASSERT(std::isfinite(field));
                 }

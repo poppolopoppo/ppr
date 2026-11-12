@@ -2817,16 +2817,14 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     std::format(
                         "SPATIAL_MSAA4 native={} nominal_x_bracket=({},{}) nominal_y_bracket=({},{})", sample,
                         (double(recovered[0]) - 0.5) / 16.0, (double(recovered[0]) + 0.5) / 16.0,
-                        (double(recovered[1]) - 0.5) / 16.0, (double(recovered[1]) + 0.5) / 16.0)
-                        .c_str());
+                        (double(recovered[1]) - 0.5) / 16.0, (double(recovered[1]) + 0.5) / 16.0));
             }
 
             PPR_TEST_ASSERT(seen == 15u);
             _.log(
                 std::format(
                     "SPATIAL_MSAA4 measured canonical-to-native indices={},{},{},{}", mapping[0], mapping[1],
-                    mapping[2], mapping[3])
-                    .c_str());
+                    mapping[2], mapping[3]));
 
             // The threshold sweep above only brackets each location. Mode 5
             // evaluates the pixel-coordinate plane at every sample, so it states
@@ -2856,8 +2854,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             _.log(
                 std::format(
-                    "SPATIAL_MSAA4 exact sample positions confirmed for all pixels: (3/8,1/8)(7/8,3/8)(1/8,5/8)(5/8,7/8)")
-                    .c_str());
+                    "SPATIAL_MSAA4 exact sample positions confirmed for all pixels: (3/8,1/8)(7/8,3/8)(1/8,5/8)(5/8,7/8)"));
             return mapping;
         }
 
@@ -3054,8 +3051,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                                     last.m_roundness, last.m_opacity, last.m_ior,
                                     last.m_emissive_rgb[0] * last.m_emissive_strength,
                                     last.m_emissive_rgb[1] * last.m_emissive_strength,
-                                    last.m_emissive_rgb[2] * last.m_emissive_strength)
-                                    .c_str());
+                                    last.m_emissive_rgb[2] * last.m_emissive_strength));
                         }
 
                         PPR_TEST_ASSERT(hdrChannel_(result.m_reactive, x, y, 0u) == 0.0);
@@ -3113,8 +3109,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 std::format(
                     "SPATIAL_GRID_SETUP families=1 programs=3 pipelines=3 world_producers=0 captures={} "
                     "discarded_legacy_draws_omitted=6 discarded_legacy_readbacks_omitted=6 wall_time_speedup=UNMEASURED",
-                    capture_count)
-                    .c_str());
+                    capture_count));
         }
 
         void checkSpatialAllocationAdmission_() {
@@ -3316,7 +3311,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(rhi.isValid());
             if (not rhi->getDevice().hasFeature("standard-sample-locations-4") or
                 not rhi->getDevice().hasFeature("sample-rate-shading")) {
-                _.log(std::format("SPATIAL_INTEGRATION unsupported: sample-rate shading is unavailable").c_str());
+                _.log(std::format("SPATIAL_INTEGRATION unsupported: sample-rate shading is unavailable"));
                 return false;
             }
 
@@ -3924,8 +3919,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     "CATEGORICAL_BOUNDARY clear={},{},{} opaque={},{},{} glass={},{},{} palette={} desc={}", clear[0],
                     clear[1], clear[2], opaque_pixel[0], opaque_pixel[1], opaque_pixel[2], glass_pixel[0],
                     glass_pixel[1], glass_pixel[2], grid.terrainPaletteForTest() != nullptr,
-                    grid.textureDescriptorsForTest() != nullptr)
-                    .c_str());
+                    grid.textureDescriptorsForTest() != nullptr));
             PPR_TEST_ASSERT(texelDist_(opaque_pixel, clear) > 10u);
             PPR_TEST_ASSERT(texelDist_(glass_pixel, opaque_pixel) > 10u);
             PPR_TEST_ASSERT(texelDist_(glass_pixel, clear) > 2u);
@@ -4016,12 +4010,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 std::format(
                     "grid resources decoded={} particle={} backdrop={} draws={} uploads={}",
                     empty.m_texture_decoded_bytes, stable.m_particle_buffer_bytes, empty.m_background_target_bytes,
-                    empty.m_draw_commands, empty.m_particle_uploads)
-                    .c_str());
+                    empty.m_draw_commands, empty.m_particle_uploads));
             const auto timing = renderer->lastGpuFrameTiming();
             PPR_TEST_ASSERT(timing.has_value());
             PPR_TEST_ASSERT(std::isfinite(timing->m_milliseconds) and timing->m_milliseconds >= 0.0f);
-            _.log(std::format("grid completed GPU frame ms={}", timing->m_milliseconds).c_str());
+            _.log(std::format("grid completed GPU frame ms={}", timing->m_milliseconds));
             const auto empty_pixels = drawOpticalGrid_(grid, 63.5f, 63.5f, 4.0f, 64u);
             for (u64 cycle = 0u; cycle < 3u; ++cycle) {
                 auto replacement = opticalGridFixture_(visual, 0u);
@@ -4525,8 +4518,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     "final_fence={} device_bytes={} readback_bytes={} cpu_bytes={}",
                     first_census.m_rows.size(), boundary_census.m_rows.size(), empty_census.m_rows.size(),
                     metric_census.m_submission, metric_census.m_device_bytes, metric_census.m_readback_bytes,
-                    metric_census.m_cpu_bytes)
-                    .c_str());
+                    metric_census.m_cpu_bytes));
         };
 
         // ------------------------------------------------------------------
@@ -4719,8 +4711,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     _.log(
                         std::format(
                             "grid scenario={} visible={} centre={},{},{},{}", scenario, args.instanceCount, centre[0],
-                            centre[1], centre[2], centre[3])
-                            .c_str());
+                            centre[1], centre[2], centre[3]));
                     if (scenario == 0u or scenario == 7u) {
                         PPR_TEST_ASSERT(centre[0] > 160u and centre[1] < 80u);
                         if (scenario == 7u) {

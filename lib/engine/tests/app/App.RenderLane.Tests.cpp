@@ -922,8 +922,7 @@ namespace pP::tests::detail {
                     sizeof(RenderLaneOperationTicket), alignof(RenderLaneOperationTicket),
                     sizeof(RenderLaneOperationCompletion), alignof(RenderLaneOperationCompletion), sizeof(RenderLane),
                     alignof(RenderLane), sizeof(RenderLaneOperationAvailability),
-                    alignof(RenderLaneOperationAvailability))
-                    .c_str());
+                    alignof(RenderLaneOperationAvailability)));
         };
 
         PPR_UNIT_TEST (queued_operation_cancel_destroys_captures_before_acknowledgement) {
@@ -1137,8 +1136,7 @@ namespace pP::tests::detail {
             _.log(
                 std::format(
                     "small lane callable size={} align={} nothrow_move={}", sizeof(SmallCallable),
-                    alignof(SmallCallable), std::is_nothrow_move_constructible_v<SmallCallable>)
-                    .c_str());
+                    alignof(SmallCallable), std::is_nothrow_move_constructible_v<SmallCallable>));
         };
 
         PPR_UNIT_TEST (running_operation_cancel_retains_original_error_and_post_stop_take) {

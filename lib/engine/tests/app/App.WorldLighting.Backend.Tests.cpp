@@ -89,8 +89,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                     "WORLD_LIGHTING_BACKEND api={} adapter={} backend={} timestamp_hz={}",
                     info.apiName != nullptr ? info.apiName : "unknown",
                     info.adapterName != nullptr ? info.adapterName : "unknown", static_cast<int>(info.deviceType),
-                    info.timestampFrequency)
-                    .c_str());
+                    info.timestampFrequency));
         }
 
         void shutdown() {
@@ -298,8 +297,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                                  static_cast<u32>(rhi::FormatSupport::ShaderUavStore);
         _.log(
             std::format(
-                "WORLD_LIGHTING_BACKEND r8_uint_support=0x{:x} required=0x{:x}", static_cast<u32>(support), required)
-                .c_str());
+                "WORLD_LIGHTING_BACKEND r8_uint_support=0x{:x} required=0x{:x}", static_cast<u32>(support), required));
         PPR_TEST_ASSERT((static_cast<u32>(support) & required) == required);
 
         shader::SharedModule module{};
@@ -383,8 +381,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         _.log(
             std::format(
                 "WORLD_LIGHTING_BACKEND r8_texels={} jump_values={},{},{},{},{},{},{}", texels.size(), jump_values[0],
-                jump_values[1], jump_values[2], jump_values[3], jump_values[4], jump_values[5], jump_values[6])
-                .c_str());
+                jump_values[1], jump_values[2], jump_values[3], jump_values[4], jump_values[5], jump_values[6]));
     };
 
     // ------------------------------------------------------------------
@@ -501,8 +498,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                 std::format(
                     "WORLD_LIGHTING_BACKEND winner_order={} keys={:x},{:x},{:x},{:x} rows={},{},{},{}", order,
                     result.m_keys[0], result.m_keys[1], result.m_keys[2], result.m_keys[3], result.m_rows[0],
-                    result.m_rows[1], result.m_rows[2], result.m_rows[3])
-                    .c_str());
+                    result.m_rows[1], result.m_rows[2], result.m_rows[3]));
         };
 
         const auto forward = qualifyWinners(fixture, module, candidates);
@@ -570,8 +566,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                 std::format(
                     "WORLD_LIGHTING_BACKEND reflected name={} stride={} size={} expected_stride={}", name,
                     type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM), type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                    stride)
-                    .c_str());
+                    stride));
             PPR_TEST_ASSERT(type->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == stride);
         }
 
@@ -617,7 +612,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         auto pipeline = makeComputePipeline(device, program);
         PPR_TEST_ASSERT(pipeline.m_pipeline.get() != nullptr and pipeline.m_root.get() != nullptr);
 
-        _.log(std::format("WORLD_LIGHTING_BACKEND strides=4/8/32 metadata_offsets=0/4/8/12/16/20/24/28").c_str());
+        _.log(std::format("WORLD_LIGHTING_BACKEND strides=4/8/32 metadata_offsets=0/4/8/12/16/20/24/28"));
     };
 
     // ------------------------------------------------------------------
@@ -756,8 +751,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         _.log(
             std::format(
                 "WORLD_LIGHTING_BACKEND sample_rate_shading={} standard_sample_locations={}",
-                device.hasFeature("sample-rate-shading"), device.hasFeature("standard-sample-locations-4"))
-                .c_str());
+                device.hasFeature("sample-rate-shading"), device.hasFeature("standard-sample-locations-4")));
         PPR_TEST_ASSERT(device.hasFeature("sample-rate-shading"));
         PPR_TEST_ASSERT(device.hasFeature("standard-sample-locations-4"));
     }
@@ -788,8 +782,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                     _.log(
                         std::format(
                             "WORLD_LIGHTING_BACKEND sample_pixel=({}, {}) sample={} position=({:.6f}, {:.6f})", x, y,
-                            sample, measured_x, measured_y)
-                            .c_str());
+                            sample, measured_x, measured_y));
                 }
             }
         }
@@ -829,8 +822,7 @@ namespace pP::tests::detail::WorldLightingBackend {
                 _.log(
                     std::format(
                         "WORLD_LIGHTING_BACKEND boundary_pixel=({}, {}) sample_colors={},{},{},{}", x, y, red[0],
-                        red[1], red[2], red[3])
-                        .c_str());
+                        red[1], red[2], red[3]));
             }
         }
     };
@@ -937,7 +929,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         PPR_TEST_ASSERT(read_pixel(history_a, 1u) == 0.5f);
         PPR_TEST_ASSERT(read_pixel(history_a, 2u) == 0.25f);
         PPR_TEST_ASSERT(read_pixel(history_a, 3u) == 1.0f);
-        _.log(std::format("WORLD_LIGHTING_BACKEND history_a_r=3 history_b_r=2 ordered=true").c_str());
+        _.log(std::format("WORLD_LIGHTING_BACKEND history_a_r=3 history_b_r=2 ordered=true"));
     };
 
     PPR_UNIT_TEST (status_copy_reports_atomic_minima_and_reserved_zeroes) {
@@ -1018,8 +1010,7 @@ namespace pP::tests::detail::WorldLightingBackend {
         _.log(
             std::format(
                 "WORLD_LIGHTING_BACKEND status_invalid_min={} status_range_min={} reserved_zero=true", record[0],
-                record[1])
-                .c_str());
+                record[1]));
     };
 } // namespace pP::tests::detail::WorldLightingBackend
 

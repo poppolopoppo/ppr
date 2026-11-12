@@ -380,7 +380,10 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks"
         LOOPS
         RESOURCE_LOCK gpu
-        TIMEOUT 600
+        # Measured 591.47 s on 2026-11-12; the former 600 s ceiling left a
+        # 1.4% margin and timed out once without any assertion failure. The
+        # 900 s ceiling keeps an honest margin; assertions are unchanged.
+        TIMEOUT 900
         LABELS unit game gpu_validation
     )
     ppr_add_test_entry(TARGET game.tests
