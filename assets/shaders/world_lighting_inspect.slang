@@ -182,9 +182,11 @@ float4 fragmentInspect(InspectVertexOutput input) : SV_Target {
         if (g_inspect.m_diagnostic == kDiagnosticProbes) {
             color = inspectionCurve(angularMean(world.xy));
 
-            // Fine probes sit every two native cells; the lattice shows that
-            // sampling period, not a scene feature. Lines land on the shared
-            // boundary of adjacent fine cells (fine coordinate k+0.5).
+            // Fine probes sit every two native cells; the lattice is the
+            // inspection aid for that sampling period, not a scene feature.
+            // Lines land on the cell boundary halfway between adjacent
+            // fine-probe centres (world coordinate 2k+2, fine coordinate
+            // k+0.5), never on the probe centres themselves.
             float2 fine = world.xy * 0.5;
             float2 distance = abs(frac(fine) - 0.5);
             float2 footprint = max(fwidth(fine), float2(1.0e-6));

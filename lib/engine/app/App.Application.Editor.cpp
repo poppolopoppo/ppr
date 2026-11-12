@@ -2099,8 +2099,12 @@ namespace pP {
             // The retained inspection overlay is read-only C-stage work drawn
             // from the same submitted world/camera as a fresh picture. A
             // retained picture carries no matching current world state, so it
-            // is presented without an overlay instead of fabricating one.
+            // is presented without an overlay instead of fabricating one. The
+            // current frame must also have armed lighting: a stale published
+            // attempt from a publication-failure window is not this frame's
+            // submitted state.
             const bool inspection_active = fresh_picture and
+                                           lighting_armed and
                                            request.m_inspection.m_diagnostic != ELightingDiagnostic::off and
                                            m_grid_pass->inspectionAvailable();
             const auto inspect_draw = [&](const DrawContext &context) -> std::error_code {

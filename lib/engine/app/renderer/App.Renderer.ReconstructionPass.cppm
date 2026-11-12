@@ -94,6 +94,14 @@ export namespace pP {
         [[nodiscard]] FenceCompletionValue historyUseForTest() const noexcept {
             return m_committed.m_history_use;
         }
+        // Read-only committed textures for non-contamination evidence. The
+        // caller must prove GPU completion (renderer/host wait) before reading.
+        [[nodiscard]] rhi::ITexture *sceneTextureForTest() const noexcept {
+            return m_history_established ? m_committed.m_scene.get() : nullptr;
+        }
+        [[nodiscard]] rhi::ITexture *historyTextureForTest() const noexcept {
+            return m_history_established ? m_committed.m_history[m_history_index].get() : nullptr;
+        }
 
     private:
         // ------------------------------------------------------------------

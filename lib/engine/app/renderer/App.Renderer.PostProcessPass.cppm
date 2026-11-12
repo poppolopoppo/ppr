@@ -124,6 +124,13 @@ export namespace pP {
             };
         }
 
+        // Read-only committed 1x1 adapted-exposure offset slot. The caller must
+        // prove GPU completion before reading.
+        [[nodiscard]] rhi::ITexture *exposureTextureForTest() const noexcept {
+            return m_exposure_valid and m_exposure_slot < kFrameRingSlots ? m_slots[m_exposure_slot].m_exposure.get()
+                                                                          : nullptr;
+        }
+
     private:
         // ------------------------------------------------------------------
         // per-output-slot cohort

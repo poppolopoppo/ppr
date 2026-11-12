@@ -728,7 +728,9 @@ namespace pP::ui {
                 int level = static_cast<int>(std::clamp(
                     lp.m_cascade, WorldLightingPass::kInspectionCascadeMin, WorldLightingPass::kInspectionCascadeMax));
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::SliderInt("##lighting_cascade", &level, 1, 5)) {
+                if (ImGui::SliderInt(
+                        "##lighting_cascade", &level, static_cast<int>(WorldLightingPass::kInspectionCascadeMin),
+                        static_cast<int>(WorldLightingPass::kInspectionCascadeMax))) {
                     lp.m_cascade = static_cast<u32>(level);
                 }
                 ImGui::SetItemTooltip(

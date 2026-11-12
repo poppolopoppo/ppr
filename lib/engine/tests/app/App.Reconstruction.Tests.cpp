@@ -1764,60 +1764,6 @@ namespace pP::tests::detail {
             }
         };
 
-        // Retained inspection and post/sky edits are presentation-only inputs.
-        // They never enter ReconstructionPass, so an accepted frame after the
-        // edit must continue the screen history instead of resetting it.
-        PPR_UNIT_TEST (gpu_inspection_and_post_edits_preserve_screen_history) {
-            Gpu::Fixture fixture;
-            fixture.initialize();
-            PPR_DEFER {
-                fixture.shutdown();
-            };
-
-            const int2 window{19, 13};
-            const auto grid = makePresentationGrid(window, 1u);
-            PPR_TEST_ASSERT(grid.has_value());
-            const auto world = Gpu::worldIdentity(23u);
-            const auto camera = makeOrthoCamera(window, float3{0.0f, 0.0f, -1.0f});
-            const auto samples = Oracle::makeProbeSamples(grid->m_raster, 1.0f);
-
-            const auto first = fixture.runFrame(camera, *grid, world, 0u, 0u, float4{0.0f, 0.0f, 0.0f, 1.0f});
-            PPR_TEST_ASSERT(fixture.m_pass.historyEstablishedForTest());
-            const u32 first_index = fixture.m_pass.historyIndexForTest();
-            const u32 first_phase = fixture.m_pass.acceptedPhaseForTest();
-            const auto committed = fixture.readResolved(first.m_view, *grid);
-
-            // Diagnostic/cascade, post and sky controls change outside this
-            // pass. The next accepted frame must advance to the other history
-            // image and continue from the committed bytes.
-            const LightingInspectionSettings inspection{ELightingDiagnostic::cascade, 5u};
-            PostProcessSettings post{};
-            post.m_auto_exposure = false;
-            post.m_exposure_ev = 2.0f;
-            post.m_bloom_enabled = false;
-            post.m_bloom_threshold = 4.0f;
-            const i32 sky_hour = 12;
-            PPR_TEST_ASSERT(inspection.m_diagnostic == ELightingDiagnostic::cascade and sky_hour == 12);
-
-            const auto second = fixture.runFrame(camera, *grid, world, 0u, 0u, float4{0.0f, 0.0f, 0.0f, 0.7f});
-            PPR_TEST_ASSERT(fixture.m_pass.historyIndexForTest() == (first_index + 1u) % 2u);
-            PPR_TEST_ASSERT(fixture.m_pass.acceptedPhaseForTest() == (first_phase + 1u) % 4u);
-
-            const auto expected = Oracle::expectedFrame(
-                samples, *grid, camera, fixture.m_pass.acceptedPhaseForTest(), true, committed.m_rgb, *grid, camera,
-                0.7f);
-            const auto actual = fixture.readResolved(second.m_view, *grid);
-            for (i32 y = 0; y < grid->m_resolved.y; ++y) {
-                for (i32 x = 0; x < grid->m_resolved.x; ++x) {
-                    const auto offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(grid->m_backing.x) +
-                                        static_cast<std::size_t>(x);
-                    if (Gpu::interiorBlendPixel(x, y, *grid)) {
-                        Gpu::assertClose(actual.m_rgb[offset], expected[offset], 3.0e-3f);
-                    }
-                }
-            }
-        };
-
         PPR_UNIT_TEST (gpu_busy_extent_change_preserves_committed_history) {
             Gpu::Fixture fixture;
             fixture.initialize();
@@ -1941,7 +1887,6 @@ namespace pP::tests::detail {
                 gpu_history_reset_and_preserve_matrix,
                 gpu_uncommitted_attempt_does_not_advance_history,
                 gpu_unaccepted_extent_change_preserves_committed_history,
-                gpu_inspection_and_post_edits_preserve_screen_history,
                 gpu_busy_extent_change_preserves_committed_history,
                 gpu_resource_reuse_waits_for_reader_fence,
             });

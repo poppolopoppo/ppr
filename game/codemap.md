@@ -139,7 +139,8 @@ cascade values are read-only inspection selection, never another lighting mode o
 an active cascade-count setting; sky, diagnostic and post changes ride the next
 rendered frame without resetting world lighting or screen history. The Display
 window edits them live, Save persists them, and Reset restores the factory
-defaults. Invalid domains, nonfinite post tuples and retired names fail resolution.
+defaults for lighting/post (live pixelization is saved but is not part of Reset).
+Invalid domains, nonfinite post tuples and retired names fail resolution.
 
 ## Joint world transition
 

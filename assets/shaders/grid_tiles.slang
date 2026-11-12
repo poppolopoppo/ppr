@@ -916,7 +916,7 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
 float4 shadeGridReactive(
     GridVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    SamplerState.Handle g_sampler, bool point_sample, out float reactive_coverage, bool material_only = false) {
+    SamplerState.Handle g_sampler, bool point_sample, out float reactive_coverage) {
     reactive_coverage = 0;
     float2 world_pixel_x = ddx(input.fine_position);
     float2 world_pixel_y = ddy(input.fine_position);
@@ -953,15 +953,18 @@ float4 shadeGridReactive(
     }
 
     // ------------------------------------------------------------------
-    // retained diagnostic and test-fixture path
+    // retained cold-start, test-fixture and authoring-preview path
     // ------------------------------------------------------------------
-    // All rendered 1024 worlds publish resolved cells and take the categorical
-    // path above. This contour path remains for: diagnostic overlays (Task 16
-    // replaces them with retained inspection views), explicit test-fixture grids
-    // with no lighting publication, the first-publication window before the
-    // lighting owner has bound cells, and a publication failure that keeps the
-    // last valid categorical field unavailable. It is not a flat/ambient
-    // substitute for a supported rendered world.
+    // All rendered 1024 production worlds publish resolved cells and take the
+    // categorical path above. This contour path remains for explicit
+    // test-fixture grids with no lighting publication, the first-publication
+    // window before the lighting owner has bound cells, and a publication
+    // failure that keeps the last valid categorical field unavailable. The same
+    // diagnostic branch serves world-generation authoring previews
+    // (material/biome/temperature/initial matter). It is not a flat/ambient
+    // substitute for a supported rendered world. Task 19 owns the final
+    // acceptance decision on whether this fallback can be removed; retained
+    // lighting inspection no longer uses it.
     float2 contour_position = input.fine_position;
     if ((g_grid_frame.m_surface_mode & 3u) == 3u) {
         contour_position += boundaryDisplacement(input.fine_position, world_pixel_x, world_pixel_y, g_sampler);
@@ -1001,7 +1004,6 @@ float4 shadeGridReactive(
 
     // The pilot's centre mask uses this actual displaced material selector,
     // before texturing/lighting. It does not infer occupancy from scene depth.
-    //if (material_only) return float4(coverage>0.0 && material<0xffffu ? float(material):0.0,0,0,0);
 
     float4 matter = float4(0.0);
     if (diagnostic_mode == 4u) {
@@ -1079,9 +1081,9 @@ float4 shadeGridReactive(
 
 float4 shadeGrid(GridVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
-    SamplerState.Handle g_sampler, bool point_sample, bool material_only = false) {
+    SamplerState.Handle g_sampler, bool point_sample) {
     float unused_reactive;
-    return shadeGridReactive(input,g_textures,g_sampler,point_sample,unused_reactive,material_only);
+    return shadeGridReactive(input,g_textures,g_sampler,point_sample,unused_reactive);
 }
 
 struct GridReactiveOutput {

@@ -140,7 +140,8 @@ atlas level (`game.world_light.cascade`, L1..L5, default 1) are live session
 values pushed to the render owner every frame. Post settings keep their existing
 `game.post.*` domains/defaults. None of these edits joins the switching draft,
 Apply, Keep or Revert; Save persists the live values and Reset restores the
-factory defaults. Sky/diagnostic/post edits ride the next rendered frame and never
+factory defaults for lighting/post only (live pixelization is saved but is not
+part of Reset). Sky/diagnostic/post edits ride the next rendered frame and never
 reset world lighting or temporal screen history. The diagnostic overlay is drawn
 after post-processing and before native UI; it decodes published data read-only
 with the captured camera and uses the fixed inspection display curve

@@ -49,7 +49,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 13 | complete (commit `2f46ae40`; independent review approved) |
 | 14 | complete (commits `8c5cf6b0`, `fd03d4c6`; reviews clean; credit ruling recorded) |
 | 15 | complete (commits `c5db57be` and the review-fix follow-up; review issues fixed; Task 16 fallback removal recorded) |
-| 16–19 | pending |
+| 16 | complete (commit `be0a29d6` + review/leak follow-up; Windows/D3D12 pending) |
+| 17–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1502,3 +1503,52 @@ and operational acceptance. No Task 4 work has begun.
   remain. Windows/D3D12 rename/exists branch unrun; no eviction/telemetry.
   Directed windowed runs still hit pre-existing libdbus LSan noise (CTest
   passes). This is a measured backend-codegen saving, not a suite fix.
+
+## Task 16 — retained controls, inspection overlay and leak-evidence correction
+
+- Commits: `be0a29d6` `feat: expose retained display controls and world-lighting
+  inspection`; follow-up review-fix commit `pending`.
+- Delivered: retained `game.world_light.diagnostic`/`game.world_light.cascade`
+  and `game.pixel.scale` domains, sky wiring, the C-stage
+  `world_lighting_inspect.slang` overlay (probes/source/occupancy/jump/cascade),
+  read-only `notifyReadSubmitted` retention, value-only inspection result stamp,
+  live Display controls and config/display/UI/material/reconstruction/projection/
+  settlement coverage.
+- **Review Important 1 fixed:** the non-contamination evidence now drives the
+  real editor (`runEditorObservation` boots the production A/B/C path with
+  capture readback) and compares committed Hable scene/history bytes, adapted
+  exposure bytes and role, fine-CH bytes and accepted-frame counter across four
+  runs: diagnostics off vs `occupancy` (scene/history/exposure identical,
+  presented pixels differ), post-only edits (scene/history/fine-CH identical),
+  and a sky edit (accepted counter/history role preserved). The tautological
+  local-only reconstruction leaf was removed.
+- **Review Important 2 fixed:** the reader-fence leaf now keeps attempt 0
+  submitted but unread while attempt 1 is submitted and read; it asserts attempt
+  0 still releases at its own write fence. The previous leaf collected attempt 0
+  before the read extension, so the old extend-all bug passed.
+- **Review minors folded in:** C-stage overlay gated on `lighting_armed` for the
+  current frame; retained pictures and non-1024 worlds deliberately present
+  without an overlay and post no stamp; stamp camera revision captured between
+  `update()` and `draw()`; stale sky/lattice comments corrected; `grid_tiles`
+  Task 16 promise replaced with the retained cold-start/test/authoring-preview
+  reason and Task 19 removal decision; dead commented override and unused
+  `material_only` parameter removed; cascade slider bounds use the production
+  constants; reset docs distinguish lighting/post reset from saved pixelization.
+- **Leak diagnosis (owner-directed):** the elevated direct-run LSan counts were
+  not repository leaks. Direct invocations omitted the repository sanitizer
+  policy (`VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1`, slow allocation
+  unwinder and `nvidia.lsan.supp`), so unloaded Vulkan loader modules truncated
+  driver stacks into unknown/DBus-only reports. With the CTest policy:
+  `world_lighting_projection` 12 allocations/549 B suppressed, material 12/549,
+  reconstruction 12/549, fine 12/549, cascade 12/549, trace 12/549, frame_fence
+  12/549; settlement (real windows) 69 allocations/102,751 B suppressed; all are
+  `libnvidia-glcore.so`/`libnvidia-glsi.so` frames inside Vulkan adapter
+  enumeration or GLX `glXDestroyWindow`. Unsuppressed runs with the loader pinned
+  retain the same NVIDIA frames; PPR frames appear only as callers of
+  `glfwDestroyWindow`/surface destruction, never as allocation owners. Windowed
+  lab direct runs with the fast unwinder show 3 libdbus allocations/1,726 B; the
+  documented slow unwinder + policy attributes and suppresses the same NVIDIA set
+  and exits 0. No engine-origin allocation remains; no suppression was added.
+- **Known gates:** Windows/D3D12 unmeasured; no Linux desktop-automation tool for
+  clicking the Display panel (config/UI tests and CLI lab captures cover the
+  behavior); owner visual acceptance remains Task 19.

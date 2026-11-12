@@ -27,9 +27,8 @@ export namespace pP {
     // boundary. Suspended/minimized intervals are excluded by the caller. The
     // pass commits this baseline only on accepted submission, so dropped
     // attempts contribute their elapsed active time to the next accepted
-    // lighting update. Production callers do not yet supply a non-default hour,
-    // so the terminal sky is the black boundary sky (-1) until later renderer
-    // wiring; 0..23 rotate it.
+    // lighting update. The application supplies the retained `-1..23` sky
+    // selection; `-1` is the black boundary sky and `0..23` rotate it.
     struct WorldLightingFrame {
         TimeSpan m_active_elapsed{};
         i32 m_sky_hour{-1};

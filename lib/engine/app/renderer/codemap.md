@@ -257,6 +257,8 @@ lazily per acquired signature (old pipelines defer until their reader fence
 completes). `notifyReadSubmitted` extends only that attempt's slot through the
 accepted C submission, and the frame result carries a value-only inspection
 stamp (settings, world identity, captured camera revision, C submission).
+A retained picture (stage B rejected) and non-1024 worlds are presented without
+an overlay: neither has a matching current submitted world/camera to stamp.
 
 ## Design
 
