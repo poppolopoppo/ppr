@@ -146,3 +146,58 @@ reset world lighting or temporal screen history. The diagnostic overlay is drawn
 after post-processing and before native UI; it decodes published data read-only
 with the captured camera and uses the fixed inspection display curve
 `max(RGB,0)/(1+max(RGB,0))`, not scene exposure.
+
+## Automated display exercise
+
+`app.game --exercise-display --exercise-output=DIR` is the permanent real-window
+exercise for the retained controls. It uses the ordinary Lighting Lab profile at
+1024, the real window, and an isolated `user-settings.toml` inside `DIR`; it
+never loads or writes the user's picture-settings file. Any explicit command
+line/environment values are reported as resolved baseline assignments so an
+explicit override cannot silently stand in for a tested live value.
+
+The game-owned `game.display_exercise` driver is an injected-time asynchronous
+state machine advanced by production action results, real window events and
+bounded deadlines. It emits typed panel/window intents one at a time:
+
+- `Apply`/`Keep`/`Revert`/timeout/`Reset`/`Save` through
+  `Application::requestDisplaySettings` and the same `ColonyIntent` dispatch the
+  Display panel uses; no renderer setter, GUI click, mocked window or second
+  settings policy exists.
+- Live pixelization, sky, diagnostic/cascade and post edits through the same
+  session values the panel writes, followed by a fresh presented frame stamped
+  with the post-edit live revision. Diagnostic changes additionally require the
+  matching C-stage inspection stamp.
+- `Display::reset_lighting_post` for the live Reset action, and ordinary
+  `iconifyWindow`/`restoreWindow` for minimize/restore. Quit uses the production
+  quit intent and requires the ordinary drain to complete.
+
+A display acknowledgement advances only when the resolved revision moved, the
+transaction is idle and the committed window/policy values match the requested
+draft. A stale or mismatched acknowledgement never completes a case or starts
+another action, and an outstanding native transaction never overlaps a new
+trial. Keep/Revert timeout starts only after that matching acknowledgement; the
+timeout case waits for the real production confirmation timer and its revert.
+
+The ordered case groups are baseline load/present, windowed 1280x720 / 1919x1079
+/ 1921x1081 / 640x481 plus the platform minimum and three odd/even pairs,
+pixelization P1/2/3/8 (including 1919/1921 at P2), exposure/bloom boundaries,
+sky -1/0/12/23 and every diagnostic/cascade level, pacing/cap/VSync/throttle,
+fullscreen at discovered monitor modes plus primary resolution/refresh
+boundaries, disruptive Apply+Keep / Apply+Revert / Apply+timeout / Reset / Save /
+isolated resolver reload / invalid-draft rejection, and two real minimize/restore
+cycles followed by quit. Actual monitor modes are discovered; requested logical
+window sizes are recorded separately from observed framebuffer extents and all
+pixelization R/S/B checks use the framebuffer.
+
+Deadlines are 10 s per transition after readiness, the existing confirmation
+duration plus 10 s for rollback, 180 s for initial world admission and 900 s for
+the whole run. A miss preserves state and reports `incomplete`; capability
+absence is `unsupported`; contradictory advertised support or a failed operation
+is `failed`. Overall `passed` requires every applicable case and clean shutdown.
+`display-exercise.json` (schema version 1) is written incrementally and
+atomically with identity, capabilities, ordered cases, acknowledgements,
+extents, revisions, timestamps, images and cleanup; `display-exercise.log` and
+PNG captures are retained beside it. Exit codes are 0=passed, 1=failed,
+2=invalid invocation, 3=incomplete-or-unsupported. Screenshots support owner
+inspection; they are not automated visual approval.

@@ -33,6 +33,7 @@ target_sources(app.game
             colony/WorldJob.cppm
             Game.Config.cppm
             Game.Display.cppm
+            Game.DisplayExercise.cppm
     PRIVATE
         ui/Game.UI.cpp
         ui/Game.UI.Model.cpp
@@ -78,6 +79,7 @@ target_sources(app.game
         colony/WorldJob.cpp
         Game.Config.cpp
         Game.Display.cpp
+        Game.DisplayExercise.cpp
     )
 
 setup_ppr_project(app.game
@@ -136,6 +138,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 Game.WorldgenWorkshop.cppm
                 Game.Config.cppm
                 Game.Display.cppm
+                Game.DisplayExercise.cppm
                 Game.Tests.cppm
                 colony/Content.cppm
                 colony/Content.Authoring.cppm
@@ -164,6 +167,8 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             ui/ColonyPanel.cpp
             Game.Config.cpp
             Game.Display.cpp
+            Game.DisplayExercise.cpp
+            Game.DisplayExercise.Tests.cpp
             Game.WorldgenWorkshop.cpp
             Game.Tests.cpp
             Game.SessionService.cpp

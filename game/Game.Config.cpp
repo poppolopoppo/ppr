@@ -76,6 +76,7 @@ namespace pP::game {
                 {"validate-worldgen", "validate-worldgen"},
                 {"worldgen-preview", "worldgen-preview"},
                 {"worldgen-workshop", "worldgen-workshop"},
+                {"exercise-display", "exercise-display"},
             };
             Array<std::string> seen{};
 
@@ -501,6 +502,14 @@ namespace pP::game {
                                   "Generate diagnostic exports without gameplay; requires an output directory."));
         appendOption(
             schema.m_options,
+            selectorOption(
+                "exercise-display", "exercise-display",
+                "Exercise retained display controls through production acknowledgements; requires an output directory."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.exercise_output", "exercise-output", "Fresh artifact directory for --exercise-display."));
+        appendOption(
+            schema.m_options,
             switchOption(
                 "game.worldgen_acceptance", "worldgen-acceptance",
                 "Exercise camera, seam edit, previews and two New Games; report and exit, fail if incomplete."));
@@ -588,6 +597,10 @@ namespace pP::game {
                 "  --auto-exit/--exit-after and --no-focus-throttle\n"
                 "  select profiling defaults (display.throttle_unfocused = false). An explicit\n"
                 "  display setting overrides the profiling default.\n"
+                "\nDisplay exercise:\n"
+                "  --exercise-display --exercise-output=DIR runs the retained display controls through\n"
+                "  production actions and real acknowledgements in an isolated persistence directory.\n"
+                "  Exit 0=passed, 1=failed, 2=invalid invocation, 3=incomplete-or-unsupported.\n"
                 "\nPicture settings file:\n"
                 "  The Display window's Save writes the acknowledged picture settings to\n"
                 "  user-settings.toml next to the executable (hand-edited files are never\n"
@@ -758,6 +771,15 @@ namespace pP::game {
             diagnostics.add(
                 "invocation", "game.command",
                 "--worldgen-preview requires an output; GPU capture requires one of these selectors", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        if ((settings.m_command == EGameCommand::exercise_display and not settings.m_exercise_output) or
+            (settings.m_command != EGameCommand::exercise_display and settings.m_exercise_output)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.command",
+                "--exercise-display requires --exercise-output=DIR and those selectors are mutually exclusive", error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 

@@ -10,6 +10,7 @@
 - `Game.Application.cppm/.cpp` (`game.application`): resolves invocation through `Game.Config.*`, loads the display overlay through `Game.Display.*`, applies explicitly supplied startup validation settings before GPU work, and dispatches the selected command. Help is generated from schema declarations; invalid usage exits 2. Smoke returns its error value. Interactive `app.run()` errors are printed and returned; unexpected exceptions escaping that boundary invoke `hal::fatalExit`.
 - `Game.Config.cppm/.cpp` (`game.config`): typed game command/profile/exit schema, combined CLI and configuration resolution. Distinct command selectors conflict; they are not gameplay toggles. Use `--help` and declarations for the current option set.
 - `Game.Display.cppm/.cpp` (`game.display`): draft validation/provenance, persistable overlay merge/encode/atomic write, overlay load, and injected-time Keep/Revert state. Overlay precedence is base < overlay < environment < CLI. The panel produces intents; application-level generation/ack checks govern native/surface changes. See [DisplayControls](../lib/engine/app/DisplayControls.md).
+- `Game.DisplayExercise.cppm/.cpp` (`game.display_exercise`): permanent real-window display exercise. The injected-time driver emits typed panel/window intents (Apply/Keep/Revert/timeout/Reset/Save, live picture edits, minimize/restore, quit), waits for matching acknowledgements and fresh presented frames, enforces the transition/load/run deadlines, and writes incremental atomic schema-1 JSON, logs and captures. The host dispatches through the same intent handler as the panel and resolves an isolated overlay in the exercise output directory. See [DisplayControls](../lib/engine/app/DisplayControls.md#automated-display-exercise).
 - `Game.WorldgenWorkshop.cppm/.cpp` (`game.application:worldgen_workshop`): authoring session, immutable worker requests, bounded cancellation, preview/export and owned `AuthoredGameSource` preparation. Standalone Start validates the current owned snapshot through the existing WorldJob; publication commits its source for later New Game. Return restores the retained game while preserving the authoring session. See [Workspace usage](../docs/worldgen-content.md#in-game-worldgen-workshop).
 
 ## Interactive flow
@@ -82,7 +83,7 @@ See [colony/codemap.md](colony/codemap.md) for the `game.colony.*` modules. Sim 
 
 ## Build and tests
 
-`CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
+`CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.display_exercise`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
 
 The game build registers `game.tests`, the split `game.tests.worldgen_preview`
 entry, the bounded `game.tests.lighting_lab` entry, three independently locked GPU lifecycle entries
@@ -117,6 +118,24 @@ measurement limits. `--worldgen-report` mirrors render-owner observations throug
 frame results; neither option reads worker-owned pass state from main.
 
 The world-work modal displays one stage-local progress bar: measured raster/staged chunk counts when available, otherwise an explicitly indeterminate animation driven by the injected application clock. It does not infer overall completion or number preview/cleanup states as generation steps.
+
+## Display exercise
+
+`app.game --exercise-display --exercise-output=DIR` runs the permanent
+real-window exercise on the ordinary Lighting Lab at 1024 with an isolated
+picture-settings overlay inside `DIR`. The driver dispatches only production
+panel/window intents and advances on real acknowledgements, observed geometry,
+genuine focus/minimize events and injected deadlines; it never clicks the GUI,
+mocks the window, calls a renderer setter or applies a second settings policy.
+It records logical requests separately from observed framebuffer extents and
+covers the nine ordered groups in [DisplayControls](../lib/engine/app/DisplayControls.md#automated-display-exercise).
+
+`display-exercise.json` is written incrementally and atomically with ordered
+case/ack/extent/revision/image/cleanup evidence; PNG captures and
+`display-exercise.log` sit beside it. Exit 0=passed, 1=failed, 2=invalid
+invocation, 3=incomplete-or-unsupported; an unsupported capability or an
+unobserved required event is never reported as a pass. `Game.DisplayExercise.Tests.cpp`
+drives the injected-time state machine without a window.
 
 ## Authored Lighting Lab
 

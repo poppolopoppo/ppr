@@ -35,6 +35,7 @@ import game.colony.pathfinding;
 import game.colony.smoke;
 import game.config;
 import game.display;
+import game.display_exercise;
 import game.ui;
 import game.ui.model;
 import game.colony.agents;
@@ -533,10 +534,12 @@ namespace demo {
         BuildPreview m_build_preview{};
         bool m_show_highlight{true};
         IWindowService::WindowFocusedCallback::Handle m_focus_handle{};
+        IWindowService::WindowIconifiedCallback::Handle m_iconified_handle{};
         // Lifetime rule: the broadcast stores a non-owning function_ref
         // view, so this member owns the callable and the handle is reset
         // in shutdown() before member destruction.
         std23::move_only_function<std::error_code(const Window &, bool)> m_on_window_focused{};
+        std23::move_only_function<std::error_code(const Window &, bool)> m_on_window_iconified{};
 
         // Slice 3 UI session state: one owned block the panel reads and the
         // intent dispatch writes, the pointer hover shared by the preview
@@ -569,6 +572,56 @@ namespace demo {
         std::error_code m_display_capabilities_error{};
         WindowDisplayGeometry m_display_geometry{};
         bool m_display_has_geometry{false};
+        // Isolated picture-settings location selected at the executable
+        // boundary. The exercise writes its own overlay here; ordinary runs
+        // keep the executable-adjacent file. Empty falls back to resolution.
+        std::filesystem::path m_display_overlay_path{};
+
+        // ------------------------------------------------------------------
+        // permanent display exercise
+        // ------------------------------------------------------------------
+        std::optional<game::DisplayExercise> m_display_exercise{};
+        std::filesystem::path m_exercise_output{};
+        u64 m_exercise_live_revision{1u};
+        Array<std::pair<u64, u64>> m_exercise_frame_revisions{};
+        u64 m_exercise_presented_frame{};
+        u64 m_exercise_presented_generation{};
+        u64 m_exercise_presented_live_revision{};
+        GridWorldIdentity m_exercise_presented_world{};
+        bool m_exercise_presented_inspection{};
+        LightingInspectionSettings m_exercise_presented_inspection_settings{};
+        u64 m_exercise_focus_losses{};
+        u64 m_exercise_iconify_events{};
+        bool m_exercise_iconified{};
+        bool m_exercise_action_submitted{};
+        std::error_code m_exercise_action_error{};
+        std::string m_exercise_action_message{};
+        bool m_exercise_capture_armed{};
+        bool m_exercise_capture_complete{};
+        u64 m_exercise_capture_sequence{};
+        std::error_code m_exercise_capture_error{};
+        std::string m_exercise_capture_path{};
+        std::filesystem::path m_exercise_capture_target{};
+        bool m_exercise_save_complete{};
+        std::error_code m_exercise_save_error{};
+        bool m_exercise_reload_complete{};
+        std::error_code m_exercise_reload_error{};
+        DisplaySettings m_exercise_reload_display{};
+        game::WorldLightDisplaySettings m_exercise_reload_world_light{};
+        game::PixelDisplaySettings m_exercise_reload_pixel{};
+        game::PostDisplaySettings m_exercise_reload_post{};
+        game::WorldLightDisplaySettings m_exercise_startup_world_light{};
+        game::PixelDisplaySettings m_exercise_startup_pixel{};
+        game::PostDisplaySettings m_exercise_startup_post{};
+        Array<std::string> m_exercise_cli_assignments{};
+        bool m_exercise_capabilities_valid{};
+        DisplayCapabilities m_exercise_capabilities{};
+        std::error_code m_exercise_capabilities_error{};
+        bool m_exercise_identity_queried{};
+        std::string m_exercise_backend{};
+        std::string m_exercise_gpu{};
+        std::string m_exercise_executable_path{};
+        u64 m_exercise_executable_bytes{};
         // Slice 4 selection: the stable agent key (NEVER a row index) plus
         // scratch naming the selection on the status line. The hovered key
         // is the marker under the pointer (same pick a click runs), and the
@@ -2301,12 +2354,19 @@ namespace demo {
                 m_on_window_focused = [this](const Window &, const bool focused) noexcept -> std::error_code {
                     m_window_focused = focused;
                     if (not focused) {
+                        ++m_exercise_focus_losses;
                         cancelToolGesture_();
                         clearControlInput_();
                     }
                     return default_value_v;
                 };
                 m_focus_handle = windows->whenWindowFocused(m_on_window_focused);
+                m_on_window_iconified = [this](const Window &, const bool iconified) noexcept -> std::error_code {
+                    m_exercise_iconified = iconified;
+                    ++m_exercise_iconify_events;
+                    return default_value_v;
+                };
+                m_iconified_handle = windows->whenWindowIconified(m_on_window_iconified);
             }
         }
 
@@ -2865,19 +2925,23 @@ namespace demo {
         void saveDisplayOverlay_() noexcept {
             try {
                 colony::ColonyDisplaySession &session = m_ui_state.m_display;
-                auto overlay_path = game::resolveDisplayOverlayPath();
-                if (not overlay_path) {
-                    session.m_last_error = "Picture settings NOT saved: the program folder is unavailable.";
-                    postDisplayNotice_(session.m_last_error, overlay_path.error());
-                    return;
+                std::filesystem::path overlay_path = m_display_overlay_path;
+                if (overlay_path.empty()) {
+                    auto resolved = game::resolveDisplayOverlayPath();
+                    if (not resolved) {
+                        session.m_last_error = "Picture settings NOT saved: the program folder is unavailable.";
+                        postDisplayNotice_(session.m_last_error, resolved.error());
+                        return;
+                    }
+                    overlay_path = std::move(*resolved);
                 }
                 // Persistence failure rejects this action without invalidating
                 // the live picture or stopping further game updates.
-                PPR_LOG(Demo, info, "saving display overlay", {{"path", overlay_path->string()}});
+                PPR_LOG(Demo, info, "saving display overlay", {{"path", overlay_path.string()}});
                 config::Diagnostics diagnostics{};
                 config::Document existing{};
                 {
-                    auto prior = game::readOverlayBytes(*overlay_path, diagnostics);
+                    auto prior = game::readOverlayBytes(overlay_path, diagnostics);
                     if (not prior) {
                         session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
                                                "refusing to overwrite it.";
@@ -2885,7 +2949,7 @@ namespace demo {
                         return;
                     }
                     if (prior->has_value()) {
-                        auto decoded = config::decode(**prior, overlay_path->string(), diagnostics);
+                        auto decoded = config::decode(**prior, overlay_path.string(), diagnostics);
                         if (not decoded) {
                             session.m_last_error = "Picture settings NOT saved: the existing file is unreadable, "
                                                    "refusing to overwrite it.";
@@ -2915,7 +2979,7 @@ namespace demo {
                     postDisplayNotice_(session.m_last_error, bytes.error());
                     return;
                 }
-                if (const std::error_code error = game::writeFileAtomically(*overlay_path, *bytes)) {
+                if (const std::error_code error = game::writeFileAtomically(overlay_path, *bytes)) {
                     session.m_last_error = "Picture settings NOT saved: " + error.message() + ".";
                     postDisplayNotice_(session.m_last_error, error);
                     return;
@@ -3095,6 +3159,313 @@ namespace demo {
             m_ui_state.m_display.m_watch_ack = false;
             m_ui_state.m_display.m_watch_revert = false;
             m_ui_state.m_display_open = false;
+        }
+
+        // ------------------------------------------------------------------
+        // permanent display exercise host
+        // ------------------------------------------------------------------
+
+        /// One production-action turn: copy a value-only observation, advance
+        /// the driver, then dispatch the returned typed intent through the same
+        /// handler the panel uses. No callback borrowing the observation leaves
+        /// this call.
+        [[nodiscard]] std::error_code advanceDisplayExercise_(const TimePoint now) {
+            if (not m_display_exercise) {
+                return {};
+            }
+
+            refreshExerciseIdentity_();
+            const game::DisplayExerciseObservation observation = buildDisplayExerciseObservation_();
+            auto action = m_display_exercise->advance(observation, now);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, action);
+            if (action and action->has_value()) {
+                executeDisplayExerciseAction_(**action);
+            }
+            return {};
+        }
+
+        [[nodiscard]] game::DisplayExerciseObservation buildDisplayExerciseObservation_() {
+            game::DisplayExerciseObservation observation{};
+
+            if (m_display_exercise->needsCapabilities()) {
+                if (auto capabilities = displayCapabilities()) {
+                    m_exercise_capabilities = std::move(*capabilities);
+                    m_exercise_capabilities_valid = true;
+                    m_exercise_capabilities_error = {};
+                } else {
+                    m_exercise_capabilities = {};
+                    m_exercise_capabilities_valid = false;
+                    m_exercise_capabilities_error = capabilities.error();
+                }
+            }
+            observation.m_capabilities = m_exercise_capabilities;
+            observation.m_capabilities_available = m_exercise_capabilities_valid;
+            observation.m_capabilities_error = m_exercise_capabilities_error;
+
+            observation.m_committed = displayController().committed();
+            observation.m_settings_revision = displayController().resolved().m_revision;
+            observation.m_surface_generation = displayController().applied().m_generation;
+            observation.m_transaction = displayController().transactionState();
+            observation.m_transaction_pending = displayController().pending().has_value();
+            observation.m_ack_settled = not m_ui_state.m_display.m_watch_ack;
+            observation.m_transaction_error = displayController().transactionError();
+            observation.m_confirm_armed = m_ui_state.m_display.m_confirm.m_armed;
+            observation.m_confirm_seconds_left = m_ui_state.m_display.m_confirm.m_seconds_left;
+
+            observation.m_action_submitted = m_exercise_action_submitted;
+            observation.m_action_error = m_exercise_action_error;
+            observation.m_action_message = m_exercise_action_message;
+            if (not observation.m_action_error and m_ui_state.m_notice.m_error) {
+                observation.m_action_error = m_ui_state.m_notice.m_error;
+                observation.m_action_message = m_ui_state.m_display.m_last_error.empty()
+                                                   ? m_ui_state.m_notice.m_text
+                                                   : m_ui_state.m_display.m_last_error;
+            }
+
+            if (auto geometry = displayWindowGeometry()) {
+                observation.m_logical_extent = geometry->m_size;
+                observation.m_framebuffer_extent = geometry->m_framebuffer_size;
+                observation.m_fullscreen = geometry->m_fullscreen;
+                observation.m_monitor = std::move(geometry->m_monitor);
+                observation.m_refresh_hz = geometry->m_refresh_hz;
+            } else if (not observation.m_action_error) {
+                observation.m_action_error = geometry.error();
+                observation.m_action_message = "window geometry unavailable";
+            }
+
+            observation.m_focused = m_window_focused;
+            observation.m_iconified = m_exercise_iconified;
+            observation.m_focus_losses = m_exercise_focus_losses;
+            observation.m_iconify_events = m_exercise_iconify_events;
+            const DisplayView display_view = displayView();
+            observation.m_background_priority = display_view.m_background_priority;
+            observation.m_throttle_active = display_view.m_throttle_active;
+
+            observation.m_world_ready = m_driver and m_driver_ready and not m_world_modal and m_world_published;
+            observation.m_world_presented = m_world_frame_presented;
+            observation.m_presented_frame = m_exercise_presented_frame;
+            observation.m_presented_generation = m_exercise_presented_generation;
+            observation.m_presented_world = m_exercise_presented_world;
+            observation.m_world_identity = GridWorldIdentity{
+                .m_job_id = 0u,
+                .m_world_generation = m_driver ? m_driver->worldGeneration() : 0u,
+                .m_content_fingerprint = m_candidate_fingerprint};
+            observation.m_presented_inspection = m_exercise_presented_inspection;
+            observation.m_presented_inspection_settings = m_exercise_presented_inspection_settings;
+            observation.m_live_revision = m_exercise_live_revision;
+            observation.m_presented_live_revision = m_exercise_presented_live_revision;
+
+            observation.m_live_world_light = m_ui_state.m_world_light;
+            observation.m_live_pixel = game::PixelDisplaySettings{m_ui_state.m_pixel_scale};
+            observation.m_live_post = m_ui_state.m_post;
+
+            observation.m_capture_complete = m_exercise_capture_complete;
+            observation.m_capture_error = m_exercise_capture_error;
+            observation.m_capture_path = m_exercise_capture_path;
+            observation.m_save_complete = m_exercise_save_complete;
+            observation.m_save_error = m_exercise_save_error;
+            observation.m_reload_complete = m_exercise_reload_complete;
+            observation.m_reload_error = m_exercise_reload_error;
+            observation.m_reload_display = m_exercise_reload_display;
+            observation.m_reload_world_light = m_exercise_reload_world_light;
+            observation.m_reload_pixel = m_exercise_reload_pixel;
+            observation.m_reload_post = m_exercise_reload_post;
+
+            observation.m_close_requested = m_close_requested.load(std::memory_order_acquire);
+            observation.m_shutdown_error = m_input_error;
+
+            observation.m_startup_display = m_display_baseline.m_value;
+            observation.m_startup_world_light = m_exercise_startup_world_light;
+            observation.m_startup_pixel = m_exercise_startup_pixel;
+            observation.m_startup_post = m_exercise_startup_post;
+            observation.m_cli_assignments = m_exercise_cli_assignments;
+
+            observation.m_backend = m_exercise_backend;
+            observation.m_gpu = m_exercise_gpu;
+            observation.m_executable_path = m_exercise_executable_path;
+            observation.m_executable_bytes = m_exercise_executable_bytes;
+            return observation;
+        }
+
+        void executeDisplayExerciseAction_(const game::DisplayExerciseAction &action) {
+            m_exercise_action_submitted = false;
+            m_exercise_action_error = {};
+            m_exercise_action_message.clear();
+            m_ui_state.m_notice = {};
+            m_ui_state.m_display.m_last_error.clear();
+
+            // The panel's Apply/Reset/Revert use the same once-a-second
+            // capability/geometry telemetry cache. With the Display window
+            // closed nothing refreshes it, so refresh through that exact
+            // production path before a transactional dispatch rather than
+            // substituting an exercise-only policy or private setter.
+            if (action.m_kind == game::EDisplayExerciseActionKind::apply_display or
+                action.m_kind == game::EDisplayExerciseActionKind::invalid_draft or
+                action.m_kind == game::EDisplayExerciseActionKind::revert_display or
+                action.m_kind == game::EDisplayExerciseActionKind::reset_display) {
+                std::ignore = refreshDisplayMonitors_();
+            }
+
+            const auto captureResult = [this]() {
+                m_exercise_action_submitted = m_ui_state.m_display.m_watch_ack;
+                if (m_ui_state.m_notice.m_error) {
+                    m_exercise_action_error = m_ui_state.m_notice.m_error;
+                    m_exercise_action_message = m_ui_state.m_display.m_last_error.empty()
+                                                    ? m_ui_state.m_notice.m_text
+                                                    : m_ui_state.m_display.m_last_error;
+                }
+            };
+
+            switch (action.m_kind) {
+                case game::EDisplayExerciseActionKind::apply_display:
+                case game::EDisplayExerciseActionKind::invalid_draft:
+                    m_ui_state.m_display.m_draft = action.m_draft;
+                    m_ui_state.m_display.m_synced = true;
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::display_apply, false});
+                    captureResult();
+                    break;
+                case game::EDisplayExerciseActionKind::keep_display:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::display_keep, false});
+                    break;
+                case game::EDisplayExerciseActionKind::revert_display:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::display_revert, false});
+                    captureResult();
+                    break;
+                case game::EDisplayExerciseActionKind::reset_display:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::display_reset_overrides, false});
+                    captureResult();
+                    break;
+                case game::EDisplayExerciseActionKind::save_display:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::display_save, false});
+                    m_exercise_save_complete = true;
+                    m_exercise_save_error = m_ui_state.m_notice.m_error;
+                    break;
+                case game::EDisplayExerciseActionKind::live_picture:
+                    m_ui_state.m_world_light = action.m_world_light;
+                    m_ui_state.m_pixel_scale = action.m_pixel.m_pixel_scale;
+                    m_ui_state.m_post = action.m_post;
+                    ++m_exercise_live_revision;
+                    break;
+                case game::EDisplayExerciseActionKind::reset_live_picture:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::reset_lighting_post, false});
+                    ++m_exercise_live_revision;
+                    break;
+                case game::EDisplayExerciseActionKind::restore_live_baseline:
+                    m_ui_state.m_world_light = m_exercise_startup_world_light;
+                    m_ui_state.m_pixel_scale = m_exercise_startup_pixel.m_pixel_scale;
+                    m_ui_state.m_post = m_exercise_startup_post;
+                    ++m_exercise_live_revision;
+                    break;
+                case game::EDisplayExerciseActionKind::minimize_window:
+                    if (const safe_ptr<IWindowService> windows = getServices().tryGet<IWindowService>();
+                        windows.isValid()) {
+                        const SharedWindow &main = windows->getMainWindow();
+                        if (main.isValid()) {
+                            windows->iconifyWindow(*main);
+                        }
+                    }
+                    break;
+                case game::EDisplayExerciseActionKind::restore_window:
+                    if (const safe_ptr<IWindowService> windows = getServices().tryGet<IWindowService>();
+                        windows.isValid()) {
+                        const SharedWindow &main = windows->getMainWindow();
+                        if (main.isValid()) {
+                            windows->restoreWindow(*main);
+                            windows->focusWindow(*main);
+                        }
+                    }
+                    break;
+                case game::EDisplayExerciseActionKind::reload_overlay: reloadExerciseOverlay_(); break;
+                case game::EDisplayExerciseActionKind::capture_image: armExerciseCapture_(action.m_image); break;
+                case game::EDisplayExerciseActionKind::wait_suspension: break;
+                case game::EDisplayExerciseActionKind::quit:
+                    applyIntent_(colony::ColonyIntent{0u, colony::EColonyIntent::quit, false});
+                    break;
+            }
+        }
+
+        void armExerciseCapture_(const std::string_view image) {
+            m_exercise_capture_complete = false;
+            m_exercise_capture_error = {};
+            m_exercise_capture_path.clear();
+            m_exercise_capture_target = m_exercise_output / std::string{image};
+            if (const std::error_code error = requestFrameCapture()) {
+                m_exercise_capture_complete = true;
+                m_exercise_capture_error = error;
+                return;
+            }
+            m_exercise_capture_sequence = currentFrameCaptureSequence();
+            m_exercise_capture_armed = true;
+        }
+
+        void settleExerciseCapture_(const RenderFrameResult &result) {
+            if (not m_exercise_capture_armed or
+                not result.m_surface_capture_attempted or
+                result.m_surface_capture_sequence != m_exercise_capture_sequence) {
+                return;
+            }
+            m_exercise_capture_armed = false;
+
+            std::error_code error = result.m_surface_capture_error;
+            if (not error and
+                (not result.m_presented or result.m_dropped or result.m_error or not result.m_surface_pixels)) {
+                error = std::make_error_code(std::errc::state_not_recoverable);
+            }
+            if (not error) {
+                error = writeSurfacePng(*result.m_surface_pixels, m_exercise_capture_target);
+            }
+            m_exercise_capture_error = error;
+            m_exercise_capture_complete = true;
+            if (not error) {
+                m_exercise_capture_path = m_exercise_capture_target.string();
+            }
+            // Only a clean completed capture re-arms the base one-shot; a
+            // failed capture leaves later attempts reportable as failures
+            // rather than fabricating an image.
+            if (not error) {
+                const std::error_code rearm = rearmFrameCapture();
+                if (rearm) {
+                    m_exercise_capture_error = rearm;
+                }
+            }
+        }
+
+        void reloadExerciseOverlay_() {
+            m_exercise_reload_complete = true;
+            m_exercise_reload_error = {};
+            if (m_display_overlay_path.empty()) {
+                m_exercise_reload_error = std::make_error_code(std::errc::no_such_file_or_directory);
+                return;
+            }
+
+            config::Diagnostics diagnostics{};
+            const char *reload_argv[]{"ppr"};
+            auto invocation = game::resolveGameInvocationWithOverlay(
+                1, const_cast<char **>(reload_argv), m_display_overlay_path, diagnostics);
+            if (not invocation) {
+                m_exercise_reload_error = std::make_error_code(std::errc::invalid_argument);
+                return;
+            }
+            m_exercise_reload_display = invocation->m_display.m_value;
+            m_exercise_reload_world_light = invocation->m_world_light.m_value;
+            m_exercise_reload_pixel = invocation->m_pixel.m_value;
+            m_exercise_reload_post = invocation->m_post.m_value;
+        }
+
+        void refreshExerciseIdentity_() {
+            if (not m_display_exercise or m_exercise_identity_queried) {
+                return;
+            }
+            m_exercise_identity_queried = true;
+            if (const safe_ptr<IRhiService> rhi = getServices().tryGet<IRhiService>(); rhi.isValid()) {
+                const rhi::DeviceInfo &info = rhi->getDevice().getInfo();
+                if (info.apiName != nullptr) {
+                    m_exercise_backend = info.apiName;
+                }
+                if (info.adapterName != nullptr) {
+                    m_exercise_gpu = info.adapterName;
+                }
+            }
         }
 
         /// Tool selection keeps the dig invariant (armed == tool == dig).
@@ -3901,6 +4272,79 @@ namespace demo {
             m_ui_state.m_world_light = world_light;
             m_ui_state.m_pixel_scale = pixel.m_pixel_scale;
             m_ui_state.m_post = post;
+        }
+
+        /// Isolated persistence location selected at the executable boundary.
+        void setDisplayOverlayPath(std::filesystem::path path) {
+            m_display_overlay_path = std::move(path);
+        }
+
+        /// Startup live values the exercise restores between groups and
+        /// compares against its isolated overlay reload.
+        void noteDisplayExerciseStartup(
+            const game::WorldLightDisplaySettings &world_light, const game::PixelDisplaySettings &pixel,
+            const game::PostDisplaySettings &post) {
+            m_exercise_startup_world_light = world_light;
+            m_exercise_startup_pixel = pixel;
+            m_exercise_startup_post = post;
+        }
+
+        /// Starts the permanent exercise driver. Must run before initialize()/run():
+        /// it enables surface readback and writes the initial atomic report.
+        [[nodiscard]] std::error_code setDisplayExercise(std::filesystem::path output) {
+            PPR_RETURN_ERROR_ON_FAIL(Demo, enableSurfaceReadbackAtStartup());
+            m_exercise_output = std::move(output);
+            game::DisplayExercise exercise{};
+            if (const std::error_code error = exercise.begin(m_exercise_output, ITimerClock::steady().now())) {
+                return error;
+            }
+            m_display_exercise.emplace(std::move(exercise));
+
+            // Binary identity and explicit CLI display assignments for the
+            // report. Origins come from the resolved startup baseline.
+            if (const auto executable = hal::process::currentExecutablePath(); not executable.empty()) {
+                m_exercise_executable_path = executable.string();
+                std::error_code size_error{};
+                const auto bytes = std::filesystem::file_size(executable, size_error);
+                m_exercise_executable_bytes = size_error ? 0u : static_cast<u64>(bytes);
+            }
+            for (const config::PropertyOrigin &origin: m_display_baseline.m_origins) {
+                if (origin.m_source == config::ESource::cli) {
+                    m_exercise_cli_assignments.push_back(origin.m_name);
+                }
+            }
+            return {};
+        }
+
+        /// Persists the final report and maps the precise state to the
+        /// documented exit codes (0 passed, 1 failed, 3 incomplete/unsupported).
+        [[nodiscard]] int finishDisplayExercise(const std::error_code cleanup_error) {
+            if (not m_display_exercise) {
+                return 1;
+            }
+            const std::error_code result = m_display_exercise->finish(cleanup_error);
+            const game::EDisplayExerciseStatus status = m_display_exercise->status();
+            std::size_t passed = 0u;
+            std::size_t unsupported = 0u;
+            std::size_t incomplete = 0u;
+            std::size_t failed = 0u;
+            for (const game::DisplayExerciseCase &entry: m_display_exercise->cases()) {
+                switch (entry.m_status) {
+                    case game::EDisplayExerciseStatus::passed: ++passed; break;
+                    case game::EDisplayExerciseStatus::unsupported: ++unsupported; break;
+                    case game::EDisplayExerciseStatus::incomplete:
+                    case game::EDisplayExerciseStatus::pending: ++incomplete; break;
+                    case game::EDisplayExerciseStatus::failed: ++failed; break;
+                }
+            }
+            std::println(
+                "[display-exercise] status={} passed={} failed={} unsupported={} incomplete={} report={}",
+                game::displayExerciseStatusName(status), passed, failed, unsupported, incomplete,
+                (m_exercise_output / "display-exercise.json").string());
+            if (result and cleanup_error) {
+                std::cerr << "[display-exercise] cleanup: " << cleanup_error.message() << '\n';
+            }
+            return game::displayExerciseExitCode(status);
         }
 
         [[nodiscard]] colony::WorldgenPreviewSpec workshopSpec_() const {
@@ -5902,6 +6346,24 @@ namespace demo {
         }
 
         void settleGameFrame_(const RenderFrameResult &result) {
+            if (m_display_exercise) {
+                settleExerciseCapture_(result);
+                if (result.m_presented and not result.m_error and not result.m_dropped) {
+                    m_exercise_presented_frame = result.m_frame_id;
+                    m_exercise_presented_generation = result.m_surface_generation;
+                    m_exercise_presented_world = result.m_presented_grid;
+                    m_exercise_presented_inspection = result.m_inspection.has_value();
+                    if (result.m_inspection) {
+                        m_exercise_presented_inspection_settings = result.m_inspection->m_settings;
+                    }
+                    for (const auto &[frame, revision]: m_exercise_frame_revisions) {
+                        if (frame == result.m_frame_id) {
+                            m_exercise_presented_live_revision = revision;
+                            break;
+                        }
+                    }
+                }
+            }
             settleCaptureFrame_(result);
             if (result.m_gpu_timing) {
                 m_performance_widget.observeGpu(result.m_gpu_timing->m_submission, result.m_gpu_timing->m_milliseconds);
@@ -6169,6 +6631,15 @@ namespace demo {
                 not m_capture_frame_complete.load(std::memory_order_acquire)) {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, armCaptureFrame_());
                 m_capture_exit_pending = true;
+            }
+
+            if (m_display_exercise) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceDisplayExercise_(ITimerClock::steady().now()));
+                m_exercise_frame_revisions.push_back({getFrameIndex(), m_exercise_live_revision});
+                if (m_exercise_frame_revisions.size() > 512u) {
+                    m_exercise_frame_revisions.erase(
+                        m_exercise_frame_revisions.begin(), m_exercise_frame_revisions.begin() + 256);
+                }
             }
 
             const auto observation_begin = m_observation_clock->now();
@@ -6520,6 +6991,7 @@ namespace demo {
             // drop the acknowledgement watch. A submitted-but-unacked change
             // settles through the lane drain in super shutdown below.
             cancelDisplaySession_();
+            m_iconified_handle.reset();
             m_focus_handle.reset();
             clearControlInput_();
             if (m_control_mapping) {
@@ -6570,26 +7042,42 @@ int runGame(const int argc, char *argv[]) try {
     const std::span<const char *const> args{argv, pP::checked_cast<std::size_t>(argc)};
 
     pP::config::Diagnostics diagnostics{};
-    // Generated picture-settings overlay: resolved through the executable
-    // folder (explicit platform boundary, no working-directory search) and
-    // loaded between the base files and the environment. A missing file
-    // means first launch and loads nothing; an undecodable file is invalid
-    // usage like a bad base file. An unavailable program folder simply
-    // skips the overlay; the Display window reports it on Save.
+    // Resolve once without an overlay to select the command; help never reads
+    // files or settings. The display exercise then reloads through an isolated
+    // overlay inside its own output directory, never the user's picture file.
+    auto base_invocation = pP::game::resolveGameInvocation(argc, argv, diagnostics);
+    if (not base_invocation) {
+        std::cerr << diagnostics.format() << '\n';
+        return pP::config::kExitInvalidUsage;
+    }
+    if (base_invocation->m_help_requested) {
+        std::println("{}", pP::game::gameHelpText());
+        return 0;
+    }
+
+    const pP::game::EGameCommand command = base_invocation->m_game.m_value.m_command;
+    const bool exercise_command = command == pP::game::EGameCommand::exercise_display;
     std::filesystem::path overlay_path{};
-    if (auto overlay = pP::game::resolveDisplayOverlayPath()) {
-        overlay_path = std::move(*overlay);
+    if (exercise_command) {
+        overlay_path = std::filesystem::path{*base_invocation->m_game.m_value.m_exercise_output} /
+                       pP::game::kDisplayOverlayFileName;
     } else {
-        std::cerr << std::format("[display] picture-settings file unavailable: {}\n", overlay.error().message());
+        // Generated picture-settings overlay: resolved through the executable
+        // folder (explicit platform boundary, no working-directory search) and
+        // loaded between the base files and the environment. A missing file
+        // means first launch and loads nothing; an undecodable file is invalid
+        // usage like a bad base file. An unavailable program folder simply
+        // skips the overlay; the Display window reports it on Save.
+        if (auto overlay = pP::game::resolveDisplayOverlayPath()) {
+            overlay_path = std::move(*overlay);
+        } else {
+            std::cerr << std::format("[display] picture-settings file unavailable: {}\n", overlay.error().message());
+        }
     }
     auto invocation = pP::game::resolveGameInvocationWithOverlay(argc, argv, overlay_path, diagnostics);
     if (not invocation) {
         std::cerr << diagnostics.format() << '\n';
         return pP::config::kExitInvalidUsage;
-    }
-    if (invocation->m_help_requested) {
-        std::println("{}", pP::game::gameHelpText());
-        return 0;
     }
 
     const pP::game::GameSettings &settings = invocation->m_game.m_value;
@@ -6625,7 +7113,14 @@ int runGame(const int argc, char *argv[]) try {
     demo::TurboLarbin app("ppr", args);
     app.noteLightingPostStartup(
         invocation->m_world_light.m_value, invocation->m_pixel.m_value, invocation->m_post.m_value);
-    if (const auto error = app.setWorldgenSettings(settings, pP::ITimerClock::steady(), diagnostics)) {
+    // The permanent exercise always runs the ordinary Lighting Lab at 1024.
+    pP::game::GameSettings run_settings = settings;
+    if (exercise_command) {
+        run_settings.m_worldgen_profile = "lighting_lab";
+        run_settings.m_map_size = 1024u;
+        run_settings.m_worldgen_seed = 42u;
+    }
+    if (const auto error = app.setWorldgenSettings(run_settings, pP::ITimerClock::steady(), diagnostics)) {
         std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
         return pP::config::kExitInvalidUsage;
     }
@@ -6639,10 +7134,19 @@ int runGame(const int argc, char *argv[]) try {
         }
     }
     app.setDisplaySettings(display);
+    app.setDisplayOverlayPath(overlay_path);
     // Startup picture baseline for "Back to startup": the lower-precedence
     // values the reset intent exposes with their provenance. Runtime edits
     // never touch it.
     app.noteDisplayStartup(invocation->m_display);
+    app.noteDisplayExerciseStartup(
+        invocation->m_world_light.m_value, invocation->m_pixel.m_value, invocation->m_post.m_value);
+    if (exercise_command) {
+        if (const auto error = app.setDisplayExercise(*settings.m_exercise_output)) {
+            std::cerr << "[display-exercise] could not start: " << error.message() << '\n';
+            return 1;
+        }
+    }
     // Report operational failures and preserve their exit status.
     try {
         const std::error_code run_error = app.run();
@@ -6650,6 +7154,9 @@ int runGame(const int argc, char *argv[]) try {
             std::cerr << std::format(
                 "[fatal] app.run: {} (category={} value={})\n", run_error.message(), run_error.category().name(),
                 run_error.value());
+        }
+        if (exercise_command) {
+            return app.finishDisplayExercise(run_error);
         }
         if (not run_error and not app.acceptanceComplete()) {
             std::cerr << "[worldgen-acceptance] INCOMPLETE: shutdown preceded sequence completion\n";

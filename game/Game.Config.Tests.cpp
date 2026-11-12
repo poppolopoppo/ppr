@@ -266,6 +266,28 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(gameHelpText().find("worldgen-preview") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (display_exercise_requires_output_and_conflicts_with_other_selectors) {
+        Diagnostics diagnostics{};
+        const auto invocation = resolveCli({"--exercise-display", "--exercise-output=artifacts"}, diagnostics);
+        PPR_TEST_ASSERT(invocation and invocation->m_game.m_value.m_command == EGameCommand::exercise_display);
+        PPR_TEST_ASSERT(invocation->m_game.m_value.m_exercise_output == "artifacts");
+        for (const auto options:
+            {std::initializer_list<const char *>{"--exercise-display"}, {"--exercise-output=artifacts"},
+                {"--smoke", "--exercise-output=artifacts"}}) {
+            Diagnostics invalid{};
+            const auto result = resolveCli(options, invalid);
+            PPR_TEST_ASSERT(not result and result.error() == make_error_code(EConfigErrc::cross_field_invalid));
+        }
+        Diagnostics conflict{};
+        const auto conflicting = resolveCli(
+            {"--exercise-display", "--exercise-output=artifacts", "--worldgen-preview", "--worldgen-output=previews"},
+            conflict);
+        PPR_TEST_ASSERT(not conflicting and conflicting.error() == make_error_code(EConfigErrc::conflicting_command));
+        Diagnostics explicit_value{};
+        PPR_TEST_ASSERT(not resolveCli({"--exercise-display=smoke"}, explicit_value));
+        PPR_TEST_ASSERT(gameHelpText().find("exercise-display") != std::string::npos);
+    };
+
     PPR_UNIT_TEST (retired_workload_commands_rejected) {
         for (const char *option:
             {"--load100", "--time-trials", "--game.command=load100", "--game.command=time-trials"}) {
@@ -873,6 +895,7 @@ namespace pP::game::tests {
             detail::compat::worldgen_pack_set_and_qualified_world_are_explicit_inputs,
             detail::compat::pack_set_roots_are_relative_owned_and_never_discovered,
             detail::compat::worldgen_preview_is_distinct_and_requires_explicit_output,
+            detail::compat::display_exercise_requires_output_and_conflicts_with_other_selectors,
             detail::compat::worldgen_acceptance_is_explicit_and_interactive_only,
             detail::compat::retired_workload_commands_rejected,
             detail::compat::repeated_same_selector_is_idempotent,

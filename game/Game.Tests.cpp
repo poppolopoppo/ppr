@@ -9,6 +9,7 @@ namespace pP::game::tests {
 
     const UnitTest &gameConfigTests() noexcept;
     const UnitTest &gameDisplayTests() noexcept;
+    const UnitTest &gameDisplayExerciseTests() noexcept;
     const UnitTest &gameContentTests() noexcept;
     const UnitTest &gameWorldJobTests() noexcept;
     const UnitTest &gameSessionServiceTests() noexcept;
@@ -35,6 +36,7 @@ namespace pP::game::tests {
         _.recurse({
             gameConfigTests(),
             gameDisplayTests(),
+            gameDisplayExerciseTests(),
             gameContentTests(),
             gameWorldJobTests(),
             gameSessionServiceTests(),

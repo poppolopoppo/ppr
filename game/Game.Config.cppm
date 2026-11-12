@@ -22,14 +22,16 @@ export namespace pP::game {
         validate_worldgen,
         worldgen_preview,
         worldgen_workshop,
+        exercise_display,
     };
 
-    inline constexpr config::EnumDomain<EGameCommand, 5u> game_command_domain{{
+    inline constexpr config::EnumDomain<EGameCommand, 6u> game_command_domain{{
         config::EnumEntry<EGameCommand>{EGameCommand::interactive, "interactive"},
         config::EnumEntry<EGameCommand>{EGameCommand::smoke, "smoke"},
         config::EnumEntry<EGameCommand>{EGameCommand::validate_worldgen, "validate-worldgen"},
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_preview, "worldgen-preview"},
         config::EnumEntry<EGameCommand>{EGameCommand::worldgen_workshop, "worldgen-workshop"},
+        config::EnumEntry<EGameCommand>{EGameCommand::exercise_display, "exercise-display"},
     }};
 
     struct MapSizeDomain {
@@ -53,6 +55,7 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_pack_set{};
         std::optional<std::string> m_worldgen_output{};
         std::optional<std::string> m_worldgen_gpu_output{};
+        std::optional<std::string> m_exercise_output{};
         std::string m_worldgen_profile{"frontier"};
         std::string m_tool_spawn_material{"water"};
         double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{100.0};
@@ -88,6 +91,12 @@ export namespace pP::game {
                     &GameSettings::m_worldgen_output,
                     Metadata{
                         "game.worldgen_output", "Headless diagnostic export directory", "World generation",
+                        EMutability::startup, ESource::all, false},
+                    PathDomain{1024u, false}),
+                field(
+                    &GameSettings::m_exercise_output,
+                    Metadata{
+                        "game.exercise_output", "Fresh artifact directory for the display exercise", "Display exercise",
                         EMutability::startup, ESource::all, false},
                     PathDomain{1024u, false}),
                 field(
