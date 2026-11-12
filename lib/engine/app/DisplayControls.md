@@ -130,3 +130,18 @@ GLFW implements both modes and optional exclusive refresh with
 `glfwSetWindowMonitor`, then queries authoritative geometry/refresh. The original
 error-reporting `setWindowMonitor` API remains compatible but is **not** the
 panel's switching API.
+
+## Retained live picture controls
+
+Pixelization (`game.pixel.scale`, P1..P8, default 3), sky hour
+(`game.world_light.sky_hour`, -1 black boundary), the lighting diagnostic
+(`game.world_light.diagnostic`, off default) and its inspection-only cascade
+atlas level (`game.world_light.cascade`, L1..L5, default 1) are live session
+values pushed to the render owner every frame. Post settings keep their existing
+`game.post.*` domains/defaults. None of these edits joins the switching draft,
+Apply, Keep or Revert; Save persists the live values and Reset restores the
+factory defaults. Sky/diagnostic/post edits ride the next rendered frame and never
+reset world lighting or temporal screen history. The diagnostic overlay is drawn
+after post-processing and before native UI; it decodes published data read-only
+with the captured camera and uses the fixed inspection display curve
+`max(RGB,0)/(1+max(RGB,0))`, not scene exposure.

@@ -705,6 +705,38 @@ namespace pP::ui {
             }
 
             {
+                beginValueRow("Diagnostic view");
+                const std::string_view current = lighting_diagnostic_domain.nameOf(lp.m_diagnostic);
+                const char *preview = current.empty() ? "?" : current.data();
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::BeginCombo("##lighting_diagnostic", preview)) {
+                    const DisplayComboScope combo_scope{};
+                    for (const auto &entry: lighting_diagnostic_domain.m_entries) {
+                        const bool selected = lp.m_diagnostic == entry.m_value;
+                        if (ImGui::Selectable(entry.m_name.data(), selected)) {
+                            lp.m_diagnostic = entry.m_value;
+                        }
+                    }
+                }
+                ImGui::SetItemTooltip(
+                    "%s\n%s", "game.world_light.diagnostic",
+                    "Inspects the published lighting data; it never selects another lighting algorithm.");
+            }
+
+            if (lp.m_diagnostic == ELightingDiagnostic::cascade) {
+                beginValueRow("Cascade atlas level");
+                int level = static_cast<int>(std::clamp(
+                    lp.m_cascade, WorldLightingPass::kInspectionCascadeMin, WorldLightingPass::kInspectionCascadeMax));
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##lighting_cascade", &level, 1, 5)) {
+                    lp.m_cascade = static_cast<u32>(level);
+                }
+                ImGui::SetItemTooltip(
+                    "%s\n%s", "game.world_light.cascade",
+                    "Inspection-only L1..L5 atlas selection; the active cascade count is unchanged.");
+            }
+
+            {
                 beginValueRow("Auto exposure");
                 ImGui::Checkbox("##post_auto_exposure", &lp.m_auto_exposure);
                 ImGui::SetItemTooltip("Adapt exposure from a scene luminance histogram.");
@@ -767,12 +799,38 @@ namespace pP::ui {
             ImGui::EndTable();
         }
         {
+            switch (state.m_lighting_post.m_diagnostic) {
+                case ELightingDiagnostic::off:
+                    noteText("Inspection overlays are off; presentation shows the ordinary scene and post treatment.");
+                    break;
+                case ELightingDiagnostic::probes:
+                    noteText(
+                        "Fine CH angular mean with the two-cell fine-probe lattice. Radiance uses the inspection "
+                        "mapping max(RGB,0)/(1+max(RGB,0)), not scene exposure.");
+                    break;
+                case ELightingDiagnostic::source:
+                    noteText(
+                        "Cached outgoing RGB per native cell. Radiance uses the inspection mapping "
+                        "max(RGB,0)/(1+max(RGB,0)), not scene exposure.");
+                    break;
+                case ELightingDiagnostic::occupancy:
+                    noteText("Empty cells black; opaque cells white; receive-only cells cyan.");
+                    break;
+                case ELightingDiagnostic::jump:
+                    noteText("Jump class colors: 0 black, 1 red, 2 orange, 4 yellow, 8 green, 16 blue, 32 magenta.");
+                    break;
+                case ELightingDiagnostic::cascade:
+                    noteText(
+                        "Cascade atlas (left: radiance through the inspection curve; right: transmittance). "
+                        "Atlas x/y are each probe's per-direction sectors; the selected level is inspection-only.");
+                    break;
+            }
             if (ImGui::Button("Reset lighting & post")) {
                 intent = EDisplayWidgetAction::reset_lighting_post;
             }
             noteText(
-                "Post changes apply immediately. The sky hour takes effect on the next world. Neither joins Apply; "
-                "Save persists the current values.");
+                "Post changes apply immediately. Sky and diagnostic changes apply to the next rendered frame. "
+                "Neither joins Apply; Save persists the current values.");
         }
 
         ImGui::SeparatorText("Requested");

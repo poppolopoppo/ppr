@@ -12,6 +12,7 @@ import :renderer.post_process_pass;
 import :renderer.presentation;
 import :renderer.reconstruction_pass;
 import :renderer.triangle_pass;
+import :renderer.world_lighting_pass;
 import :service.client;
 import :service.input;
 import :ui.imgui;
@@ -101,6 +102,11 @@ export namespace pP {
         // frame request carries a valid resolution control. CPU-only: no GPU
         // work and no frame drain; the next submit picks the stored values up.
         void setPostProcessSettings(const PostProcessSettings &settings, u32 pixel_scale) noexcept;
+
+        // Retained inspection selection and sky hour. CPU-only policy set like
+        // setPostProcessSettings; invalid diagnostics/cascade levels and sky
+        // hours are rejected by the frame request before backend work.
+        void setLightingInspectionSettings(const LightingInspectionSettings &settings, i32 sky_hour) noexcept;
 
         // Post-initialize only. Rebuilds the camera input mapping before
         // releasing the previous controller; the editor keeps camera ownership.
@@ -307,6 +313,8 @@ export namespace pP {
         std::unique_ptr<ReconstructionPass> m_reconstruction{};
         PostProcessSettings m_post_settings{};
         u32 m_pixel_scale{3u};
+        LightingInspectionSettings m_inspection{};
+        i32 m_sky_hour{-1};
         std::array<SceneDepthSlot, kFrameRingSlots> m_scene_depths{};
         rhi::ComPtr<rhi::ITextureView> m_scene_color_view{};
         rhi::ComPtr<rhi::ITextureView> m_post_output_view{};

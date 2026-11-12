@@ -70,6 +70,15 @@ quarter-probe schedule, probe geometry, derived trace directions and interval
 atlas addressing are shared with fine reconstruction through
 `world_lighting_schedule.slang` (include-only).
 
+`world_lighting_inspect.slang` is the retained C-stage inspection overlay
+(vertex `vertexInspect`, fragment `fragmentInspect`). It reconstructs the world
+plane from the captured inverse view-projection and decodes only published data:
+fine-CH angular mean with the two-cell probe lattice, cached source RGB,
+occupancy classification, the stored jump classes, or the selected L1..L5
+interval atlas (radiance left, transmittance right). Radiance uses the fixed
+`max(RGB,0)/(1+max(RGB,0))` inspection mapping; categorical colors are literal.
+It writes no state and is drawn after post-presentation and before native UI.
+
 `world_lighting_projection.slang` is the `WorldLightingPass` categorical
 projection: `clearWinners`, `reduceKeys`, `reduceRows` and `resolveCells` share
 one native-cell coordinate/key helper over the 1024-square domain. It reads the

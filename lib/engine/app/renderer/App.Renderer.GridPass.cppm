@@ -438,6 +438,12 @@ export namespace pP {
             const PreRenderContext &context, const WorldLightingFrame &frame);
         [[nodiscard]] std::error_code finalizeWorldLighting(const PreRenderContext &context);
         [[nodiscard]] std::error_code bindWorldLighting(rhi::ShaderCursor &cursor) const;
+        // C-stage retained inspection overlay. The active world owns the
+        // published data; the caller's submission fence extends its readers
+        // through notifyWorldLightingReadSubmitted.
+        [[nodiscard]] bool inspectionAvailable() const noexcept;
+        [[nodiscard]] std::error_code renderWorldLightingInspection(
+            const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings);
         void notifyWorldLightingSubmitted(FenceCompletionValue value) noexcept;
         void notifyWorldLightingReadSubmitted(FenceCompletionValue value) noexcept;
         void discardWorldLightingUnsubmitted() noexcept;

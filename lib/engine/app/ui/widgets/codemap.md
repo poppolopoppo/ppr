@@ -15,7 +15,9 @@ switching availability and trial status; the caller implements synchronization,
 validation, submission, confirmation timing, persistence and error handling.
 `auto` remains a monitor preference and resolves to the reported primary monitor
 for available mode choices. Capability/geometry pointers and spans must remain
-alive for the draw call.
+alive for the draw call. Separate borrowed live fields own pixelization, sky,
+`ELightingDiagnostic`/cascade inspection and the post tuple; those never join the
+display draft or its transaction, and their notes state the inspection mapping.
 
 Both partitions are exported from `../../App.cppm` and registered in
 `../../CMakeLists.txt`. The colony panel adapts game display policy to the neutral

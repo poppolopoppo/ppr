@@ -1512,11 +1512,33 @@ descriptor = "earlier.toml"
         // Valid sky draft: the retained hour slider produces accepted values.
         game::WorldLightDisplaySettings sky_draft{};
         sky_draft.m_sky_hour = 12;
+        sky_draft.m_diagnostic = ELightingDiagnostic::probes;
+        sky_draft.m_cascade = 1u;
         config::Diagnostics sky_diagnostics{};
         auto sky = validateWorldLightDraft(committed_world, sky_draft, sky_diagnostics);
         PPR_TEST_ASSERT(sky.has_value());
         PPR_TEST_ASSERT(sky->m_value.m_sky_hour == 12);
+        PPR_TEST_ASSERT(sky->m_value.m_diagnostic == ELightingDiagnostic::probes);
         PPR_TEST_ASSERT(not sky_diagnostics.hasErrors());
+
+        // The cascade atlas selection accepts only the retained L1..L5 levels.
+        sky_draft.m_diagnostic = ELightingDiagnostic::cascade;
+        sky_draft.m_cascade = 5u;
+        config::Diagnostics cascade_diagnostics{};
+        auto cascade = validateWorldLightDraft(committed_world, sky_draft, cascade_diagnostics);
+        PPR_TEST_ASSERT(cascade.has_value());
+        PPR_TEST_ASSERT(cascade->m_value.m_cascade == 5u);
+        PPR_TEST_ASSERT(not cascade_diagnostics.hasErrors());
+
+        // Pixelization P1..P8 is a retained resolution control; P1 keeps the
+        // full-size Hable resolve and P0/P9 are rejected drafts.
+        const game::PixelDisplaySettings pixel_draft{};
+        const Resolved<game::PixelDisplaySettings> committed_pixel{};
+        config::Diagnostics pixel_diagnostics{};
+        const auto pixel = validatePixelDraft(committed_pixel, pixel_draft, pixel_diagnostics);
+        PPR_TEST_ASSERT(pixel.has_value());
+        PPR_TEST_ASSERT(pixel->m_value.m_pixel_scale == 3u);
+        PPR_TEST_ASSERT(not pixel_diagnostics.hasErrors());
 
         // Valid post draft: toggles produce accepted values.
         game::PostDisplaySettings post_draft{};
@@ -1533,6 +1555,10 @@ descriptor = "earlier.toml"
         // independent post bloom and eye adaptation on).
         const game::WorldLightDisplaySettings world_defaults{};
         PPR_TEST_ASSERT(world_defaults.m_sky_hour == -1);
+        PPR_TEST_ASSERT(world_defaults.m_diagnostic == ELightingDiagnostic::off);
+        PPR_TEST_ASSERT(world_defaults.m_cascade == 1u);
+        const game::PixelDisplaySettings pixel_defaults{};
+        PPR_TEST_ASSERT(pixel_defaults.m_pixel_scale == 3u);
         const game::PostDisplaySettings post_defaults{};
         PPR_TEST_ASSERT(post_defaults.m_auto_exposure);
         PPR_TEST_ASSERT(post_defaults.m_bloom);
@@ -1543,6 +1569,29 @@ descriptor = "earlier.toml"
         config::Diagnostics invalid_sky_diagnostics{};
         PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_sky, invalid_sky_diagnostics));
         PPR_TEST_ASSERT(invalid_sky_diagnostics.hasErrors());
+
+        game::WorldLightDisplaySettings unknown_diagnostic = sky_draft;
+        unknown_diagnostic.m_diagnostic = static_cast<ELightingDiagnostic>(42);
+        config::Diagnostics unknown_diagnostic_diagnostics{};
+        PPR_TEST_ASSERT(
+            not validateWorldLightDraft(committed_world, unknown_diagnostic, unknown_diagnostic_diagnostics));
+        PPR_TEST_ASSERT(unknown_diagnostic_diagnostics.hasErrors());
+
+        for (const u32 cascade_level: {0u, 6u}) {
+            game::WorldLightDisplaySettings invalid_cascade = sky_draft;
+            invalid_cascade.m_cascade = cascade_level;
+            config::Diagnostics invalid_cascade_diagnostics{};
+            PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_cascade, invalid_cascade_diagnostics));
+            PPR_TEST_ASSERT(invalid_cascade_diagnostics.hasErrors());
+        }
+
+        for (const u32 scale: {0u, 9u}) {
+            config::Diagnostics invalid_pixel_diagnostics{};
+            const auto rejected = validatePixelDraft(
+                committed_pixel, game::PixelDisplaySettings{scale}, invalid_pixel_diagnostics);
+            PPR_TEST_ASSERT(not rejected.has_value());
+            PPR_TEST_ASSERT(invalid_pixel_diagnostics.hasErrors());
+        }
 
         game::PostDisplaySettings invalid_post = post_draft;
         invalid_post.m_ev_min = 4.0f;

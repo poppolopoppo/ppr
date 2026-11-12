@@ -14,6 +14,14 @@ The model reports snapshot availability and tick; after resident evolution it
 does not interpret unavailable coordinates as an empty particle cell. Terrain,
 authored metadata and agent inspection remain live without a particle mirror.
 
+The Display window keeps the disruptive switching draft/transaction separate from
+its live picture controls. Pixelization, sky hour, the retained lighting diagnostic
+(`off`, `probes`, `source`, `occupancy`, `jump`, `cascade`) and the cascade atlas
+level edit the caller's session values immediately; post settings keep their
+approved domains/defaults. The panel states the diagnostic mappings (including the
+inspection curve and jump colors) as inspection-only readouts, never scene
+exposure, and never folds them into Apply.
+
 ## Navigation
 
 | Module | Files | Responsibility |

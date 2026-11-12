@@ -243,6 +243,21 @@ submitted or discarded is rejected with `operation_not_permitted` before it
 touches the armed attempt's slot, constants or recorded bindings; callers
 settle that attempt with `notifySubmitted` or `discardUnsubmitted` first.
 
+`renderInspection` is the retained C-stage overlay: one fullscreen draw of
+`assets/shaders/world_lighting_inspect.slang` after post-presentation and before
+native UI. `ELightingDiagnostic` selects `off`, `probes` (fine-CH angular mean with
+the two-cell probe lattice), `source` (cached outgoing RGB), `occupancy` (empty
+black / opaque white / receive-only cyan), `jump` (stored 0/1/2/4/8/16/32 classes)
+or `cascade` (selected L1..L5 atlas; left radiance, right transmittance).
+Radiance views use the fixed inspection curve `max(RGB,0)/(1+max(RGB,0))`; the
+overlay never changes exposure. `LightingInspectionSettings::m_cascade` is an
+inspection atlas level only, never the active cascade count. The draw decodes the
+attempt's published data read-only and creates its surface-targeted pipeline
+lazily per acquired signature (old pipelines defer until their reader fence
+completes). `notifyReadSubmitted` extends only that attempt's slot through the
+accepted C submission, and the frame result carries a value-only inspection
+stamp (settings, world identity, captured camera revision, C submission).
+
 ## Design
 
 Resident particle presentation accepts a renderer-neutral layout-v4 view with

@@ -9,6 +9,7 @@ import :renderer.frame_fence;
 import :renderer.grid_pass;
 import :renderer.presentation;
 import :renderer.triangle_pass;
+import :renderer.world_lighting_pass;
 import :ui.imgui;
 import :window.handle;
 
@@ -93,6 +94,11 @@ export namespace pP {
         // rendering-resolution control; the lane never reads live client state.
         PostProcessSettings m_post{};
         u32 m_pixel_scale{3u};
+        // Retained inspection selection and sky hour for this frame. Both are
+        // value-only inspection/presentation inputs; they never select another
+        // lighting algorithm or alter the allocated cascade count.
+        LightingInspectionSettings m_inspection{};
+        i32 m_sky_hour{-1};
         std::shared_ptr<const FramePacket> m_packet{};
         DetachedUiDrawData m_ui{};
         GridPass::GridStagedFrame m_grid_stage{};
@@ -181,6 +187,20 @@ export namespace pP {
     // frame result values and incorporated optical source receipts
     // ------------------------------------------------------------------
 
+    // Value-only proof that the C-stage overlay decoded the world state this
+    // frame submitted, using the captured camera. A frame that drew no overlay
+    // (off, dropped, retained picture, unpublished world) is absent rather than
+    // stamped with a fabricated identity.
+    struct LightingInspectionStamp {
+        LightingInspectionSettings m_settings{};
+        GridWorldIdentity m_world{};
+        std::size_t m_camera_revision{};
+        FenceCompletionValue m_submission{kFenceValueNone};
+    };
+
+    static_assert(
+        std::is_standard_layout_v<LightingInspectionStamp> and std::is_trivially_copyable_v<LightingInspectionStamp>);
+
     // Per-frame completion posted back to main: submission acceptance is
     // independent of present (a submitted value travels with the fence
     // until completion; a dropped frame carries m_dropped and no value).
@@ -209,6 +229,10 @@ export namespace pP {
         // Same actual-present proof for the selected jointly committed resident
         // state. CPU preparation frames and every non-present fate leave it empty.
         std::optional<GridParticlePresentationIdentity> m_presented_particles{};
+        // C-stage inspection proof: the diagnostic/cascade actually drawn, the
+        // matching submitted world identity, the captured camera revision and
+        // the accepted C submission. Absent when no overlay was drawn.
+        std::optional<LightingInspectionStamp> m_inspection{};
         u64 m_frame_id{0u};
         u64 m_surface_capture_sequence{}; // Nonzero only for an actual capture attempt.
         // Latest ACCEPTED submission value across A/B/C, independent of a

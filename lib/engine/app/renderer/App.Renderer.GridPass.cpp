@@ -3279,6 +3279,20 @@ namespace pP {
         return {};
     }
 
+    bool GridPass::inspectionAvailable() const noexcept {
+        return m_world.m_lighting and
+               m_world.m_lighting->inspectionAvailable() and
+               m_world.m_world_edge == WorldLightingPass::kWorldEdge;
+    }
+
+    std::error_code GridPass::renderWorldLightingInspection(
+        const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_world.m_lighting and inspectionAvailable() ? std::error_code{}
+                                                                   : std::make_error_code(std::errc::not_connected));
+        return m_world.m_lighting->renderInspection(context, camera, settings);
+    }
+
     std::error_code GridPass::setLightingBuffersForTest(
         rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch) {
         PPR_RETURN_ERROR_ON_FAIL(

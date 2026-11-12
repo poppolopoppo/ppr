@@ -33,7 +33,7 @@ the acknowledged world/job/generation, publication, terrain revision and joint
 tick. CPU preparation, queue acceptance and GPU completion do not release it.
 The initial expected publication is held stable while the modal is open.
 
-Controls and panel intents are declared in `Game.Application.cpp` and `ui/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, tool-driven Colony management/tool context, independently visible Performance, Display and Menu Quit. Regeneration is confirmed and deferred to an update boundary; Quit and native close share the host's dirty-draft/cancellation/drain path.
+Controls and panel intents are declared in `Game.Application.cpp` and `ui/ColonyPanel.*`: pause/step/speed/regenerate, inspect/dig/build/demolish, agent selection/follow, grid/edit overlays, help, tool-driven Colony management/tool context, independently visible Performance, Display and Menu Quit. The Display window keeps the switching transaction plus live pixelization, sky, lighting-diagnostic and post controls; the diagnostic selects the retained inspection overlay, and its cascade level is inspection-only. Regeneration is confirmed and deferred to an update boundary; Quit and native close share the host's dirty-draft/cancellation/drain path.
 
 When the session has a controlled actor, WASD supplies held fixed-tick commands
 ahead of camera input. Opposing directions cancel. Focus loss, UI keyboard capture,
@@ -130,6 +130,16 @@ recognizes the lab. Its first published frame applies the ordinary
 map-centred 1056-cell overview camera. `game.tests.lighting_lab` covers the
 exact recipe, deterministic content, particle seeds, checkpoint state and
 1024 rendered admission.
+
+Retained picture settings are `game.world_light.sky_hour` (-1 black boundary),
+`game.world_light.diagnostic` (off default; probes/source/occupancy/jump/cascade),
+`game.world_light.cascade` (inspection atlas L1..L5, default 1), `game.pixel.scale`
+(P1..P8, default 3) and the unchanged `game.post.*` tuple. The diagnostic and
+cascade values are read-only inspection selection, never another lighting mode or
+an active cascade-count setting; sky, diagnostic and post changes ride the next
+rendered frame without resetting world lighting or screen history. The Display
+window edits them live, Save persists them, and Reset restores the factory
+defaults. Invalid domains, nonfinite post tuples and retired names fail resolution.
 
 ## Joint world transition
 

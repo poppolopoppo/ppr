@@ -1288,6 +1288,49 @@ namespace pP::tests::detail::WorldLightingProjection {
 
         PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(60u, 60u)) == *lighting::packCell(1u, 500.0));
     };
+
+    // ------------------------------------------------------------------
+    // C-stage inspection reader fences
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (inspection_read_extends_its_attempt_and_no_earlier_slot) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        Scene scene;
+        scene.publish(fixture, std::span<const ParticleSpec>{});
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // Attempt 0 is accepted at 1 and read by a C-stage overlay at 2.
+        auto first = encodeAttempt(fixture, pass, scene.m_inputs);
+        PPR_TEST_ASSERT(not first.m_prepare and not first.m_finalize);
+        pass.notifySubmitted(1u);
+        pass.notifyReadSubmitted(2u);
+
+        // The write fence alone is not enough: the accepted read keeps the slot
+        // pending until its own submission completes.
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+        PPR_TEST_ASSERT(pass.statusSlotPendingForTest(0u));
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+        PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(0u));
+
+        // A later attempt's overlay read extends only that attempt, never the
+        // earlier slot that already completed.
+        auto second = encodeAttempt(fixture, pass, scene.m_inputs, 2u);
+        PPR_TEST_ASSERT(not second.m_prepare and not second.m_finalize);
+        pass.notifySubmitted(3u);
+        pass.notifyReadSubmitted(4u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(3u));
+        PPR_TEST_ASSERT(pass.statusSlotPendingForTest(1u));
+        PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(0u));
+        PPR_TEST_ASSERT(not pass.collectCompleted(4u));
+        PPR_TEST_ASSERT(not pass.statusSlotPendingForTest(1u));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
 }
 
 namespace pP::tests {
@@ -1311,6 +1354,7 @@ namespace pP::tests {
                 detail::WorldLightingProjection::shutdown_reports_an_uninspected_pending_error,
                 detail::WorldLightingProjection::reflected_projection_records_match_the_cpu_shapes,
                 detail::WorldLightingProjection::grid_pass_owns_the_projection_and_binds_resolved_cells,
+                detail::WorldLightingProjection::inspection_read_extends_its_attempt_and_no_earlier_slot,
             });
         };
         return group;

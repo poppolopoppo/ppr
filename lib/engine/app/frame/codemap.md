@@ -30,7 +30,8 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   (fail closed when absent) and submits it (worker) or executes it (inline reference) the same frame.
 - `RenderLane` — one fixed worker + `Channel`-free `RawChannel` triple (depths 2/4/8: frames/results/control).
   Forward `RenderFrameRequest`s carry `shared_ptr<const FramePacket>`, `DetachedUiDrawData`, owned `GridStagedFrame`/`TriangleStagedFrame`,
-  the value-only `PostProcessSettings` plus P1..8 `m_pixel_scale`, and reservation epoch/frame identity with `drop_if_full` (full maps to
+  the value-only `PostProcessSettings` plus P1..8 `m_pixel_scale`, the retained `LightingInspectionSettings` and sky hour, and
+  reservation epoch/frame identity with `drop_if_full` (full maps to
   capacity-busy: drop the frame, never fail the app); results carry submit value/error/drop/font-ack/surface
   generation; control carries wake/exit/config (exit additionally latches an atomic, so a full queue never blocks
   exit signalling). Exactly one logical consumer per channel; the signalling path never uses
@@ -53,7 +54,10 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   stage error), the aggregate latest accepted value and the consumed
   active-presentation elapsed echo. Un-attempted stages keep
   rejected/none/success, so "never reached" and "attempted but rejected" stay
-  distinct. Records retain their natural alignment. The lane reserves
+  distinct. Records retain their natural alignment. A drawn C-stage inspection
+  overlay additionally posts `LightingInspectionStamp` (settings, matched
+  submitted world identity, captured camera revision, accepted C submission);
+  absent means no overlay was drawn. The lane reserves
   `sizeof(result) + alignof(result) - 1` bytes per raw-channel payload and uses
   the same `std::align` address for placement, reads and destruction; RawChannel
   itself continues to guarantee only u64-aligned payloads. Frame handles and

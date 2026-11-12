@@ -4,6 +4,7 @@ export module engine.app:ui.widgets.display;
 
 import :display;
 import :display.settings;
+import :renderer.world_lighting_pass;
 import :service.window;
 import engine.core;
 import std;
@@ -79,6 +80,8 @@ export namespace pP::ui {
     /// emits a widget action the caller maps to restoring factory defaults.
     struct LightingPostWidgetDraft {
         i32 &m_sky_hour;
+        ELightingDiagnostic &m_diagnostic;
+        u32 &m_cascade;
         bool &m_auto_exposure;
         float &m_exposure_ev;
         float &m_adaptation_tau;

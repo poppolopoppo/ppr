@@ -450,6 +450,14 @@ namespace pP {
         m_pixel_scale = std::clamp(pixel_scale, 1u, 8u);
     }
 
+    void ApplicationEditor::setLightingInspectionSettings(
+        const LightingInspectionSettings &settings, const i32 sky_hour) noexcept {
+        // CPU-only policy set: no GPU work and no frame drain. The frame
+        // request revalidates both values before any backend work.
+        m_inspection = settings;
+        m_sky_hour = sky_hour;
+    }
+
     std::error_code ApplicationEditor::ensureSceneDepth_(rhi::IDevice &device, const int2 raster_extent) {
         // One completion-gated depth target per ring slot. Stage A writes it
         // and stage B never reads it, but the slot a later frame rotates onto
@@ -1481,6 +1489,8 @@ namespace pP {
             request.m_observe_grid = m_observe_grid;
             request.m_post = m_post_settings;
             request.m_pixel_scale = m_pixel_scale;
+            request.m_inspection = m_inspection;
+            request.m_sky_hour = m_sky_hour;
             request.m_capture_final_frame = m_frame_capture_requested and m_frame_capture_eligible;
             request.m_surface_capture_sequence = m_frame_capture_sequence;
             try {
@@ -1553,6 +1563,8 @@ namespace pP {
         inline_request.m_observe_grid = m_observe_grid;
         inline_request.m_post = m_post_settings;
         inline_request.m_pixel_scale = m_pixel_scale;
+        inline_request.m_inspection = m_inspection;
+        inline_request.m_sky_hour = m_sky_hour;
         inline_request.m_capture_final_frame = m_frame_capture_requested and m_frame_capture_eligible;
         inline_request.m_surface_capture_sequence = m_frame_capture_sequence;
         try {
@@ -1783,6 +1795,11 @@ namespace pP {
         // Post settings are a pass precondition; the presentation grid applies
         // the retained P1..8 resolution control to the real framebuffer extent.
         PPR_RETURN_ERROR_ON_FAIL(Editor, validatePostProcessSettings(request.m_post));
+        PPR_RETURN_ERROR_ON_FAIL(Editor, validateLightingInspectionSettings(request.m_inspection));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Editor, request.m_sky_hour >= -1 and request.m_sky_hour <= 23
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::invalid_argument));
         const auto presentation = makePresentationGrid(packet.m_framebuffer_size, request.m_pixel_scale);
         PPR_RETURN_ERROR_ON_FAIL(Editor, presentation ? std::error_code{} : presentation.error());
         const PresentationGrid grid = *presentation;
@@ -1956,7 +1973,10 @@ namespace pP {
             if (m_grid_pass->lightingInputsAvailable()) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, m_grid_pass->prepareWorldLighting(
-                                context, WorldLightingFrame{.m_active_elapsed = packet.m_active_elapsed}));
+                                context, WorldLightingFrame{
+                                             .m_active_elapsed = packet.m_active_elapsed,
+                                             .m_sky_hour = request.m_sky_hour,
+                                         }));
                 lighting_armed = true;
             }
 
@@ -2056,6 +2076,7 @@ namespace pP {
         // therefore made only when C will actually be submitted.
         bool present_picture = not out_result.m_submit_possibly_executed and
                                out_result.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kSubmitted;
+        const bool fresh_picture = present_picture;
         if (not present_picture and
             not out_result.m_submit_possibly_executed and
             m_post_process->retainedPictureAvailable(grid.m_resolved, active_identity)) {
@@ -2075,26 +2096,52 @@ namespace pP {
             DrawSubmission present_submission{string_literal{std::in_place, "post.present"}, present_draw};
             DrawSubmission ui_draws{string_literal{std::in_place, "ui.detached"}, ui_encode};
 
-            const std::initializer_list<SurfaceRenderPass> surface_passes{
-                {
-                    .m_additional_colors = {},
-                    // Presentation samples the resolved output as a fullscreen
-                    // blit, so the surface pass owns no depth attachment.
-                    .m_depth_policy = ESurfaceDepthPolicy::none,
-                    .m_draws = {present_submission},
-                },
-                {
-                    .m_surface_color =
-                        ColorAttachmentOps{
-                            .m_load_op = rhi::LoadOp::Load,
-                        },
-                    .m_additional_colors = {},
-                    // Detached UI draws, constructed synchronously on this lane
-                    // (inline or worker): the encode reads ONLY the detached
-                    // data, never the live ImGui frontend.
-                    .m_draws = {ui_draws},
-                },
+            // The retained inspection overlay is read-only C-stage work drawn
+            // from the same submitted world/camera as a fresh picture. A
+            // retained picture carries no matching current world state, so it
+            // is presented without an overlay instead of fabricating one.
+            const bool inspection_active = fresh_picture and
+                                           request.m_inspection.m_diagnostic != ELightingDiagnostic::off and
+                                           m_grid_pass->inspectionAvailable();
+            const auto inspect_draw = [&](const DrawContext &context) -> std::error_code {
+                return m_grid_pass->renderWorldLightingInspection(context, packet.m_camera, request.m_inspection);
             };
+            DrawSubmission inspection_submission{string_literal{std::in_place, "lighting.inspect"}, inspect_draw};
+
+            // Named initializer-list backing arrays: SurfaceRenderPass borrows
+            // the draw list, so an inline `{submission}` temporary inside an
+            // assigned aggregate would dangle after its statement.
+            const std::initializer_list<const DrawSubmission> present_draws{present_submission};
+            const std::initializer_list<const DrawSubmission> inspection_draws{inspection_submission};
+            const std::initializer_list<const DrawSubmission> ui_draw_list{ui_draws};
+
+            SurfaceRenderPass present_pass{};
+            // Presentation samples the resolved output as a fullscreen blit,
+            // so the surface pass owns no depth attachment.
+            present_pass.m_depth_policy = ESurfaceDepthPolicy::none;
+            present_pass.m_draws = present_draws;
+
+            SurfaceRenderPass inspection_pass{};
+            inspection_pass.m_surface_color = ColorAttachmentOps{.m_load_op = rhi::LoadOp::Load};
+            // Read-only diagnostic colors over the presented picture; no depth
+            // and no blend.
+            inspection_pass.m_depth_policy = ESurfaceDepthPolicy::none;
+            inspection_pass.m_draws = inspection_draws;
+
+            SurfaceRenderPass ui_pass{};
+            ui_pass.m_surface_color = ColorAttachmentOps{.m_load_op = rhi::LoadOp::Load};
+            // Detached UI draws, constructed synchronously on this lane
+            // (inline or worker): the encode reads ONLY the detached data,
+            // never the live ImGui frontend.
+            ui_pass.m_draws = ui_draw_list;
+
+            std::array<SurfaceRenderPass, 3u> surface_passes{present_pass, inspection_pass, ui_pass};
+            u32 pass_count = 2u;
+            if (inspection_active) {
+                ++pass_count;
+            } else {
+                surface_passes[1u] = ui_pass;
+            }
             const SurfaceWindowSnapshot window_snapshot{
                 .m_handle = packet.m_surface_identity,
                 .m_native = packet.m_surface_native,
@@ -2123,9 +2170,8 @@ namespace pP {
                 const CpuObservationScope cpu_surface{clock, cpu.m_surface};
                 try {
                     frame_error = renderer.renderAndPresent(
-                        window_snapshot, {surface_passes.begin(), surface_passes.size()}, packet_surface,
-                        &out_result.m_presented, capture ? &out_result.m_surface_pixels : nullptr,
-                        capture ? &capture_image_acquired : nullptr);
+                        window_snapshot, {surface_passes.data(), pass_count}, packet_surface, &out_result.m_presented,
+                        capture ? &out_result.m_surface_pixels : nullptr, capture ? &capture_image_acquired : nullptr);
                 } catch (const std::bad_alloc &) {
                     throw; // The run boundary drains accepted work before fatal propagation.
                 } catch (...) {
@@ -2133,6 +2179,21 @@ namespace pP {
                 }
             }
             settlePresentStage_(out_result, before, frame_error);
+
+            // Accepted inspection work extends the lighting owner's reader
+            // fence: the attempt's status/jump/mask slot must stay valid until
+            // this C submission completed. A rejected C proves nothing and
+            // extends nothing.
+            const RenderStageResult &present_stage = out_result.m_stages[kRenderStagePresent];
+            if (inspection_active and present_stage.m_settlement == FrameSettlement::kSubmitted) {
+                m_grid_pass->notifyWorldLightingReadSubmitted(present_stage.m_submission);
+                out_result.m_inspection = LightingInspectionStamp{
+                    .m_settings = request.m_inspection,
+                    .m_world = active_identity,
+                    .m_camera_revision = packet.m_camera.m_revision,
+                    .m_submission = present_stage.m_submission,
+                };
+            }
 
             if (capture) {
                 // A capture stays armed across known pre-acquire backpressure

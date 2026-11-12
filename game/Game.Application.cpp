@@ -2902,7 +2902,8 @@ namespace demo {
                     return;
                 }
                 auto merged_lighting = game::buildLightingPostOverlayDocument(
-                    *merged, m_ui_state.m_world_light, m_ui_state.m_post);
+                    *merged, m_ui_state.m_world_light, game::PixelDisplaySettings{m_ui_state.m_pixel_scale},
+                    m_ui_state.m_post);
                 if (not merged_lighting) {
                     session.m_last_error = "Picture settings NOT saved: " + merged_lighting.error().message() + ".";
                     postDisplayNotice_(session.m_last_error, merged_lighting.error());
@@ -3890,12 +3891,15 @@ namespace demo {
             m_display_baseline = baseline;
         }
 
-        /// Startup world-light/post baseline: seeds the live session settings
-        /// (edited in the Display window's "Lighting & Post" section) from the
-        /// resolved invocation. Runtime edits never touch these seeds.
+        /// Startup world-light/pixel/post baseline: seeds the live session
+        /// settings (edited in the Display window's "Lighting & Post" and
+        /// "Rendering" sections) from the resolved invocation. Runtime edits
+        /// never touch these seeds.
         void noteLightingPostStartup(
-            const game::WorldLightDisplaySettings &world_light, const game::PostDisplaySettings &post) {
+            const game::WorldLightDisplaySettings &world_light, const game::PixelDisplaySettings &pixel,
+            const game::PostDisplaySettings &post) {
             m_ui_state.m_world_light = world_light;
+            m_ui_state.m_pixel_scale = pixel.m_pixel_scale;
             m_ui_state.m_post = post;
         }
 
@@ -4786,6 +4790,8 @@ namespace demo {
             // reads them, with no display transaction and no wait.
             game::applyPostProcessSettings(m_ui_state.m_post_process, m_ui_state.m_post);
             setPostProcessSettings(m_ui_state.m_post_process, m_ui_state.m_pixel_scale);
+            setLightingInspectionSettings(
+                game::lightingInspectionFrom(m_ui_state.m_world_light), m_ui_state.m_world_light.m_sky_hour);
 
             return super_t::render();
         }
@@ -6617,7 +6623,8 @@ int runGame(const int argc, char *argv[]) try {
         return pP::colony::runColonySmoke(pP::colony::SmokeOptions{startup.m_gpu_validation}).value();
     }
     demo::TurboLarbin app("ppr", args);
-    app.noteLightingPostStartup(invocation->m_world_light.m_value, invocation->m_post.m_value);
+    app.noteLightingPostStartup(
+        invocation->m_world_light.m_value, invocation->m_pixel.m_value, invocation->m_post.m_value);
     if (const auto error = app.setWorldgenSettings(settings, pP::ITimerClock::steady(), diagnostics)) {
         std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
         return pP::config::kExitInvalidUsage;

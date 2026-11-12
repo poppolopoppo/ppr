@@ -1099,6 +1099,59 @@ namespace pP::tests::detail::WorldLightingSettlement {
         torn_down = true;
     };
 
+    // The C-stage overlay must stamp the world/camera actually submitted and
+    // stop stamping (while still presenting) when the diagnostic is off.
+    PPR_UNIT_TEST (editor_inspection_stamp_matches_submitted_world_camera_and_revision) {
+        SettlementEditorApp test_app{std::span<const char *const>{}};
+        PPR_TEST_ASSERT(not test_app.boot());
+        bool torn_down = false;
+        PPR_DEFER {
+            if (not torn_down) {
+                std::ignore = test_app.teardown();
+            }
+        };
+
+        stageEditorChunk(test_app);
+        constexpr auto frame_delta = std::chrono::milliseconds{16};
+
+        test_app.setLightingInspectionSettings({ELightingDiagnostic::occupancy, 1u}, 12);
+        PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+        PPR_TEST_ASSERT(not test_app.draw());
+        PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+        const RenderFrameResult inspected = *test_app.m_last_result;
+        PPR_TEST_ASSERT(not inspected.m_error);
+        PPR_TEST_ASSERT(inspected.m_presented);
+        PPR_TEST_ASSERT(inspected.m_inspection.has_value());
+
+        const LightingInspectionStamp &stamp = *inspected.m_inspection;
+        PPR_TEST_ASSERT(stamp.m_settings.m_diagnostic == ELightingDiagnostic::occupancy);
+        PPR_TEST_ASSERT(stamp.m_settings.m_cascade == 1u);
+        PPR_TEST_ASSERT(stamp.m_world == inspected.m_presented_grid);
+        PPR_TEST_ASSERT(stamp.m_world == test_app.getGridPass().activeWorldIdentity());
+        {
+            const safe_ptr<const Camera> camera = test_app.getMainCamera();
+            PPR_TEST_ASSERT(camera.isValid());
+            PPR_TEST_ASSERT(stamp.m_camera_revision == camera->getRevision());
+        }
+        PPR_TEST_ASSERT(stamp.m_submission == inspected.m_stages[kRenderStagePresent].m_submission);
+        PPR_TEST_ASSERT(stamp.m_submission > inspected.m_stages[kRenderStageScene].m_submission);
+
+        // Off still presents the ordinary picture and posts no inspection
+        // stamp; the overlay is an added reader, never a presentation mode.
+        GridPass::GridStagedFrame retained{};
+        retained.m_retain_content = true;
+        test_app.submitGridStage(std::move(retained));
+        test_app.setLightingInspectionSettings({ELightingDiagnostic::off, 5u}, 12);
+        PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+        PPR_TEST_ASSERT(not test_app.draw());
+        PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+        PPR_TEST_ASSERT(test_app.m_last_result->m_presented);
+        PPR_TEST_ASSERT(not test_app.m_last_result->m_inspection.has_value());
+
+        torn_down = true;
+        PPR_TEST_ASSERT(not test_app.teardown());
+    };
+
     PPR_UNIT_TEST (editor_ambiguous_resolve_quarantines_and_teardown_recovers) {
         SettlementEditorApp test_app{std::span<const char *const>{}};
         PPR_TEST_ASSERT(not test_app.boot());
@@ -1516,6 +1569,7 @@ namespace pP::tests {
                 detail::WorldLightingSettlement::stale_publication_epoch_is_rejected_before_encode,
                 detail::WorldLightingSettlement::rejected_resolve_preserves_exposure_and_retained_picture,
                 detail::WorldLightingSettlement::editor_scene_survives_a_rejected_resolve_and_settles_its_fence,
+                detail::WorldLightingSettlement::editor_inspection_stamp_matches_submitted_world_camera_and_revision,
                 detail::WorldLightingSettlement::editor_ambiguous_resolve_quarantines_and_teardown_recovers,
                 detail::WorldLightingSettlement::lighting_status_failure_is_observed_at_pass_shutdown,
                 detail::WorldLightingSettlement::accepted_resolve_commits_history_and_exposure_exactly_once,

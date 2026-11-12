@@ -529,9 +529,10 @@ namespace pP::game::tests::detail::display {
         PPR_TEST_ASSERT(existing.has_value());
 
         const game::WorldLightDisplaySettings world_light{};
+        const game::PixelDisplaySettings pixel{};
         const game::PostDisplaySettings post{};
 
-        auto merged = buildLightingPostOverlayDocument(*existing, world_light, post);
+        auto merged = buildLightingPostOverlayDocument(*existing, world_light, pixel, post);
         PPR_TEST_ASSERT(merged.has_value());
 
         auto bytes = encodeDisplayOverlay(*merged);
@@ -544,6 +545,9 @@ namespace pP::game::tests::detail::display {
         bool display_kept = false;
         bool palette_removed = true;
         bool sky_hour_replaced = false;
+        bool diagnostic_persisted = false;
+        bool cascade_persisted = false;
+        bool pixel_persisted = false;
         for (const auto &entry: round->m_entries) {
             if (entry.m_key == "audio.volume" and entry.m_value.m_kind == EFileKind::integer) {
                 audio_kept = entry.m_value.m_integer == 7;
@@ -557,20 +561,40 @@ namespace pP::game::tests::detail::display {
             if (entry.m_key == "game.world_light.sky_hour" and entry.m_value.m_kind == EFileKind::integer) {
                 sky_hour_replaced = entry.m_value.m_integer == world_light.m_sky_hour;
             }
+            if (entry.m_key == "game.world_light.diagnostic" and entry.m_value.m_kind == EFileKind::text) {
+                diagnostic_persisted = entry.m_value.m_text == "off";
+            }
+            if (entry.m_key == "game.world_light.cascade" and entry.m_value.m_kind == EFileKind::integer) {
+                cascade_persisted = entry.m_value.m_integer == 1;
+            }
+            if (entry.m_key == "game.pixel.scale" and entry.m_value.m_kind == EFileKind::integer) {
+                pixel_persisted = entry.m_value.m_integer == 3;
+            }
         }
         PPR_TEST_ASSERT(audio_kept);
         PPR_TEST_ASSERT(display_kept);
         PPR_TEST_ASSERT(palette_removed);
         PPR_TEST_ASSERT(sky_hour_replaced);
+        PPR_TEST_ASSERT(diagnostic_persisted);
+        PPR_TEST_ASSERT(cascade_persisted);
+        PPR_TEST_ASSERT(pixel_persisted);
 
         // Every game.world_light.* / game.post.* entry is a persistable schema
         // property, and the display.* entries (from a prior display merge) are
         // preserved untouched by this merge.
         for (const auto &entry: round->m_entries) {
-            if (entry.m_key.starts_with("game.world_light.") or entry.m_key.starts_with("game.post.")) {
+            if (entry.m_key.starts_with("game.world_light.") or
+                entry.m_key.starts_with("game.pixel.") or
+                entry.m_key.starts_with("game.post.")) {
                 bool persistable = false;
                 game::WorldLightDisplaySettings world_probe{};
                 visit(world_probe, [&](const auto &member, const auto &) {
+                    if (member.m_metadata.m_name == entry.m_key and member.m_metadata.m_persistable) {
+                        persistable = true;
+                    }
+                });
+                game::PixelDisplaySettings pixel_probe{};
+                visit(pixel_probe, [&](const auto &member, const auto &) {
                     if (member.m_metadata.m_name == entry.m_key and member.m_metadata.m_persistable) {
                         persistable = true;
                     }

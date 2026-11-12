@@ -5,6 +5,7 @@ export module engine.app:renderer.world_lighting_pass;
 import :renderer.frame_fence;
 import :renderer.types;
 import :renderer.world_lighting;
+import :scene.camera;
 
 import engine.core;
 import engine.math;
@@ -33,6 +34,42 @@ export namespace pP {
         TimeSpan m_active_elapsed{};
         i32 m_sky_hour{-1};
     };
+
+    // ------------------------------------------------------------------
+    // retained inspection views
+    // ------------------------------------------------------------------
+
+    // The completed application has one lighting/reconstruction pipeline.
+    // These views inspect its published data; they never select an alternative
+    // lighting algorithm. Values are the retained configuration domain, and
+    // unknown values are configuration errors.
+    enum class ELightingDiagnostic : u8 {
+        off,
+        probes,
+        source,
+        occupancy,
+        jump,
+        cascade,
+    };
+
+    inline constexpr config::EnumDomain<ELightingDiagnostic, 6u> lighting_diagnostic_domain{{
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::off, "off"},
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::probes, "probes"},
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::source, "source"},
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::occupancy, "occupancy"},
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::jump, "jump"},
+        config::EnumEntry<ELightingDiagnostic>{ELightingDiagnostic::cascade, "cascade"},
+    }};
+
+    // One inspection selection. m_cascade is an inspection-only atlas level in
+    // L1..L5; it never changes the allocated/updated cascade count.
+    struct LightingInspectionSettings {
+        ELightingDiagnostic m_diagnostic{ELightingDiagnostic::off};
+        u32 m_cascade{1u};
+    };
+
+    [[nodiscard]] std::error_code validateLightingInspectionSettings(
+        const LightingInspectionSettings &settings) noexcept;
 
     // ------------------------------------------------------------------
     // numeric status records
@@ -97,6 +134,12 @@ export namespace pP {
         static constexpr u32 kFineEntryCount{1u};
         static constexpr u32 kFineDispatchThreads{8u};
 
+        // Retained inspection: one fullscreen diagnostic draw in the C stage.
+        // The cascade selection is an atlas level, never an active count.
+        static constexpr u32 kInspectionCascadeLevels{lighting::kCascadeLevels};
+        static constexpr u32 kInspectionCascadeMin{1u};
+        static constexpr u32 kInspectionCascadeMax{kInspectionCascadeLevels};
+
         // Fixed projection dispatch order. The status record index is the
         // numeric stage constant, not this count: the transport and fine stages
         // own the additional records.
@@ -137,11 +180,25 @@ export namespace pP {
         // The cursor names are owner-private.
         [[nodiscard]] std::error_code bind(rhi::ShaderCursor &cursor) const;
 
+        // Read-only C-stage inspection overlay. Draws the retained view selected
+        // by `settings` from this pass's published data with the captured camera;
+        // it writes no world, CH, cascade, source or history state. The caller
+        // extends this pass's reader fences with the accepted submission through
+        // notifyReadSubmitted. Off is a no-op. Invalid selections or a world with
+        // no published data fail closed (invalid_argument / not_connected).
+        [[nodiscard]] std::error_code renderInspection(
+            const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings);
+
         // Normal availability query for production branching. True once the
         // world's resolved-cell/CH storage exists.
         [[nodiscard]] bool hasPublishedCells() const noexcept {
             return m_resources and m_resources->m_resolved and m_resources->m_fine_ch;
         }
+
+        // True when the current attempt actually submitted the published data
+        // an inspection overlay would decode. A world whose stage A did not arm
+        // lighting this frame has no matching state to stamp.
+        [[nodiscard]] bool inspectionAvailable() const noexcept;
 
         // Encodes the stage-end copy of this attempt's status records into its
         // completion-fenced readback storage. Called in the same submission
@@ -205,6 +262,16 @@ export namespace pP {
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
         };
 
+        // One surface-targeted fullscreen program. The pipeline is keyed by the
+        // surface signature; a signature change defers the previous pipeline
+        // until the submission that used it completed.
+        struct InspectionProgram {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
+            std::optional<RenderPipelineKey> m_key{};
+            FenceCompletionValue m_last_use{kFenceValueNone};
+        };
+
         // One in-flight attempt's status storage and exact input owners. The
         // slot is reusable only after its submission completed AND collection
         // consumed it; m_pending is that single occupancy fact.
@@ -243,6 +310,11 @@ export namespace pP {
                 m_cascade_roots{};
             std::array<ProjectionProgram, kFineEntryCount> m_fine_programs{};
             std::array<std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize>, kFineEntryCount> m_fine_roots{};
+            // Retained inspection program and one binding root per status slot:
+            // a slot is reused only after its submission and C-stage readers
+            // completed, so its root is never rewritten while in flight.
+            InspectionProgram m_inspection{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kStatusRingSize> m_inspection_roots{};
             // One ordered in-place 40 MiB interval store, one 4 MiB source cache
             // and the single in-place 8 MiB fine CH field. They are created once
             // per world and never reallocated per frame; there is no history
@@ -270,6 +342,11 @@ export namespace pP {
         [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device);
         [[nodiscard]] std::error_code ensureTransportResources_(rhi::IDevice &device);
         [[nodiscard]] std::error_code ensureCascadeResources_(rhi::IDevice &device);
+        [[nodiscard]] std::error_code ensureInspectionPipeline_(
+            const DrawContext &context, const RenderPipelineSignature &signature, bool encode_srgb);
+        [[nodiscard]] std::error_code encodeInspection_(
+            const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
+            bool encode_srgb);
         [[nodiscard]] std::error_code selectStatusSlot_(FenceCompletionValue completed) noexcept;
         [[nodiscard]] std::error_code encodeProjection_(const PreRenderContext &context);
         [[nodiscard]] std::error_code encodeAcceleration_(const PreRenderContext &context);
@@ -283,6 +360,10 @@ export namespace pP {
         std::filesystem::path m_root{};
         rhi::IDevice *m_device{};
         std::unique_ptr<ProjectionResources> m_resources{};
+        // Surface-targeted inspection pipelines retired after their last
+        // submission completed. Reclaimed at the existing status collection
+        // boundary.
+        DeferredReleaseQueue m_inspection_releases{};
         bool m_ready{};
     };
 }

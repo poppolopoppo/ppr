@@ -178,10 +178,15 @@ export namespace pP::game {
 
     /// Runtime-tunable sky and post settings. The retained sky hour keeps its
     /// -1 black-boundary meaning: -1 selects no sky contribution and 0..23
-    /// rotate the sky. Persisted under `game.world_light.*` and edited in the
-    /// Display window's "Lighting & Post" section.
+    /// rotate the sky. The retained diagnostic view and its cascade atlas
+    /// level inspect the one lighting pipeline; they never select an
+    /// alternative algorithm or change the allocated cascade count. Persisted
+    /// under `game.world_light.*` and edited in the Display window's
+    /// "Lighting & Post" section.
     struct WorldLightDisplaySettings {
         i32 m_sky_hour{-1};
+        ELightingDiagnostic m_diagnostic{ELightingDiagnostic::off};
+        u32 m_cascade{1u};
 
         [[nodiscard]] static constexpr auto describe() {
             using namespace config;
@@ -194,6 +199,47 @@ export namespace pP::game {
                         "Field sky solar hour (-1 uses the black boundary sky; 12 is noon)", "World lighting",
                         EMutability::runtime, ESource::all, true},
                     Range<i32>{-1, 23}),
+                field(
+                    &WorldLightDisplaySettings::m_diagnostic,
+                    Metadata{
+                        "game.world_light.diagnostic", "Retained lighting inspection view", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    lighting_diagnostic_domain),
+                field(
+                    &WorldLightDisplaySettings::m_cascade,
+                    Metadata{
+                        "game.world_light.cascade",
+                        "Inspection cascade atlas level (1-5); not an active cascade-count setting", "World lighting",
+                        EMutability::runtime, ESource::all, true},
+                    Range<u32>{WorldLightingPass::kInspectionCascadeMin, WorldLightingPass::kInspectionCascadeMax}),
+            };
+        }
+    };
+
+    /// Retained inspection selection carried by the live session value. The
+    /// cascade entry is inspection-only and never changes the allocated or
+    /// updated cascade count.
+    [[nodiscard]] constexpr LightingInspectionSettings lightingInspectionFrom(
+        const WorldLightDisplaySettings &settings) noexcept {
+        return LightingInspectionSettings{settings.m_diagnostic, settings.m_cascade};
+    }
+
+    /// Retained pixelization control: the resolved-scene resolution factor P.
+    /// P1 keeps the resolved extent without a reduction but Hable
+    /// reconstruction stays on. Persisted under `game.pixel.*`.
+    struct PixelDisplaySettings {
+        u32 m_pixel_scale{3u};
+
+        [[nodiscard]] static constexpr auto describe() {
+            using namespace config;
+
+            return std::tuple{
+                field(
+                    &PixelDisplaySettings::m_pixel_scale,
+                    Metadata{
+                        "game.pixel.scale", "Pixelization factor P (1..8): render the scene at 1/P resolution",
+                        "Rendering", EMutability::runtime, ESource::all, true},
+                    Range<u32>{1u, 8u}),
             };
         }
     };
@@ -278,6 +324,7 @@ export namespace pP::game {
         config::Resolved<DisplaySettings> m_display{};
         config::Resolved<StartupSettings> m_startup{};
         config::Resolved<WorldLightDisplaySettings> m_world_light{};
+        config::Resolved<PixelDisplaySettings> m_pixel{};
         config::Resolved<PostDisplaySettings> m_post{};
         config::CliResult m_cli{};
         Array<std::string> m_config_paths{};
@@ -330,19 +377,19 @@ export namespace pP::game {
     /// Executable schema check for all three invocation schemas.
     [[nodiscard]] Expected<void> validateGameSchemas(config::Diagnostics &diagnostics);
 
-    /// CLI bindings for the world light and post display settings, composed
-    /// into gameCliSchema. Canonical names are the property names; the
-    /// kebab-case aliases are the legacy game spellings.
+    /// CLI bindings for the world light, pixelization and post display
+    /// settings, composed into gameCliSchema. Canonical names are the property
+    /// names; the kebab-case aliases are the legacy game spellings.
     [[nodiscard]] Array<config::OptionDecl> worldLightPostCliOptions();
 
-    /// Merges acknowledged world-light and post settings into an existing
-    /// overlay document: every `game.world_light.*` and `game.post.*` entry is
-    /// replaced by the persistable properties only, while unrelated entries
-    /// (including `display.*`) keep their order and values. Hand-edited base
-    /// files are never touched by this path.
+    /// Merges acknowledged world-light, pixelization and post settings into an
+    /// existing overlay document: every `game.world_light.*`, `game.pixel.*`
+    /// and `game.post.*` entry is replaced by the persistable properties only,
+    /// while unrelated entries (including `display.*`) keep their order and
+    /// values. Hand-edited base files are never touched by this path.
     [[nodiscard]] Expected<config::Document> buildLightingPostOverlayDocument(
         const config::Document &existing, const WorldLightDisplaySettings &world_light,
-        const PostDisplaySettings &post);
+        const PixelDisplaySettings &pixel, const PostDisplaySettings &post);
 
     /// Panel-draft validation: apply the draft as one runtime layer over
     /// committed state (schema rules, domain, range, cross-field only).
@@ -353,6 +400,11 @@ export namespace pP::game {
     /// Panel-draft validation for the post settings, same contract.
     [[nodiscard]] Expected<config::Resolved<PostDisplaySettings>> validatePostDraft(
         const config::Resolved<PostDisplaySettings> &committed, const PostDisplaySettings &draft,
+        config::Diagnostics &diagnostics);
+
+    /// Panel-draft validation for the pixelization factor, same contract.
+    [[nodiscard]] Expected<config::Resolved<PixelDisplaySettings>> validatePixelDraft(
+        const config::Resolved<PixelDisplaySettings> &committed, const PixelDisplaySettings &draft,
         config::Diagnostics &diagnostics);
 
     /// Applies the live post display settings to the independent post owner.

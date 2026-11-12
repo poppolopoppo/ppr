@@ -1857,6 +1857,442 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(close3(float3{result[0].x, result[0].y, result[0].z}, float3{0.25f, 0.5f, 0.75f}, 0.005f));
         PPR_TEST_ASSERT(close3(float3{result[1].x, result[1].y, result[1].z}, float3{0.25f, 0.5f, 0.75f}, 0.005f));
     };
+
+    // ------------------------------------------------------------------
+    // retained inspection overlay
+    // ------------------------------------------------------------------
+    // The real world_lighting_inspect.slang is rendered standalone against
+    // controlled published records. The assertions decode the same records on
+    // the CPU, so a view that silently changes its mapping fails here.
+
+    inline constexpr u32 kInspectTarget = 512u;
+    inline constexpr u32 kInspectSmall = 64u;
+
+    struct InspectionFrame {
+        float4x4 m_inverse_view_projection{identity_v};
+        float4 m_viewport{};
+        u32 m_diagnostic{};
+        u32 m_cascade_level{1u};
+        u32 m_encode_srgb{};
+        u32 m_reserved{};
+    };
+    static_assert(sizeof(InspectionFrame) == 96u);
+
+    [[nodiscard]] CameraSnapshot inspectionCamera() noexcept {
+        CameraSnapshot camera{};
+        const float world_edge = static_cast<float>(WorldLightingPass::kWorldEdge);
+        camera.m_origin = float3{0.0f, 0.0f, -1.0f};
+        camera.m_view = float4x4::translate(0.0f, 0.0f, 1.0f);
+        camera.m_projection = rhi::getOrthoMatrix(world_edge, world_edge);
+        camera.m_view_projection = camera.m_view * camera.m_projection;
+        camera.m_invert_view_projection = inverse(camera.m_view_projection);
+        camera.m_viewport_size = float2{world_edge, world_edge};
+        camera.m_aspect_ratio = 1.0f;
+        return camera;
+    }
+
+    [[nodiscard]] float inspectionCurveScalar(const float3 rgb) noexcept {
+        const float peak = (std::max) (rgb.x, (std::max) (rgb.y, rgb.z));
+        return 1.0f / (1.0f + (std::max) (peak, 0.0f));
+    }
+
+    [[nodiscard]] float inspectionSrgbEncode(const float linear) noexcept {
+        const float bounded = (std::max) (linear, 0.0f);
+        return bounded <= 0.0031308f ? bounded * 12.92f : 1.055f * std::pow(bounded, 1.0f / 2.4f) - 0.055f;
+    }
+
+    [[nodiscard]] std::array<float, 3u> inspectionCurve(const float3 rgb) noexcept {
+        const float3 positive{(std::max) (rgb.x, 0.0f), (std::max) (rgb.y, 0.0f), (std::max) (rgb.z, 0.0f)};
+        const float scale = inspectionCurveScalar(positive);
+        return {positive.x * scale, positive.y * scale, positive.z * scale};
+    }
+
+    [[nodiscard]] rhi::ComPtr<rhi::ITexture> makeInspectionTarget(rhi::IDevice &device, const int2 extent) {
+        rhi::TextureDesc description{};
+        description.type = rhi::TextureType::Texture2D;
+        description.size = {static_cast<u32>(extent.x), static_cast<u32>(extent.y), 1u};
+        description.arrayLength = 1u;
+        description.mipCount = 1u;
+        description.format = rhi::Format::RGBA8Unorm;
+        description.memoryType = rhi::MemoryType::DeviceLocal;
+        description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        description.defaultState = rhi::ResourceState::RenderTarget;
+        description.label = "world lighting inspection target";
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(not make_error_code(device.createTexture(description, nullptr, target.writeRef())));
+        return target;
+    }
+
+    struct InspectionResources {
+        rhi::ComPtr<rhi::IBuffer> m_resolved{};
+        rhi::ComPtr<rhi::IBuffer> m_visuals{};
+        rhi::ComPtr<rhi::IBuffer> m_fine_ch{};
+        rhi::ComPtr<rhi::IBuffer> m_source{};
+        rhi::ComPtr<rhi::IBuffer> m_cascades{};
+        rhi::ComPtr<rhi::ITexture> m_jump{};
+    };
+
+    struct InspectionRenderer {
+        Fixture &m_fixture;
+        rhi::ComPtr<rhi::IShaderProgram> m_program{};
+        rhi::ComPtr<rhi::IRenderPipeline> m_pipeline{};
+        rhi::ComPtr<rhi::IShaderObject> m_root{};
+
+        explicit InspectionRenderer(Fixture &fixture) : m_fixture(fixture) {
+            auto &device = fixture.device();
+            shader::SharedModule module{};
+            PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+                std::filesystem::current_path() / "shaders" / "world_lighting_inspect.slang", "world_lighting_inspect",
+                module.writeRef()));
+
+            constexpr const char *entries[]{"vertexInspect", "fragmentInspect"};
+            std::array<shader::ComPtr<slang::IEntryPoint>, 2u> points{};
+            for (u32 index = 0u; index < points.size(); ++index) {
+                PPR_TEST_ASSERT(
+                    not make_error_code(module->findEntryPointByName(entries[index], points[index].writeRef())));
+            }
+
+            slang::IComponentType *entry_points[]{points[0u].get(), points[1u].get()};
+            rhi::ShaderProgramDesc program_description{};
+            program_description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            program_description.slangGlobalScope = module.get();
+            program_description.slangEntryPoints = entry_points;
+            program_description.slangEntryPointCount = 2u;
+            shader::Diagnose diagnostics;
+            PPR_TEST_ASSERT(not make_error_code(
+                device.createShaderProgram(program_description, m_program.writeRef(), diagnostics.writeRef())));
+
+            rhi::ColorTargetDesc color{};
+            color.format = rhi::Format::RGBA8Unorm;
+            rhi::RenderPipelineDesc pipeline_description{};
+            pipeline_description.program = m_program;
+            pipeline_description.targets = &color;
+            pipeline_description.targetCount = 1u;
+            pipeline_description.multisample.sampleCount = 1u;
+            pipeline_description.rasterizer.cullMode = rhi::CullMode::None;
+            pipeline_description.depthStencil.depthTestEnable = false;
+            pipeline_description.depthStencil.depthWriteEnable = false;
+            PPR_TEST_ASSERT(
+                not make_error_code(device.createRenderPipeline(pipeline_description, m_pipeline.writeRef())));
+            PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(m_program, m_root.writeRef())));
+        }
+
+        [[nodiscard]] TextureReadback draw(
+            const InspectionResources &resources, const CameraSnapshot &camera, const u32 diagnostic, const u32 cascade,
+            const int2 extent) {
+            auto &device = m_fixture.device();
+            auto target = makeInspectionTarget(device, extent);
+            auto target_view = defaultView(target);
+
+            InspectionFrame frame{};
+            frame.m_inverse_view_projection = camera.m_invert_view_projection;
+            frame.m_viewport = float4{
+                static_cast<float>(extent.x), static_cast<float>(extent.y), 1.0f / static_cast<float>(extent.x),
+                1.0f / static_cast<float>(extent.y)};
+            frame.m_diagnostic = diagnostic;
+            frame.m_cascade_level = cascade;
+            // The test target is UNorm: the shader owns the one sRGB encode,
+            // exactly like an SDR surface.
+            frame.m_encode_srgb = 1u;
+
+            rhi::ShaderCursor cursor{m_root};
+            rhi::ShaderCursor constants;
+            PPR_TEST_ASSERT(not make_error_code(cursor["g_inspect"].getDereferenced(constants)));
+            PPR_TEST_ASSERT(not make_error_code(constants.setData(&frame, sizeof(frame))));
+
+            const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) {
+                PPR_TEST_ASSERT(not make_error_code(
+                    cursor[name].setBinding(rhi::Binding(buffer, rhi::BufferRange{0u, buffer->getDesc().size}))));
+            };
+            bind("g_resolved_cells", resources.m_resolved);
+            bind("g_visuals", resources.m_visuals);
+            bind("g_fine_ch", resources.m_fine_ch);
+            bind("g_cell_source", resources.m_source);
+            bind("g_cascades", resources.m_cascades);
+            PPR_TEST_ASSERT(not make_error_code(cursor["g_jump"].setBinding(rhi::Binding(resources.m_jump))));
+
+            rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+            PPR_TEST_ASSERT(not make_error_code(m_fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+            encoder->setTextureState(target.get(), range, rhi::ResourceState::RenderTarget);
+            const std::array<rhi::RenderPassColorAttachment, 1u> colors{
+                rhi::RenderPassColorAttachment{.view = target_view, .clearValue = {0.0f, 0.0f, 0.0f, 1.0f}}};
+            rhi::RenderPassDesc pass_description{};
+            pass_description.colorAttachments = colors.data();
+            pass_description.colorAttachmentCount = 1u;
+            auto *const pass = encoder->beginRenderPass(pass_description);
+            PPR_TEST_ASSERT(pass != nullptr);
+            pass->setRenderState(
+                {.viewports = {rhi::Viewport::fromSize(static_cast<float>(extent.x), static_cast<float>(extent.y))},
+                    .viewportCount = 1u,
+                    .scissorRects = {rhi::ScissorRect::fromSize(
+                        static_cast<u32>(extent.x), static_cast<u32>(extent.y))},
+                    .scissorRectCount = 1u,
+                    .vertexBuffers = {},
+                    .indexBuffer = {}});
+            pass->bindPipeline(m_pipeline, m_root);
+            pass->draw({.vertexCount = 3u});
+            pass->end();
+            encoder->setTextureState(target.get(), range, rhi::ResourceState::CopySource);
+
+            m_fixture.submit(*encoder);
+
+            const auto readback = readTexture(device, *target);
+            PPR_TEST_ASSERT(readback.m_bytes.size() >= static_cast<std::size_t>(extent.y) * readback.m_row_pitch);
+            return readback;
+        }
+
+        [[nodiscard]] static std::array<u8, 4u> texel(const TextureReadback &pixels, const u32 x, const u32 y) {
+            const auto *const bytes = pixels.m_bytes.data() + static_cast<std::size_t>(y) * pixels.m_row_pitch + x * 4u;
+            return {
+                static_cast<u8>(bytes[0]), static_cast<u8>(bytes[1]), static_cast<u8>(bytes[2]),
+                static_cast<u8>(bytes[3])};
+        }
+
+        static void assertCategorical(const std::array<u8, 4u> &actual, const float3 color, const int tolerance = 2) {
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const int encoded = static_cast<int>(std::lround(
+                    inspectionSrgbEncode(channel == 0u ? color.x : (channel == 1u ? color.y : color.z)) * 255.0f));
+                if (std::abs(static_cast<int>(actual[channel]) - encoded) > tolerance) {
+                    std::println(
+                        "INSPECT categorical mismatch channel={} actual={} expected={}", channel,
+                        static_cast<int>(actual[channel]), encoded);
+                }
+                PPR_TEST_ASSERT(std::abs(static_cast<int>(actual[channel]) - encoded) <= tolerance);
+            }
+        }
+
+        static void assertDisplayed(const std::array<u8, 4u> &actual, const float3 linear, const int tolerance = 2) {
+            const auto expected = inspectionCurve(linear);
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                const int encoded = static_cast<int>(
+                    std::lround(inspectionSrgbEncode(static_cast<float>(expected[channel])) * 255.0f));
+                if (std::abs(static_cast<int>(actual[channel]) - encoded) > tolerance) {
+                    std::println(
+                        "INSPECT mismatch channel={} actual={} expected={} linear=({},{},{})", channel,
+                        static_cast<int>(actual[channel]), encoded, float(linear.x), float(linear.y), float(linear.z));
+                }
+                PPR_TEST_ASSERT(std::abs(static_cast<int>(actual[channel]) - encoded) <= tolerance);
+            }
+        }
+    };
+
+    [[nodiscard]] std::vector<std::byte> readBufferBytes(
+        rhi::IDevice &device, rhi::IBuffer &buffer, const u64 offset, const u64 size) {
+        std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+        PPR_TEST_ASSERT(not make_error_code(device.readBuffer(&buffer, offset, size, bytes.data())));
+        return bytes;
+    }
+
+    PPR_UNIT_TEST (inspection_settings_reject_unknown_views_and_levels) {
+        for (const auto diagnostic:
+            {ELightingDiagnostic::off, ELightingDiagnostic::probes, ELightingDiagnostic::source,
+                ELightingDiagnostic::occupancy, ELightingDiagnostic::jump, ELightingDiagnostic::cascade}) {
+            for (const u32 cascade: {1u, 5u}) {
+                PPR_TEST_ASSERT(not validateLightingInspectionSettings({diagnostic, cascade}));
+            }
+        }
+
+        PPR_TEST_ASSERT(
+            validateLightingInspectionSettings({static_cast<ELightingDiagnostic>(42), 1u}) ==
+            std::errc::invalid_argument);
+        for (const u32 cascade: {0u, 6u}) {
+            PPR_TEST_ASSERT(
+                validateLightingInspectionSettings({ELightingDiagnostic::cascade, cascade}) ==
+                std::errc::invalid_argument);
+        }
+    };
+
+    PPR_UNIT_TEST (inspection_views_decode_published_records_without_mutation) {
+        Fixture fixture;
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        auto &device = fixture.device();
+        InspectionRenderer renderer{fixture};
+
+        constexpr u32 edge = WorldLightingPass::kWorldEdge;
+        constexpr u32 fine_edge = WorldLightingPass::kFineCHEdge;
+        constexpr u32 cascade_level_records = lighting::kCascadeLevelRecords;
+
+        InspectionResources inputs{};
+
+        std::vector<u32> resolved(static_cast<std::size_t>(edge) * edge, 0u);
+        std::vector<u32> source(static_cast<std::size_t>(edge) * edge, 0u);
+        std::vector<u8> jump(static_cast<std::size_t>(edge) * edge, 0u);
+        std::array<GridTerrainVisual, 6u> visuals{};
+        for (u32 index = 0u; index < visuals.size(); ++index) {
+            visuals[index].m_material_id = index;
+            visuals[index].m_color_rgba = 0xffff'ffffu;
+        }
+        visuals[2u].m_surface_flags = kGridSurfaceOpticalBlend;
+        visuals[2u].m_opacity = 0.25f;
+        visuals[3u].m_emissive_rgb[0] = 1.0f;
+        visuals[3u].m_emissive_strength = 4.0f;
+
+        const auto cell = [](const u32 x, const u32 y) { return static_cast<std::size_t>(y) * edge + x; };
+        resolved[cell(8u, 8u)] = *lighting::packCell(1u, 300.0);
+        resolved[cell(24u, 8u)] = *lighting::packCell(2u, 300.0);
+        resolved[cell(56u, 8u)] = *lighting::packCell(3u, 300.0);
+        const u32 source_word = *lighting::packRGB9E5(float3{0.25f, 0.5f, 1.0f});
+        source[cell(8u, 8u)] = source_word;
+
+        const std::array<u8, 6u> jump_values{1u, 2u, 4u, 8u, 16u, 32u};
+        const std::array<u32, 6u> jump_cells{8u, 24u, 40u, 56u, 72u, 88u};
+        for (u32 index = 0u; index < jump_cells.size(); ++index) {
+            jump[cell(jump_cells[index], 8u)] = jump_values[index];
+        }
+
+        const auto uniform = lighting::packCH(uniformCH(float3{0.25f, 0.5f, 1.0f}));
+        PPR_TEST_ASSERT(uniform.has_value());
+        std::vector<lighting::PackedCH> fine(static_cast<std::size_t>(fine_edge) * fine_edge, *uniform);
+
+        std::vector<lighting::PackedInterval> cascades(
+            static_cast<std::size_t>(WorldLightingPass::kCascadeLevels) * cascade_level_records);
+        const auto setInterval = [&](const u32 level, const float3 radiance, const float transmittance) {
+            const auto packed = lighting::packInterval(
+                lighting::Interval{.m_radiance = radiance, .m_transmittance = transmittance});
+            PPR_TEST_ASSERT(packed.has_value());
+            // Fill the small atlas neighborhood the sampled panel pixels hit
+            // (fragment centers add half a pixel to the exact coordinate).
+            for (u32 y = 8u; y <= 12u; ++y) {
+                for (u32 x = 136u; x <= 140u; ++x) {
+                    cascades[static_cast<std::size_t>(level - 1u) * cascade_level_records + y * edge + x] = *packed;
+                }
+            }
+        };
+        setInterval(1u, float3{0.25f, 0.5f, 1.0f}, 0.5f);
+        setInterval(5u, float3{1.0f, 0.25f, 0.5f}, 0.25f);
+
+        inputs.m_resolved = makeBuffer(device, resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        inputs.m_visuals = makeBuffer(device, sizeof(visuals), sizeof(GridTerrainVisual), visuals.data());
+        inputs.m_fine_ch = makeBuffer(
+            device, fine.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH), fine.data());
+        inputs.m_source = makeBuffer(device, source.size() * sizeof(u32), sizeof(u32), source.data());
+        inputs.m_cascades = makeBuffer(
+            device, cascades.size() * sizeof(lighting::PackedInterval), sizeof(lighting::PackedInterval),
+            cascades.data());
+
+        rhi::TextureDesc jump_description{};
+        jump_description.type = rhi::TextureType::Texture2D;
+        jump_description.size = {edge, edge, 1u};
+        jump_description.arrayLength = 1u;
+        jump_description.mipCount = 1u;
+        jump_description.format = rhi::Format::R8Uint;
+        jump_description.memoryType = rhi::MemoryType::DeviceLocal;
+        jump_description.usage = rhi::TextureUsage::ShaderResource;
+        jump_description.defaultState = rhi::ResourceState::ShaderResource;
+        const rhi::SubresourceData jump_initial{jump.data(), edge, static_cast<u64>(edge) * edge};
+        PPR_TEST_ASSERT(
+            not make_error_code(device.createTexture(jump_description, &jump_initial, inputs.m_jump.writeRef())));
+
+        // Snapshot the inspected records before any overlay draw.
+        const auto resolved_before = readBufferBytes(
+            device, *inputs.m_resolved, cell(8u, 8u) * sizeof(u32), sizeof(u32));
+        const auto source_before = readBufferBytes(device, *inputs.m_source, cell(8u, 8u) * sizeof(u32), sizeof(u32));
+        const auto fine_before = readBufferBytes(
+            device, *inputs.m_fine_ch, static_cast<u64>(7u * 64u + 9u) * sizeof(lighting::PackedCH),
+            sizeof(lighting::PackedCH));
+        const auto cascade1_before = readBufferBytes(
+            device, *inputs.m_cascades, static_cast<u64>(8u * edge + 136u) * sizeof(lighting::PackedInterval),
+            sizeof(lighting::PackedInterval));
+        const auto cascade5_before = readBufferBytes(
+            device, *inputs.m_cascades,
+            (static_cast<u64>(4u) * cascade_level_records + static_cast<u64>(8u * edge + 136u)) *
+                sizeof(lighting::PackedInterval),
+            sizeof(lighting::PackedInterval));
+
+        const CameraSnapshot camera = inspectionCamera();
+        const auto probe_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::probes), 1u, int2{2048, 2048});
+        const auto source_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::source), 1u, int2{64, 64});
+        const auto occupancy_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::occupancy), 1u, int2{64, 64});
+        const auto jump_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::jump), 1u, int2{64, 64});
+        const auto cascade1_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 1u, int2{512, 512});
+        const auto cascade5_pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 5u, int2{512, 512});
+
+        // probes: uniform fine field. A 2048-pixel target keeps the two-cell
+        // fine-probe lattice a full pixel-width from the sample at cell centers
+        // (edge = target/2048), so this isolates the CH angular mean.
+        const float3 mean = lighting::unpackRGB9E5(uniform->m_words[0]) * static_cast<float>(kInvSqrtTwoPi);
+        InspectionRenderer::assertDisplayed(InspectionRenderer::texel(probe_pixels, 8u, 2040u), mean);
+
+        // source: decoded cached outgoing RGB at native cell (8,8).
+        InspectionRenderer::assertDisplayed(
+            InspectionRenderer::texel(source_pixels, 0u, 63u), lighting::unpackRGB9E5(source_word));
+
+        // occupancy: opaque white, receive-only cyan, empty black, emissive opaque white.
+        const auto occupancy = [&](const u32 x) { return InspectionRenderer::texel(occupancy_pixels, x, 63u); };
+        const auto nearByte = [](const u8 actual, const u8 expected, const int tolerance = 1) {
+            return std::abs(static_cast<int>(actual) - static_cast<int>(expected)) <= tolerance;
+        };
+        const u8 white = static_cast<u8>(std::lround(inspectionSrgbEncode(1.0f) * 255.0f));
+        const u8 cyan = static_cast<u8>(std::lround(inspectionSrgbEncode(1.0f) * 255.0f));
+        PPR_TEST_ASSERT(
+            nearByte(occupancy(0u)[0], white) and
+            nearByte(occupancy(0u)[1], white) and
+            nearByte(occupancy(0u)[2], white));
+        PPR_TEST_ASSERT(
+            nearByte(occupancy(1u)[0], 0u) and nearByte(occupancy(1u)[1], cyan) and nearByte(occupancy(1u)[2], cyan));
+        PPR_TEST_ASSERT(
+            nearByte(occupancy(2u)[0], 0u) and nearByte(occupancy(2u)[1], 0u) and nearByte(occupancy(2u)[2], 0u));
+        PPR_TEST_ASSERT(
+            nearByte(occupancy(3u)[0], white) and
+            nearByte(occupancy(3u)[1], white) and
+            nearByte(occupancy(3u)[2], white));
+
+        // jump: every stored class is a distinct labeled color.
+        const std::array<float3, 6u> jump_colors{
+            float3{0.80f, 0.08f, 0.08f}, float3{0.95f, 0.45f, 0.05f}, float3{0.92f, 0.92f, 0.08f},
+            float3{0.10f, 0.80f, 0.20f}, float3{0.10f, 0.35f, 0.95f}, float3{0.85f, 0.15f, 0.85f}};
+        for (u32 index = 0u; index < jump_colors.size(); ++index) {
+            InspectionRenderer::assertCategorical(
+                InspectionRenderer::texel(jump_pixels, index, 63u), jump_colors[index]);
+        }
+
+        // cascade: left panel is radiance through the inspection curve, right
+        // panel is transmittance. Pixel (34,130) maps to atlas (136,8) without
+        // landing on the probe/direction lattice at either level.
+        const auto left = [](const TextureReadback &pixels) { return InspectionRenderer::texel(pixels, 34u, 130u); };
+        const auto right = [](const TextureReadback &pixels) { return InspectionRenderer::texel(pixels, 290u, 130u); };
+        InspectionRenderer::assertDisplayed(left(cascade1_pixels), float3{0.25f, 0.5f, 1.0f});
+        InspectionRenderer::assertDisplayed(left(cascade5_pixels), float3{1.0f, 0.25f, 0.5f});
+        const auto assertGray = [&](const std::array<u8, 4u> &texel, const float linear) {
+            const u8 expected = static_cast<u8>(std::lround(inspectionSrgbEncode(linear) * 255.0f));
+            PPR_TEST_ASSERT(
+                nearByte(texel[0], expected) and nearByte(texel[1], expected) and nearByte(texel[2], expected));
+        };
+        assertGray(right(cascade1_pixels), 0.5f);
+        assertGray(right(cascade5_pixels), 0.25f);
+
+        // Read-only decode: no inspected record changed across any view.
+        PPR_TEST_ASSERT(
+            resolved_before == readBufferBytes(device, *inputs.m_resolved, cell(8u, 8u) * sizeof(u32), sizeof(u32)));
+        PPR_TEST_ASSERT(
+            source_before == readBufferBytes(device, *inputs.m_source, cell(8u, 8u) * sizeof(u32), sizeof(u32)));
+        PPR_TEST_ASSERT(
+            fine_before == readBufferBytes(
+                               device, *inputs.m_fine_ch, static_cast<u64>(7u * 64u + 9u) * sizeof(lighting::PackedCH),
+                               sizeof(lighting::PackedCH)));
+        PPR_TEST_ASSERT(
+            cascade1_before == readBufferBytes(
+                                   device, *inputs.m_cascades,
+                                   static_cast<u64>(8u * edge + 136u) * sizeof(lighting::PackedInterval),
+                                   sizeof(lighting::PackedInterval)));
+        PPR_TEST_ASSERT(
+            cascade5_before == readBufferBytes(
+                                   device, *inputs.m_cascades,
+                                   (static_cast<u64>(4u) * cascade_level_records + static_cast<u64>(8u * edge + 136u)) *
+                                       sizeof(lighting::PackedInterval),
+                                   sizeof(lighting::PackedInterval)));
+    };
 }
 
 namespace pP::tests {
@@ -1884,6 +2320,8 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::grid_tiles_sample_rate_boundary_selects_distinct_cell_materials,
                 detail::WorldLightingMaterial::grid_frame_reflection_matches_the_cpu_contract,
                 detail::WorldLightingMaterial::opaque_thermal_glow_and_receive_only_thermal_exclusion,
+                detail::WorldLightingMaterial::inspection_settings_reject_unknown_views_and_levels,
+                detail::WorldLightingMaterial::inspection_views_decode_published_records_without_mutation,
             });
         };
         return group;

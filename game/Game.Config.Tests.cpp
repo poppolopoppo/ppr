@@ -703,6 +703,9 @@ namespace pP::game::tests::detail::compat {
         const auto normal = resolveCli({}, defaults_diagnostics);
         PPR_TEST_ASSERT(normal.has_value());
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == -1);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_diagnostic == ELightingDiagnostic::off);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_cascade == 1u);
+        PPR_TEST_ASSERT(normal->m_pixel.m_value.m_pixel_scale == 3u);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_exposure_ev == 0.0f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_adaptation_tau == 0.7f);
@@ -713,11 +716,14 @@ namespace pP::game::tests::detail::compat {
 
         Diagnostics configured_diagnostics;
         const auto configured = resolveCli(
-            {"--world-light-sky-hour=12", "--post-auto-exposure", "--post-exposure-ev=2.5",
-                "--post-bloom-intensity=1.25"},
+            {"--world-light-sky-hour=12", "--world-light-diagnostic=cascade", "--world-light-cascade=5",
+                "--pixel-scale=2", "--post-auto-exposure", "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25"},
             configured_diagnostics);
         PPR_TEST_ASSERT(configured.has_value());
         PPR_TEST_ASSERT(configured->m_world_light.m_value.m_sky_hour == 12);
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_diagnostic == ELightingDiagnostic::cascade);
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_cascade == 5u);
+        PPR_TEST_ASSERT(configured->m_pixel.m_value.m_pixel_scale == 2u);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_bloom_intensity == 1.25f);
@@ -725,11 +731,18 @@ namespace pP::game::tests::detail::compat {
         for (const auto *const invalid:
             {"--world-light-sky-hour=24", "--world-light-sky-hour=-2", "--post-exposure-ev=-16.1",
                 "--post-adaptation-tau=0.09", "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
-                "--post-bloom-threshold=16.1"}) {
+                "--post-bloom-threshold=16.1", "--post-exposure-ev=nan", "--post-adaptation-tau=inf",
+                "--post-bloom-threshold=nan", "--world-light-diagnostic=debug", "--world-light-diagnostic=none",
+                "--world-light-cascade=0", "--world-light-cascade=6", "--pixel-scale=0", "--pixel-scale=9"}) {
             Diagnostics rejected;
             PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
             PPR_TEST_ASSERT(rejected.hasErrors());
         }
+
+        // The cascade selection is an inspection atlas level, never an active
+        // cascade-count control: the compiled schedule still owns all five.
+        PPR_TEST_ASSERT(WorldLightingPass::kCascadeLevels == 5u);
+        PPR_TEST_ASSERT(configured->m_world_light.m_value.m_cascade <= WorldLightingPass::kCascadeLevels);
 
         Diagnostics cross_diagnostics;
         PPR_TEST_ASSERT(not resolveCli({"--post-ev-min=2", "--post-ev-max=-2"}, cross_diagnostics));
@@ -744,8 +757,56 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(sky_round_trip.has_value());
         PPR_TEST_ASSERT(sky_round_trip->m_value.m_sky_hour == 12);
 
+        // The retained inspection domain round-trips, and unknown diagnostics or
+        // out-of-range cascade levels are configuration errors, never clamped.
+        WorldLightDisplaySettings inspection_draft{};
+        inspection_draft.m_diagnostic = ELightingDiagnostic::cascade;
+        inspection_draft.m_cascade = 5u;
+        Diagnostics inspection_diagnostics;
+        const auto inspection_round_trip = validateWorldLightDraft(
+            committed_world, inspection_draft, inspection_diagnostics);
+        PPR_TEST_ASSERT(inspection_round_trip.has_value());
+        PPR_TEST_ASSERT(inspection_round_trip->m_value.m_diagnostic == ELightingDiagnostic::cascade);
+        PPR_TEST_ASSERT(inspection_round_trip->m_value.m_cascade == 5u);
+
+        WorldLightDisplaySettings unknown_diagnostic = inspection_draft;
+        unknown_diagnostic.m_diagnostic = static_cast<ELightingDiagnostic>(200);
+        Diagnostics unknown_diagnostics;
+        PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, unknown_diagnostic, unknown_diagnostics));
+        PPR_TEST_ASSERT(unknown_diagnostics.hasErrors());
+
+        for (const u32 cascade: {0u, 6u}) {
+            WorldLightDisplaySettings invalid_cascade = inspection_draft;
+            invalid_cascade.m_cascade = cascade;
+            Diagnostics cascade_diagnostics;
+            PPR_TEST_ASSERT(not validateWorldLightDraft(committed_world, invalid_cascade, cascade_diagnostics));
+            PPR_TEST_ASSERT(cascade_diagnostics.hasErrors());
+        }
+
+        // Pixelization P0/P9 are the same configuration rejection at the draft
+        // boundary; P1..P8 resolve and P1 still means full-size Hable resolve.
+        config::Resolved<PixelDisplaySettings> committed_pixel{};
+        for (const u32 scale: {0u, 9u}) {
+            PixelDisplaySettings invalid_pixel{scale};
+            Diagnostics pixel_diagnostics;
+            PPR_TEST_ASSERT(not validatePixelDraft(committed_pixel, invalid_pixel, pixel_diagnostics));
+            PPR_TEST_ASSERT(pixel_diagnostics.hasErrors());
+        }
+
+        for (const u32 scale: {1u, 3u, 8u}) {
+            PixelDisplaySettings valid_pixel{scale};
+            Diagnostics pixel_diagnostics;
+            const auto resolved_pixel = validatePixelDraft(committed_pixel, valid_pixel, pixel_diagnostics);
+            PPR_TEST_ASSERT(resolved_pixel.has_value());
+            PPR_TEST_ASSERT(resolved_pixel->m_value.m_pixel_scale == scale);
+            PPR_TEST_ASSERT(not pixel_diagnostics.hasErrors());
+        }
+
         const std::string help = gameHelpText();
         PPR_TEST_ASSERT(help.find("world-light-sky-hour") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-diagnostic") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("world-light-cascade") != std::string::npos);
+        PPR_TEST_ASSERT(help.find("pixel-scale") != std::string::npos);
         PPR_TEST_ASSERT(help.find("post-palette") == std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-samples-per-frame") == std::string::npos);
         PPR_TEST_ASSERT(help.find("world-light-debug") == std::string::npos);
@@ -754,9 +815,13 @@ namespace pP::game::tests::detail::compat {
     };
 
     PPR_UNIT_TEST (retired_world_light_settings_are_rejected) {
-        // The retained sky setting keeps its -1 black-boundary meaning.
+        // The retained settings keep their approved defaults.
         const WorldLightDisplaySettings defaults{};
         PPR_TEST_ASSERT(defaults.m_sky_hour == -1);
+        PPR_TEST_ASSERT(defaults.m_diagnostic == ELightingDiagnostic::off);
+        PPR_TEST_ASSERT(defaults.m_cascade == 1u);
+        const PixelDisplaySettings pixel_defaults{};
+        PPR_TEST_ASSERT(pixel_defaults.m_pixel_scale == 3u);
 
         // The retired world-light controls have no active owner: an explicit
         // assignment through any source must fail resolution with diagnostics
@@ -786,7 +851,7 @@ namespace pP::game::tests::detail::compat {
         // The persist boundary refuses the invalid draft, so it never reaches the
         // overlay and never fails the next launch's resolution.
         const auto persisted = buildLightingPostOverlayDocument(
-            config::Document{}, WorldLightDisplaySettings{}, invalid);
+            config::Document{}, WorldLightDisplaySettings{}, PixelDisplaySettings{}, invalid);
         PPR_TEST_ASSERT(not persisted.has_value());
     };
 

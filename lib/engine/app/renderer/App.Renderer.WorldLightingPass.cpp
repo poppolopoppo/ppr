@@ -9,6 +9,7 @@ import :renderer.frame_fence;
 import :renderer.types;
 import :renderer.world_lighting;
 import :renderer.world_lighting_pass;
+import :scene.camera;
 
 import engine.core;
 import engine.math;
@@ -75,6 +76,24 @@ namespace pP {
         constexpr std::array<const char *, 1u> kSourceEntries{"prepareSource"};
         constexpr std::array<const char *, 2u> kCascadeEntries{"updateTerminal", "updateCascade"};
         constexpr std::array<const char *, 1u> kFineEntries{"reconstructFine"};
+
+        constexpr std::array<const char *, 2u> kInspectionEntries{"vertexInspect", "fragmentInspect"};
+
+        // Mirrored field-for-field by assets/shaders/world_lighting_inspect.slang.
+        struct alignas(16) InspectionStageFrame {
+            float4x4 m_inverse_view_projection{identity_v};
+            float4 m_viewport{};
+            u32 m_diagnostic{};
+            u32 m_cascade_level{1u};
+            u32 m_encode_srgb{};
+            u32 m_reserved{};
+        };
+
+        static_assert(sizeof(InspectionStageFrame) == 96u);
+        static_assert(alignof(InspectionStageFrame) == 16u);
+        static_assert(PPR_OFFSETOF(InspectionStageFrame, m_inverse_view_projection) == 0u);
+        static_assert(PPR_OFFSETOF(InspectionStageFrame, m_viewport) == 64u);
+        static_assert(PPR_OFFSETOF(InspectionStageFrame, m_diagnostic) == 80u);
 
         std::error_code validateProjectionInputs(const lighting::WorldLightingInputs &inputs) {
             // Only the resources these dispatches bind are required. The source
@@ -153,6 +172,19 @@ namespace pP {
     // ------------------------------------------------------------------
     // initialization and teardown
     // ------------------------------------------------------------------
+
+    std::error_code validateLightingInspectionSettings(const LightingInspectionSettings &settings) noexcept {
+        if (lighting_diagnostic_domain.nameOf(settings.m_diagnostic).empty()) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        if (settings.m_cascade < WorldLightingPass::kInspectionCascadeMin or
+            settings.m_cascade > WorldLightingPass::kInspectionCascadeMax) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+
+        return {};
+    }
 
     WorldLightingPass::~WorldLightingPass() {
         releaseResources_();
@@ -294,6 +326,36 @@ namespace pP {
                                    root / "shaders" / "world_lighting_fine.slang", "world_lighting_fine", 0u,
                                    kFineEntries, m_resources->m_fine_programs.data()));
 
+        // Retained inspection: one fullscreen render program. Its pipeline is
+        // created per acquired-surface signature on first C-stage use.
+        shader::SharedModule inspect_module{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, shaders.loadModuleFromFile(
+                                   root / "shaders" / "world_lighting_inspect.slang", "world_lighting_inspect",
+                                   inspect_module.writeRef()));
+
+        std::array<shader::ComPtr<slang::IEntryPoint>, kInspectionEntries.size()> inspect_points{};
+        for (u32 entry = 0u; entry < kInspectionEntries.size(); ++entry) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass,
+                inspect_module->findEntryPointByName(kInspectionEntries[entry], inspect_points[entry].writeRef()));
+        }
+
+        slang::IComponentType *inspection_entries[]{
+            inspect_points[0u].get(),
+            inspect_points[1u].get(),
+        };
+        rhi::ShaderProgramDesc inspection_description{};
+        inspection_description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        inspection_description.slangGlobalScope = inspect_module.get();
+        inspection_description.slangEntryPoints = inspection_entries;
+        inspection_description.slangEntryPointCount = static_cast<u32>(std::size(inspection_entries));
+        shader::Diagnose inspection_diagnostics;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, device.createShaderProgram(
+                                   inspection_description, m_resources->m_inspection.m_program.writeRef(),
+                                   inspection_diagnostics.writeRef()));
+
         m_ready = true;
         PPR_LOG(WorldLightingPass, info, "WorldLightingPass initialized");
         return {};
@@ -353,6 +415,11 @@ namespace pP {
                     device.createRootShaderObject(
                         resources.m_programs[entry].m_program, resources.m_roots[entry][slot].writeRef()));
             }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass,
+                device.createRootShaderObject(
+                    resources.m_inspection.m_program, resources.m_inspection_roots[slot].writeRef()));
         }
 
         return ensureTransportResources_(device);
@@ -372,6 +439,7 @@ namespace pP {
             attempt.m_readback_mapped = nullptr;
         }
 
+        std::ignore = m_inspection_releases.drainAll();
         m_resources.reset();
         m_ready = false;
         m_device = nullptr;
@@ -595,10 +663,14 @@ namespace pP {
             return;
         }
 
-        for (auto &attempt: m_resources->m_status) {
-            if (attempt.m_pending and attempt.m_submission != kFenceValueNone and attempt.m_submission <= value) {
-                attempt.m_read_submission = std::max(attempt.m_read_submission, value);
-            }
+        m_resources->m_inspection.m_last_use = std::max(m_resources->m_inspection.m_last_use, value);
+
+        // Only the attempt this C-stage overlay actually decoded is extended.
+        // Extending every earlier pending attempt would chain their reader
+        // fences to the newest submission and exhaust the status ring.
+        auto &attempt = m_resources->m_status[m_resources->m_attempt_slot];
+        if (attempt.m_pending and attempt.m_submission != kFenceValueNone and attempt.m_submission <= value) {
+            attempt.m_read_submission = std::max(attempt.m_read_submission, value);
         }
     }
 
@@ -677,6 +749,7 @@ namespace pP {
             PPR_RETAIN_ERROR_ON_FAIL(WorldLightingPass, first_err, inspectAttempt_(attempt));
         }
 
+        std::ignore = m_inspection_releases.reclaim(completed);
         return first_err;
     }
 
@@ -722,6 +795,181 @@ namespace pP {
                 status_cursor.setBinding(rhi::Binding(attempt.m_status, projectionRange(attempt.m_status))));
         }
         return {};
+    }
+
+    // ------------------------------------------------------------------
+    // retained inspection overlay
+    // ------------------------------------------------------------------
+
+    bool WorldLightingPass::inspectionAvailable() const noexcept {
+        if (not m_resources or
+            not m_resources->m_resolved or
+            not m_resources->m_fine_ch or
+            not m_resources->m_source or
+            not m_resources->m_cascades or
+            not m_resources->m_inspection.m_program) {
+            return false;
+        }
+
+        const auto &attempt = m_resources->m_status[m_resources->m_attempt_slot];
+        return attempt.m_pending and
+               attempt.m_submission != kFenceValueNone and
+               attempt.m_jump and
+               attempt.m_inputs.m_visible_materials;
+    }
+
+    std::error_code WorldLightingPass::ensureInspectionPipeline_(
+        const DrawContext &context, const RenderPipelineSignature &signature, const bool encode_srgb) {
+        auto &inspection = m_resources->m_inspection;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            inspection.m_program ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        if (inspection.m_key and static_cast<const RenderPipelineSignature &>(*inspection.m_key) != signature) {
+            if (inspection.m_pipeline) {
+                m_inspection_releases.defer(
+                    inspection.m_last_use, [held = std::move(inspection.m_pipeline)]() mutable { held.setNull(); });
+            }
+            inspection.m_key.reset();
+        }
+
+        if (inspection.m_pipeline) {
+            return {};
+        }
+
+        rhi::ColorTargetDesc target{};
+        target.format = signature.colorFormats().front();
+        target.enableBlend = false;
+        rhi::RenderPipelineDesc description{};
+        description.program = inspection.m_program.get();
+        description.primitiveTopology = rhi::PrimitiveTopology::TriangleList;
+        description.targets = &target;
+        description.targetCount = 1u;
+        description.multisample.sampleCount = static_cast<u32>(signature.m_sample_count);
+        description.depthStencil.format = rhi::Format::Undefined;
+        description.depthStencil.depthTestEnable = false;
+        description.depthStencil.depthWriteEnable = false;
+        description.rasterizer.cullMode = rhi::CullMode::None;
+        description.label = encode_srgb ? "world lighting inspect (shader sRGB)" : "world lighting inspect";
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, context.m_device.createRenderPipeline(description, inspection.m_pipeline.writeRef()));
+        inspection.m_key.emplace(signature);
+        return {};
+    }
+
+    std::error_code WorldLightingPass::encodeInspection_(
+        const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
+        const bool encode_srgb) {
+        auto &resources = *m_resources;
+        auto &attempt = resources.m_status[resources.m_attempt_slot];
+
+        InspectionStageFrame values{};
+        values.m_inverse_view_projection = camera.m_invert_view_projection;
+        const float width = static_cast<float>(context.m_target_extent.x);
+        const float height = static_cast<float>(context.m_target_extent.y);
+        values.m_viewport = float4{width, height, 1.0f / width, 1.0f / height};
+        values.m_diagnostic = static_cast<u32>(settings.m_diagnostic);
+        values.m_cascade_level = settings.m_cascade;
+        values.m_encode_srgb = encode_srgb ? 1u : 0u;
+
+        auto &root = *resources.m_inspection_roots[resources.m_attempt_slot];
+        rhi::ShaderCursor cursor{&root};
+
+        const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, projectionRange(buffer))));
+            return {};
+        };
+
+        rhi::ShaderCursor constants;
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_inspect"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved_cells", resources.m_resolved));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", attempt.m_inputs.m_visible_materials));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_fine_ch", resources.m_fine_ch));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_source", resources.m_source));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cascades", resources.m_cascades));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+
+        context.m_pass.pushDebugGroup("WorldLighting.Inspect", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
+        context.m_pass.setRenderState({
+            .viewports = {context.m_viewport},
+            .viewportCount = 1u,
+            .scissorRects = {context.m_scissor},
+            .scissorRectCount = 1u,
+            .vertexBuffers = {},
+            .indexBuffer = {},
+        });
+        context.m_pass.bindPipeline(resources.m_inspection.m_pipeline, &root);
+        context.m_pass.draw({.vertexCount = 3u});
+        return {};
+    }
+
+    std::error_code WorldLightingPass::renderInspection(
+        const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings) {
+        const hal::ProfileScope scope{"App.Pass.WorldLighting.Inspect"};
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateLightingInspectionSettings(settings));
+        if (settings.m_diagnostic == ELightingDiagnostic::off) {
+            return {};
+        }
+
+        if (not m_ready) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLightingPass, m_shaders.isValid() and not m_root.empty()
+                                       ? std::error_code{}
+                                       : std::make_error_code(std::errc::not_connected));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, initialize(*m_shaders, m_root));
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, m_resources and
+                                       m_resources->m_resolved and
+                                       m_resources->m_fine_ch and
+                                       m_resources->m_source and
+                                       m_resources->m_cascades and
+                                       m_resources->m_inspection.m_program
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+
+        // The overlay decodes the attempt this frame actually submitted. A
+        // never-submitted or already-collected attempt has no matching world
+        // state to stamp, so the caller's view is not fabricated.
+        const auto &attempt = m_resources->m_status[m_resources->m_attempt_slot];
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, attempt.m_pending and
+                                       attempt.m_submission != kFenceValueNone and
+                                       attempt.m_jump and
+                                       attempt.m_inputs.m_visible_materials
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+
+        const RenderPipelineSignature &signature = context.m_render_pipeline_key;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, signature.colorFormats().size() == 1u and
+                                       not signature.m_depth_stencil_format.has_value() and
+                                       signature.m_sample_count == SampleCount::x1 and
+                                       context.m_target_extent.x > 0 and
+                                       context.m_target_extent.y > 0
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
+
+        // A hardware sRGB attachment encodes once; an SDR UNorm attachment asks
+        // the overlay shader for the single encoding. Float targets stay as the
+        // inspection curve produced them.
+        const rhi::Format format = signature.colorFormats().front();
+        const bool encode_srgb = format == rhi::Format::RGBA8Unorm or format == rhi::Format::BGRA8Unorm;
+        const bool srgb_target = format == rhi::Format::RGBA8UnormSrgb or format == rhi::Format::BGRA8UnormSrgb;
+        const bool float_target = format == rhi::Format::RGBA16Float or format == rhi::Format::RGBA32Float;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, encode_srgb or srgb_target or float_target
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_supported));
+
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureInspectionPipeline_(context, signature, encode_srgb));
+        return encodeInspection_(context, camera, settings, encode_srgb);
     }
 
     // ------------------------------------------------------------------

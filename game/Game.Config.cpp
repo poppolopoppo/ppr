@@ -177,6 +177,29 @@ namespace pP::game {
             });
             return layer;
         }
+
+        // The world-light domain carries one enum, so its draft layer spells the
+        // canonical domain name instead of the integer-only generic visitor.
+        [[nodiscard]] config::Layer worldLightRuntimeLayer(
+            const WorldLightDisplaySettings &settings, const std::string origin) {
+            config::Layer layer{};
+            layer.m_source = config::ESource::runtime;
+            layer.m_origin = origin;
+            layer.m_assignments.push_back(
+                config::Assignment{
+                    "game.world_light.sky_hour", "panel", config::SourceValue::integer(settings.m_sky_hour), origin,
+                    0u});
+            layer.m_assignments.push_back(
+                config::Assignment{
+                    "game.world_light.diagnostic", "panel",
+                    config::SourceValue::text(std::string{lighting_diagnostic_domain.nameOf(settings.m_diagnostic)}),
+                    origin, 1u});
+            layer.m_assignments.push_back(
+                config::Assignment{
+                    "game.world_light.cascade", "panel",
+                    config::SourceValue::integer(static_cast<i64>(settings.m_cascade)), origin, 2u});
+            return layer;
+        }
     } // namespace
 
     std::error_code PostDisplaySettings::validate(
@@ -207,6 +230,17 @@ namespace pP::game {
         append(
             "game.world_light.sky_hour", "Field sky solar hour (-1 uses the black boundary sky; 12 is noon).",
             "world-light-sky-hour", false);
+        append(
+            "game.world_light.diagnostic",
+            "Retained lighting inspection view (off, probes, source, occupancy, jump, cascade).",
+            "world-light-diagnostic", false);
+        append(
+            "game.world_light.cascade", "Inspection cascade atlas level (1-5); not an active cascade count.",
+            "world-light-cascade", false);
+
+        append(
+            "game.pixel.scale", "Pixelization factor P (1..8): render the scene at 1/P resolution and enlarge it.",
+            "pixel-scale", false);
 
         append(
             "game.post.auto_exposure", "Adapt exposure from a scene luminance histogram.", "post-auto-exposure", true);
@@ -223,18 +257,23 @@ namespace pP::game {
 
     Expected<config::Document> buildLightingPostOverlayDocument(
         const config::Document &existing, const WorldLightDisplaySettings &world_light,
-        const PostDisplaySettings &post) {
-        // Reject an invalid draft (e.g. ev_min > ev_max) before it reaches the
-        // overlay, so a bad panel value never persists and fails the next launch.
+        const PixelDisplaySettings &pixel, const PostDisplaySettings &post) {
+        // Reject an invalid draft (e.g. ev_min > ev_max or P0) before it reaches
+        // the overlay, so a bad panel value never persists and fails the next
+        // launch.
         config::Diagnostics validation_diagnostics{};
         config::Resolved<WorldLightDisplaySettings> world_committed{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             GameConfig, validateWorldLightDraft(world_committed, world_light, validation_diagnostics));
+        config::Resolved<PixelDisplaySettings> pixel_committed{};
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, validatePixelDraft(pixel_committed, pixel, validation_diagnostics));
         config::Resolved<PostDisplaySettings> post_committed{};
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, validatePostDraft(post_committed, post, validation_diagnostics));
 
         const auto strip_prefix = [](std::string_view key) {
-            return key.starts_with("game.world_light.") or key.starts_with("game.post.");
+            return key.starts_with("game.world_light.") or
+                   key.starts_with("game.pixel.") or
+                   key.starts_with("game.post.");
         };
 
         config::Document merged{};
@@ -277,6 +316,7 @@ namespace pP::game {
         };
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, append_schema(world_light));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, append_schema(pixel));
         PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, append_schema(post));
         return merged;
     }
@@ -285,6 +325,16 @@ namespace pP::game {
         const config::Resolved<WorldLightDisplaySettings> &committed, const WorldLightDisplaySettings &draft,
         config::Diagnostics &diagnostics) {
         config::Resolved<WorldLightDisplaySettings> scratch = committed;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameConfig,
+            config::applyRuntime(scratch, worldLightRuntimeLayer(draft, "lighting-post-panel"), diagnostics));
+        return scratch;
+    }
+
+    Expected<config::Resolved<PixelDisplaySettings>> validatePixelDraft(
+        const config::Resolved<PixelDisplaySettings> &committed, const PixelDisplaySettings &draft,
+        config::Diagnostics &diagnostics) {
+        config::Resolved<PixelDisplaySettings> scratch = committed;
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             GameConfig, config::applyRuntime(scratch, runtimeLayerFrom(draft, "lighting-post-panel"), diagnostics));
         return scratch;
@@ -561,6 +611,9 @@ namespace pP::game {
         if (auto valid = config::validateSchema<WorldLightDisplaySettings>(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
+        if (auto valid = config::validateSchema<PixelDisplaySettings>(diagnostics); not valid) {
+            return std::unexpected{valid.error()};
+        }
         if (auto valid = config::validateSchema<PostDisplaySettings>(diagnostics); not valid) {
             return std::unexpected{valid.error()};
         }
@@ -583,6 +636,7 @@ namespace pP::game {
         Array<config::Layer> display_layers{};
         Array<config::Layer> startup_layers{};
         Array<config::Layer> world_light_layers{};
+        Array<config::Layer> pixel_layers{};
         Array<config::Layer> post_layers{};
         std::error_code first_error{};
 
@@ -591,10 +645,13 @@ namespace pP::game {
             Array<config::Assignment> display_assigns{};
             Array<config::Assignment> startup_assigns{};
             Array<config::Assignment> world_light_assigns{};
+            Array<config::Assignment> pixel_assigns{};
             Array<config::Assignment> post_assigns{};
             for (const auto &assignment: layer.m_assignments) {
                 if (assignment.m_name.starts_with("game.world_light.")) {
                     world_light_assigns.push_back(assignment);
+                } else if (assignment.m_name.starts_with("game.pixel.")) {
+                    pixel_assigns.push_back(assignment);
                 } else if (assignment.m_name.starts_with("game.post.")) {
                     post_assigns.push_back(assignment);
                 } else if (assignment.m_name.starts_with("game.")) {
@@ -623,6 +680,7 @@ namespace pP::game {
             emit(display_layers, std::move(display_assigns));
             emit(startup_layers, std::move(startup_assigns));
             emit(world_light_layers, std::move(world_light_assigns));
+            emit(pixel_layers, std::move(pixel_assigns));
             emit(post_layers, std::move(post_assigns));
         };
 
@@ -658,6 +716,9 @@ namespace pP::game {
         auto world_light = config::resolve<WorldLightDisplaySettings>(
             std::span<const config::Layer>{world_light_layers.data(), world_light_layers.size()}, diagnostics);
 
+        auto pixel = config::resolve<PixelDisplaySettings>(
+            std::span<const config::Layer>{pixel_layers.data(), pixel_layers.size()}, diagnostics);
+
         auto post = config::resolve<PostDisplaySettings>(
             std::span<const config::Layer>{post_layers.data(), post_layers.size()}, diagnostics);
 
@@ -672,6 +733,9 @@ namespace pP::game {
         }
         if (not world_light) {
             return std::unexpected{world_light.error()};
+        }
+        if (not pixel) {
+            return std::unexpected{pixel.error()};
         }
         if (not post) {
             return std::unexpected{post.error()};
@@ -709,6 +773,7 @@ namespace pP::game {
         invocation.m_display = std::move(*display);
         invocation.m_startup = std::move(*startup);
         invocation.m_world_light = std::move(*world_light);
+        invocation.m_pixel = std::move(*pixel);
         invocation.m_post = std::move(*post);
         invocation.m_cli = cli;
         invocation.m_config_paths = configPathsFrom(cli);

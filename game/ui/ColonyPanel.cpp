@@ -1569,9 +1569,10 @@ namespace pP::colony {
                         draft.m_window_mode, draft.m_monitor, draft.m_width, draft.m_height, draft.m_refresh_hz},
                 .m_pixelization = {state.m_pixel_scale},
                 .m_lighting_post =
-                    {state.m_world_light.m_sky_hour, state.m_post.m_auto_exposure, state.m_post.m_exposure_ev,
-                        state.m_post.m_adaptation_tau, state.m_post.m_ev_min, state.m_post.m_ev_max,
-                        state.m_post.m_bloom, state.m_post.m_bloom_intensity, state.m_post.m_bloom_threshold},
+                    {state.m_world_light.m_sky_hour, state.m_world_light.m_diagnostic, state.m_world_light.m_cascade,
+                        state.m_post.m_auto_exposure, state.m_post.m_exposure_ev, state.m_post.m_adaptation_tau,
+                        state.m_post.m_ev_min, state.m_post.m_ev_max, state.m_post.m_bloom,
+                        state.m_post.m_bloom_intensity, state.m_post.m_bloom_threshold},
                 .m_matches = game::displayDraftMatches(draft, snap.m_view.m_committed),
                 .m_availability = {availability.m_supported, availability.m_reason},
                 .m_trial_open = game::displayTrialUnresolved(session.m_confirm),
