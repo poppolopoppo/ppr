@@ -49,7 +49,7 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 13 | complete (commit `2f46ae40`; independent review approved) |
 | 14 | complete (commits `8c5cf6b0`, `fd03d4c6`; reviews clean; credit ruling recorded) |
 | 15 | complete (commits `c5db57be` and the review-fix follow-up; review issues fixed; Task 16 fallback removal recorded) |
-| 16 | complete (commit `be0a29d6` + review/leak follow-up; Windows/D3D12 pending) |
+| 16 | complete (commits `be0a29d6`, `7e017cc4`; leak evidence NVIDIA-only; Windows/D3D12 pending) |
 | 17–19 | pending |
 
 ## Task 0 — evidence
@@ -1507,7 +1507,7 @@ and operational acceptance. No Task 4 work has begun.
 ## Task 16 — retained controls, inspection overlay and leak-evidence correction
 
 - Commits: `be0a29d6` `feat: expose retained display controls and world-lighting
-  inspection`; follow-up review-fix commit `pending`.
+  inspection`; follow-up review/evidence commit `7e017cc4`.
 - Delivered: retained `game.world_light.diagnostic`/`game.world_light.cascade`
   and `game.pixel.scale` domains, sky wiring, the C-stage
   `world_lighting_inspect.slang` overlay (probes/source/occupancy/jump/cascade),
