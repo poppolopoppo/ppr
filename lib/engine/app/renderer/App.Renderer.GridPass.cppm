@@ -148,16 +148,26 @@ export namespace pP {
     // ------------------------------------------------------------------
     // One constant set, mirrored by grid_particle_native.slang (the prepare cull
     // and the draw geometry read it there). r is the packed physical radius
-    // h*sqrt(V/pi); R = 1.25 r is the support radius both phases share; the cull
-    // margin in the prepare `visible()` test is 1.5 r.
-    inline constexpr float kGridParticleSupportScale{1.25f};
-    inline constexpr float kGridParticleCullRadiusScale{1.5f};
+    // h*sqrt(V/pi); R = 2.0 r is the support radius both phases share (the P1
+    // decision); the cull margin in the prepare `visible()` test is 2.45 r, which
+    // also covers the optional 1.2x stretch at 2.400 r.
+    inline constexpr float kGridParticleSupportScale{2.0f};
+    inline constexpr float kGridParticleCullRadiusScale{2.45f};
+    inline constexpr float kGridParticleStretchCap{1.2f};
+
+    // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
+    // 1 for rho <= 2/3, smoothstep(1, 2/3, rho) for 2/3 < rho < 1 and 0 beyond.
+    // The alpha = 0.5 contour is rho = 5/6. Every seeded-lattice point sits inside
+    // R_in, so a packed interior is saturated and the falloff only shapes the free
+    // surface and detached droplets.
+    inline constexpr float kGridParticleFalloffInnerFraction{2.0f / 3.0f};
+    inline constexpr float kGridParticleDiscardThreshold{0.5f};
 
     // Solid: a rounded square inscribed in the R circle. It is the Minkowski sum
     // of a square of half-extent a-c and a disk of radius c, so its support is
     // S = sqrt(2)*a - c*(sqrt(2)-1). With c = 0.25 a, S = 1.3106 a, giving
-    // a = R/1.3106 = 0.9538 r (0.2690 cell at r = 0.2821 cell) and
-    // c = 0.25 a (0.0673 cell). Liquid: a disk of radius R, support exactly R.
+    // a = R/1.3106 = 1.5260 r (0.4305 cell at r = 0.2821 cell) and
+    // c = 0.25 a (0.1076 cell). Liquid: a disk of radius R, support exactly R.
     inline constexpr float kGridParticleRoundedSquareSupport{1.3106f};
     inline constexpr float kGridParticleSolidHalfExtentScale{
         kGridParticleSupportScale / kGridParticleRoundedSquareSupport};
@@ -175,30 +185,43 @@ export namespace pP {
         return root_two * half_extent - corner * (root_two - 1.0f);
     }
 
-    // Every shape's support must stay inside the 1.5 r cull margin, and the
-    // rounded square must be inscribed exactly in the disk's support circle. A
-    // future shape that outgrows the bound fails here instead of clipping
-    // silently at the frustum edge.
+    // C1 falloff mirror of grid_tiles.slang's particleFalloff, in rho units.
+    [[nodiscard]] constexpr float gridParticleFalloff(const float rho) noexcept {
+        const float t = (1.0f - rho) / (1.0f - kGridParticleFalloffInnerFraction);
+        const float clamped = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        return clamped * clamped * (3.0f - 2.0f * clamped);
+    }
+
+    // Every shape's support must stay inside the 2.45 r cull margin, including the
+    // optional stretch, and the rounded square must be inscribed exactly in the
+    // disk's support circle. A future shape that outgrows the bound fails here
+    // instead of clipping silently at the frustum edge:
+    //   max(support, kStretchCap * support) = 2.400 r <= 2.45 r (2.08% headroom).
     //
     // Rejected variants, recorded so they cannot return unnoticed: a rounded
-    // square with half-extent a = R has support 1.638 r (1.09x the margin) and
-    // the unrounded square with a = R has 1.768 r (1.18x); both would clip.
-    static_assert(
-        gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) <=
-            kGridParticleCullRadiusScale,
-        "the solid rounded square must fit the shared 1.5 r cull margin");
+    // square with half-extent a = R has support 2.621 r, the unrounded square with
+    // a = R has 2.828 r and the earlier 0.5-cell half-extent square has 2.507 r;
+    // all exceed the margin and would clip.
     static_assert(
         gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) <=
             kGridParticleSupportScale + 1.0e-4f,
         "the solid rounded square is inscribed in the R support circle");
     static_assert(
+        gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) *
+                kGridParticleStretchCap <=
+            kGridParticleCullRadiusScale,
+        "the stretched support must fit the 2.45 r cull margin");
+    static_assert(
         gridParticleRoundedSquareSupport(
             kGridParticleSupportScale, kGridParticleSolidCornerFraction *kGridParticleSupportScale) >
             kGridParticleCullRadiusScale,
-        "the rejected rounded a = R variant would clip; keep it rejected");
+        "the rejected rounded a = R variant (2.621 r) would clip; keep it rejected");
     static_assert(
         1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale,
-        "the rejected unrounded a = R variant would clip; keep it rejected");
+        "the rejected unrounded a = R variant (2.828 r) would clip; keep it rejected");
+    static_assert(
+        2.5066f > kGridParticleCullRadiusScale,
+        "the rejected 0.5-cell half-extent square (2.507 r) would clip; keep it rejected");
 
     // ------------------------------------------------------------------
     // per-instance particle descriptions

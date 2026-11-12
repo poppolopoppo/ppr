@@ -3371,9 +3371,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 hot[0u][0u] = position->x + 3.0f;
                 hot[0u][1u] = position->y + 3.0f;
                 hot[0u][15u] = 1.0f;
-                // r = 0.2 m, so the drawn support (R = 1.25 r = 0.25 m) sits
-                // entirely inside one native cell: the per-pixel terrain hard
-                // clip then covers the whole footprint of the occupied probe.
+                // r = 0.2 m, so the drawn support (R = 2.0 r = 0.4 m) still fits
+                // inside one 1 m native cell: the per-pixel terrain hard clip
+                // then covers the whole footprint of the occupied probe.
                 cold[0u][1u] = std::numbers::pi_v<float> * 0.04f;
             }
 
@@ -3496,37 +3496,74 @@ namespace pP::tests::detail::WorldLightingMaterial {
     };
 
     PPR_UNIT_TEST (particle_shapes_share_one_support_bound) {
-        // One arithmetic probe for the adopted geometry: the solid rounded
-        // square is inscribed in the liquid disk's support circle and both fit
-        // the 1.5 r cull margin the prepare pass uses. The same constants are
-        // mirrored in grid_particle_native.slang for the draw geometry and the
-        // prepare cull.
+        // Arithmetic probe for the revised (P1) geometry: 2.0x support, the C1
+        // falloff, the 2.45 r_m cull margin that also covers the 1.2x stretch,
+        // and the saturated seeded interior. The same constants are mirrored in
+        // grid_particle_native.slang for the draw geometry and the prepare cull.
         constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
         const float rounded_support = gridParticleRoundedSquareSupport(
             kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale);
 
-        PPR_TEST_ASSERT(kGridParticleSupportScale == 1.25f);
-        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 1.5f);
+        PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
+        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 2.45f);
+        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.2f);
+        PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
         PPR_TEST_ASSERT(std::abs(rounded_support - kGridParticleSupportScale) <= 1.0e-4f);
-        PPR_TEST_ASSERT(rounded_support <= kGridParticleCullRadiusScale);
-        // Cell units at the reference radius: a = 0.2690 cell, c = 0.0673 cell.
-        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidHalfExtentScale) * r_cell - 0.2690) <= 5.0e-4);
-        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidCornerScale) * r_cell - 0.0673) <= 5.0e-4);
+        // max(support, kStretchCap * support) = 2.400 r <= 2.45 r.
+        PPR_TEST_ASSERT(rounded_support * kGridParticleStretchCap <= kGridParticleCullRadiusScale);
+        // Cell units at the reference radius: a = 0.4305 cell, c = 0.1076 cell.
+        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidHalfExtentScale) * r_cell - 0.4305) <= 5.0e-4);
+        PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidCornerScale) * r_cell - 0.1076) <= 5.0e-4);
+
+        // The falloff is C1: value 1 up to R_in = (2/3) R, 0 at R and beyond, the
+        // alpha = 0.5 contour at rho = 5/6, and (numerically) zero slope at both
+        // joins.
+        constexpr float epsilon = 1.0e-4f;
+        const float inner = kGridParticleFalloffInnerFraction;
+        PPR_TEST_ASSERT(gridParticleFalloff(0.0f) == 1.0f);
+        PPR_TEST_ASSERT(gridParticleFalloff(inner) == 1.0f);
+        PPR_TEST_ASSERT(std::abs(gridParticleFalloff(5.0f / 6.0f) - 0.5f) <= 1.0e-4f);
+        PPR_TEST_ASSERT(gridParticleFalloff(1.0f) == 0.0f);
+        PPR_TEST_ASSERT(gridParticleFalloff(1.5f) == 0.0f);
+        PPR_TEST_ASSERT((gridParticleFalloff(inner) - gridParticleFalloff(inner + epsilon)) / epsilon <= 1.0e-2f);
+        PPR_TEST_ASSERT((gridParticleFalloff(1.0f) - gridParticleFalloff(1.0f - epsilon)) / epsilon <= 1.0e-2f);
+
+        // The seeded interior is saturated: the axis midpoint (0.25 cell) and the
+        // diagonal midpoint / cell centre (0.3536 cell) are all inside R_in, so a
+        // packed body is fully opaque by construction (plan §5.2).
+        const double support_cell = double(kGridParticleSupportScale) * r_cell;
+        const double rho_axis = 0.25 / support_cell;
+        const double rho_diagonal = 0.35355339059327373 / support_cell;
+        PPR_TEST_ASSERT(rho_axis < double(kGridParticleFalloffInnerFraction));
+        PPR_TEST_ASSERT(rho_diagonal < double(kGridParticleFalloffInnerFraction));
+        const auto union_coverage = [](const double rho, const u32 contributors) {
+            const double alpha = double(gridParticleFalloff(static_cast<float>(rho)));
+            return 1.0 - std::pow(1.0 - alpha, double(contributors));
+        };
+        PPR_TEST_ASSERT(union_coverage(rho_axis, 2u) >= 0.99);
+        PPR_TEST_ASSERT(union_coverage(rho_diagonal, 2u) >= 0.98);
+        PPR_TEST_ASSERT(union_coverage(rho_diagonal, 4u) >= 0.99);
+
         // Rejected variants would clip at the frustum edge: the rounded square of
-        // half-extent a = R (keeping the 0.25 a corner fraction) needs 1.638x the
-        // cull margin, and the unrounded square of half-extent a = R needs 1.768x.
+        // half-extent a = R (keeping the 0.25 a corner fraction) needs 2.621x the
+        // physical radius, the unrounded square of a = R needs 2.828x and the
+        // earlier 0.5-cell half-extent square needs 2.507x.
         PPR_TEST_ASSERT(
             gridParticleRoundedSquareSupport(
                 kGridParticleSupportScale, kGridParticleSolidCornerFraction * kGridParticleSupportScale) >
             kGridParticleCullRadiusScale);
         PPR_TEST_ASSERT(1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale);
+        PPR_TEST_ASSERT(1.41421356237309505f * 0.5f / float(r_cell) > kGridParticleCullRadiusScale);
+
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_shape support={:.4f} cull={:.4f} half_extent={:.4f} "
-                "corner={:.4f} half_extent_cell={:.4f} corner_cell={:.4f}",
-                rounded_support, kGridParticleCullRadiusScale, kGridParticleSolidHalfExtentScale,
-                kGridParticleSolidCornerScale, double(kGridParticleSolidHalfExtentScale) * r_cell,
-                double(kGridParticleSolidCornerScale) * r_cell));
+                "WORLD_LIGHTING_MATERIAL particle_shape support={:.4f} stretched={:.4f} cull={:.4f} "
+                "half_extent={:.4f} corner={:.4f} half_extent_cell={:.4f} corner_cell={:.4f} "
+                "rho_axis={:.4f} rho_diagonal={:.4f}",
+                rounded_support, rounded_support * kGridParticleStretchCap, kGridParticleCullRadiusScale,
+                kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale,
+                double(kGridParticleSolidHalfExtentScale) * r_cell, double(kGridParticleSolidCornerScale) * r_cell,
+                rho_axis, rho_diagonal));
     };
 }
 

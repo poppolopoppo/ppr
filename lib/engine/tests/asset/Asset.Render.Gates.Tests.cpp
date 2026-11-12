@@ -4124,12 +4124,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 24u);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
-            // The restored liquid disk's support is R = 1.25 r, where the retired
+            // The restored liquid disk's support is R = 2.0 r, where the retired
             // mask filled the whole authored radius (its 64/62 quad padding only
             // extended the transparent border). Scaling the authored volume by
-            // 1/1.25^2 keeps every drawn footprint at the previously probed
+            // 1/2.0^2 keeps every drawn footprint at the previously probed
             // extent, so the pixel assertions below stay exact.
-            constexpr float kMaskSupportMatch = 0.64f;
+            constexpr float kMaskSupportMatch = 0.25f;
             for (u32 row = 0u; row < 2u; ++row) {
                 hot[row].fields[0u] = 67.0f;
                 hot[row].fields[1u] = 67.0f;

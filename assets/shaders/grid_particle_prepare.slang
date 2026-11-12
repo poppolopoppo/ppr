@@ -221,8 +221,9 @@ bool visible(PresentationRow particle) {
     if (!all(isfinite(particle.position)) || !(particle.radius>0.0))
         return false;
     // Enclose the drawn support, not only the disk quad: liquid is a disk of
-    // radius R = 1.25 r and the solid rounded square is inscribed in the same
-    // circle, so both stay inside this shared 1.5 r cull margin.
+    // radius R = 2.0 r and the solid rounded square is inscribed in the same
+    // circle, so both stay inside this shared 2.45 r cull margin (which also
+    // covers the optional 1.2x stretch at 2.400 r).
     float radius=particle.radius*kParticleCullRadiusScale;
     for (uint plane=0u;plane<6u;++plane) {
         float4 p=g_particle_prepare.planes[plane];

@@ -1176,8 +1176,8 @@ struct ParticleVertexOutput {
     nointerpolation uint material:TEXCOORD2;
     nointerpolation float4 color:COLOR0;
     // Quad corner in units of the row's physical radius r: 64/62 for the gas
-    // mask, and the shared support 1.25 for both restored classes (the
-    // fragment's SDF turns it into the phase-specific silhouette).
+    // mask, and the shared support 2.0 for both restored classes (the
+    // fragment's phase SDF and falloff produce the actual silhouette).
     nointerpolation float shape_scale:TEXCOORD3;
     // Canonical packCell word rebuilt from the row: material | temperature << 16.
     nointerpolation uint canonical:TEXCOORD4;
@@ -1212,7 +1212,7 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
 
     // Gas keeps the shared mask texture and its two-texel transparent border;
     // the restored classes use the analytic shapes. Both shapes are inscribed in
-    // the same support circle R = 1.25 r, so one quad encloses either and the
+    // the same support circle R = 2.0 r, so one quad encloses either and the
     // fragment's phase test selects the actual silhouette. Sizing the quad from
     // the draw class instead would clip an opaque liquid's disk.
     float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
@@ -1390,16 +1390,23 @@ GridReactiveOutput fragmentParticleReactive(ParticleVertexOutput input,uint inde
 // opaque class and still shades through the liquid description, and an optical
 // solid is drawn by the optical class and still shades through the solid one.
 
-// Signed distance to the adopted support boundary, in units of the row's
-// physical radius. This is a distance-to-inset-rect comparison for the solid
-// and a radius comparison for the liquid, never a mask texture fetch.
-float particleShapeDistance(float2 local, bool liquid) {
-    if (liquid) return length(local)-kParticleSupportScale;
-
-    // Rounded box: the inner square half-extent is a-c and the corner radius c,
-    // so the outside distance is to the inset rectangle and its arc.
+// Signed distance to the solid rounded-square boundary, in units of the row's
+// physical radius: distance to the inset rectangle (half-extent a-c) plus the
+// corner arc c. It is a distance comparison, never a mask texture fetch. The
+// liquid silhouette is the radial falloff below, so it needs no SDF.
+float particleSolidDistance(float2 local) {
     float2 offset=abs(local)-float2(kParticleSolidInnerHalfExtentScale,kParticleSolidInnerHalfExtentScale);
     return length(max(offset,float2(0.0)))+min(max(offset.x,offset.y),0.0)-kParticleSolidCornerScale;
+}
+
+// C1 radial falloff of the presentation support, shared by both phases. With
+// rho = |local| / R it is 1 inside R_in = (2/3) R, falls as smoothstep(1, 2/3,
+// rho) to 0 at R and is 0 beyond. t is written increasing so this is the ordinary
+// smoothstep polynomial, and both joins have zero slope.
+float particleFalloff(float2 local) {
+    float rho=length(local)/kParticleSupportScale;
+    float t=saturate((1.0-rho)/(1.0-kParticleFalloffInnerFraction));
+    return t*t*(3.0-2.0*t);
 }
 
 float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
@@ -1426,14 +1433,17 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     bool liquid=authored_liquid&&!authored_solid;
 
     // Derivatives are prepared before any per-pixel reject so the texture
-    // gradients and the analytic edge width stay coherent across the quad.
+    // gradients stay coherent across the quad.
     float2 world_gradient_x=clamp(ddx(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
     float2 world_gradient_y=clamp(ddy(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
     ParticleTerrainFootprint footprint=particleTerrainFootprint(input.fine_position,g_sampler);
     float2 local=(input.uv*2.0-1.0)*input.shape_scale;
-    float distance=particleShapeDistance(local,liquid);
-    float shape_coverage=saturate(0.5-distance/max(fwidth(distance),1.0e-6));
-    if (shape_coverage<=0.0) discard;
+    float falloff=particleFalloff(local);
+    // A blended class shapes its edge with alpha; a non-blending class cannot,
+    // so its silhouette is the alpha = 0.5 contour (the R_s circle, plan §3).
+    // Solids also carry their rounded-square mask.
+    bool inside_solid_shape=liquid || particleSolidDistance(local)<=0.0;
+    if (!inside_solid_shape || falloff<=(blend_class ? 0.0 : kParticleDiscardThreshold)) discard;
 
     // The per-pixel terrain hard clip is kept as the second line of defence for
     // pixels where draw order alone is not enough.
@@ -1441,6 +1451,10 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     if (terrain_coverage==1.0) discard;
 
     geometric_support=1;
+
+    // A blended instance yields to the falloff and to partial terrain coverage;
+    // an opaque class writes straight.
+    float coverage_scale=blend_class ? falloff*(1.0-terrain_coverage) : 1.0;
 
     if (liquid) {
         // Liquid description: the material's own albedo/normal, IOR, optical
@@ -1452,11 +1466,6 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
             input.position.xy,float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,
             input.fine_position,false,blend_class);
         if (!blend_class) return surface;
-
-        // A blended instance covers `shape_coverage` of the pixel and yields to
-        // partial terrain coverage, so the premultiplied result is scaled by
-        // both for the optical pipeline's One/InvSrcAlpha blend.
-        float coverage_scale=shape_coverage*(1.0-terrain_coverage);
         return float4(surface.rgb*coverage_scale,surface.a*coverage_scale);
     }
 
@@ -1469,8 +1478,10 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // writes it straight.
     CH coefficients={};
     if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(input.fine_position);
-    return categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,
+    float4 surface=categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,
         world_gradient_y,coefficients,g_textures,g_sampler,blend_class);
+    if (!blend_class) return surface;
+    return float4(surface.rgb*coverage_scale,surface.a*coverage_scale);
 }
 
 [shader("fragment")]
