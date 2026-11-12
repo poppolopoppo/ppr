@@ -363,6 +363,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         TIMEOUT 180
         LABELS unit game gpu_validation
     )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_stall_gpu
+        FILTER "game/checkpoint_gpu/terrain_position_rejection_freezes_matter_until_a_committed_mutation"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation
+    )
 
     ppr_add_test_entry(TARGET game.tests
         NAME matter_sand_gpu

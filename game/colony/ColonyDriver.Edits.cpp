@@ -714,13 +714,19 @@ namespace pP::colony {
                 const auto finished = finishMatterPhysics();
                 PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, finished);
                 if (not *finished) {
-                    if (m_matter_stalled) {
-                        // The rejected candidate ended this slice without a
-                        // publication. The frozen state owns the joint tick
-                        // identity, so the slice and every queued catch-up slice
-                        // are dropped instead of replaying an identical tick. An
-                        // explicit single-step request was attempted once and is
-                        // consumed, so it cannot retry every frame.
+                    // Only a *just-observed* rejection ends this slice without a
+                    // publication: finishMatterPhysics clears m_matter_pending on
+                    // that path, while a transport-pending poll or an unacknowledged
+                    // publication keeps it set. The sticky stall flag alone must not
+                    // drop the slice, or a retry admitted while frozen would strand
+                    // its in-flight poll (no held slice left to poll it, so
+                    // physicsPending() and the frozen admission would never clear).
+                    if (m_matter_stalled and not m_matter_pending) {
+                        // The frozen state owns the joint tick identity, so the
+                        // slice and every queued catch-up slice are dropped instead
+                        // of replaying an identical tick. An explicit single-step
+                        // request was attempted once and is consumed, so it cannot
+                        // retry every frame.
                         m_held_slices = 0u;
                         if (m_pending_single_steps != 0u) {
                             --m_pending_single_steps;

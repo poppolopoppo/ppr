@@ -192,6 +192,36 @@ void inspectTerrainExteriorEndpoint(uniform float2 g_contact_query) {
     g_contact_result[11] = int(g_errors[0]);
 }
 
+// ------------------------------------------------------------------
+// bounded transport-exit repair through the production helper
+// ------------------------------------------------------------------
+
+// The two transport exits publish a point they chose; when that point is not
+// certified they call terrainRepairPublishedPosition, which projects it to the
+// nearest canonical feature and takes at most three representable outward steps
+// before the final-position field is recorded. g_contact_query is the world point
+// under test; the repaired point, both certifications, the no-op flag and the
+// nearest canonical feature are reported so the bound is checkable, not assumed.
+[shader("compute")]
+[numthreads(1,1,1)]
+void inspectTerrainPositionRepair(uniform float2 g_contact_query) {
+    float2 repaired = terrainRepairPublishedPosition(g_contact_query, 0u);
+    TerrainFeature feature = terrainNearestFeature(g_contact_query, 0u);
+
+    g_contact_result[0] = asint(repaired.x);
+    g_contact_result[1] = asint(repaired.y);
+    g_contact_result[2] = terrainPositionCertified(repaired) ? 1 : 0;
+    g_contact_result[3] = terrainPositionCertified(g_contact_query) ? 1 : 0;
+    g_contact_result[4] = all(repaired == g_contact_query) ? 1 : 0;
+    g_contact_result[5] = asint(feature.point.x);
+    g_contact_result[6] = asint(feature.point.y);
+    g_contact_result[7] = asint(feature.fraction);
+    g_contact_result[8] = asint(g_contact_query.x);
+    g_contact_result[9] = asint(g_contact_query.y);
+    g_contact_result[10] = terrainPositionCertified(feature.point) ? 1 : 0;
+    g_contact_result[11] = int(g_errors[0]);
+}
+
 // Both paths use the production error helpers with a mixed full-group cohort.
 // The candidate compares error acceptance, not its deliberately unused values.
 [shader("compute")]

@@ -35,6 +35,7 @@ namespace pP::tests::detail::MatterGpu {
         rhi::ComPtr<rhi::IComputePipeline> m_bootstrap_pipeline;
         rhi::ComPtr<rhi::IComputePipeline> m_transport_pipeline;
         rhi::ComPtr<rhi::IComputePipeline> m_exterior_pipeline;
+        rhi::ComPtr<rhi::IComputePipeline> m_repair_pipeline;
         rhi::ComPtr<rhi::IComputePipeline> m_sand_contact_pipeline;
         GpuSolver m_solver;
 
@@ -74,6 +75,7 @@ namespace pP::tests::detail::MatterGpu {
             // destroying their injected dependencies in that exceptional case.
             PPR_TEST_ASSERT(not solver_error);
             m_sand_contact_pipeline.setNull();
+            m_repair_pipeline.setNull();
             m_exterior_pipeline.setNull();
             m_transport_pipeline.setNull();
             m_bootstrap_pipeline.setNull();
@@ -289,10 +291,12 @@ namespace pP::tests::detail::MatterGpu {
         const std::optional<std::array<float, 2u>> contact_query = {},
         const std::span<const std::array<float, 2u>> wave_queries = {}, const std::span<const u32> wave_enabled = {},
         const bool inspect_codec = false, const bool inspect_bootstrap = false, const bool inspect_transport = false,
-        const bool inspect_exterior = false, const bool inspect_sand_contact = false) {
+        const bool inspect_exterior = false, const bool inspect_sand_contact = false,
+        const bool inspect_repair = false) {
         auto &device = fixture.m_rhi->getDevice();
         const bool wave = not wave_queries.empty();
         auto &pipeline = inspect_sand_contact ? fixture.m_sand_contact_pipeline
+                         : inspect_repair     ? fixture.m_repair_pipeline
                          : inspect_exterior   ? fixture.m_exterior_pipeline
                          : inspect_transport  ? fixture.m_transport_pipeline
                          : inspect_bootstrap  ? fixture.m_bootstrap_pipeline
@@ -308,6 +312,7 @@ namespace pP::tests::detail::MatterGpu {
             shader::ComPtr<slang::IEntryPoint> entry;
             PPR_TEST_ASSERT(not make_error_code(module->findEntryPointByName(
                 inspect_sand_contact ? "inspectSandGridContacts"
+                : inspect_repair     ? "inspectTerrainPositionRepair"
                 : inspect_exterior   ? "inspectTerrainExteriorEndpoint"
                 : inspect_transport  ? "inspectTerrainTransportBudget"
                 : inspect_bootstrap  ? "compareBootstrapChecks"
@@ -512,6 +517,11 @@ namespace pP::tests::detail::MatterGpu {
 
     GridResult compareTerrainSearch(Fixture &fixture, const TerrainView terrain, const std::array<float, 2u> point) {
         return contactProbe(fixture, terrain, {}, 0.0f, {}, 10'000'000, 0.0f, point);
+    }
+
+    GridResult repairProbe(Fixture &fixture, const TerrainView terrain, const std::array<float, 2u> point) {
+        return contactProbe(
+            fixture, terrain, {}, 0.0f, {}, 10'000'000, 0.0f, point, {}, {}, false, false, false, false, false, true);
     }
 
     // ------------------------------------------------------------------
@@ -2985,6 +2995,61 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // transport-exit recovery through the production helper
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (transport_exit_repair_is_bounded_and_a_no_op_when_certified) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+
+        // Case 3 is the straight bottom-half face y = 0.5 across x in [0, 1], with
+        // a single canonical segment. The production helper projects an uncertified
+        // published point onto that face.
+        const std::array<u32, 1u> masks{3u};
+        const TerrainView face{masks, 1u, 1u, 0.0f, 0.0f};
+        const auto bits = [](const float value) { return std::bit_cast<u32>(value); };
+        const auto probe = [&](const float x, const float y) {
+            const auto result = repairProbe(fixture, face, {x, y});
+            PPR_TEST_ASSERT(result.m_errors[0u] == 0u and result.m_contacts[11u] == 0u);
+            return result;
+        };
+
+        // One representable step inside the face: the input is uncertified, the
+        // published point is the certified canonical feature point (zero outward
+        // steps, therefore inside the three-step bound).
+        const float one_ulp_inside = std::nextafter(0.5f, 0.0f);
+        PPR_TEST_ASSERT(std::nextafter(one_ulp_inside, std::numeric_limits<float>::infinity()) == 0.5f);
+        const auto near_face = probe(0.5f, one_ulp_inside);
+        PPR_TEST_ASSERT(near_face.m_contacts[3u] == 0u);
+        PPR_TEST_ASSERT(near_face.m_contacts[2u] == 1u);
+        PPR_TEST_ASSERT(near_face.m_contacts[4u] == 0u);
+        PPR_TEST_ASSERT(near_face.m_contacts[0u] == bits(0.5f) and near_face.m_contacts[1u] == bits(0.5f));
+        PPR_TEST_ASSERT(near_face.m_contacts[5u] == bits(0.5f) and near_face.m_contacts[6u] == bits(0.5f));
+        PPR_TEST_ASSERT(near_face.m_contacts[10u] == 1u);
+
+        // Deep penetration (a quarter cell) snaps to the same nearest certified
+        // face: bounded by that face distance, never a silent clamp to the input.
+        const auto deep = probe(0.5f, 0.25f);
+        PPR_TEST_ASSERT(deep.m_contacts[3u] == 0u and deep.m_contacts[2u] == 1u);
+        PPR_TEST_ASSERT(deep.m_contacts[4u] == 0u);
+        PPR_TEST_ASSERT(deep.m_contacts[8u] == bits(0.5f) and deep.m_contacts[9u] == bits(0.25f));
+        PPR_TEST_ASSERT(deep.m_contacts[0u] == deep.m_contacts[5u] and deep.m_contacts[1u] == deep.m_contacts[6u]);
+        PPR_TEST_ASSERT(
+            std::abs(std::bit_cast<float>(deep.m_contacts[1u]) - std::bit_cast<float>(deep.m_contacts[9u])) <= 0.5f);
+
+        // A certified position is returned bit-identically: the repair is a no-op
+        // on a passing tick, so a successful transport exit is unchanged by B.
+        const auto free = probe(0.5f, 0.75f);
+        PPR_TEST_ASSERT(free.m_contacts[3u] == 1u and free.m_contacts[2u] == 1u);
+        PPR_TEST_ASSERT(free.m_contacts[4u] == 1u);
+        PPR_TEST_ASSERT(free.m_contacts[0u] == free.m_contacts[8u] and free.m_contacts[1u] == free.m_contacts[9u]);
+        PPR_TEST_ASSERT(free.m_contacts[0u] == bits(0.5f) and free.m_contacts[1u] == bits(0.75f));
+    };
+
+    // ------------------------------------------------------------------
     // recoverable terrain-position verdict
     // ------------------------------------------------------------------
 
@@ -4722,6 +4787,8 @@ namespace pP::tests {
                 detail::MatterGpu::prepared_replacement_accounts_peak_and_freezes_admission,
                 detail::MatterGpu::terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,
                 detail::MatterGpu::terrain_recovery_sweeps_and_rest_preserve_published_contact,
+                detail::MatterGpu::transport_exit_repair_is_bounded_and_a_no_op_when_certified,
+                detail::MatterGpu::terrain_position_rejection_is_recoverable_and_other_verdicts_stay_fatal,
                 detail::MatterGpu::terrain_endpoint_response_and_complete_boundary_search,
                 detail::MatterGpu::wave_boundary_search_matches_serial_for_full_mixed_groups,
                 detail::MatterGpu::moving_body_static_limit_translation_rotation_and_one_way_contact,

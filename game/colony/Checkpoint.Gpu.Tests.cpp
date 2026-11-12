@@ -893,13 +893,17 @@ namespace pP::game::tests::detail::checkpoint {
         const TimeSpan period = TimeSpan{std::chrono::seconds{1}} / owner.m_driver->tickHz();
 
         // One admitted slice submits the working batch; the poll decodes the
-        // injected verdict and discards the candidate.
+        // injected verdict and discards the candidate. These are the exact
+        // application-level calls (Game.Application.cpp: updateDriver_(elapsed),
+        // then updateDriver_({}) for the poll), and both must succeed.
         const auto stall = [&] {
             PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginInjectTickVerdictForTest(verdict)));
-            owner.update(period);
+            const bool fresh = owner.m_driver->admitsElapsed();
+            PPR_TEST_ASSERT(fresh);
+            PPR_TEST_ASSERT(not owner.m_driver->update(fresh ? period : TimeSpan{}));
             PPR_TEST_ASSERT(owner.m_driver->physicsPending());
             owner.drain();
-            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(not owner.m_driver->update(TimeSpan{}));
             PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
         };
 
@@ -923,21 +927,49 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(owner.m_runtime.failure()->m_particle == 4455u);
 
         // No spin: the application's gate passes zero elapsed while frozen, so
-        // nothing is resubmitted and the interval counter does not grow.
+        // nothing is resubmitted, the interval counter does not grow, and every
+        // application-level update still succeeds. The submission proxy is
+        // physicsPending() (no batch admitted), the unchanged tick count/device
+        // epoch (no publication) and the unchanged stall counter (no re-poll):
+        // no existing counter exposes a raw submission count through the facade,
+        // and m_dispatches only refreshes on a completion that cannot occur here.
         for (u32 frame = 0u; frame < 4u; ++frame) {
-            PPR_TEST_ASSERT(not owner.m_driver->admitsElapsed());
-            owner.update(TimeSpan{});
+            const bool fresh = owner.m_driver->admitsElapsed();
+            PPR_TEST_ASSERT(not fresh);
+            PPR_TEST_ASSERT(not owner.m_driver->update(fresh ? period : TimeSpan{}));
         }
 
         PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 1u);
         PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
         PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
 
+        // A single-step retry is admitted while the stall is still armed (stepOne
+        // sets one held slice without clearing the verdict). That retry must not
+        // strand its own in-flight poll: while a batch is in flight the poll is
+        // transport-pending, and dropping the slice there would leave
+        // physicsPending() true forever with no held slice left to poll it. The
+        // bounded loop replays the poll and must resolve to a counted re-stall.
+        owner.m_driver->setPaused(true);
+        PPR_TEST_ASSERT(not owner.m_driver->stepOne());
+        for (u32 frame = 0u; frame < 500u and owner.m_driver->physicsPending(); ++frame) {
+            PPR_TEST_ASSERT(not owner.m_driver->update(TimeSpan{}));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+
+        owner.m_driver->setPaused(false);
+        PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
+        PPR_TEST_ASSERT(owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 2u);
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+
         // A non-mutating retry reproduces the verdict: counted, not looped.
         owner.update(period);
         owner.drain();
-        owner.update(TimeSpan{});
-        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 2u);
+        for (u32 frame = 0u; frame < 500u and owner.m_driver->physicsPending(); ++frame)
+            PPR_TEST_ASSERT(not owner.m_driver->update(TimeSpan{}));
+
+        PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 3u);
         PPR_TEST_ASSERT(owner.m_driver->matterStalled());
         PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
 
@@ -3000,6 +3032,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::checkpoint::service_door_cancel_reused_matter_target_rejects_stale_outer_activation,
             detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
+            detail::checkpoint::terrain_position_rejection_freezes_matter_until_a_committed_mutation,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry,
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,

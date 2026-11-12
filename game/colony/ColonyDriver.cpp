@@ -828,6 +828,11 @@ namespace pP::colony {
             m_pending_digs.erase(m_pending_digs.begin());
         }
         m_pending_digs.push_back(PendingDig{.m_min = min, .m_width = width, .m_height = height});
+        // A queued terrain mutation is a state mutation that can change a frozen
+        // verdict, so it re-admits one evaluated tick. The tool step runs before
+        // physics in that slice, so the dig becomes an edit instead of a replay;
+        // if the edit is deferred the tick simply re-stalls (counted, no loop).
+        clearMatterStall();
         return {};
     }
 

@@ -153,7 +153,7 @@ concave-corner contact into interior penetration. Uncertified rounding uses at
 most three representable outward steps, not a fixed skin. The two transport exits
 that publish a chosen point (a representable leg with no motion, and a no-hit
 sweep) are the exception to the immediate rejection: when the chosen point is not
-certified they first attempt a bounded, counted exterior projection (the nearest
+certified they first attempt a bounded exterior projection (the nearest
 3x3 canonical feature, then at most three representable outward steps), and
 reject only if that also fails. The published point therefore moves to the nearest
 certified boundary within that bound, never by a silent clamp, and a passing
