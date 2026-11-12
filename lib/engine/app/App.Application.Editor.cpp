@@ -264,49 +264,48 @@ namespace pP {
 
         m_ui_service = ui::createImGuiService();
 
-        // Default Site Office face slots: Pixelify body/emphasis, then Big
-        // Shoulders headings, then the body family again at the smaller size
-        // the Inspector read-out binds (ui::theme::EFont::tiny). Font Awesome
-        // merges into the body, so it does not consume a separate slot. Keep
-        // ui::theme::font's contract in sync.
+        // UI face slots: Sour Gummy carries body, emphasis and the smaller
+        // read-out the Inspector binds (ui::theme::EFont::tiny); Jersey 25
+        // carries headings. Font Awesome merges into the body, so it does not
+        // consume a separate slot. Keep ui::theme::font's contract in sync.
         // Static pinned artifacts are staged beside the executable. The
         // digests pin the exact bytes: a missing or altered file fails UI
         // initialization instead of silently substituting a default font.
         const std::filesystem::path font_root = getContentDir().path() / "fonts";
         const std::array font_sources{
             UIFontSource{
-                .m_path = font_root / "PixelifySans-Regular.ttf",
-                .m_expected_bytes = 93780u,
-                .m_size_pixels = 16.0f,
-                .m_sha256 = sha256DigestFromHex("5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9"),
+                .m_path = font_root / "SourGummy-Medium.ttf",
+                .m_expected_bytes = 71728u,
+                .m_size_pixels = 15.0f,
+                .m_sha256 = sha256DigestFromHex("4fc77ca2182c2b0f21724f87d7b4343d56c009f13430f174f2820296444bd075"),
             },
             UIFontSource{
                 .m_path = font_root / "Font Awesome 7 Free-Solid-900.otf",
                 .m_merge_glyphs = ui::icons::kMergeRanges,
                 .m_expected_bytes = 414704u,
-                .m_size_pixels = 16.0f,
+                .m_size_pixels = 15.0f,
                 .m_sha256 = sha256DigestFromHex("daa92774861a14e9ccbccc5e73a5fba514271ba4d1bd7e5adbf952182bc00835"),
                 .m_merge_into_previous = true,
             },
             UIFontSource{
-                .m_path = font_root / "PixelifySans-SemiBold.ttf",
-                .m_expected_bytes = 97492u,
-                .m_size_pixels = 16.0f,
-                .m_sha256 = sha256DigestFromHex("a4b54982991cd47450df317a451a7f066bf6b91aa033e105643aba2cf7bd35c3"),
+                .m_path = font_root / "SourGummy-Bold.ttf",
+                .m_expected_bytes = 72180u,
+                .m_size_pixels = 15.0f,
+                .m_sha256 = sha256DigestFromHex("62c9d98e95e1bb971e8d7a2d3a6d197575156d5ec69d2498ae8f2a7c925411b1"),
             },
             UIFontSource{
-                .m_path = font_root / "BigShouldersDisplay-Bold.ttf",
-                .m_expected_bytes = 122896u,
-                .m_size_pixels = 22.0f,
-                .m_sha256 = sha256DigestFromHex("cbfe03f89e2bb3aba487644cdaf9abc9b3eb59946efaf894dda5cd05e1690c83"),
+                .m_path = font_root / "Jersey25-Regular.ttf",
+                .m_expected_bytes = 142372u,
+                .m_size_pixels = 21.0f,
+                .m_sha256 = sha256DigestFromHex("4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370"),
             },
             // The compact read-out binding: the same pinned body file at a
             // smaller size, so no new artifact or licence enters the set.
             UIFontSource{
-                .m_path = font_root / "PixelifySans-Regular.ttf",
-                .m_expected_bytes = 93780u,
-                .m_size_pixels = 12.0f,
-                .m_sha256 = sha256DigestFromHex("5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9"),
+                .m_path = font_root / "SourGummy-Medium.ttf",
+                .m_expected_bytes = 71728u,
+                .m_size_pixels = 13.0f,
+                .m_sha256 = sha256DigestFromHex("4fc77ca2182c2b0f21724f87d7b4343d56c009f13430f174f2820296444bd075"),
             },
         };
 

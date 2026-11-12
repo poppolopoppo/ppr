@@ -1,7 +1,7 @@
 # assets/fonts/ — Provenance
 
 Pinned UI assets for [the ImGui refinement plan](../../docs/plans/imgui-ricing-plan.md).
-The current default composition is recorded under **Concept typography** below.
+The current default composition is recorded under **UI font pair** below.
 The original three font files and notices were present and their byte counts/
 full SHA-256 values reverified on 2026-10-15. They remain fixtures; that historical
 identity check alone does not establish deployment, loadability or visual acceptance.
@@ -69,9 +69,36 @@ configure success alone does not prove those checks.
 Local execution details: [font manifest](../../.slim/deepwork/imgui-ricing/font-manifest.md).
 That Git-ignored record is supplementary; the artifact pins above are self-contained.
 
-## Concept typography — selected 2026-10-18
+## UI font pair — selected 2026-11-09
 
-Pixelify Sans Regular (400) and SemiBold (600) are the default body/emphasis faces at 16 logical px. Big Shoulders Display Bold (700) supplies 22 px headings. The Inspector read-out binds the body file a second time at 12 px for its compact key/value table, which adds a baked face but no artifact or licence. Font Awesome remains merged into body only. All are static upstream TTF artifacts; no conversion/subsetting. Earlier Inter/JBMono files remain as legacy test fixtures. Runtime checks exact byte counts and SHA-256 before atlas creation.
+Sour Gummy Medium (500) carries body text and the compact read-out at 15 and
+13 logical px; Sour Gummy Bold (700) carries emphasis at 15 px. Jersey 25
+Regular supplies 21 px headings. Font Awesome remains merged into the body face
+only. All three fonts are unmodified upstream static `glyf` TTFs with no `fvar`
+axis: no instancing, subsetting or conversion was performed, and neither
+upstream copyright line declares a Reserved Font Name. The Inspector read-out
+binds the body file a second time at the smaller size, which adds a baked face
+but no artifact or licence. Earlier Inter/JB Mono files remain as legacy test
+fixtures. Runtime checks exact byte counts and SHA-256 before atlas creation.
+
+Pixelify Sans and Big Shoulders Display, the previous pair, were retired on
+2026-11-09; their entries below are kept only as the historical record.
+
+| File | Pinned upstream commit/path | Bytes | SHA-256 |
+|---|---|---:|---|
+| SourGummy-Medium.ttf | [b93db84aea88d697656eb829fdd8472fe5304325 / fonts/ttf/SourGummy-Medium.ttf](https://raw.githubusercontent.com/eifetx/Sour-Gummy-Fonts/b93db84aea88d697656eb829fdd8472fe5304325/fonts/ttf/SourGummy-Medium.ttf) | 71728 | 4fc77ca2182c2b0f21724f87d7b4343d56c009f13430f174f2820296444bd075 |
+| SourGummy-Bold.ttf | [b93db84aea88d697656eb829fdd8472fe5304325 / fonts/ttf/SourGummy-Bold.ttf](https://raw.githubusercontent.com/eifetx/Sour-Gummy-Fonts/b93db84aea88d697656eb829fdd8472fe5304325/fonts/ttf/SourGummy-Bold.ttf) | 72180 | 62c9d98e95e1bb971e8d7a2d3a6d197575156d5ec69d2498ae8f2a7c925411b1 |
+| Jersey25-Regular.ttf | [220d0c5be4c2b369bd442fd28c162ba08455cfc6 / ofl/jersey25/Jersey25-Regular.ttf](https://raw.githubusercontent.com/google/fonts/220d0c5be4c2b369bd442fd28c162ba08455cfc6/ofl/jersey25/Jersey25-Regular.ttf) | 142372 | 4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370 |
+| SourGummy-OFL.txt | [b93db84aea88d697656eb829fdd8472fe5304325 / OFL.txt](https://raw.githubusercontent.com/eifetx/Sour-Gummy-Fonts/b93db84aea88d697656eb829fdd8472fe5304325/OFL.txt) | 4486 | 1eb024b31134b9e11ebdb2cd50697dd948d74a5a3eb7eedcfc4e71a8912a12ca |
+| Jersey25-OFL.txt | [220d0c5be4c2b369bd442fd28c162ba08455cfc6 / ofl/jersey25/OFL.txt](https://raw.githubusercontent.com/google/fonts/220d0c5be4c2b369bd442fd28c162ba08455cfc6/ofl/jersey25/OFL.txt) | 4395 | 436d5836064cec796c7ddde6fb4faeabdb6f2f17443a24a30d0c38b75d13f922 |
+
+## Retired pair — 2026-10-18 to 2026-11-09
+
+Pixelify Sans Regular (400) and SemiBold (600) were the body/emphasis faces at
+16 logical px, Big Shoulders Display Bold (700) supplied 22 px headings, and the
+Inspector bound the body file at 12 px. The binaries were removed when the UI
+font pair replaced them; the pins are retained so the retired bytes stay
+identifiable.
 
 | File | Pinned upstream commit/path | Bytes | SHA-256 |
 |---|---|---:|---|

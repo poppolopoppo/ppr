@@ -1616,17 +1616,17 @@ namespace pP::tests::detail {
                     }
                 };
 
-                assertTexelNear(texel(20u, 16u), std::array{37u, 34u, 28u, 255u});
-                assertTexelNear(texel(60u, 16u), std::array{217u, 210u, 180u, 255u});
+                assertTexelNear(texel(20u, 16u), std::array{242u, 230u, 208u, 255u});
+                assertTexelNear(texel(60u, 16u), std::array{11u, 18u, 25u, 255u});
                 PPR_TEST_ASSERT(std::abs(int(texel(12u, 52u)[3u]) - 128) <= 1);
 
                 if (format == rhi::Format::RGBA8UnormSrgb) {
                     // Linear-light half coverage and a pixel-centred gradient
                     // midpoint differ substantially from byte-space blending.
-                    assertTexelNear(texel(100u, 16u), std::array{161u, 155u, 133u, 255u});
+                    assertTexelNear(texel(100u, 16u), std::array{178u, 169u, 153u, 255u});
                     assertTexelNear(texel(64u, 56u), std::array{189u, 189u, 189u, 255u});
                 } else {
-                    assertTexelNear(texel(100u, 16u), std::array{127u, 122u, 104u, 255u});
+                    assertTexelNear(texel(100u, 16u), std::array{126u, 124u, 116u, 255u});
                     assertTexelNear(texel(64u, 56u), std::array{129u, 129u, 129u, 255u});
                 }
             }
@@ -1669,14 +1669,14 @@ namespace pP::tests::detail {
             };
         }
 
-        /// Icon face merged into the Inter body source above, exactly as the
+        /// Icon face merged into the production body source, exactly as the
         /// production Editor list declares it.
         [[nodiscard]] UIFontSource awesomeSource(const std::filesystem::path &font_root) {
             return UIFontSource{
                 .m_path = font_root / "Font Awesome 7 Free-Solid-900.otf",
                 .m_merge_glyphs = ui::icons::kMergeRanges,
                 .m_expected_bytes = kAwesomeBytes,
-                .m_size_pixels = 16.0f,
+                .m_size_pixels = 15.0f,
                 .m_sha256 = sha256DigestFromHex("daa92774861a14e9ccbccc5e73a5fba514271ba4d1bd7e5adbf952182bc00835"),
                 .m_merge_into_previous = true,
             };
@@ -1694,32 +1694,32 @@ namespace pP::tests::detail {
         [[nodiscard]] std::array<UIFontSource, 5u> conceptSources(const std::filesystem::path &font_root) {
             return {
                 UIFontSource{
-                    .m_path = font_root / "PixelifySans-Regular.ttf",
-                    .m_expected_bytes = 93780u,
-                    .m_size_pixels = 16.0f,
+                    .m_path = font_root / "SourGummy-Medium.ttf",
+                    .m_expected_bytes = 71728u,
+                    .m_size_pixels = 15.0f,
                     .m_sha256 = sha256DigestFromHex(
-                        "5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9")},
+                        "4fc77ca2182c2b0f21724f87d7b4343d56c009f13430f174f2820296444bd075")},
                 awesomeSource(font_root),
                 UIFontSource{
-                    .m_path = font_root / "PixelifySans-SemiBold.ttf",
-                    .m_expected_bytes = 97492u,
-                    .m_size_pixels = 16.0f,
+                    .m_path = font_root / "SourGummy-Bold.ttf",
+                    .m_expected_bytes = 72180u,
+                    .m_size_pixels = 15.0f,
                     .m_sha256 = sha256DigestFromHex(
-                        "a4b54982991cd47450df317a451a7f066bf6b91aa033e105643aba2cf7bd35c3")},
+                        "62c9d98e95e1bb971e8d7a2d3a6d197575156d5ec69d2498ae8f2a7c925411b1")},
                 UIFontSource{
-                    .m_path = font_root / "BigShouldersDisplay-Bold.ttf",
-                    .m_expected_bytes = 122896u,
-                    .m_size_pixels = 22.0f,
+                    .m_path = font_root / "Jersey25-Regular.ttf",
+                    .m_expected_bytes = 142372u,
+                    .m_size_pixels = 21.0f,
                     .m_sha256 = sha256DigestFromHex(
-                        "cbfe03f89e2bb3aba487644cdaf9abc9b3eb59946efaf894dda5cd05e1690c83")},
+                        "4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370")},
                 // The compact read-out binding: slot 0's pinned bytes again, at
                 // the smaller size the production Editor list declares.
                 UIFontSource{
-                    .m_path = font_root / "PixelifySans-Regular.ttf",
-                    .m_expected_bytes = 93780u,
-                    .m_size_pixels = 12.0f,
+                    .m_path = font_root / "SourGummy-Medium.ttf",
+                    .m_expected_bytes = 71728u,
+                    .m_size_pixels = 13.0f,
                     .m_sha256 = sha256DigestFromHex(
-                        "5436d485d1713afa376e1744911cbbcc0849eae1eb55ec9bc34c0753993ffef9")}};
+                        "4fc77ca2182c2b0f21724f87d7b4343d56c009f13430f174f2820296444bd075")}};
         }
     } // namespace FontLoading
 
@@ -2466,18 +2466,21 @@ namespace pP::tests::detail {
         };
 
         const Sample base = sample(1.0f, int2{800, 600});
-        PPR_TEST_ASSERT(base.m_window_border == 3.0f and base.m_popup_border == 3.0f and base.m_child_border == 2.0f);
-        PPR_TEST_ASSERT(base.m_heading_size == 22.0f and base.m_emphasis_size == base.m_font_size);
+        PPR_TEST_ASSERT(base.m_window_border == 1.0f and base.m_popup_border == 1.0f and base.m_child_border == 1.0f);
+        PPR_TEST_ASSERT(base.m_heading_size == 21.0f and base.m_emphasis_size == base.m_font_size);
         PPR_TEST_ASSERT(base.m_font_size > 0.0f and base.m_padding > 0.0f);
         for (const float content: {1.25f, 1.5f, 2.0f, 1.0f}) {
             const Sample current = sample(content, int2{800, 600});
-            PPR_TEST_ASSERT(std::abs(current.m_font_size - base.m_font_size * content) < 0.1f);
-            PPR_TEST_ASSERT(std::abs(current.m_padding - base.m_padding * content) < 0.1f);
+            // The baked size is rounded to whole logical pixels, so on a 15 px
+            // face a fractional scale can land up to half a pixel away.
+            PPR_TEST_ASSERT(std::abs(current.m_font_size - base.m_font_size * content) < 1.0f);
+            // Style metrics are likewise rounded to whole logical pixels.
+            PPR_TEST_ASSERT(std::abs(current.m_padding - base.m_padding * content) < 1.0f);
             // Pinned ImGui rounds both PushFont and legacy preload to whole logical pixels.
             PPR_TEST_ASSERT(current.m_heading_size == std::round(base.m_heading_size * content));
             PPR_TEST_ASSERT(current.m_emphasis_size == current.m_font_size);
-            PPR_TEST_ASSERT(current.m_window_border == std::trunc(3.0f * content));
-            PPR_TEST_ASSERT(current.m_child_border == std::trunc(2.0f * content));
+            PPR_TEST_ASSERT(current.m_window_border == std::trunc(1.0f * content));
+            PPR_TEST_ASSERT(current.m_child_border == std::trunc(1.0f * content));
             PPR_TEST_ASSERT(current.m_popup_border == current.m_window_border);
             PPR_TEST_ASSERT(current.m_density == 1.0f);
             PPR_TEST_ASSERT(current.m_ratio_x == 1.0f and current.m_ratio_y == 1.0f);
@@ -2490,12 +2493,13 @@ namespace pP::tests::detail {
         PPR_TEST_ASSERT(steady.m_font_size == two.m_font_size and steady.m_padding == two.m_padding);
 
         const Sample mixed = sample(2.0f, int2{1600, 1200});
-        PPR_TEST_ASSERT(std::abs(mixed.m_font_size * mixed.m_ratio_x - base.m_font_size * 2.0f) < 0.1f);
+        // Whole-pixel rounding applies to the density-scaled size too.
+        PPR_TEST_ASSERT(std::abs(mixed.m_font_size * mixed.m_ratio_x - base.m_font_size * 2.0f) < 1.0f);
         PPR_TEST_ASSERT(mixed.m_padding == base.m_padding and mixed.m_density == 2.0f);
 
         const Sample high_ratio = sample(1.0f, int2{1600, 1200});
-        PPR_TEST_ASSERT(std::abs(high_ratio.m_font_size * high_ratio.m_ratio_x - base.m_font_size) < 0.1f);
-        PPR_TEST_ASSERT(high_ratio.m_padding == base.m_padding * 0.5f and high_ratio.m_density == 2.0f);
+        PPR_TEST_ASSERT(std::abs(high_ratio.m_font_size * high_ratio.m_ratio_x - base.m_font_size) <= 1.0f);
+        PPR_TEST_ASSERT(std::abs(high_ratio.m_padding - base.m_padding * 0.5f) < 1.0f and high_ratio.m_density == 2.0f);
 
         const Sample asymmetric = sample(2.0f, int2{1600, 900});
         PPR_TEST_ASSERT(asymmetric.m_ratio_x == 2.0f and asymmetric.m_ratio_y == 1.5f);
@@ -2799,18 +2803,18 @@ namespace pP::tests::detail {
         ImGui::SetCurrentContext(imgui_context);
         ImGuiIO &io = ImGui::GetIO();
 
-        // The merge adds glyphs to the Pixelify body face, never a face of its own.
+        // The merge adds glyphs to the Sour Gummy body face, never a face of its own.
         PPR_TEST_ASSERT(io.Fonts->Fonts.Size == 4);
         ImFont *const body = ui::theme::font(ui::theme::EFont::body);
         PPR_TEST_ASSERT(body == io.Fonts->Fonts[0]);
         PPR_TEST_ASSERT(ui::theme::font(ui::theme::EFont::emphasis) == io.Fonts->Fonts[1]);
         PPR_TEST_ASSERT(ui::theme::font(ui::theme::EFont::heading) == io.Fonts->Fonts[2]);
         PPR_TEST_ASSERT(ui::theme::font(ui::theme::EFont::tiny) == io.Fonts->Fonts[3]);
-        PPR_TEST_ASSERT(body->LegacySize == 16.0f and io.Fonts->Fonts[2]->LegacySize == 22.0f);
-        PPR_TEST_ASSERT(io.Fonts->Fonts[3]->LegacySize == 12.0f);
+        PPR_TEST_ASSERT(body->LegacySize == 15.0f and io.Fonts->Fonts[2]->LegacySize == 21.0f);
+        PPR_TEST_ASSERT(io.Fonts->Fonts[3]->LegacySize == 13.0f);
 
         // The compact binding is a real second bake of the body file rather
-        // than an empty slot: it resolves its own Latin glyphs at 12 px, and
+        // than an empty slot: it resolves its own Latin glyphs at 13 px, and
         // carries no icon merge, so icon-bearing text must stay on the body
         // face.
         ImFontBaked *const tiny_baked = io.Fonts->Fonts[3]->GetFontBaked(io.Fonts->Fonts[3]->LegacySize);

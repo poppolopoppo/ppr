@@ -19,10 +19,10 @@ established two faces the owner wants to keep:
 
 | Role | `ui::theme::EFont` | File | Size (logical px) |
 |---|---|---|---|
-| Titles, section headings, logo | `heading` | `Jersey25-Regular.ttf` (Jersey 25, 400) | 28 |
-| Body text, buttons, row labels | `body` | `SourGummy-Medium.ttf` (500) + merged FA7 | 20 |
-| Emphasis (selected row, active label) | `emphasis` | `SourGummy-Bold.ttf` (700) | 20 |
-| Compact read-out, table keys, micro-caps | `tiny` | `SourGummy-Medium.ttf` (500) | 16 |
+| Titles, section headings, logo | `heading` | `Jersey25-Regular.ttf` (Jersey 25, 400) | 21 |
+| Body text, buttons, row labels | `body` | `SourGummy-Medium.ttf` (500) + merged FA7 | 15 |
+| Emphasis (selected row, active label) | `emphasis` | `SourGummy-Bold.ttf` (700) | 15 |
+| Compact read-out, table keys, micro-caps | `tiny` | `SourGummy-Medium.ttf` (500) | 13 |
 
 Font Awesome 7 stays merged into the body face only, so icon-bearing text never
 lands on the pixel face. Slot count is unchanged (four base faces + one merge),
@@ -87,11 +87,22 @@ which keeps `ui::theme::font`'s `Fonts.Size == 4` contract intact.
 
 ## Size decision
 
-The rounds were judged at display 28 / body 20 / caps 15 / read-out 16, up from
-22 / 16 / 12 / 12. Larger type is the second half of the legibility fix, not a
-cosmetic preference. If the 1280×720 layout feels cramped once built, the
-fallback is 26 / 18 / 15, which is a one-line change per slot and no artifact
-change.
+The type stays at the current scale. The comparison rounds were judged at
+20/28, but that was a size increase stacked on top of a legibility fix: Sour
+Gummy is an outline face with a generous x-height, so at the same 16 px it
+already reads far better than Pixelify did. Growing the type *and* the chrome
+would make a UI the owner already calls too big.
+
+| Role | Now | New |
+|---|---|---|
+| heading | 22 | **21** |
+| body | 16 | **15** |
+| emphasis | 16 | **15** |
+| tiny | 12 | **13** |
+
+Every role drops one pixel, so the UI is visibly tighter than today while the
+outline face still reads better than Pixelify did at 16. This is the owner's
+"tighter" choice; it costs no artifact change.
 
 ## Theme palette — dark control room
 
@@ -152,6 +163,29 @@ Structural consequences, not just values:
   a subtle lightening rather than a darkening; the comment that explains why it
   stopped using `kRaised` must be restated for a dark surface.
 
+### Style geometry
+
+Density is the correction the previous draft got wrong: the reference interface
+is *tighter* than the current one, not roomier. These are `ImGuiStyle` values in
+the same `applyThemeStyle()` function.
+
+| Property | Current | New | Reason |
+|---|---:|---:|---|
+| `kContainerRounding` (window/child/popup) | 2 | **8** | reference panels are softly rounded |
+| `kControlRounding` (frame/tab/grab/menu item/scrollbar) | 2 | **6** | tiles and buttons are rounded squares |
+| `WindowBorderSize` | 3 | **1** | seams are hairlines on dark; 3 px reads as bulk |
+| `ChildBorderSize` | 2 | **1** | same |
+| `PopupBorderSize` | 3 | **1** | same |
+| `WindowPadding` | 12,12 | **10,9** | insets shrink; the panel keeps less dead space |
+| `FramePadding` | 8,4 | **7,3** | controls get shorter without clipping text |
+| `ItemSpacing` | 8,8 | **6,6** | rows sit closer, matching the reference's density |
+| `CellPadding` | 4,2 (default) | **6,3** | table rows stay airy enough at the smaller outer padding |
+| `ScrollbarSize` | 12 | **8** | slimmer on dark |
+
+`FrameBorderSize` stays 1, `DisabledAlpha` 0.6, `WindowTitleAlign` `(0, 0.5)`.
+Rounding is visual only; every other value here reduces occupied space, so the
+net effect on a 1280×720 window is a smaller UI than today.
+
 ## Where the change lands
 
 - `assets/fonts/`: add `SourGummy-Medium.ttf`, `SourGummy-Bold.ttf`,
@@ -166,7 +200,8 @@ Structural consequences, not just values:
 - `lib/engine/app/ui/App.UI.ImGui.cpp`: `applyThemeStyle()` base style, title
   roles, border roles and the contrast comments.
 - `lib/engine/tests/app/App.ImGuiRouting.Tests.cpp`: `FontLoading::conceptSources`
-  and the slot/size assertions (`16`/`22`/`12` → `20`/`28`/`16`); the UI
+  and the slot/size assertions (`12` → `14` for `tiny`; `body` and `heading`
+  are unchanged); the UI
   transfer test's expected texels, which are derived from `kTextPrimary` and
   `kPanel` and therefore change with the palette.
 

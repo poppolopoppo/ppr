@@ -38,17 +38,18 @@ export namespace pP {
             }
         };
 
-        /// The Site Office palette, adapted from the rounded concept board. The
-        /// private style mapping in the ImGui service consumes the full set;
-        /// presentation that owns a semantic status color (display errors,
-        /// timing reference lines) reads these tokens instead of restating
-        /// hex values, so re-validating the table stays a single-point change.
+        /// The reference HUD palette: near-black surfaces, warm cream text and
+        /// amber highlights, adapted from the colony mockup. The private style
+        /// mapping in the ImGui service consumes the full set; presentation
+        /// that owns a semantic status color (display errors, timing reference
+        /// lines) reads these tokens instead of restating hex values, so
+        /// re-validating the table stays a single-point change.
         namespace theme {
-            /// Base-face order supplied by ApplicationEditor; merged icons
-            /// belong to the body face only, so the icon merge never consumes a
-            /// slot. `tiny` binds the body family a second time at a smaller,
-            /// narrower size for compact read-outs; it carries no icon merge,
-            /// so icon-bearing text stays on `body`.
+            /// Base-face order supplied by ApplicationEditor: Sour Gummy for
+            /// body/emphasis and for the `tiny` read-out at a smaller size,
+            /// Jersey 25 for headings. Merged icons belong to the body face
+            /// only, so the icon merge never consumes a slot and icon-bearing
+            /// text never lands on the pixel face.
             enum class EFont : u8 {
                 body,
                 emphasis,
@@ -61,24 +62,24 @@ export namespace pP {
             /// are handled at service initialization, never by this accessor.
             [[nodiscard]] ImFont *font(EFont role) noexcept;
 
-            inline constexpr ThemeColor kCanvas{0xCFu, 0xC7u, 0xABu};
-            inline constexpr ThemeColor kPanel{0xD9u, 0xD2u, 0xB4u};
-            inline constexpr ThemeColor kRaised{0xF4u, 0xEEu, 0xD6u};
-            inline constexpr ThemeColor kPaper{0xFBu, 0xF7u, 0xE6u};
-            inline constexpr ThemeColor kHover{0xE9u, 0xDEu, 0xB8u};
-            inline constexpr ThemeColor kBorder{0x8Au, 0x7Fu, 0x5Eu};
-            inline constexpr ThemeColor kBorderStrong{0x25u, 0x22u, 0x1Cu};
-            inline constexpr ThemeColor kTextPrimary{0x25u, 0x22u, 0x1Cu};
-            inline constexpr ThemeColor kTextSecondary{0x5Au, 0x54u, 0x44u};
-            inline constexpr ThemeColor kAccent{0xFFu, 0xC7u, 0x2Cu};
-            inline constexpr ThemeColor kAccentHover{0xFFu, 0xD7u, 0x68u};
-            inline constexpr ThemeColor kAccentActive{0xE8u, 0xB0u, 0x12u};
-            inline constexpr ThemeColor kAccentText{0x25u, 0x22u, 0x1Cu};
-            inline constexpr ThemeColor kSelection{0x3Fu, 0x7Fu, 0xD6u};
-            inline constexpr ThemeColor kSelectionText{0x20u, 0x4Bu, 0x83u};
-            inline constexpr ThemeColor kSuccess{0x2Fu, 0x68u, 0x2Bu};
-            inline constexpr ThemeColor kWarning{0x78u, 0x4Cu, 0x08u};
-            inline constexpr ThemeColor kError{0xA3u, 0x30u, 0x16u};
+            inline constexpr ThemeColor kCanvas{0x05u, 0x0Au, 0x10u};
+            inline constexpr ThemeColor kPanel{0x0Bu, 0x12u, 0x19u};
+            inline constexpr ThemeColor kRaised{0x12u, 0x1Bu, 0x24u};
+            inline constexpr ThemeColor kPaper{0x1Au, 0x25u, 0x2Fu};
+            inline constexpr ThemeColor kHover{0x23u, 0x31u, 0x3Eu};
+            inline constexpr ThemeColor kBorder{0x2Bu, 0x39u, 0x46u};
+            inline constexpr ThemeColor kBorderStrong{0x40u, 0x53u, 0x6Au};
+            inline constexpr ThemeColor kTextPrimary{0xF2u, 0xE6u, 0xD0u};
+            inline constexpr ThemeColor kTextSecondary{0xA2u, 0xB1u, 0xBFu};
+            inline constexpr ThemeColor kAccent{0xF0u, 0xB4u, 0x4Au};
+            inline constexpr ThemeColor kAccentHover{0xF8u, 0xC9u, 0x6Fu};
+            inline constexpr ThemeColor kAccentActive{0xCEu, 0x94u, 0x2Fu};
+            inline constexpr ThemeColor kAccentText{0x17u, 0x10u, 0x06u};
+            inline constexpr ThemeColor kSelection{0xE9u, 0xC8u, 0x96u};
+            inline constexpr ThemeColor kSelectionText{0xF7u, 0xE4u, 0xC4u};
+            inline constexpr ThemeColor kSuccess{0x3Fu, 0xD0u, 0x7Au};
+            inline constexpr ThemeColor kWarning{0xF2u, 0xA9u, 0x3Bu};
+            inline constexpr ThemeColor kError{0xF2u, 0x55u, 0x5Au};
 
             /// Background alpha for movable informational windows: low enough
             /// that the scene reads through the panel, high enough that body

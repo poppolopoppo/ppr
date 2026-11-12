@@ -97,26 +97,27 @@ float4 fragmentMain(PsInput input) : SV_Target {
         // ------------------------------------------------------------------
 
         /// Site Office geometry from the token table: container and control
-        /// radius, applied with the single-pixel strokes and 12px scrollbars
-        /// below. The concept board draws every panel, card and control with
-        /// hard corners (0-2px), so both roles now resolve to the same 2px and
-        /// the pair is kept as two named roles rather than one value.
-        constexpr float kContainerRounding = 2.0f;
-        constexpr float kControlRounding = 2.0f;
+        /// radius. The reference HUD draws panels and cards with soft corners
+        /// and controls slightly tighter, so containers take the larger radius
+        /// and the pair stays two named roles rather than one value.
+        constexpr float kContainerRounding = 8.0f;
+        constexpr float kControlRounding = 6.0f;
 
-        /// Map the Site Office token table onto the live ImGui style exactly
-        /// once, at context initialization. StyleColorsLight() seeds only the
+        /// Map the reference HUD token table onto the live ImGui style exactly
+        /// once, at context initialization. StyleColorsDark() seeds only the
         /// roles the theme does not name; every assignment below is absolute,
         /// so repeating this call cannot accumulate scaling and no frame
         /// resets or rescales the style.
         void applyThemeStyle() {
-            ImGui::StyleColorsLight();
+            ImGui::StyleColorsDark();
             ImGuiStyle &style = ImGui::GetStyle();
 
-            // spacing and geometry:
-            style.WindowPadding = ImVec2{12.0f, 12.0f};
-            style.FramePadding = ImVec2{8.0f, 4.0f};
-            style.ItemSpacing = ImVec2{8.0f, 8.0f};
+            // spacing and geometry: tighter than the previous light theme so
+            // the same window shows more panel, with hairline seams.
+            style.WindowPadding = ImVec2{10.0f, 9.0f};
+            style.FramePadding = ImVec2{7.0f, 3.0f};
+            style.ItemSpacing = ImVec2{6.0f, 6.0f};
+            style.CellPadding = ImVec2{6.0f, 3.0f};
             style.WindowRounding = kContainerRounding;
             style.ChildRounding = kContainerRounding;
             style.PopupRounding = kContainerRounding;
@@ -126,10 +127,10 @@ float4 fragmentMain(PsInput input) : SV_Target {
             style.MenuItemRounding = kControlRounding;
             style.ScrollbarRounding = kControlRounding;
             style.TabRounding = kControlRounding;
-            style.WindowBorderSize = 3.0f;
-            style.ChildBorderSize = 2.0f;
-            style.PopupBorderSize = 3.0f;
-            style.ScrollbarSize = 12.0f;
+            style.WindowBorderSize = 1.0f;
+            style.ChildBorderSize = 1.0f;
+            style.PopupBorderSize = 1.0f;
+            style.ScrollbarSize = 8.0f;
             style.DisabledAlpha = 0.6f;
             style.WindowTitleAlign = ImVec2{0.0f, 0.5f};
 
@@ -142,14 +143,15 @@ float4 fragmentMain(PsInput input) : SV_Target {
             style.Colors[ImGuiCol_Border] = ui::theme::kBorderStrong.vec4();
             style.Colors[ImGuiCol_BorderShadow] = ui::theme::kCanvas.vec4(0.0f);
 
-            // One yellow header per panel. The pinned ImGui has no dedicated
-            // title-text role, so the title reads with ImGuiCol_Text: ink
-            // #25221C scores 10.16:1 on kAccent, 11.46:1 on kAccentHover and
-            // 8.04:1 on kAccentActive, and focus moves to the lighter accent
-            // so an active title never reads weaker than a resting one.
-            style.Colors[ImGuiCol_TitleBg] = ui::theme::kAccent.vec4();
-            style.Colors[ImGuiCol_TitleBgActive] = ui::theme::kAccentHover.vec4();
-            style.Colors[ImGuiCol_TitleBgCollapsed] = ui::theme::kAccentActive.vec4();
+            // Panel headers are part of the surface, not a colored band: the
+            // reference HUD keeps a dark title strip and lets the cream title
+            // text carry the hierarchy. The pinned ImGui has no dedicated
+            // title-text role, so the title reads with ImGuiCol_Text:
+            // #F2E6D0 scores 15.25:1 on kPanel and 14.08:1 on kRaised, so an
+            // active title never reads weaker than a resting one.
+            style.Colors[ImGuiCol_TitleBg] = ui::theme::kPanel.vec4();
+            style.Colors[ImGuiCol_TitleBgActive] = ui::theme::kRaised.vec4();
+            style.Colors[ImGuiCol_TitleBgCollapsed] = ui::theme::kCanvas.vec4();
             style.Colors[ImGuiCol_MenuBarBg] = ui::theme::kRaised.vec4();
             style.Colors[ImGuiCol_DockingEmptyBg] = ui::theme::kCanvas.vec4();
 
@@ -165,9 +167,9 @@ float4 fragmentMain(PsInput input) : SV_Target {
             style.Colors[ImGuiCol_HeaderActive] = ui::theme::kSelection.vec4(0.36f);
             style.Colors[ImGuiCol_TableHeaderBg] = ui::theme::kHover.vec4();
             style.Colors[ImGuiCol_TableRowBg] = ui::theme::kPanel.vec4(0.0f);
-            // Striping must still read on the now-cream window: kRaised at low
-            // alpha over kRaised composites to itself and would vanish, so the
-            // alternating row uses the darker kHover instead.
+            // Striping must still read on the dark window: kRaised at low alpha
+            // over kRaised composites to itself and would vanish, so the
+            // alternating row uses the lighter kHover instead.
             style.Colors[ImGuiCol_TableRowBgAlt] = ui::theme::kHover.vec4(0.35f);
             style.Colors[ImGuiCol_TableBorderStrong] = ui::theme::kBorderStrong.vec4();
             style.Colors[ImGuiCol_TableBorderLight] = ui::theme::kBorder.vec4();
