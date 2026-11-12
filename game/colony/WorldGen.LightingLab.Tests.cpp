@@ -219,6 +219,7 @@ namespace pP::game::tests::detail::lighting_lab {
         const auto *const glass_material = catalog.findMaterial("lab_glass");
         const auto *const hot_material = catalog.findMaterial("lab_hot_metal");
         const auto *const magma_material = catalog.findMaterial("lab_magma");
+        const auto *const water_material = catalog.findMaterial("water");
         PPR_TEST_ASSERT(
             wall_material and
             red_material and
@@ -226,7 +227,8 @@ namespace pP::game::tests::detail::lighting_lab {
             emitter_material and
             glass_material and
             hot_material and
-            magma_material);
+            magma_material and
+            water_material);
 
         expectLinearColor(wall_material->m_color_rgba, 0.6, 0.6, 0.6);
         PPR_TEST_ASSERT(wall_material->m_metallic == 0.0 and wall_material->m_roughness == 0.8);
@@ -268,6 +270,16 @@ namespace pP::game::tests::detail::lighting_lab {
             lighting::receiveOnlyCell(
                 kGridSurfaceOpticalBlend, static_cast<float>(glass_material->m_emissive_strength)));
         PPR_TEST_ASSERT(not lighting::receiveOnlyCell(kGridSurfaceOpticalBlend, 1.0f));
+
+        // The basin water stays the ordinary authored material: visible
+        // transparency is presentation, its nonzero emission keeps it occupied.
+        PPR_TEST_ASSERT(water_material->m_representation == EMaterialRepresentation::particle);
+        PPR_TEST_ASSERT(water_material->m_phase == EMaterialPhase::liquid);
+        PPR_TEST_ASSERT(water_material->m_alpha_mode == EMaterialAlphaMode::blend);
+        PPR_TEST_ASSERT(water_material->m_emissive_strength == 0.35);
+        PPR_TEST_ASSERT(water_material->m_emissive_rgb == std::array{0.02, 0.38, 0.45});
+        PPR_TEST_ASSERT(not lighting::receiveOnlyCell(
+            kGridSurfaceOpticalBlend, static_cast<float>(water_material->m_emissive_strength)));
 
         expectLinearColor(hot_material->m_color_rgba, 0.7, 0.7, 0.7);
         PPR_TEST_ASSERT(hot_material->m_metallic == 1.0 and hot_material->m_roughness == 0.4);

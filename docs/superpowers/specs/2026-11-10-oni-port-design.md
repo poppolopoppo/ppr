@@ -1541,7 +1541,7 @@ thickness requirements. Include all of the following in one fixed 1024 x 1024 ma
 | Sealed room with one emissive block | Surface emission, propagation and shadows |
 | L-shaped room with colored walls | Indirect illumination around the corner and color bounce |
 | Thin barriers crossing chunk boundaries | Shadows/leaks, chunk seams and changes after ordinary digging |
-| Particle basins with sand, transparent water and emissive liquid | Sand occlusion, receive-only water, and emissive-liquid illumination of neighboring surfaces |
+| Particle basins with sand, transparent water and emissive liquid | Sand occlusion; ordinary transparent, emissive water: receives and emits; stops rays under the current material classification; and emissive-liquid illumination of neighboring surfaces. Water's visible transparency is a presentation property, distinct from its transport occupancy. |
 | Sealed two-compartment room with an open door | Source in the left compartment illuminates the otherwise empty right compartment through the doorway |
 | Matched copy with the door closed | Same source/layout, but the opaque closed door isolates the empty right compartment |
 | Matched copy with transparent blocks filling the doorway | The right compartment receives light through the blocks under the approved receive-only transparent-material model |
