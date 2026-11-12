@@ -260,10 +260,12 @@ partial native output.
 
 A capture directory holds `manifest.json`, application/profiler stdout/stderr,
 the command argv arrays, `ready.json`, `final-state.json`, the native report
-(`.nsys-rep` / `.ngfx-gputrace`), the untouched raw export (`systems.sqlite` /
-`graphics/<CLOCK_STATE>/*.xls`), `analysis.json` and `analysis.yaml`.
-`analyze` is offline and read-only; repeating it over the same export produces
-identical normalized numbers.
+(`.nsys-rep` / `.ngfx-gputrace`) and the untouched raw export (`systems.sqlite` /
+`graphics/<CLOCK_STATE>/*.xls`). `analyze --output` writes `analysis.json` and
+`analysis.yaml` to that separate directory (the maintained convention is a
+sibling `<capture>-analysis/`), never beside the raw export unless explicitly
+requested. `analyze` is offline and read-only; repeating it over the same
+export produces identical normalized numbers.
 
 The normalized analysis is `schema_version: 1` and independent of vendor
 formats: `identity`, `collection`, `ranges[]`, `metrics[]` and `validation`.
@@ -281,7 +283,11 @@ Marker validation is scoped by tool: only a Graphics GPU trace can carry GPU
 pass ranges and requires the contract set plus at least one complete A/B/C
 frame; a Systems capture completes on its own checks (validated schema,
 nonempty API/workload trace, clean shutdown). `PBMPM.Tick` is optional for a
-frozen workload, which pauses before the first simulation tick.
+frozen workload, which pauses before the first simulation tick. `Post.Bloom`
+becomes optional when the recorded settings disable bloom; a future baseline
+with zero particles would likewise make `Scene.Gas` legitimately absent (the
+current readiness record carries no particle count, so that case is
+documented rather than auto-classified).
 
 Metric-family availability is decided by exact vendor tag families
 (`dramc__`/`dram__` traffic, `*hit_rate`, `*__warps_active` occupancy), never by
@@ -306,9 +312,14 @@ the differences and still emits a descriptive distribution comparison
 
 ### Contract marker set
 
-The owning passes emit the design contract names as stable RHI GPU ranges (and
-matching CPU `hal::ProfileScope` boundaries where the pass has no enclosing
-CPU scope): `WorldLighting.ResolveCells` (projection/resolve),
+The owning passes emit the design contract names as stable RHI GPU ranges.
+`hal::ProfileScope` boundaries are added only where the pass has no enclosing
+CPU scope; `Post.Exposure`, `Post.Bloom` and `Post.AgX` reuse the existing
+metering/bloom/display CPU scopes and add only the GPU range. `Scene.Materials`
+is the opaque and translucent material draw groups separately (two ranges per
+frame), split by the unchanged `Scene.Gas` draw between them; draw submission
+order is background → opaque → particles/gas → translucent and profiling never
+reorders it. `WorldLighting.ResolveCells` (projection/resolve),
 `WorldLighting.Visibility`, `.Jump`, `.Source`, `WorldLighting.Cascade.L5`
 through `.L1` (the terminal dispatch is L5, then one dispatch per level),
 `WorldLighting.FineCH`, `Scene.Materials`, `Scene.Gas`, `Hable.Resolve`,

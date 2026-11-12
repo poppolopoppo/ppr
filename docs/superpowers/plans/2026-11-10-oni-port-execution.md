@@ -1700,3 +1700,22 @@ and operational acceptance. No Task 4 work has begun.
   decimal-comma vendor export; nsys GPU-metrics sampling; multipass/replay;
   profiler-overhead baseline; an actual live-workload capture exercising
   `PBMPM.Tick` was not run (frozen classifies it optional).
+
+### Task 18 review follow-up — draw order and evidence corrections
+
+- The marker work had moved the particle/gas draw after the translucent terrain
+  draw. Production order (background → opaque materials → particles/gas →
+  translucent materials) is restored; `Scene.Materials` is now two contiguous
+  RHI ranges around the opaque and translucent material draws, with
+  `Scene.Gas` between them. No rendering algorithm or submission order changed.
+- Tool-scoped marker validation (Systems cannot observe GPU pass ranges),
+  exact metric-family/unit matching, content-based dirty hash, backend from the
+  application final-state, Systems `metric_set: null`, cleanup/stop/terminate
+  lifecycle fixes and their tests are recorded in the commits
+  `ba3eba49`/`59110f8e`/`506d750f` and the follow-up commit.
+- Re-captured final evidence from the corrected binary: Systems and two
+  Graphics frozen captures, all complete at tick 0 with ~2.0 s active
+  presentation; Graphics shows all contract markers (28 names, `Scene.Materials`
+  twice per frame), 8/8 A/B/C frames, 93 counters/744 samples, `missing_markers
+  = []`, `PBMPM.Tick` optional for frozen; Systems completes on its own checks
+  with `metric_set: null`. Analyze-twice identical; comparison `like-for-like`.

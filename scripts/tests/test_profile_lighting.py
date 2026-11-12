@@ -59,13 +59,17 @@ def write_capture_identity(directory: Path, tool: str) -> None:
         "screen_frame_index": 40,
         "camera": {"origin": [1.0, 2.0, 3.0], "forward": [0.0, 0.0, 1.0]},
         "extents": {"logical": [1280, 720], "framebuffer": [1280, 720]},
-        "settings": [{"name": "worldgen_profile", "value": "lighting_lab"}],
+        "settings": [
+            {"name": "worldgen_profile", "value": "lighting_lab"},
+            {"name": "post.bloom", "value": "true"},
+        ],
     }
     final_state = {
         "schema_version": 1,
         "pid": 1234,
         "tool": tool,
         "workload": "frozen",
+        "backend": "vulkan",
         "session_token": "session-test",
         "status": "complete",
         "reason": "matching session stop request",
@@ -88,7 +92,12 @@ def write_capture_identity(directory: Path, tool: str) -> None:
         },
         "environment": {
             "os": "linux",
-            "gpu": {"name": "NVIDIA GeForce RTX 2080", "driver_version": "620.70.06", "architecture": "Turing"},
+            "gpu": {
+                "name": "NVIDIA GeForce RTX 2080",
+                "driver_version": "620.70.06",
+                "architecture": "Turing",
+                "backend": "vulkan",
+            },
         },
         "tools": {"systems": {"version": "2026.5.1"}, "graphics": {"version": "2026.4"}},
         "capture": {"tool": tool, "workload": "frozen"},
@@ -130,7 +139,10 @@ def fake_app_script(directory: Path) -> Path:
                 "lighting_frame_index": 1, "screen_frame_index": 1,
                 "camera": {"origin": [0, 0, 0], "forward": [0, 0, 1]},
                 "extents": {"logical": [1280, 720], "framebuffer": [1280, 720]},
-                "settings": [{"name": "worldgen_profile", "value": "lighting_lab"}],
+                "settings": [
+                    {"name": "worldgen_profile", "value": "lighting_lab"},
+                    {"name": "post.bloom", "value": "true"},
+                ],
             }
             (output / "ready.json").write_text(json.dumps(ready))
             request = output / "stop.request"
@@ -142,6 +154,7 @@ def fake_app_script(directory: Path) -> Path:
                 time.sleep(0.05)
             final = {
                 "schema_version": 1, "pid": os.getpid(), "tool": "systems", "workload": "frozen",
+                "backend": os.environ.get("PPR_FAKE_BACKEND", "vulkan"),
                 "session_token": "session-fake", "status": "complete", "ready": True,
                 "accepted_scene_frames": 240, "ready_tick": 0, "stop_tick": 0,
                 "lighting_frame_start": 1, "lighting_frame_end": 120,
@@ -237,6 +250,18 @@ class GraphicsAnalysisTests(unittest.TestCase):
         self.assertTrue(all(entry["duration_ns"] > 0 for entry in marker_ranges))
         # Nested sub-pass ranges retain explicit parent links.
         self.assertTrue(any(entry["parent_id"] is not None for entry in analysis["ranges"]))
+        # Production submission order is background -> opaque materials ->
+        # particles/gas -> translucent materials; the material marker is split
+        # around the gas draw without reordering the draws.
+        marker_order = [
+            entry["stable_name"]
+            for entry in sorted(
+                (entry for entry in analysis["ranges"] if entry["frame_id"] == 0),
+                key=lambda entry: entry["id"],
+            )
+            if entry["stable_name"] in ("Scene.Materials", "Scene.Gas")
+        ]
+        self.assertEqual(marker_order, ["Scene.Materials", "Scene.Gas", "Scene.Materials"])
         frame_metrics = [entry for entry in analysis["metrics"] if entry["name"] == "gpu.frame_time"]
         self.assertEqual(len(frame_metrics), 8)
         self.assertEqual(frame_metrics[0]["unit"], "ms")
@@ -310,6 +335,18 @@ class GraphicsAnalysisTests(unittest.TestCase):
             lighting.analyze(capture_dir, self.root / "analysis")
         self.assertEqual(raised.exception.cause, "unknown-schema")
 
+    def test_disabled_bloom_marks_the_range_optional(self) -> None:
+        capture_dir = self.root / "no-bloom"
+        copy_graphics_fixture(capture_dir / "graphics")
+        write_capture_identity(capture_dir, "graphics")
+        ready = json.loads((capture_dir / "ready.json").read_text())
+        for entry in ready["settings"]:
+            if entry["name"] == "post.bloom":
+                entry["value"] = "false"
+        (capture_dir / "ready.json").write_text(json.dumps(ready))
+        analysis = lighting.analyze(capture_dir, self.root / "no-bloom-analysis")
+        self.assertIn("Post.Bloom", analysis["validation"]["optional_markers"])
+
     def test_identity_mismatch_is_labeled(self) -> None:
         baseline = self.root / "baseline"
         candidate = self.root / "candidate"
@@ -351,6 +388,8 @@ class SystemsAnalysisTests(unittest.TestCase):
         self.assertIsNone(analysis["validation"]["required_ranges_present"])
         self.assertEqual(analysis["validation"]["missing_markers"], [])
         self.assertEqual(analysis["validation"]["overall_status"], "complete")
+        # A Systems capture requested no GPU metric set and must not claim one.
+        self.assertIsNone(analysis["collection"]["metric_set"])
 
         cpu_metrics = [entry for entry in analysis["metrics"] if entry["name"].startswith("cpu.api.")]
         self.assertTrue(cpu_metrics)
@@ -530,6 +569,29 @@ class CaptureSupervisionTests(unittest.TestCase):
         self.assertEqual(raised.exception.cause, "output-collision")
 
 
+    def test_capture_records_the_application_backend(self) -> None:
+        output = self.root / "backend-vulkan"
+        manifest = lighting.capture(
+            self._config(output, environment={"PPR_FAKE_APP_MODE": "ready", "PPR_FAKE_BACKEND": "vulkan"})
+        )
+        self.assertEqual(manifest["environment"]["gpu"]["backend"], "vulkan")
+        analysis = lighting.analyze(output, output)
+        self.assertEqual(analysis["identity"]["backend"], "vulkan")
+
+        other = self.root / "backend-d3d12"
+        manifest = lighting.capture(
+            self._config(other, environment={"PPR_FAKE_APP_MODE": "ready", "PPR_FAKE_BACKEND": "d3d12"})
+        )
+        self.assertEqual(manifest["environment"]["gpu"]["backend"], "d3d12")
+        analysis = lighting.analyze(other, other)
+        self.assertEqual(analysis["identity"]["backend"], "d3d12")
+
+    def test_manifest_has_no_gpu_metric_set_for_systems(self) -> None:
+        output = self.root / "systems-set"
+        manifest = lighting.capture(self._config(output, environment={"PPR_FAKE_APP_MODE": "ready"}))
+        self.assertIsNone(manifest["collection"]["metric_set"])
+        self.assertIsNone(manifest["collection"]["architecture"])
+
     def test_stop_then_export_then_quit_order(self) -> None:
         output = self.root / "ordered"
         order_log = self.root / "order.log"
@@ -637,6 +699,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIsNone(record["tools"]["graphics"]["path"])
         self.assertIn("os", record)
         self.assertIn("gpu", record)
+        self.assertIn("backend", record["gpu"])
 
     def test_architecture_mapping_matches_observed_compute_capabilities(self) -> None:
         self.assertEqual(lighting.architecture_for_compute_capability("7.5"), "Turing")

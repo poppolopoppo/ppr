@@ -1954,6 +1954,12 @@ namespace pP {
 
             {
                 const CpuObservationScope cpu_draw{clock, cpu.m_grid_draw};
+                // Production submission order: background, opaque materials,
+                // particles/gas, then translucent materials. Particles have
+                // depth test/write disabled while translucent terrain still
+                // depth-tests, so this order is visual behavior and must not be
+                // rearranged for profiling. The material marker is therefore
+                // split into the two contiguous material draw groups.
                 PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderBackground(context));
                 {
                     const hal::ProfileScope scope{"Scene.Materials"};
@@ -1962,7 +1968,6 @@ namespace pP {
                         context.m_pass.popDebugGroup();
                     };
                     PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderGpuIndirect(context));
-                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderTranslucent(context));
                 }
                 {
                     const hal::ProfileScope scope{"Scene.Gas"};
@@ -1971,6 +1976,14 @@ namespace pP {
                         context.m_pass.popDebugGroup();
                     };
                     PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderParticles(context));
+                }
+                {
+                    const hal::ProfileScope scope{"Scene.Materials"};
+                    context.m_pass.pushDebugGroup("Scene.Materials", {});
+                    PPR_DEFER {
+                        context.m_pass.popDebugGroup();
+                    };
+                    PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->renderTranslucent(context));
                 }
             }
 

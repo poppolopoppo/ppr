@@ -313,7 +313,15 @@ def _command_help(executable: Path, arguments: Sequence[str]) -> str:
 
 
 def _gpu_information() -> dict[str, Any]:
-    info: dict[str, Any] = {"name": None, "driver_version": None, "compute_capability": None, "architecture": None}
+    info: dict[str, Any] = {
+        "name": None,
+        "driver_version": None,
+        "compute_capability": None,
+        "architecture": None,
+        # Filled from the application's final-state, which records the actual
+        # RHI device backend; discovery does not guess one.
+        "backend": None,
+    }
     try:
         completed = subprocess.run(
             [
@@ -836,8 +844,10 @@ def capture(config: CaptureConfig) -> dict[str, Any]:
             },
         },
         "collection": {
-            "metric_set": config.metric_set,
-            "architecture": config.architecture,
+            # Architecture/metric-set selection is Graphics-only; a Systems
+            # capture does not request GPU metrics and must not claim a set.
+            "metric_set": config.metric_set if config.tool == TOOL_GRAPHICS else None,
+            "architecture": config.architecture if config.tool == TOOL_GRAPHICS else None,
             "clocks": "unaltered",
             "requested_frames": GRAPHICS_FRAMES if config.tool == TOOL_GRAPHICS else None,
             "max_duration_ms": GRAPHICS_MAX_DURATION_MS if config.tool == TOOL_GRAPHICS else None,
@@ -1018,6 +1028,8 @@ def capture(config: CaptureConfig) -> dict[str, Any]:
 
             final_state = _read_json_if_present(output / FINAL_STATE_FILE)
             manifest["final_state"] = final_state
+            if isinstance(final_state, dict) and final_state.get("backend"):
+                manifest["environment"]["gpu"]["backend"] = final_state["backend"]
             final_status = final_state.get("status") if isinstance(final_state, dict) else None
             if final_status in ("incomplete", "unsupported", "failed"):
                 status = final_status
@@ -1677,6 +1689,14 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
 
     markers_applicable = tool == TOOL_GRAPHICS
     optional_markers = list(FROZEN_OPTIONAL_MARKERS) if workload == "frozen" else []
+    recorded_settings = {
+        str(entry.get("name")): str(entry.get("value"))
+        for entry in ((ready.get("settings") if isinstance(ready, dict) else None) or [])
+        if isinstance(entry, dict)
+    }
+    if recorded_settings.get("post.bloom") == "false":
+        # A disabled bloom legitimately omits the Post.Bloom range.
+        optional_markers.append("Post.Bloom")
     if markers_applicable:
         missing_markers = [
             marker
@@ -1703,8 +1723,7 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
             TOOL_GRAPHICS: ((manifest.get("tools") or {}).get(TOOL_GRAPHICS) or {}).get("version"),
         },
         "os": (manifest.get("environment") or {}).get("os"),
-        "backend": ((manifest.get("environment") or {}).get("gpu") or {}).get("backend")
-        or "vulkan",
+        "backend": ((manifest.get("environment") or {}).get("gpu") or {}).get("backend"),
         "gpu": ((manifest.get("environment") or {}).get("gpu") or {}).get("name"),
         "driver": ((manifest.get("environment") or {}).get("gpu") or {}).get("driver_version"),
         "architecture": ((manifest.get("environment") or {}).get("gpu") or {}).get("architecture"),

@@ -17,11 +17,19 @@ export of the real `app.game` on this host (RTX 2080 / TU104, driver
 - `FRAME.xls` — the observed `GPU frame time` row with its eight per-frame
   values (milliseconds).
 - `GPUTRACE_FRAME.xls` — the first three observed metric rows verbatim, each with
-  eight per-frame samples. Vendor tag names (including the
-  `.avg.pct_of_peak_sustained_elapsed`/`.sum` suffixes) and values are
-  unmodified.
-- `D3DPERF_EVENTS.xls` — the observed marker table: `ppr` and its nested
-  `scene`/`ui.detached` rows with eight per-frame durations (milliseconds).
+  eight per-frame samples. Vendor tag names (including
+  `.avg.pct_of_peak_sustained_elapsed`, `.avg.per_cycle_elapsed` and `.sum`
+  suffixes) and values are unmodified.
+- `D3DPERF_EVENTS.xls` — the observed marker table: 28 rows with eight
+  per-frame durations (milliseconds). It retains the production nesting
+  (`scene.stage → scene.content → Scene.Materials/Scene.Gas → Particles.Draw`,
+  `ppr → Present.Scene`, `ppr → Present.UI`) and every design-contract range:
+  `WorldLighting.ResolveCells`, `.Visibility`, `.Jump`, `.Source`,
+  `.Cascade.L5`–`.L1`, `.FineCH`, `Scene.Materials`, `Scene.Gas`,
+  `Hable.Resolve`, `Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`,
+  `Present.UI`. `Scene.Materials` appears twice per frame: the opaque material
+  draw, then (after `Scene.Gas`) the translucent material draw, matching the
+  unchanged production order background → opaque → particles/gas → translucent.
 
 Not retained (present in a real capture, not read by the adapter and too large
 to commit): `ReportGeneratorTags.txt`, `GPUTRACE_REGIMES.xls`, the
@@ -42,8 +50,10 @@ Source: an Nsight Systems 2026.5.1.161 SQLite export
 `META_DATA_EXPORT`, `StringIds`, `PROCESSES`, `ThreadNames`, `VULKAN_API` and
 `VULKAN_WORKLOAD` is copied verbatim; `META_DATA_EXPORT`/`PROCESSES`/
 `ThreadNames` are the real rows, and the API/workload tables keep a real window
-around the first presented frames. `StringIds` retains only the ids those rows
-reference. Heavy event tables and unused schema tables were dropped.
+around the first presented frames (1,024 API rows, 7 workload rows on the
+current fixture). `StringIds` retains only the ids those rows reference. Heavy
+event tables and unused schema tables were dropped. A Systems capture requests
+no GPU metric set, so its analysis reports `collection.metric_set: null`.
 
 Attribution: NVIDIA Nsight Systems/Graphics and the Nsight Graphics SDK are
 NVIDIA products; see `third_party/README.md` for the SDK license record.
