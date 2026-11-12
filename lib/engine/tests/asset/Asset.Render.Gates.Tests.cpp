@@ -1547,8 +1547,12 @@ namespace pP::tests::detail {
                     const PreRenderContext stale{
                         context.m_device, context.m_encoder, kFenceValueNone, FenceWaitHook{wait}};
                     PPR_RETURN_ERROR_ON_FAIL(
+                        GridMaterialGate, grid.prepareBackgroundInputs(stale, snapshot, viewport, scissor));
+                    PPR_RETURN_ERROR_ON_FAIL(
                         GridMaterialGate, grid.prepareBackground(stale, snapshot, viewport, scissor));
                 } else {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridMaterialGate, grid.prepareBackgroundInputs(context, snapshot, viewport, scissor));
                     PPR_RETURN_ERROR_ON_FAIL(
                         GridMaterialGate, grid.prepareBackground(context, snapshot, viewport, scissor));
                 }
@@ -2580,6 +2584,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
                 if (grid != nullptr) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridMaterialGate, grid->prepareBackgroundInputs(
+                                              context, *camera, rhi::Viewport::fromSize(float(width), float(height)),
+                                              rhi::ScissorRect::fromSize(width, height)));
                     PPR_RETURN_ERROR_ON_FAIL(
                         GridMaterialGate, grid->prepareBackground(
                                               context, *camera, rhi::Viewport::fromSize(float(width), float(height)),
@@ -4592,9 +4600,6 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             const auto returned = capture({replacement});
             PPR_TEST_ASSERT(texelDist_(gateTexel_(returned, 102u, 64u), gas_pixel) <= 2u);
         };
-
-
-
 
 
         // ------------------------------------------------------------------

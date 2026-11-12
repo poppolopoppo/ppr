@@ -2000,9 +2000,7 @@ namespace pP {
         const auto scene_prepare = [&](const PreRenderContext &context) -> std::error_code {
             const CpuObservationScope cpu_prepare{clock, cpu.m_grid_prepare};
             PPR_RETURN_ERROR_ON_FAIL(
-                Editor, m_grid_pass->prepareBackground(context, scene_camera, scene_viewport, scene_scissor));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
-            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
+                Editor, m_grid_pass->prepareBackgroundInputs(context, scene_camera, scene_viewport, scene_scissor));
 
             // World lighting is armed only when the admitted world supplies its
             // publication owners. A world with no published catalog (the
@@ -2010,6 +2008,9 @@ namespace pP {
             // keeps the documented `m_has_resolved_cells == 0` flat fallback
             // and commits no lighting phase; the first frame whose world
             // publishes its catalog prepares and commits A's lighting state.
+            //
+            // The cached backdrop follows this prepare in the same submission
+            // so it samples this attempt's fine CH write.
             if (m_grid_pass->lightingInputsAvailable()) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     Editor, m_grid_pass->prepareWorldLighting(
@@ -2020,6 +2021,10 @@ namespace pP {
                 lighting_armed = true;
             }
 
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->prepareBackground(context, scene_camera, scene_viewport, scene_scissor));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
+            PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
             return {};
         };
 

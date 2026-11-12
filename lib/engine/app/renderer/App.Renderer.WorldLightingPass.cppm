@@ -179,6 +179,12 @@ export namespace pP {
         // The cursor names are owner-private.
         [[nodiscard]] std::error_code bind(rhi::ShaderCursor &cursor) const;
 
+        // Binds the current fine CH field alone. The background receiver root
+        // carries no material/source/thermal resources, so it must not call the
+        // full `bind`. Fails closed unless this attempt's reconstruction is
+        // armed; binding errors propagate.
+        [[nodiscard]] std::error_code bindFineCH(rhi::ShaderCursor &cursor) const;
+
         // Read-only C-stage inspection overlay. Draws the retained view selected
         // by `settings` from this pass's published data with the captured camera;
         // it writes no world, CH, cascade, source or history state. The caller
@@ -194,6 +200,16 @@ export namespace pP {
         // world's resolved-cell/CH storage exists.
         [[nodiscard]] bool hasPublishedCells() const noexcept {
             return m_resources and m_resources->m_resolved and m_resources->m_fine_ch;
+        }
+
+        // True when this attempt's fine CH reconstruction is armed for readers
+        // in the current submission. Background receivers use it to decide
+        // whether to sample the field or keep the authored unlit fallback.
+        [[nodiscard]] bool currentFineCHAvailable() const noexcept {
+            return m_resources and
+                   m_resources->m_fine_ch and
+                   m_resources->m_armed and
+                   m_resources->m_status[m_resources->m_attempt_slot].m_pending;
         }
 
         // True when the current attempt actually submitted the published data

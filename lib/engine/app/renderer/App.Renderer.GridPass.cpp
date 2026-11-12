@@ -381,6 +381,7 @@ namespace pP {
         m_spatial_msaa = spatial_msaa;
         m_visibility_prepared = false;
         m_background_ready = false;
+        m_background_inputs_prepared = false;
         for (auto *const pipeline:
             {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
                 &m_background_spatial_pipeline}) {
@@ -3851,6 +3852,49 @@ namespace pP {
         }
     }
 
+    void GridPass::fillBackgroundFrame_(GridFrame &frame) const noexcept {
+        frame.m_view_projection = m_background_camera.m_view_projection;
+        frame.m_cell_size_m = m_world.m_cell_size_m;
+        frame.m_camera_world_x = m_background_camera.m_origin.x;
+        frame.m_camera_world_y = m_background_camera.m_origin.y;
+        frame.m_camera_world_z = m_background_camera.m_origin.z;
+        frame.m_camera_forward_x = m_background_camera.m_forward.x;
+        frame.m_camera_forward_y = m_background_camera.m_forward.y;
+        frame.m_camera_forward_z = m_background_camera.m_forward.z;
+        frame.m_camera_ortho = m_background_camera.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
+        fillOpticalFrame_(frame);
+    }
+
+    std::error_code GridPass::bindBackgroundFineCH_(rhi::ShaderCursor &cursor, u32 &has_resolved_cells) const {
+        // The narrow binder reads only this attempt's fine CH; the full
+        // world-lighting bind would require material/source/thermal resources
+        // the background root does not carry.
+        if (m_world.m_lighting and
+            m_world.m_world_edge == WorldLightingPass::kWorldEdge and
+            m_world.m_lighting->currentFineCHAvailable()) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->bindFineCH(cursor));
+            has_resolved_cells = 1u;
+            return {};
+        }
+
+        if (m_test_resolved and m_test_fine_ch) {
+            // Tests-only external field follows the same gate and binding.
+            auto *const fine_ch = m_test_fine_ch.get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fine_ch, makeFullRange(fine_ch))));
+            has_resolved_cells = 1u;
+            return {};
+        }
+
+        // No current field: keep the authored unlit fallback. The clear gate
+        // means the shader never indexes this zero buffer.
+        auto *const fallback = m_lighting_fallback.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+        has_resolved_cells = 0u;
+        return {};
+    }
+
     // ------------------------------------------------------------------
     // opt-in opaque sample-frequency programs
     // ------------------------------------------------------------------
@@ -4062,13 +4106,17 @@ namespace pP {
         return &*cache;
     }
 
-    std::error_code GridPass::prepareBackground(
+    std::error_code GridPass::prepareBackgroundInputs(
         const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
         const rhi::ScissorRect &scissor) {
         if (m_spatial_msaa) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
         }
 
+        // The encoding half requires this admission call in the same frame and
+        // clears the flag once consumed.
+        m_background_inputs_prepared = true;
+        m_background_needs_backdrop = false;
         m_background_ready = false;
         m_background_camera = camera;
         m_background_viewport = viewport;
@@ -4117,20 +4165,40 @@ namespace pP {
             effective_completed = std::max(effective_completed, values[selected]);
         }
         m_background_cursor = selected;
+        m_background_inputs_completed = effective_completed;
 
-        const bool needs_backdrop = std::ranges::any_of(m_world.m_terrain_visuals, [](const auto &visual) {
+        m_background_needs_backdrop = std::ranges::any_of(m_world.m_terrain_visuals, [](const auto &visual) {
             return (visual.m_surface_flags & kGridSurfaceOpticalBlend) != 0u;
         });
-        if (m_spatial_msaa and not needs_backdrop) {
+        if (m_spatial_msaa and not m_background_needs_backdrop) {
             // Reuse the same fenced background root slots without generating
             // a single-sample intermediate. The direct MSAA draw follows.
             m_background_ready = true;
+        }
+
+        return {};
+    }
+
+    std::error_code GridPass::prepareBackground(
+        const PreRenderContext &context, [[maybe_unused]] const CameraSnapshot &camera,
+        [[maybe_unused]] const rhi::Viewport &viewport, [[maybe_unused]] const rhi::ScissorRect &scissor) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_background_inputs_prepared ? std::error_code{}
+                                                   : std::make_error_code(std::errc::operation_not_permitted));
+        m_background_inputs_prepared = false;
+
+        if (not m_world.m_has_background) {
+            return {};
+        }
+        if (m_spatial_msaa and not m_background_needs_backdrop) {
+            // The inputs half already marked the fenced roots ready.
             return {};
         }
 
+        const u32 selected = m_background_cursor;
         auto &slot = m_background_slots[selected];
-        const u32 width = static_cast<u32>(std::ceil(viewport.extentX));
-        const u32 height = static_cast<u32>(std::ceil(viewport.extentY));
+        const u32 width = static_cast<u32>(std::ceil(m_background_viewport.extentX));
+        const u32 height = static_cast<u32>(std::ceil(m_background_viewport.extentY));
         if (not slot.m_texture or slot.m_width != width or slot.m_height != height) {
             // This slot's last reader completed; roots may still retain its view.
             for (auto *const cache: {&m_cached_pipeline, &m_gpu_particle_pipeline, &m_background_copy_pipeline}) {
@@ -4138,7 +4206,7 @@ namespace pP {
                     for (u32 index = 0u; index < kTileRingSize; ++index) {
                         auto &pipeline = **cache;
                         if (pipeline.m_slot_backdrop_views[index] == slot.m_view.get() and
-                            slotFenceComplete(effective_completed, pipeline.m_slot_last_use[index])) {
+                            slotFenceComplete(m_background_inputs_completed, pipeline.m_slot_last_use[index])) {
                             pipeline.m_slot_roots[index].setNull();
                             pipeline.m_slot_backdrop_owners[index].clear();
                             pipeline.m_slot_frame_cursors[index] = {};
@@ -4175,9 +4243,6 @@ namespace pP {
             slot.m_width = width;
             slot.m_height = height;
         }
-        m_background_camera = camera;
-        m_background_viewport = viewport;
-        m_background_scissor = scissor;
         RenderPipelineSignature signature{};
         signature.m_color_formats[0] = rhi::Format::RGBA16Float;
         signature.m_color_format_count = 1u;
@@ -4187,12 +4252,11 @@ namespace pP {
         auto *const root = (*pipeline)->m_slot_roots[selected].get();
         rhi::ShaderCursor cursor{root};
         GridFrame frame{};
-        frame.m_view_projection = camera.m_view_projection;
-        frame.m_cell_size_m = m_world.m_cell_size_m;
-        fillOpticalFrame_(frame);
+        fillBackgroundFrame_(frame);
         frame.m_has_background = 1u;
         frame.m_viewport[0] = 0.0f;
         frame.m_viewport[1] = 0.0f;
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(cursor, frame.m_has_resolved_cells));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[selected].setData(&frame, sizeof(frame)));
         rhi::ShaderCursor surface;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_surface_profile"].getDereferenced(surface));
@@ -4263,9 +4327,8 @@ namespace pP {
             auto *const root = (*pipeline)->m_slot_roots[slot].get();
             rhi::ShaderCursor cursor{root};
             GridFrame frame{};
-            frame.m_view_projection = m_background_camera.m_view_projection;
-            frame.m_cell_size_m = m_world.m_cell_size_m;
-            fillOpticalFrame_(frame);
+            fillBackgroundFrame_(frame);
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(cursor, frame.m_has_resolved_cells));
             PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[slot].setData(&frame, sizeof(frame)));
             rhi::ShaderCursor surface;
             PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_surface_profile"].getDereferenced(surface));
@@ -4331,6 +4394,9 @@ namespace pP {
 
     void GridPass::clearOpticalResources_() noexcept {
         m_background_ready = false;
+        m_background_inputs_prepared = false;
+        m_background_needs_backdrop = false;
+        m_background_inputs_completed = kFenceValueNone;
         m_background_spatial_pipeline.reset();
         m_background_spatial_key.reset();
         m_background_spatial_program.setNull();

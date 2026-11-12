@@ -799,6 +799,18 @@ namespace pP {
         return {};
     }
 
+    std::error_code WorldLightingPass::bindFineCH(rhi::ShaderCursor &cursor) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            currentFineCHAvailable() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+
+        const auto &resources = *m_resources;
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            cursor["g_fine_ch"].setBinding(rhi::Binding(resources.m_fine_ch, projectionRange(resources.m_fine_ch))));
+        return {};
+    }
+
     // ------------------------------------------------------------------
     // retained inspection overlay
     // ------------------------------------------------------------------

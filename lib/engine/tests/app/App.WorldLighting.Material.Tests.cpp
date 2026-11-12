@@ -1663,50 +1663,207 @@ namespace pP::tests::detail::WorldLightingMaterial {
             fixture.shutdown();
         };
 
-        shader::SharedModule module{};
-        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
-            std::filesystem::current_path() / "shaders" / "grid_tiles.slang", "grid_tiles", module.writeRef()));
-        auto *const layout = module->getLayout();
-        PPR_TEST_ASSERT(layout != nullptr);
-        slang::TypeLayoutReflection *frame = nullptr;
-        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
-            auto *const parameter = layout->getParameterByIndex(index);
-            if (std::string_view{parameter->getName()} == "g_grid_frame") {
-                frame = parameter->getTypeLayout()->getElementTypeLayout();
-                break;
-            }
-        }
-
-        PPR_TEST_ASSERT(frame != nullptr);
-        _.log(
-            std::format(
-                "WORLD_LIGHTING_MATERIAL grid_frame size={} cpu={}", frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                sizeof(GridPass::GridFrame)));
-        for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
-            auto *const field = frame->getFieldByIndex(index);
-            _.log(
-                std::format(
-                    "WORLD_LIGHTING_MATERIAL grid_frame field[{}] name={} offset={}", index, field->getName(),
-                    field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM)));
-        }
-
-        PPR_TEST_ASSERT(frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridPass::GridFrame));
-        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 8u>{
-                 std::pair{"m_camera_world_x", 304u}, {"m_camera_world_y", 308u}, {"m_camera_world_z", 312u},
-                 {"m_camera_forward_x", 316u}, {"m_camera_forward_y", 320u}, {"m_camera_forward_z", 324u},
-                 {"m_camera_ortho", 328u}, {"m_has_resolved_cells", 332u}}) {
-            bool matched = false;
-            for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
-                auto *const field = frame->getFieldByIndex(index);
-                if (std::string_view{field->getName()} == name) {
-                    PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset);
-                    matched = true;
+        PPR_TEST_ASSERT(sizeof(GridPass::GridFrame) == 336u);
+        const auto verify_frame = [&](const char *const file, const char *const module_name) {
+            shader::SharedModule module{};
+            PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+                std::filesystem::current_path() / "shaders" / file, module_name, module.writeRef()));
+            auto *const layout = module->getLayout();
+            PPR_TEST_ASSERT(layout != nullptr);
+            slang::TypeLayoutReflection *frame = nullptr;
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == "g_grid_frame") {
+                    frame = parameter->getTypeLayout()->getElementTypeLayout();
                     break;
                 }
             }
 
-            PPR_TEST_ASSERT(matched);
+            PPR_TEST_ASSERT(frame != nullptr);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL {} grid_frame size={} cpu={}", module_name,
+                    frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM), sizeof(GridPass::GridFrame)));
+            for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
+                auto *const field = frame->getFieldByIndex(index);
+                _.log(
+                    std::format(
+                        "WORLD_LIGHTING_MATERIAL {} grid_frame field[{}] name={} offset={}", module_name, index,
+                        field->getName(), field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM)));
+            }
+
+            PPR_TEST_ASSERT(frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridPass::GridFrame));
+            for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 8u>{
+                     std::pair{"m_camera_world_x", 304u}, {"m_camera_world_y", 308u}, {"m_camera_world_z", 312u},
+                     {"m_camera_forward_x", 316u}, {"m_camera_forward_y", 320u}, {"m_camera_forward_z", 324u},
+                     {"m_camera_ortho", 328u}, {"m_has_resolved_cells", 332u}}) {
+                bool matched = false;
+                for (unsigned index = 0u; index < frame->getFieldCount(); ++index) {
+                    auto *const field = frame->getFieldByIndex(index);
+                    if (std::string_view{field->getName()} == name) {
+                        PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset);
+                        matched = true;
+                        break;
+                    }
+                }
+
+                PPR_TEST_ASSERT(matched);
+            }
+        };
+
+        verify_frame("grid_tiles.slang", "grid_tiles");
+        verify_frame("grid_background.slang", "grid_background");
+    };
+
+    PPR_UNIT_TEST (background_layers_receive_light_at_bounded_offsets) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        // One opaque white layer carries every assertion; the three upper
+        // layers are authored fully transparent so ordering cannot leak in.
+        GridTerrainVisual visual{};
+        visual.m_material_id = 1u;
+        visual.m_color_rgba = 0xffffffffu;
+        visual.m_ior = 1.5f;
+        visual.m_roughness = 0.5f;
+        visual.m_opacity = 1.0f;
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_has_background = true;
+        stage.m_terrain_visuals = {visual};
+        stage.m_terrain_images.push_back(makeConstantImage(float4{1.0f, 1.0f, 1.0f, 1.0f}));
+        for (u32 layer = 0u; layer < 4u; ++layer) {
+            stage.m_background_layers[layer] = GridBackgroundLayer{
+                .m_texture_index = 0u,
+                .m_order = layer,
+                .m_color_rgba = layer == 0u ? 0xffffffffu : 0xffffff00u,
+                .m_repeat_period_m = 8.0f,
+                .m_parallax_factor = 0.0f,
+            };
         }
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        Array<u32> resolved(static_cast<std::size_t>(WorldLightingPass::kCellCount), 1u);
+        auto resolved_buffer = makeBuffer(
+            fixture.device(), resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        const auto make_ch = [&](const lighting::CH &ch) {
+            Array<lighting::PackedCH> records(lighting::kFineCHRecordCount);
+            const auto packed = lighting::packCH(ch);
+            PPR_TEST_ASSERT(packed.has_value());
+            for (auto &record: records) {
+                record = *packed;
+            }
+
+            return makeBuffer(
+                fixture.device(), records.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH),
+                records.data());
+        };
+
+        // Eight metres across at 64 pixels. The orthographic origin is the
+        // view's lower-left corner, so this frame covers [1016, 1024) metres:
+        // the right column's unshifted receiver is inside the field and eight
+        // metres from the camera centre.
+        constexpr u32 kEdge = 64u;
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{1016.0f, 1016.0f, -0.5f};
+        model.m_ortho_scale = 0.125f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, kEdge, kEdge}});
+        const auto snapshot = camera.getSnapshot();
+        const auto viewport = rhi::Viewport::fromSize(float(kEdge), float(kEdge));
+        const auto scissor = rhi::ScissorRect::fromSize(kEdge, kEdge);
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = kEdge, .height = kEdge, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+
+        const auto capture = [&](const lighting::CH &ch) {
+            PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(resolved_buffer, make_ch(ch)));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+            const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                if (const auto ec = grid.prepareBackgroundInputs(context, snapshot, viewport, scissor)) {
+                    return ec;
+                }
+
+                return grid.prepareBackground(context, snapshot, viewport, scissor);
+            };
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                return grid.renderBackground(context);
+            };
+            DrawSubmission submission{"background receiver layers", DrawCallback{draw}};
+            submission.m_viewport = viewport;
+            submission.m_scissor = scissor;
+            PPR_TEST_ASSERT(not renderer.renderToTexture(*target, {submission}, {}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            return readTexture(fixture.device(), *target);
+        };
+        const auto pixel = [](const TextureReadback &readback, const u32 x, const u32 y) {
+            const auto *const words = reinterpret_cast<const u16 *>(
+                readback.m_bytes.data() + static_cast<std::size_t>(y) * readback.m_row_pitch + x * 8u);
+            std::array<float, 4u> value{};
+            for (u32 channel = 0u; channel < 4u; ++channel) {
+                value[channel] = halfToFloat(words[channel]);
+            }
+
+            return value;
+        };
+
+        const auto assert_black = [&](const std::array<float, 4u> &value) {
+            PPR_TEST_ASSERT(std::abs(value[0]) <= 0.003f);
+            PPR_TEST_ASSERT(std::abs(value[1]) <= 0.003f);
+            PPR_TEST_ASSERT(std::abs(value[2]) <= 0.003f);
+        };
+
+        // A nonunit uniform field must appear exactly once: squaring it or
+        // applying it to alpha fails these values.
+        const auto lit = capture(uniformCH(float3{0.5f, 0.25f, 0.125f}));
+        const auto lit_center = pixel(lit, kEdge / 2u, kEdge / 2u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL background_receiver lit=({:.4f},{:.4f},{:.4f},{:.4f})", lit_center[0],
+                lit_center[1], lit_center[2], lit_center[3]));
+        PPR_TEST_ASSERT(std::abs(lit_center[0] - 0.5f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(lit_center[1] - 0.25f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(lit_center[2] - 0.125f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(lit_center[3] - 1.0f) <= 0.003f);
+
+        // A zero field yields zero reflected HDR while the layer stays opaque.
+        const auto dark = capture(lighting::CH{});
+        const auto dark_center = pixel(dark, kEdge / 2u, kEdge / 2u);
+        assert_black(dark_center);
+        PPR_TEST_ASSERT(std::abs(dark_center[3] - 1.0f) <= 0.003f);
+
+        // The right column's unshifted point is inside the map, but the bounded
+        // depth offset pushes its CH position outside; that layer is zero.
+        const auto exterior = pixel(lit, kEdge - 1u, kEdge / 2u);
+        assert_black(exterior);
+        PPR_TEST_ASSERT(std::abs(exterior[3] - 1.0f) <= 0.003f);
     };
 
     PPR_UNIT_TEST (grid_tiles_sample_rate_boundary_selects_distinct_cell_materials) {
@@ -2432,6 +2589,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::gas_uses_nonzero_ch_angular_mean_and_alpha_composition,
                 detail::WorldLightingMaterial::grid_tiles_sample_rate_boundary_selects_distinct_cell_materials,
                 detail::WorldLightingMaterial::grid_frame_reflection_matches_the_cpu_contract,
+                detail::WorldLightingMaterial::background_layers_receive_light_at_bounded_offsets,
                 detail::WorldLightingMaterial::opaque_thermal_glow_and_receive_only_thermal_exclusion,
                 detail::WorldLightingMaterial::inspection_settings_reject_unknown_views_and_levels,
                 detail::WorldLightingMaterial::inspection_views_decode_published_records_without_mutation,

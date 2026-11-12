@@ -393,6 +393,13 @@ export namespace pP {
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_ortho) == 328u);
         static_assert(PPR_OFFSETOF(GridFrame, m_has_resolved_cells) == 332u);
 
+        // Background prerequisites (seeds, visuals/palette, camera/viewport,
+        // ring slot) separate from the cached-backdrop encoding. The Editor
+        // arms world lighting between them so the cache samples this attempt's
+        // fine CH; legacy callers invoke both halves in order.
+        [[nodiscard]] std::error_code prepareBackgroundInputs(
+            const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
+            const rhi::ScissorRect &scissor);
         [[nodiscard]] std::error_code prepareBackground(
             const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
             const rhi::ScissorRect &scissor);
@@ -828,6 +835,13 @@ export namespace pP {
             std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool blend,
             bool premultiplied = false);
         void fillOpticalFrame_(GridFrame &frame) const noexcept;
+        // Background frame tail: captured camera position, forward and
+        // orthographic flag, plus the shared optical frame fields.
+        void fillBackgroundFrame_(GridFrame &frame) const noexcept;
+        // Binds the background receiver's fine CH input and reports whether the
+        // field is live. With no current field the zero fallback is bound and
+        // the gate stays clear, so no unlit layer indexes it.
+        [[nodiscard]] std::error_code bindBackgroundFineCH_(rhi::ShaderCursor &cursor, u32 &has_resolved_cells) const;
         void clearOpticalResources_() noexcept;
         [[nodiscard]] std::error_code ensureSpatialPrograms_(rhi::IDevice &device, bool reactive = false);
 
@@ -1174,6 +1188,11 @@ export namespace pP {
         rhi::Viewport m_background_viewport{};
         rhi::ScissorRect m_background_scissor{};
         CameraSnapshot m_background_camera{};
+        // Split background preparation: inputs admit prerequisites and select
+        // the backdrop slot; the cache half encodes it after lighting.
+        FenceCompletionValue m_background_inputs_completed{kFenceValueNone};
+        bool m_background_needs_backdrop{};
+        bool m_background_inputs_prepared{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_copy_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_background_spatial_program{};

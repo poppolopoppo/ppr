@@ -1,6 +1,11 @@
 #include "grid_background_world.slang"
+#include "world_lighting_codec.slang"
 
-// Same 304-byte per-slot frame mirror as GridPass::GridFrame. Row vectors,
+// The CH helper expects the fine-field binding to exist before it is included.
+StructuredBuffer<PackedCH> g_fine_ch;
+#include "world_lighting_ch.slang"
+
+// Same 336-byte per-slot frame mirror as GridPass::GridFrame. Row vectors,
 // +Y-up world coordinates and [0,1] depth; no backend-specific transform.
 struct BackgroundLayer {
     uint m_texture_index;
@@ -24,6 +29,14 @@ struct GridFrame {
     uint m_has_background;
     uint m_has_surface;
     BackgroundLayer m_layers[4];
+    float m_camera_world_x;
+    float m_camera_world_y;
+    float m_camera_world_z;
+    float m_camera_forward_x;
+    float m_camera_forward_y;
+    float m_camera_forward_z;
+    uint m_camera_ortho;
+    uint m_has_resolved_cells;
 };
 ConstantBuffer<GridFrame> g_grid_frame;
 // Float4 packing preserves a 16-byte constant-buffer array stride. The
@@ -99,10 +112,39 @@ float4 sampleBackground(DescriptorHandle<Texture2D<float4>> texture, SamplerStat
     return lerp(cubic, filtered, smoothstep(0.75, 1.0, footprint));
 }
 
+// ------------------------------------------------------------------
+// layer receivers
+// ------------------------------------------------------------------
+// Each layer samples its own CH position: the receiving-plane point shifted
+// by at most one native cell along the camera displacement, softened by a
+// sixteen-cell length. The shifted position is a CH sample location only; the
+// authored texture UV stays unshifted. A shifted receiver outside the fine
+// field's [0, 1024*h)^2 domain has zero reflected radiance for that layer.
+float3 backgroundLayerRadiance(float3 linear_rgb, float2 world, float2 camera, float cell, float parallax) {
+    float2 displacement = (world - camera) / cell;
+    float depth_weight = 1.0 - clamp(parallax, 0.0, 1.0);
+    float2 offset_cells = depth_weight * displacement / sqrt(256.0 + dot(displacement, displacement));
+    float2 shifted_cells = world / cell + offset_cells;
+    if (any(shifted_cells < 0.0) || any(shifted_cells >= 1024.0)) return float3(0.0);
+
+    return linear_rgb * angularMean(shifted_cells);
+}
+
 float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler) {
-    float2 world = backgroundWorldAt(input.uv, g_grid_frame.m_inverse_view_projection);
+    const bool lit = g_grid_frame.m_has_resolved_cells != 0u;
+    float2 world;
+    if (lit) {
+        // A lit view never substitutes the near-plane fallback: an unvalidated
+        // receiving point has no field position to sample and stays black.
+        if (!backgroundReceivingPointAt(input.uv, g_grid_frame.m_inverse_view_projection, world)) {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+    } else {
+        world = backgroundWorldAt(input.uv, g_grid_frame.m_inverse_view_projection);
+    }
+
     float2 dx = ddx(world), dy = ddy(world);
     if (g_grid_frame.m_has_surface != 0u) {
         // Columns match the exact seeded height sampled by the terrain raster.
@@ -117,6 +159,13 @@ float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
             return float4(lerp(horizon, zenith, smoothstep(0.0, 1.0, altitude)), 1.0);
         }
     }
+    if (lit) {
+        float2 world_cells = world / g_grid_frame.m_cell_size_m;
+        if (any(world_cells < 0.0) || any(world_cells >= 1024.0)) return float4(0.0, 0.0, 0.0, 1.0);
+    }
+
+    const float2 camera_world = float2(g_grid_frame.m_camera_world_x, g_grid_frame.m_camera_world_y);
+    const float cell = g_grid_frame.m_cell_size_m;
     float3 result = float3(0.0);
     [unroll]
     for (uint index = 0u; index < 4u; ++index) {
@@ -126,7 +175,11 @@ float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
             uv, dx / layer.m_repeat_period_m, dy / layer.m_repeat_period_m);
         float4 tint = linearTint(layer.m_color_rgba);
         float alpha = index == 0u ? 1.0 : saturate(texel.a * tint.a);
-        result = lerp(result, texel.rgb * tint.rgb, alpha);
+        float3 radiance = texel.rgb * tint.rgb;
+        if (lit) {
+            radiance = backgroundLayerRadiance(radiance, world, camera_world, cell, layer.m_parallax_factor);
+        }
+        result = lerp(result, radiance, alpha);
     }
     return float4(result, 1.0);
 }

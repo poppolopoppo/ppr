@@ -1809,6 +1809,8 @@ namespace pP::game::tests::detail::checkpoint {
 
                 const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
                     PPR_RETURN_ERROR_ON_FAIL(
+                        CheckpointTests, grid.prepareBackgroundInputs(context, snapshot, viewport, scissor));
+                    PPR_RETURN_ERROR_ON_FAIL(
                         CheckpointTests, grid.prepareBackground(context, snapshot, viewport, scissor));
                     PPR_RETURN_ERROR_ON_FAIL(CheckpointTests, grid.prepareGpuParticles(context));
                     observe("prepared");

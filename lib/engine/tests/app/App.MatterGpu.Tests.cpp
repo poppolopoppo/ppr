@@ -2718,6 +2718,8 @@ namespace pP::tests::detail::MatterGpu {
 
                     const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
                         PPR_RETURN_ERROR_ON_FAIL(
+                            MatterPoolRender, grid.prepareBackgroundInputs(context, snapshot, viewport, scissor));
+                        PPR_RETURN_ERROR_ON_FAIL(
                             MatterPoolRender, grid.prepareBackground(context, snapshot, viewport, scissor));
                         return grid.prepareGpuParticles(context);
                     };
