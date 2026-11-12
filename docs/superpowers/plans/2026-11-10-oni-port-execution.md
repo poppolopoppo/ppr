@@ -1541,7 +1541,7 @@ and operational acceptance. No Task 4 work has begun.
   driver stacks into unknown/DBus-only reports. With the CTest policy:
   `world_lighting_projection` 12 allocations/549 B suppressed, material 12/549,
   reconstruction 12/549, fine 12/549, cascade 12/549, trace 12/549, frame_fence
-  12/549; settlement (real windows) 69 allocations/102,751 B suppressed; all are
+  12/549; settlement (real windows) 90 allocations/141,875 B suppressed; all are
   `libnvidia-glcore.so`/`libnvidia-glsi.so` frames inside Vulkan adapter
   enumeration or GLX `glXDestroyWindow`. Unsuppressed runs with the loader pinned
   retain the same NVIDIA frames; PPR frames appear only as callers of
