@@ -74,6 +74,15 @@ namespace pP::game {
         return "frozen";
     }
 
+    std::string_view profileCaptureBackendName(const EProfileCaptureBackend backend) noexcept {
+        switch (backend) {
+            case EProfileCaptureBackend::vulkan: return "vulkan";
+            case EProfileCaptureBackend::d3d12: return "d3d12";
+            case EProfileCaptureBackend::unsupported: return "unsupported";
+        }
+        return "unsupported";
+    }
+
     std::string_view profileCaptureStatusName(const EProfileCaptureStatus status) noexcept {
         switch (status) {
             case EProfileCaptureStatus::pending: return "pending";
@@ -167,6 +176,7 @@ namespace pP::game {
             "  \"pid\": {},\n"
             "  \"tool\": {},\n"
             "  \"workload\": {},\n"
+            "  \"backend\": {},\n"
             "  \"session_token\": {},\n"
             "  \"status\": {},\n"
             "  \"reason\": {},\n"
@@ -196,19 +206,18 @@ namespace pP::game {
             "  \"elapsed_seconds\": {:.6f}\n"
             "}}\n",
             kProfileCaptureSchemaVersion, m_process_id, jsonString_(profileCaptureToolName(m_tool)),
-            jsonString_(profileCaptureWorkloadName(m_workload)), jsonString_(m_session_token),
-            jsonString_(profileCaptureStatusName(m_status)), jsonString_(m_reason), m_ready_written, m_accepted_frames,
-            m_ui_only_frames, m_rejected_frames, m_active_seconds, m_ready_tick, m_stop_tick, m_ready_scene_frame,
-            m_scene_frame_index, m_ready_screen_frame, m_screen_frame_index, m_frozen_pause_satisfied, m_pause_tick,
-            m_tick_preceded_pause, m_frozen_advanced, m_sdk != nullptr, m_sdk_operations, m_sdk_status.m_status,
-            jsonString_(m_sdk_error ? m_sdk_error.message() : std::string{}), trace_finalized,
-            m_sdk_status.m_trace_files, jsonString_(m_sdk_status.m_trace_path),
+            jsonString_(profileCaptureWorkloadName(m_workload)), jsonString_(profileCaptureBackendName(m_backend)),
+            jsonString_(m_session_token), jsonString_(profileCaptureStatusName(m_status)), jsonString_(m_reason),
+            m_ready_written, m_accepted_frames, m_ui_only_frames, m_rejected_frames, m_active_seconds, m_ready_tick,
+            m_stop_tick, m_ready_scene_frame, m_scene_frame_index, m_ready_screen_frame, m_screen_frame_index,
+            m_frozen_pause_satisfied, m_pause_tick, m_tick_preceded_pause, m_frozen_advanced, m_sdk != nullptr,
+            m_sdk_operations, m_sdk_status.m_status, jsonString_(m_sdk_error ? m_sdk_error.message() : std::string{}),
+            trace_finalized, m_sdk_status.m_trace_files, jsonString_(m_sdk_status.m_trace_path),
             jsonString_(m_cleanup_error ? m_cleanup_error.message() : std::string{}),
             elapsedSeconds_(m_begin, m_last_now));
     }
 
-    std::error_code ProfileCapture::writeReady_(const TimePoint now) {
-        m_ready_time = now;
+    std::error_code ProfileCapture::writeReady_() {
         m_ready_tick = m_tick;
         m_ready_scene_frame = m_scene_frame_index;
         m_ready_screen_frame = m_screen_frame_index;
@@ -223,8 +232,8 @@ namespace pP::game {
         return {};
     }
 
-    std::error_code ProfileCapture::writeFinalState_() {
-        if (m_final_written) {
+    std::error_code ProfileCapture::writeFinalState_(const bool force) {
+        if (m_final_written and not force) {
             return {};
         }
         if (const std::error_code error = writeFileAtomically(m_final_state_path, finalStateJson_())) {
@@ -316,6 +325,22 @@ namespace pP::game {
         return {};
     }
 
+    void ProfileCapture::noteBackend(const EProfileCaptureBackend backend, const TimePoint now) {
+        m_backend = backend;
+        if (m_tool == EProfileCaptureTool::graphics and
+            backend != EProfileCaptureBackend::vulkan and
+            m_phase != EPhase::finished) {
+            // The installed adapter is Vulkan-only. A D3D12 (or unknown) device
+            // queue must never be reinterpreted as a Vulkan queue.
+            complete_(
+                EProfileCaptureStatus::unsupported,
+                std::format(
+                    "Nsight Graphics SDK adapter supports Vulkan only; observed backend is {}",
+                    profileCaptureBackendName(m_backend)),
+                now);
+        }
+    }
+
     Expected<std::optional<ProfileCaptureAction>> ProfileCapture::advance(
         const ProfileCaptureObservation &observed, const TimePoint now) {
         if (m_phase == EPhase::idle) {
@@ -355,6 +380,16 @@ namespace pP::game {
             total > static_cast<double>(kProfileCaptureTotalDeadlineSeconds)) {
             complete_(
                 EProfileCaptureStatus::incomplete, std::format("total {:.0f} s capture deadline exceeded", total), now);
+            return std::optional<ProfileCaptureAction>{};
+        }
+
+        if (pollStopRequest_(now)) {
+            // The request is a completion; the ordinary quit is published below.
+        }
+        if (m_phase == EPhase::finished) {
+            if (not m_suppress_quit) {
+                return publish_(ProfileCaptureAction{EProfileCaptureActionKind::quit});
+            }
             return std::optional<ProfileCaptureAction>{};
         }
 
@@ -514,7 +549,7 @@ namespace pP::game {
             return std::nullopt;
         }
 
-        if (const std::error_code error = writeReady_(now)) {
+        if (const std::error_code error = writeReady_()) {
             complete_(
                 EProfileCaptureStatus::failed, std::format("ready record write failed: {}", error.message()), now);
             return std::nullopt;
@@ -529,10 +564,8 @@ namespace pP::game {
 
     std::optional<ProfileCaptureAction> ProfileCapture::advanceReady_(const TimePoint now) {
         if (m_tool == EProfileCaptureTool::systems) {
-            pollStopRequest_(now);
             return std::nullopt;
         }
-
         if (now - m_poll_time < TimeSpan{std::chrono::milliseconds{50}}) {
             return std::nullopt;
         }
@@ -615,24 +648,33 @@ namespace pP::game {
         return emitSdk_(EProfileCaptureSdkOperation::poll, now);
     }
 
-    void ProfileCapture::pollStopRequest_(const TimePoint now) {
-        if (now - m_poll_time < TimeSpan{std::chrono::milliseconds{100}}) {
-            return;
+    bool ProfileCapture::pollStopRequest_(const TimePoint now) {
+        // A supervisor can ask for the ordinary quit in any phase, including
+        // during warm-up, tracing and draining; a wrong token never stops us.
+        if (now - m_stop_poll_time < TimeSpan{std::chrono::milliseconds{100}}) {
+            return false;
         }
-        m_poll_time = now;
+        m_stop_poll_time = now;
 
         const std::string token = readTrimmed_(m_stop_request_path);
         if (token.empty()) {
-            return;
+            return false;
         }
         if (token != m_session_token) {
-            // A stale request from another run must never stop this capture.
             writeLog_(std::format("ignored stop request for another session: {}", token));
-            return;
+            return false;
         }
 
-        m_stop_requested = true;
-        complete_(EProfileCaptureStatus::complete, "matching session stop request", now);
+        if (m_phase == EPhase::warming or not m_ready_written) {
+            complete_(EProfileCaptureStatus::incomplete, "matching session stop request before readiness", now);
+        } else if (m_tool == EProfileCaptureTool::graphics and
+                   (m_sdk_status.m_trace_files == 0u or m_sdk_status.m_tracing or m_sdk_status.m_draining)) {
+            complete_(
+                EProfileCaptureStatus::incomplete, "matching session stop request before the trace finalized", now);
+        } else {
+            complete_(EProfileCaptureStatus::complete, "matching session stop request", now);
+        }
+        return true;
     }
 
     void ProfileCapture::complete_(
@@ -656,18 +698,27 @@ namespace pP::game {
 
     std::error_code ProfileCapture::finish(const std::error_code cleanup_error) {
         m_cleanup_error = cleanup_error;
+        bool rewrite = false;
 
         if (not m_finalized) {
             m_finalized = true;
             if (m_phase != EPhase::finished) {
                 complete_(
                     EProfileCaptureStatus::incomplete, "application shutdown before capture completion", m_last_now);
+                rewrite = true;
             } else if (cleanup_error and m_status == EProfileCaptureStatus::complete) {
                 m_status = EProfileCaptureStatus::incomplete;
                 m_reason += std::format("; shutdown cleanup failed: {}", cleanup_error.message());
+                rewrite = true;
             }
+        } else if (cleanup_error and m_status == EProfileCaptureStatus::complete) {
+            m_status = EProfileCaptureStatus::incomplete;
+            m_reason += std::format("; shutdown cleanup failed: {}", cleanup_error.message());
+            rewrite = true;
+        }
 
-            if (const std::error_code error = writeFinalState_()) {
+        if (rewrite or not m_final_written) {
+            if (const std::error_code error = writeFinalState_(true)) {
                 return error;
             }
         }

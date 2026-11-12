@@ -91,9 +91,16 @@ namespace pP::game {
                 return {};
             }
 
-            std::error_code activate(void *const native_queue) override {
+            std::error_code activate(void *const native_queue, const EProfileCaptureBackend backend) override {
                 if (native_queue == nullptr) {
                     return std::make_error_code(std::errc::invalid_argument);
+                }
+                if (backend != EProfileCaptureBackend::vulkan) {
+                    // Never reinterpret a D3D12/foreign queue object as Vulkan.
+                    PPR_LOG(
+                        ProfileCaptureNsight, error, "Nsight GPU Trace adapter rejected a non-Vulkan backend",
+                        {{"backend", profileCaptureBackendName(backend)}});
+                    return std::make_error_code(std::errc::not_supported);
                 }
 
                 NGFX_GPUTrace_ActivateTrace_Vulkan_Params params{};

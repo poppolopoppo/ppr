@@ -71,9 +71,10 @@ LOCK_NAME = "ppr-lighting-profile.lock"
 SYSTEMS_EXPORT_SCHEMA = "3.31.0"
 SYSTEMS_EXPORT_SCHEMA_MAJOR = 3
 
-# Stable GPU marker names required by the design contract. They are checked
-# against observed ranges; a missing marker is reported, never invented.
-REQUIRED_MARKERS = (
+# Stable GPU marker names required by the design contract for the Graphics GPU
+# trace. A missing marker is reported, never invented. Systems cannot observe
+# GPU pass ranges, so this set does not gate a Systems capture.
+REQUIRED_GPU_MARKERS = (
     "WorldLighting.ResolveCells",
     "WorldLighting.Visibility",
     "WorldLighting.Jump",
@@ -95,14 +96,20 @@ REQUIRED_MARKERS = (
     "PBMPM.Tick",
 )
 
-# Normalized metric families the analysis would like to report. Unsupported or
-# not-collected families are null with a reason, never zero.
-DESIRED_METRIC_FAMILIES = {
-    "gpu_duration": ("gpu frame time", "gpu__duration", "gpu__time"),
-    "sm_occupancy": ("occupancy", "sm__warps_active", "warp_occupancy"),
-    "memory_throughput": ("throughput", "dram", "memory"),
-    "cache_hit_rate": ("cache_hit", "l1tex", "l2__hit"),
-}
+# A frozen workload pauses before the first simulation tick, so the PB-MPM
+# solver legitimately never runs; a live workload must emit it.
+FROZEN_OPTIONAL_MARKERS = ("PBMPM.Tick",)
+
+# Normalized metric families the analysis would like to report. Membership is
+# decided by exact vendor tag families, never by a loose substring: e.g.
+# ``vkAllocateMemory`` is a CPU API call, not memory throughput, and
+# ``l1tex__throughput`` is a unit throughput metric, not a cache hit rate.
+DESIRED_METRIC_FAMILIES = (
+    "gpu_duration",
+    "sm_occupancy",
+    "memory_throughput",
+    "cache_hit_rate",
+)
 
 class ProfileError(RuntimeError):
     """Operational failure carrying a machine-readable cause."""
@@ -131,22 +138,58 @@ def sha256_file(path: Path) -> str:
 
 
 def git_identity(repository: Path) -> dict[str, Any]:
-    identity: dict[str, Any] = {"source_commit": None, "dirty_diff_hash": None, "dirty": False}
-    if not (repository / ".git").exists():
-        return identity
+    """Content identity of the captured working tree, not just its file list.
 
-    def run(*args: str) -> str:
-        completed = subprocess.run(
-            ["git", *args], cwd=repository, capture_output=True, text=True, check=False
-        )
-        return completed.stdout.strip() if completed.returncode == 0 else ""
+    The hash covers ``git diff HEAD --binary`` and the bytes of every untracked,
+    non-ignored file (plus the profiling tool's own bytes), so two different
+    edits with an identical status listing cannot claim the same identity.
+    """
 
-    identity["source_commit"] = run("rev-parse", "HEAD") or None
-    status = run("status", "--porcelain")
-    identity["dirty"] = bool(status)
-    if status:
-        identity["dirty_diff_hash"] = hashlib.sha256(status.encode("utf-8")).hexdigest()
-    return identity
+    toplevel = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], cwd=repository, capture_output=True, text=True, check=False
+    )
+    if toplevel.returncode != 0:
+        return {
+            "source_commit": None,
+            "dirty": False,
+            "dirty_diff_hash": None,
+            "working_tree_hash": None,
+            "tooling": {"profile_lighting_py_sha256": sha256_file(Path(__file__))},
+        }
+
+    root = Path(toplevel.stdout.strip())
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=False
+    ).stdout.strip()
+    tracked_diff = subprocess.run(
+        ["git", "diff", "HEAD", "--binary"], cwd=root, capture_output=True, check=False
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    ).stdout
+
+    hasher = hashlib.sha256()
+    hasher.update(tracked_diff)
+    names = sorted(name for name in untracked.split(b"\0") if name)
+    for name in names:
+        hasher.update(name)
+        hasher.update(b"\0")
+        try:
+            hasher.update((root / name.decode("utf-8", errors="replace")).read_bytes())
+        except OSError:
+            hasher.update(b"<unreadable>")
+    digest = hasher.hexdigest()
+
+    return {
+        "source_commit": commit or None,
+        "dirty": bool(tracked_diff or names),
+        "dirty_diff_hash": digest if (tracked_diff or names) else None,
+        "working_tree_hash": digest,
+        "tooling": {"profile_lighting_py_sha256": sha256_file(Path(__file__))},
+    }
 
 
 def build_preset_from_path(executable: Path) -> str | None:
@@ -601,15 +644,29 @@ class _OwnedProcess:
             return None
 
     def terminate(self, grace: float) -> str:
+        """Terminates only this owned process group; never raises a timeout.
+
+        A child that ignores SIGTERM is escalated to SIGKILL after the grace
+        period, so the original capture error remains the reported cause.
+        """
+
         if self.process.poll() is not None:
             return "exited"
         with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-        if self.process.wait(timeout=grace) is not None:
+
+        try:
+            self.process.wait(timeout=grace)
             return "terminated"
+        except subprocess.TimeoutExpired:
+            pass
+
         with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-        self.process.wait(timeout=grace)
+        try:
+            self.process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            return "kill-unreaped"
         return "killed"
 
     def close(self) -> None:
@@ -910,40 +967,10 @@ def capture(config: CaptureConfig) -> dict[str, Any]:
                 manifest["collection"]["stop_exit_code"] = stop_code
                 if stop_code != 0:
                     raise ProfileError(f"nsys stop failed with exit {stop_code}", cause="tool-failure")
-            else:
-                # The application starts and finalizes the trace through the
-                # installed SDK; the tool bounds frames and duration.
-                deadline = min(time.monotonic() + config.collect_seconds + config.export_timeout, total_deadline)
-                final_state = _wait_for_json(output / FINAL_STATE_FILE, deadline, profiler)
-                if final_state is None:
-                    raise ProfileError(
-                        "application did not finalize the graphics trace within the collection deadline",
-                        cause="finalize-timeout",
-                    )
 
-            # Ordinary shutdown through the session-specific rendezvous.
-            request_stop()
-            manifest["commands"]["stop_request"] = str(output / STOP_REQUEST_FILE)
-
-            wait_deadline = time.monotonic() + config.shutdown_grace
-            if launcher is not None:
-                exit_code = launcher.wait(max(0.0, wait_deadline - time.monotonic()))
-            if exit_code is None and launcher is not None:
-                manifest["deviations"].append("launcher did not exit within the shutdown grace period")
-                manifest["cleanup"] = launcher.terminate(config.shutdown_grace)
-
-            final_state = _read_json_if_present(output / FINAL_STATE_FILE)
-            manifest["final_state"] = final_state
-            final_status = final_state.get("status") if isinstance(final_state, dict) else None
-            if final_status in ("complete", "ready"):
-                status = "complete"
-            elif final_status in ("incomplete", "unsupported", "failed"):
-                status = final_status
-            else:
-                status = "incomplete"
-                manifest["deviations"].append("final-state record missing or unreadable")
-
-            if config.tool == TOOL_SYSTEMS:
+                # Stop -> export -> quit: the native report is complete after
+                # `nsys stop`, so the export succeeds while the application is
+                # still alive, and the ordinary quit follows the retained export.
                 native = output / "systems.nsys-rep"
                 if not native.is_file():
                     raise ProfileError("Nsight Systems native report was not produced", cause="tool-failure")
@@ -964,12 +991,56 @@ def capture(config: CaptureConfig) -> dict[str, Any]:
                 manifest["collection"]["export_exit_code"] = export_code
                 if export_code != 0 or not (output / "systems.sqlite").is_file():
                     raise ProfileError(f"nsys sqlite export failed with exit {export_code}", cause="export-failure")
+
+                request_stop()
+                manifest["commands"]["stop_request"] = str(output / STOP_REQUEST_FILE)
             else:
-                if not graphics_staging.is_dir() or not any(graphics_staging.iterdir()):
+                # The application starts and finalizes the trace through the
+                # installed SDK; the tool bounds frames and duration.
+                deadline = min(time.monotonic() + config.collect_seconds + config.export_timeout, total_deadline)
+                final_state = _wait_for_json(output / FINAL_STATE_FILE, deadline, profiler)
+                if final_state is None:
                     raise ProfileError(
-                        "Nsight Graphics auto-export produced no directory", cause="export-failure"
+                        "application did not finalize the graphics trace within the collection deadline",
+                        cause="finalize-timeout",
                     )
+
+                request_stop()
+                manifest["commands"]["stop_request"] = str(output / STOP_REQUEST_FILE)
+
+            # Ordinary bounded wait for the process this capture owns.
+            wait_deadline = time.monotonic() + config.shutdown_grace
+            if launcher is not None:
+                exit_code = launcher.wait(max(0.0, wait_deadline - time.monotonic()))
+            if exit_code is None and launcher is not None:
+                manifest["deviations"].append("launcher did not exit within the shutdown grace period")
+                manifest["cleanup"] = launcher.terminate(config.shutdown_grace)
+
+            final_state = _read_json_if_present(output / FINAL_STATE_FILE)
+            manifest["final_state"] = final_state
+            final_status = final_state.get("status") if isinstance(final_state, dict) else None
+            if final_status in ("incomplete", "unsupported", "failed"):
+                status = final_status
+            elif final_status in ("complete", "ready"):
+                # `complete` is only claimed after the export/finalization below.
+                status = "pending-artifacts"
+            else:
+                status = "incomplete"
+                manifest["deviations"].append("final-state record missing or unreadable")
+
+            if config.tool == TOOL_GRAPHICS:
+                if not graphics_staging.is_dir() or not any(graphics_staging.iterdir()):
+                    raise ProfileError("Nsight Graphics auto-export produced no directory", cause="export-failure")
                 shutil.move(str(graphics_staging), str(output / "graphics"))
+                traces = sorted((output / "graphics").rglob("*.ngfx-gputrace"))
+                if not traces:
+                    raise ProfileError("no finalized .ngfx-gputrace file was retained", cause="export-failure")
+                # Record the path of the preserved native report, after the move.
+                manifest["collection"]["trace_path"] = str(traces[0])
+                manifest["collection"]["trace_bytes"] = traces[0].stat().st_size
+
+            if status == "pending-artifacts":
+                status = "complete"
     except ProfileError as error:
         failure = str(error)
         manifest["error"] = {"message": str(error), "cause": error.cause, "details": error.details}
@@ -984,6 +1055,9 @@ def capture(config: CaptureConfig) -> dict[str, Any]:
                 process.close()
             except OSError:
                 pass
+
+    if failure is not None:
+        status = "failed"
 
     for log_path in sorted(supervisor_logs.glob("*")):
         with contextlib.suppress(OSError):
@@ -1063,19 +1137,57 @@ def _read_tsv_rows(path: Path, number_format: str, numeric_from: int = 1) -> lis
 
 
 def _metric_unit(tag: str) -> tuple[str, str]:
-    """Splits an observed vendor aggregation suffix into (unit, aggregation)."""
+    """Splits an observed vendor aggregation suffix into (unit, aggregation).
 
-    if tag.endswith(".avg.pct_of_peak_sustained_elapsed"):
+    Rates stay rates and percentage-of-peak values keep their peak reference;
+    a summed per-second counter is not a count.
+    """
+
+    lower = tag.lower()
+    if lower.endswith(".sum.per_second"):
+        return "per second", "rate"
+    if lower.endswith(".avg.per_second"):
+        return "per second", "mean"
+    if lower.endswith(".sum.per_cycle_elapsed"):
+        return "per cycle elapsed", "rate"
+    if lower.endswith(".avg.per_cycle_elapsed"):
+        return "per cycle elapsed", "mean"
+    if lower.endswith(".avg.pct_of_peak_sustained_elapsed"):
         return "% of peak sustained elapsed", "mean"
-    if tag.endswith(".sum"):
+    if lower.endswith(".avg.pct_of_peak_sustained_active"):
+        return "% of peak sustained active", "mean"
+    if lower.endswith(".sum.pct_of_peak_sustained_elapsed"):
+        return "% of peak sustained elapsed", "sum"
+    if lower.endswith(".avg.peak_sustained"):
+        return "peak sustained", "mean"
+    if lower.endswith(".sum.peak_sustained"):
+        return "peak sustained", "sum"
+    if lower.endswith(".sum"):
         return "count", "sum"
-    if tag.endswith(".avg"):
+    if lower.endswith(".avg"):
         return "value", "mean"
-    if tag.endswith(".max"):
+    if lower.endswith(".max"):
         return "value", "max"
-    if tag.endswith(".min"):
+    if lower.endswith(".min"):
         return "value", "min"
     return "value", "mean"
+
+
+def _metric_family(tag: str) -> str | None:
+    """Maps an exact vendor tag family to a normalized metric family."""
+
+    lower = tag.lower()
+    if lower == "gpu frame time":
+        return "gpu_duration"
+    # DRAM/DRAM-controller traffic only; an L1TEX unit throughput is neither
+    # memory throughput nor a cache hit rate.
+    if "dramc__" in lower or "dram__" in lower or "gpu__dram_" in lower or "lts__throughput" in lower:
+        return "memory_throughput"
+    if "hit_rate" in lower:
+        return "cache_hit_rate"
+    if "__warps_active" in lower or "__maximum_warps_per_active_cycle_pct" in lower:
+        return "sm_occupancy"
+    return None
 
 
 class GraphicsAdapter:
@@ -1217,11 +1329,22 @@ class GraphicsAdapter:
                 }
             )
 
-        metrics.extend(_unavailable_metrics(metrics, required_families=DESIRED_METRIC_FAMILIES))
+        observed_families = {
+            family
+            for entry in metrics
+            if (family := _metric_family(str(entry.get("vendor_id") or ""))) is not None
+        }
+        metrics.extend(
+            _unavailable_metrics(
+                metrics,
+                observed_families,
+                "the selected metric set does not export {family}; no value is inferred",
+            )
+        )
 
         # Production stage markers, observed names. A complete frame carries the
         # scene stage (A), resolve/post (B) and present (C) ranges.
-        stage_names = ("scene.stage", "post.agx", "post.present")
+        stage_names = ("scene.stage", "Post.AgX", "Present.Scene")
         frames_with_stage: dict[int, set[str]] = {}
         for entry in ranges:
             frames_with_stage.setdefault(int(entry["frame_id"]), set()).add(entry["stable_name"])
@@ -1250,14 +1373,13 @@ class GraphicsAdapter:
 
 
 def _unavailable_metrics(
-    metrics: Iterable[dict[str, Any]], *, required_families: dict[str, Sequence[str]]
+    metrics: Iterable[dict[str, Any]], observed_families: set[str], reason: str
 ) -> list[dict[str, Any]]:
-    """Adds explicit null entries for metric families the source cannot provide."""
+    """Adds explicit null entries for normalized families the source cannot provide."""
 
-    observed_names = " ".join(str(entry.get("name", "")) + " " + str(entry.get("vendor_id", "")) for entry in metrics).lower()
     entries: list[dict[str, Any]] = []
-    for family, keywords in required_families.items():
-        if any(keyword in observed_names for keyword in keywords):
+    for family in DESIRED_METRIC_FAMILIES:
+        if family in observed_families:
             continue
         entries.append(
             {
@@ -1268,7 +1390,7 @@ def _unavailable_metrics(
                 "unit": None,
                 "value": None,
                 "availability": "unavailable",
-                "reason": f"the selected capture does not export {family}; no value is inferred",
+                "reason": reason.format(family=family),
                 "aggregation": "none",
                 "raw_artifact": None,
                 "raw_location": None,
@@ -1463,7 +1585,13 @@ class SystemsAdapter:
                     )
                 ]
 
-            metrics.extend(_unavailable_metrics(metrics, required_families=DESIRED_METRIC_FAMILIES))
+            metrics.extend(
+                _unavailable_metrics(
+                    metrics,
+                    set(),
+                    "Systems records API/workload windows on this host, not GPU {family}; no value is inferred",
+                )
+            )
 
             return {
                 "vendor": {
@@ -1544,8 +1672,21 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
         vendor = SystemsAdapter(sqlite_path).analyze()
 
     observed_markers = list(vendor["markers"])
-    missing_markers = [marker for marker in REQUIRED_MARKERS if marker not in observed_markers]
+    workload = (manifest.get("capture") or {}).get("workload")
     final_status = final_state.get("status") if isinstance(final_state, dict) else None
+
+    markers_applicable = tool == TOOL_GRAPHICS
+    optional_markers = list(FROZEN_OPTIONAL_MARKERS) if workload == "frozen" else []
+    if markers_applicable:
+        missing_markers = [
+            marker
+            for marker in REQUIRED_GPU_MARKERS
+            if marker not in observed_markers and marker not in optional_markers
+        ]
+        missing_optional_markers = [marker for marker in optional_markers if marker not in observed_markers]
+    else:
+        missing_markers = []
+        missing_optional_markers = []
 
     settings = ready.get("settings") if isinstance(ready, dict) else None
     camera = ready.get("camera") if isinstance(ready, dict) else None
@@ -1562,7 +1703,8 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
             TOOL_GRAPHICS: ((manifest.get("tools") or {}).get(TOOL_GRAPHICS) or {}).get("version"),
         },
         "os": (manifest.get("environment") or {}).get("os"),
-        "backend": "vulkan",
+        "backend": ((manifest.get("environment") or {}).get("gpu") or {}).get("backend")
+        or "vulkan",
         "gpu": ((manifest.get("environment") or {}).get("gpu") or {}).get("name"),
         "driver": ((manifest.get("environment") or {}).get("gpu") or {}).get("driver_version"),
         "architecture": ((manifest.get("environment") or {}).get("gpu") or {}).get("architecture"),
@@ -1595,6 +1737,7 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
             ],
         },
         "number_format": vendor.get("number_format", declared_format),
+        "tooling": (manifest.get("identity") or {}).get("tooling"),
         "sdk": None,
     }
 
@@ -1630,17 +1773,45 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
     )
     ranges = sorted(vendor["ranges"], key=lambda entry: (entry["id"],))
 
+    frames_present = isinstance(vendor.get("frames"), int) and vendor["frames"] > 0
+    abc_frames = vendor.get("frames_abc_complete")
+    abc_present = bool(abc_frames) if markers_applicable else None
+    shutdown_clean = final_status == "complete"
+
+    if markers_applicable:
+        checks = {
+            "gpu_markers_applicable": True,
+            "gpu_markers_present": not missing_markers,
+            "complete_abc_frame_present": abc_present,
+            "frames_present": frames_present,
+            "shutdown_clean": shutdown_clean,
+        }
+        complete = checks["gpu_markers_present"] and checks["complete_abc_frame_present"] and frames_present and shutdown_clean
+    else:
+        # Systems cannot observe GPU pass ranges. Its own evidence must be
+        # sufficient: a validated schema, a nonempty API/workload trace and a
+        # clean application shutdown.
+        checks = {
+            "gpu_markers_applicable": False,
+            "vendor_schema_validated": True,
+            "frames_present": frames_present,
+            "shutdown_clean": shutdown_clean,
+        }
+        complete = frames_present and shutdown_clean
+
     validation = {
         "vendor_schema": "ok",
-        "required_ranges_present": not missing_markers,
-        "required_markers": list(REQUIRED_MARKERS),
+        "required_ranges_present": (not missing_markers) if markers_applicable else None,
+        "required_markers_applicable": markers_applicable,
+        "required_markers": list(REQUIRED_GPU_MARKERS) if markers_applicable else [],
+        "optional_markers": optional_markers,
         "observed_markers": observed_markers,
         "missing_markers": missing_markers,
+        "missing_optional_markers": missing_optional_markers,
+        "checks": checks,
         "complete_frames": vendor.get("frames"),
-        "complete_abc_frames": vendor.get("frames_abc_complete"),
-        "abc_frames_present": (
-            None if vendor.get("frames_abc_complete") is None else len(vendor.get("frames_abc_complete") or []) > 0
-        ),
+        "complete_abc_frames": abc_frames,
+        "abc_frames_present": abc_present,
         "missing_counters": [entry["name"] for entry in metrics if entry["availability"] != "observed"],
         "counter_summary": {
             "distinct_metrics": len({str(entry["name"]) for entry in metrics if entry["availability"] == "observed"}),
@@ -1650,13 +1821,11 @@ def analyze(input_directory: Path, output_directory: Path, number_format: str | 
         "parser_failures": [],
         "shutdown": {
             "status": final_status,
-            "clean": final_status == "complete",
+            "clean": shutdown_clean,
             "reason": (final_state or {}).get("reason"),
         },
-        "overall_status": "complete" if final_status == "complete" and not missing_markers else "incomplete",
+        "overall_status": "failed" if final_status == "failed" else ("complete" if complete else "incomplete"),
     }
-    if final_status == "failed":
-        validation["overall_status"] = "failed"
 
     analysis = {
         "schema_version": SCHEMA_VERSION,

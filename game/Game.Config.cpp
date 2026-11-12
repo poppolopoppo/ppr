@@ -822,6 +822,12 @@ namespace pP::game {
                 error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
+        if (settings.m_profile_capture and settings.m_worldgen_acceptance) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.profile_capture", "--profile-capture conflicts with --worldgen-acceptance", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
 
         GameInvocation invocation{};
         invocation.m_game = std::move(*game);

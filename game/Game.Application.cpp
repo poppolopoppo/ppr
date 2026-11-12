@@ -638,6 +638,7 @@ namespace demo {
         std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_requested{};
         std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_inflight{};
         std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_completed_operation{};
+        bool m_profile_backend_noted{};
         game::ProfileCaptureSdkStatus m_profile_sdk_status{};
         std::error_code m_profile_sdk_result{};
         u32 m_profile_accepted_frames{};
@@ -645,6 +646,7 @@ namespace demo {
         u32 m_profile_rejected_frames{};
         double m_profile_active_seconds{};
         double m_profile_last_active_seconds{};
+        bool m_profile_active_baseline_seeded{};
         u64 m_profile_last_scene_frame{};
         u64 m_profile_last_screen_frame{};
         u64 m_profile_last_tick{};
@@ -4429,6 +4431,10 @@ namespace demo {
                 return {};
             }
 
+            if (not m_profile_backend_noted) {
+                m_profile_backend_noted = true;
+                m_profile_capture->noteBackend(profileCaptureBackend_(), now);
+            }
             PPR_RETURN_ERROR_ON_FAIL(Demo, pollProfileSdkOperation_());
             admitProfileSdkOperation_();
 
@@ -4439,6 +4445,18 @@ namespace demo {
                 executeProfileCaptureAction_(**action);
             }
             return {};
+        }
+
+        [[nodiscard]] game::EProfileCaptureBackend profileCaptureBackend_() {
+            const safe_ptr<IRhiService> rhi_service = getServices().tryGet<IRhiService>();
+            if (not rhi_service.isValid()) {
+                return game::EProfileCaptureBackend::unsupported;
+            }
+            switch (rhi_service->getDevice().getDeviceType()) {
+                case rhi::DeviceType::Vulkan: return game::EProfileCaptureBackend::vulkan;
+                case rhi::DeviceType::D3D12: return game::EProfileCaptureBackend::d3d12;
+                default: return game::EProfileCaptureBackend::unsupported;
+            }
         }
 
         game::ProfileCaptureObservation buildProfileCaptureObservation_() {
@@ -4528,7 +4546,7 @@ namespace demo {
                 switch (operation) {
                     case game::EProfileCaptureSdkOperation::initialize: return m_profile_sdk->initialize();
                     case game::EProfileCaptureSdkOperation::activate:
-                        return m_profile_sdk->activate(rhi::getNativeQueueObject(*queue));
+                        return m_profile_sdk->activate(rhi::getNativeQueueObject(*queue), profileCaptureBackend_());
                     case game::EProfileCaptureSdkOperation::start_trace: return m_profile_sdk->startTrace();
                     case game::EProfileCaptureSdkOperation::poll: {
                         game::ProfileCaptureSdkStatus status{};
@@ -6675,7 +6693,15 @@ namespace demo {
 
             ++m_profile_accepted_frames;
             const double active = time::seconds(result.m_active_elapsed);
-            if (active < m_profile_last_active_seconds) {
+            const bool new_world = m_profile_presented_world.m_world_generation !=
+                                   result.m_presented_grid.m_world_generation;
+            if (not m_profile_active_baseline_seeded or new_world) {
+                // The packet's active elapsed is cumulative from packet capture:
+                // seed the baseline at the first accepted frame of this world so
+                // readiness measures presentation time rather than load time.
+                m_profile_last_active_seconds = active;
+                m_profile_active_baseline_seeded = true;
+            } else if (active < m_profile_last_active_seconds) {
                 m_profile_last_active_seconds = active;
             }
             m_profile_active_seconds += std::max(0.0, active - m_profile_last_active_seconds);

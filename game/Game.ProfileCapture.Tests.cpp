@@ -43,6 +43,7 @@ namespace pP::game::tests::detail::profile_capture {
         u32 m_start_calls{};
         u32 m_poll_calls{};
         void *m_queue{};
+        EProfileCaptureBackend m_backend{EProfileCaptureBackend::vulkan};
         ProfileCaptureSdkStatus m_status{};
 
         [[nodiscard]] bool available() const noexcept override {
@@ -60,8 +61,12 @@ namespace pP::game::tests::detail::profile_capture {
             return {};
         }
 
-        std::error_code activate(void *const native_queue) override {
+        std::error_code activate(void *const native_queue, const EProfileCaptureBackend backend) override {
             ++m_activate_calls;
+            m_backend = backend;
+            if (backend != EProfileCaptureBackend::vulkan) {
+                return std::make_error_code(std::errc::not_supported);
+            }
             m_queue = native_queue;
             m_status.m_active = true;
             return {};
@@ -130,7 +135,8 @@ namespace pP::game::tests::detail::profile_capture {
         switch (operation) {
             case EProfileCaptureSdkOperation::initialize: return sdk.initialize();
             case EProfileCaptureSdkOperation::activate:
-                return sdk.activate(reinterpret_cast<void *>(static_cast<std::uintptr_t>(1u)));
+                return sdk.activate(
+                    reinterpret_cast<void *>(static_cast<std::uintptr_t>(1u)), EProfileCaptureBackend::vulkan);
             case EProfileCaptureSdkOperation::start_trace: return sdk.startTrace();
             case EProfileCaptureSdkOperation::poll: {
                 ProfileCaptureSdkStatus status{};
@@ -562,6 +568,134 @@ namespace pP::game::tests::detail::profile_capture {
         PPR_TEST_ASSERT(final_state.find("graphics SDK operation failed") != std::string::npos);
     };
 
+    PPR_UNIT_TEST (cleanup_error_after_completion_rewrites_final_state_incomplete) {
+        const auto start = startTime();
+        const auto directory = captureDirectory("cleanup");
+        ProfileCapture capture{};
+        PPR_TEST_ASSERT(not capture.begin(
+            directory, EProfileCaptureTool::systems, EProfileCaptureWorkload::frozen, "s1", 1u, nullptr, start));
+        driveToReady(capture, start);
+        {
+            std::ofstream matching{directory / "stop.request", std::ios::binary | std::ios::trunc};
+            matching << "s1\n";
+        }
+        const auto quit = capture.advance(admittedObservation(), start + std::chrono::seconds{3});
+        PPR_TEST_ASSERT(quit.has_value() and quit->has_value());
+        PPR_TEST_ASSERT(capture.status() == EProfileCaptureStatus::complete);
+        PPR_TEST_ASSERT(readFile(directory / "final-state.json").find("\"status\": \"complete\"") != std::string::npos);
+
+        // The run boundary can report a cleanup failure after a completed
+        // capture; the evidence must say incomplete and preserve the cause.
+        const std::error_code cleanup = std::make_error_code(std::errc::io_error);
+        PPR_TEST_ASSERT(static_cast<bool>(capture.finish(cleanup)));
+        PPR_TEST_ASSERT(capture.status() == EProfileCaptureStatus::incomplete);
+        const std::string final_state = readFile(directory / "final-state.json");
+        PPR_TEST_ASSERT(final_state.find("\"status\": \"incomplete\"") != std::string::npos);
+        PPR_TEST_ASSERT(final_state.find("shutdown cleanup failed") != std::string::npos);
+        PPR_TEST_ASSERT(final_state.find("Input/output error") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (stop_request_during_warmup_quits_ordinarily_and_reports_incomplete) {
+        const auto start = startTime();
+        const auto directory = captureDirectory("stop_warmup");
+        ProfileCapture capture{};
+        PPR_TEST_ASSERT(not capture.begin(
+            directory, EProfileCaptureTool::systems, EProfileCaptureWorkload::frozen, "warm", 1u, nullptr, start));
+
+        auto pause = capture.advance(admittedObservation(), start);
+        PPR_TEST_ASSERT(pause.has_value() and pause->has_value());
+        capture.notePauseApplied(0u);
+
+        {
+            std::ofstream matching{directory / "stop.request", std::ios::binary | std::ios::trunc};
+            matching << "warm\n";
+        }
+        ProfileCaptureObservation frames = admittedObservation();
+        frames.m_accepted_scene_frames = 10u;
+        const auto quit = capture.advance(frames, start + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(quit.has_value() and quit->has_value());
+        PPR_TEST_ASSERT((*quit)->m_kind == EProfileCaptureActionKind::quit);
+        PPR_TEST_ASSERT(capture.status() == EProfileCaptureStatus::incomplete);
+        PPR_TEST_ASSERT(readFile(directory / "final-state.json").find("before readiness") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (stop_request_during_graphics_tracing_quits_without_fabricating_a_trace) {
+        const auto start = startTime();
+        const auto directory = captureDirectory("stop_tracing");
+        FakeSdk sdk{};
+        ProfileCapture capture{};
+        PPR_TEST_ASSERT(not capture.begin(
+            directory, EProfileCaptureTool::graphics, EProfileCaptureWorkload::frozen, "gfx", 1u, &sdk, start));
+        driveToReady(capture, start);
+
+        TimePoint now = start + std::chrono::seconds{2};
+        std::optional<EProfileCaptureSdkOperation> completed{};
+        bool started = false;
+        for (u32 turn = 0u; turn < 24u and not started; ++turn) {
+            now += std::chrono::milliseconds{60};
+            ProfileCaptureObservation observation = admittedObservation();
+            if (completed) {
+                observation.m_sdk_operation_completed = true;
+                observation.m_sdk_operation = *completed;
+                observation.m_sdk_status = sdk.m_status;
+                completed.reset();
+            }
+            auto action = capture.advance(observation, now);
+            PPR_TEST_ASSERT(action.has_value());
+            if (not action->has_value()) {
+                continue;
+            }
+            if ((**action).m_kind == EProfileCaptureActionKind::sdk_operation) {
+                std::ignore = observeSdkAction(sdk, (**action).m_operation);
+                completed = (**action).m_operation;
+                started = (**action).m_operation == EProfileCaptureSdkOperation::start_trace;
+            }
+        }
+        PPR_TEST_ASSERT(started);
+
+        {
+            std::ofstream matching{directory / "stop.request", std::ios::binary | std::ios::trunc};
+            matching << "gfx\n";
+        }
+        bool quit = false;
+        for (u32 turn = 0u; turn < 8u and not quit; ++turn) {
+            now += std::chrono::milliseconds{120};
+            ProfileCaptureObservation observation = admittedObservation();
+            if (completed) {
+                observation.m_sdk_operation_completed = true;
+                observation.m_sdk_operation = *completed;
+                observation.m_sdk_status = sdk.m_status;
+                completed.reset();
+            }
+            auto action = capture.advance(observation, now);
+            PPR_TEST_ASSERT(action.has_value());
+            if (action->has_value() and (**action).m_kind == EProfileCaptureActionKind::quit) {
+                quit = true;
+            }
+        }
+        PPR_TEST_ASSERT(quit);
+        PPR_TEST_ASSERT(capture.status() == EProfileCaptureStatus::incomplete);
+        PPR_TEST_ASSERT(
+            readFile(directory / "final-state.json").find("before the trace finalized") != std::string::npos);
+    };
+
+    PPR_UNIT_TEST (graphics_on_a_non_vulkan_backend_is_unsupported_explicitly) {
+        const auto start = startTime();
+        const auto directory = captureDirectory("backend");
+        FakeSdk sdk{};
+        ProfileCapture capture{};
+        PPR_TEST_ASSERT(not capture.begin(
+            directory, EProfileCaptureTool::graphics, EProfileCaptureWorkload::frozen, "s1", 1u, &sdk, start));
+
+        capture.noteBackend(EProfileCaptureBackend::d3d12, start);
+        PPR_TEST_ASSERT(capture.status() == EProfileCaptureStatus::unsupported);
+        const auto action = capture.advance(admittedObservation(), start);
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((*action)->m_kind == EProfileCaptureActionKind::quit);
+        PPR_TEST_ASSERT(capture.sdkOperations() == 0u);
+        PPR_TEST_ASSERT(readFile(directory / "final-state.json").find("Vulkan only") != std::string::npos);
+    };
+
     PPR_UNIT_TEST (shutdown_before_completion_is_incomplete_and_keeps_evidence) {
         const auto start = startTime();
         const auto directory = captureDirectory("shutdown");
@@ -602,6 +736,10 @@ namespace pP::game::tests {
             detail::profile_capture::graphics_without_an_sdk_is_unsupported_not_substituted,
             detail::profile_capture::graphics_initialize_failure_fails_the_capture_explicitly,
             detail::profile_capture::shutdown_before_completion_is_incomplete_and_keeps_evidence,
+            detail::profile_capture::cleanup_error_after_completion_rewrites_final_state_incomplete,
+            detail::profile_capture::stop_request_during_warmup_quits_ordinarily_and_reports_incomplete,
+            detail::profile_capture::stop_request_during_graphics_tracing_quits_without_fabricating_a_trace,
+            detail::profile_capture::graphics_on_a_non_vulkan_backend_is_unsupported_explicitly,
         });
     };
 

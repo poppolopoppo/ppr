@@ -314,7 +314,8 @@ namespace pP::game::tests::detail::compat {
             {std::initializer_list<const char *>{
                  "--profile-capture=systems", "--profile-output=profile", "--exercise-display",
                  "--exercise-output=artifacts"},
-                {"--profile-capture=systems", "--profile-output=profile", "--smoke"}}) {
+                {"--profile-capture=systems", "--profile-output=profile", "--smoke"},
+                {"--profile-capture=systems", "--profile-output=profile", "--worldgen-acceptance"}}) {
             Diagnostics conflict{};
             PPR_TEST_ASSERT(not resolveCli(options, conflict));
         }

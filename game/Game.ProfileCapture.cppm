@@ -57,6 +57,17 @@ export namespace pP::game {
         live,
     };
 
+    /// Backend of the device-owner queue handed to the profiling adapter. The
+    /// adapter is backend-specific; an unsupported backend fails the requested
+    /// Graphics capture instead of casting a foreign queue object.
+    enum class EProfileCaptureBackend : u8 {
+        vulkan,
+        d3d12,
+        unsupported,
+    };
+
+    [[nodiscard]] std::string_view profileCaptureBackendName(EProfileCaptureBackend backend) noexcept;
+
     enum class EProfileCaptureStatus : u8 {
         pending,
         ready,
@@ -130,8 +141,9 @@ export namespace pP::game {
         [[nodiscard]] virtual std::error_code initialize() = 0;
 
         /// Device-owner-lane activation with the backend queue object obtained
-        /// from the existing RHI native-object seam.
-        [[nodiscard]] virtual std::error_code activate(void *native_queue) = 0;
+        /// from the existing RHI native-object seam. The backend must match the
+        /// adapter's own API; a foreign queue object is rejected.
+        [[nodiscard]] virtual std::error_code activate(void *native_queue, EProfileCaptureBackend backend) = 0;
 
         [[nodiscard]] virtual std::error_code startTrace() = 0;
 
@@ -211,6 +223,11 @@ export namespace pP::game {
         [[nodiscard]] std::error_code begin(
             const std::filesystem::path &output, EProfileCaptureTool tool, EProfileCaptureWorkload workload,
             std::string_view session_token, u64 process_id, IProfileCaptureSdk *sdk, TimePoint now);
+
+        /// Records the device-owner backend once the RHI device exists. A
+        /// requested Graphics capture on any backend other than Vulkan is an
+        /// explicit unsupported result for this adapter.
+        void noteBackend(EProfileCaptureBackend backend, TimePoint now);
 
         [[nodiscard]] Expected<std::optional<ProfileCaptureAction>> advance(
             const ProfileCaptureObservation &observed, TimePoint now);
@@ -315,7 +332,7 @@ export namespace pP::game {
         [[nodiscard]] std::optional<ProfileCaptureAction> advanceReady_(TimePoint now);
         [[nodiscard]] std::optional<ProfileCaptureAction> advanceTracing_(TimePoint now);
         [[nodiscard]] std::optional<ProfileCaptureAction> advanceDraining_(TimePoint now);
-        void pollStopRequest_(TimePoint now);
+        [[nodiscard]] bool pollStopRequest_(TimePoint now);
         void captureIdentity_(const ProfileCaptureObservation &observed);
         void noteAccepted_(const ProfileCaptureObservation &observed);
         void noteSdkResult_(const ProfileCaptureObservation &observed);
@@ -326,8 +343,8 @@ export namespace pP::game {
         // artifacts
         // ------------------------------------------------------------------
 
-        [[nodiscard]] std::error_code writeReady_(TimePoint now);
-        [[nodiscard]] std::error_code writeFinalState_();
+        [[nodiscard]] std::error_code writeReady_();
+        [[nodiscard]] std::error_code writeFinalState_(bool force = false);
         [[nodiscard]] std::string readyJson_() const;
         [[nodiscard]] std::string finalStateJson_() const;
         [[nodiscard]] static std::string jsonString_(std::string_view value);
@@ -347,12 +364,13 @@ export namespace pP::game {
 
         EProfileCaptureTool m_tool{EProfileCaptureTool::systems};
         EProfileCaptureWorkload m_workload{EProfileCaptureWorkload::frozen};
+        EProfileCaptureBackend m_backend{EProfileCaptureBackend::vulkan};
         EProfileCaptureStatus m_status{EProfileCaptureStatus::pending};
         EPhase m_phase{EPhase::idle};
         IProfileCaptureSdk *m_sdk{};
 
-        TimePoint m_begin{}, m_last_now{}, m_ready_time{}, m_trace_start{};
-        TimePoint m_poll_time{};
+        TimePoint m_begin{}, m_last_now{}, m_trace_start{};
+        TimePoint m_poll_time{}, m_stop_poll_time{};
         std::string m_session_token{};
         std::string m_reason{};
         u64 m_process_id{};
@@ -401,7 +419,6 @@ export namespace pP::game {
         bool m_final_written{};
         bool m_quit_emitted{};
         bool m_suppress_quit{};
-        bool m_stop_requested{};
         bool m_finalized{};
         std::error_code m_cleanup_error{};
     };

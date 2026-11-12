@@ -6,10 +6,9 @@ Chip Name	TU104
 Driver Version	620.70.06
 Product Version	2026.4.0.0 (build 39228586) (public-release)
 Process File Name	/home/bek/Projects/ppr/out/build/clang-rel-profile/game/app.game
-Command Line	/home/bek/Projects/ppr/out/build/clang-rel-profile/game/app.game --exit-after=45
+Command Line	/home/bek/Projects/ppr/out/build/clang-rel-profile/game/app.game --profile-capture=graphics --profile-output=/home/bek/Projects/ppr/.superpowers/sdd/2026-11-10-oni-port/task-18-artifacts/graphics --profile-workload=frozen
 APIs	Vulkan, OpenGL
 Background Shader Compiles at Trace End	N/A
-Start After	120 Frames
 Limited To	8 Frames
 V-Sync Mode	Enforced Off
 GPU Clocks	Unaltered

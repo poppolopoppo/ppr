@@ -113,6 +113,11 @@ def fake_app_script(directory: Path) -> Path:
                 if argument.startswith("--profile-output="):
                     output = pathlib.Path(argument.split("=", 1)[1])
             mode = os.environ.get("PPR_FAKE_APP_MODE", "silent")
+            order = os.environ.get("PPR_FAKE_ORDER_LOG")
+            def note(event):
+                if order:
+                    with open(order, "a", encoding="utf-8") as stream:
+                        stream.write(event + "\\n")
             if output is None:
                 sys.exit(2)
             if mode == "silent":
@@ -132,6 +137,7 @@ def fake_app_script(directory: Path) -> Path:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if request.is_file() and request.read_text().strip() == "session-fake":
+                    note("quit")
                     break
                 time.sleep(0.05)
             final = {
@@ -158,7 +164,7 @@ def fake_nsys_script(directory: Path, app: Path, systems_fixture: Path) -> Path:
         textwrap.dedent(
             f"""\
             #!/usr/bin/env python3
-            import shutil, subprocess, sys
+            import os, shutil, subprocess, sys
             from pathlib import Path
 
             APP = Path({str(app)!r})
@@ -181,6 +187,12 @@ def fake_nsys_script(directory: Path, app: Path, systems_fixture: Path) -> Path:
             if command == "stop":
                 sys.exit(0)
             if command == "export":
+                order = os.environ.get("PPR_FAKE_ORDER_LOG")
+                if order:
+                    with open(order, "a", encoding="utf-8") as stream:
+                        stream.write("export\\n")
+                if os.environ.get("PPR_FAKE_EXPORT_FAIL") == "1":
+                    sys.exit(1)
                 output = Path(next(a.split("=", 1)[1] for a in arguments if a.startswith("--output=")))
                 shutil.copy2(FIXTURE, output)
                 sys.exit(0)
@@ -211,15 +223,20 @@ class GraphicsAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis["schema_version"], 1)
         self.assertEqual(analysis["collection"]["observed_complete_frames"], 8)
         self.assertIn("ppr", analysis["validation"]["observed_markers"])
-        self.assertIn("scene", analysis["validation"]["observed_markers"])
-        # Required contract markers are reported missing, never invented.
-        self.assertIn("WorldLighting.ResolveCells", analysis["validation"]["missing_markers"])
-        self.assertFalse(analysis["validation"]["required_ranges_present"])
+        self.assertIn("WorldLighting.ResolveCells", analysis["validation"]["observed_markers"])
+        self.assertIn("Present.UI", analysis["validation"]["observed_markers"])
+        self.assertTrue(analysis["validation"]["required_ranges_present"])
+        self.assertEqual(analysis["validation"]["missing_markers"], [])
+        # Frozen pauses before the first tick, so the solver marker is optional.
+        self.assertEqual(analysis["validation"]["missing_optional_markers"], ["PBMPM.Tick"])
+        self.assertEqual(analysis["validation"]["complete_abc_frames"], list(range(8)))
+        self.assertEqual(analysis["validation"]["overall_status"], "complete")
 
-        marker_ranges = [entry for entry in analysis["ranges"] if entry["stable_name"] == "scene"]
+        marker_ranges = [entry for entry in analysis["ranges"] if entry["stable_name"] == "scene.stage"]
         self.assertTrue(marker_ranges)
         self.assertTrue(all(entry["duration_ns"] > 0 for entry in marker_ranges))
-        self.assertTrue(any(entry["parent_id"] is not None for entry in marker_ranges))
+        # Nested sub-pass ranges retain explicit parent links.
+        self.assertTrue(any(entry["parent_id"] is not None for entry in analysis["ranges"]))
         frame_metrics = [entry for entry in analysis["metrics"] if entry["name"] == "gpu.frame_time"]
         self.assertEqual(len(frame_metrics), 8)
         self.assertEqual(frame_metrics[0]["unit"], "ms")
@@ -259,7 +276,13 @@ class GraphicsAnalysisTests(unittest.TestCase):
         self.assertEqual(analysis["identity"]["number_format"], "comma")
         frame_metrics = [entry for entry in analysis["metrics"] if entry["name"] == "gpu.frame_time"]
         self.assertEqual(len(frame_metrics), 8)
-        self.assertAlmostEqual(frame_metrics[0]["value"], 2.27456, places=9)
+        point_capture = self.root / "point-capture"
+        copy_graphics_fixture(point_capture / "graphics")
+        write_capture_identity(point_capture, "graphics")
+        point = lighting.analyze(point_capture, self.root / "point-analysis")
+        point_frames = [entry for entry in point["metrics"] if entry["name"] == "gpu.frame_time"]
+        for comma_entry, point_entry in zip(frame_metrics, point_frames):
+            self.assertAlmostEqual(comma_entry["value"], point_entry["value"], places=9)
 
     def test_missing_metrics_are_null_with_reason(self) -> None:
         capture_dir = self.root / "capture"
@@ -273,7 +296,9 @@ class GraphicsAnalysisTests(unittest.TestCase):
             self.assertIsNone(entry["value"])
             self.assertTrue(entry["reason"])
             self.assertTrue(entry["name"].startswith("unavailable."))
-        self.assertIn("unavailable.sm_occupancy", analysis["validation"]["missing_counters"])
+        # A missing family is null+reason, never a zero or a misclassified tag.
+        names = {entry["name"] for entry in unavailable}
+        self.assertTrue(names <= {f"unavailable.{family}" for family in lighting.DESIRED_METRIC_FAMILIES})
 
     def test_unknown_graphics_schema_fails(self) -> None:
         capture_dir = self.root / "capture"
@@ -321,6 +346,12 @@ class SystemsAnalysisTests(unittest.TestCase):
         write_capture_identity(capture_dir, "systems")
         analysis = lighting.analyze(capture_dir, self.root / "analysis")
 
+        # Systems cannot observe GPU pass markers; its own evidence is enough.
+        self.assertFalse(analysis["validation"]["required_markers_applicable"])
+        self.assertIsNone(analysis["validation"]["required_ranges_present"])
+        self.assertEqual(analysis["validation"]["missing_markers"], [])
+        self.assertEqual(analysis["validation"]["overall_status"], "complete")
+
         cpu_metrics = [entry for entry in analysis["metrics"] if entry["name"].startswith("cpu.api.")]
         self.assertTrue(cpu_metrics)
         self.assertTrue(all(entry["unit"] == "ns" for entry in cpu_metrics))
@@ -361,6 +392,58 @@ class SystemsAnalysisTests(unittest.TestCase):
         with self.assertRaises(lighting.ProfileError) as raised:
             lighting.analyze(capture_dir, self.root / "analysis")
         self.assertEqual(raised.exception.cause, "missing-export")
+
+
+class MetricNormalizationTests(unittest.TestCase):
+    def test_metric_families_use_exact_tag_names(self) -> None:
+        self.assertEqual(lighting._metric_family("GPU frame time"), "gpu_duration")
+        self.assertEqual(lighting._metric_family("dram__bytes.sum.per_second"), "memory_throughput")
+        self.assertEqual(lighting._metric_family("gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed"), "memory_throughput")
+        self.assertEqual(lighting._metric_family("l1tex__t_sector_hit_rate.pct"), "cache_hit_rate")
+        self.assertEqual(
+            lighting._metric_family("LTS.TriageA.lts__average_t_sector_op_read_realtime_hit_rate.pct"),
+            "cache_hit_rate",
+        )
+        self.assertEqual(
+            lighting._metric_family("FBPA.TriageA.dramc__throughput.avg.pct_of_peak_sustained_elapsed"),
+            "memory_throughput",
+        )
+        self.assertEqual(
+            lighting._metric_family("TPC.TriageA.tpc__warps_active_shader_ps_realtime.avg"), "sm_occupancy"
+        )
+        self.assertEqual(lighting._metric_family("lts__t_sector_hit_rate.pct"), "cache_hit_rate")
+        self.assertEqual(lighting._metric_family("sm__warps_active.avg.pct_of_peak_sustained_active"), "sm_occupancy")
+        # Near-misses are not family members.
+        self.assertIsNone(lighting._metric_family("vkAllocateMemory"))
+        self.assertIsNone(lighting._metric_family("l1tex__throughput.avg.pct_of_peak_sustained_elapsed"))
+        self.assertIsNone(lighting._metric_family("gpu__engine_cycles_active_gr_or_ce.sum"))
+
+    def test_metric_units_preserve_rates_and_peak_references(self) -> None:
+        self.assertEqual(lighting._metric_unit("dram__bytes.sum.per_second"), ("per second", "rate"))
+        self.assertEqual(lighting._metric_unit("dram__bytes.avg.per_second"), ("per second", "mean"))
+        self.assertEqual(
+            lighting._metric_unit("sm__cycles.avg.per_cycle_elapsed"), ("per cycle elapsed", "mean")
+        )
+        self.assertEqual(
+            lighting._metric_unit("gpu__cycles.sum.per_cycle_elapsed"), ("per cycle elapsed", "rate")
+        )
+        self.assertEqual(
+            lighting._metric_unit("sm__warps_active.avg.pct_of_peak_sustained_active"),
+            ("% of peak sustained active", "mean"),
+        )
+        self.assertEqual(
+            lighting._metric_unit("sm__warps_active.avg.peak_sustained"), ("peak sustained", "mean")
+        )
+        self.assertEqual(lighting._metric_unit("gpu__cycles.sum"), ("count", "sum"))
+
+    def test_unavailable_families_are_null_with_a_reason(self) -> None:
+        entries = lighting._unavailable_metrics([], set(), "not collected: {family}")
+        self.assertEqual({entry["name"] for entry in entries}, {
+            f"unavailable.{family}" for family in lighting.DESIRED_METRIC_FAMILIES
+        })
+        for entry in entries:
+            self.assertIsNone(entry["value"])
+            self.assertIn("not collected:", entry["reason"])
 
 
 class CaptureSupervisionTests(unittest.TestCase):
@@ -445,6 +528,105 @@ class CaptureSupervisionTests(unittest.TestCase):
         with self.assertRaises(lighting.ProfileError) as raised:
             lighting.capture(self._config(output, environment={"PPR_FAKE_APP_MODE": "ready"}))
         self.assertEqual(raised.exception.cause, "output-collision")
+
+
+    def test_stop_then_export_then_quit_order(self) -> None:
+        output = self.root / "ordered"
+        order_log = self.root / "order.log"
+        manifest = lighting.capture(
+            self._config(
+                output,
+                environment={"PPR_FAKE_APP_MODE": "ready", "PPR_FAKE_ORDER_LOG": str(order_log)},
+            )
+        )
+        self.assertEqual(manifest["capture"]["status"], "complete")
+        events = order_log.read_text().split()
+        self.assertIn("export", events)
+        self.assertIn("quit", events)
+        self.assertLess(events.index("export"), events.index("quit"))
+
+    def test_export_failure_never_claims_complete(self) -> None:
+        output = self.root / "export-failure"
+        with self.assertRaises(lighting.ProfileError) as raised:
+            lighting.capture(
+                self._config(
+                    output,
+                    environment={"PPR_FAKE_APP_MODE": "ready", "PPR_FAKE_EXPORT_FAIL": "1"},
+                )
+            )
+        self.assertEqual(raised.exception.cause, "export-failure")
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(manifest["capture"]["status"], "failed")
+        self.assertEqual(manifest["error"]["cause"], "export-failure")
+        self.assertFalse((output / "systems.sqlite").is_file())
+
+    def test_terminate_escalates_a_sigterm_ignoring_child(self) -> None:
+        script = self.root / "stubborn.py"
+        ready_marker = self.root / "stubborn.ready"
+        script.write_text(
+            textwrap.dedent(
+                f"""\
+                import pathlib, signal, time
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                pathlib.Path({str(ready_marker)!r}).write_text("ready")
+                time.sleep(60)
+                """
+            ),
+            encoding="utf-8",
+        )
+        owned = lighting._OwnedProcess(
+            [sys.executable, str(script)],
+            cwd=self.root,
+            env=dict(os.environ),
+            stdout=self.root / "stubborn.out",
+            stderr=self.root / "stubborn.err",
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not ready_marker.is_file() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready_marker.is_file())
+            outcome = owned.terminate(0.2)
+            self.assertEqual(outcome, "killed")
+            self.assertIsNotNone(owned.poll())
+        finally:
+            owned.close()
+
+
+class IdentityTests(unittest.TestCase):
+    def test_dirty_diff_hash_covers_content_not_only_the_file_list(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ppr-profile-git-") as temporary:
+            root = Path(temporary)
+
+            def run(*arguments: str) -> None:
+                subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+
+            run("init")
+            run("config", "user.email", "test@example.invalid")
+            run("config", "user.name", "test")
+            (root / "tracked.txt").write_text("base", encoding="utf-8")
+            run("add", "tracked.txt")
+            run("commit", "-m", "base")
+
+            (root / "tracked.txt").write_text("first edit", encoding="utf-8")
+            (root / "untracked.txt").write_text("one", encoding="utf-8")
+            first = lighting.git_identity(root)
+
+            (root / "tracked.txt").write_text("second edit", encoding="utf-8")
+            (root / "untracked.txt").write_text("two", encoding="utf-8")
+            second = lighting.git_identity(root)
+
+            self.assertTrue(first["dirty"])
+            self.assertTrue(second["dirty"])
+            self.assertNotEqual(first["dirty_diff_hash"], second["dirty_diff_hash"])
+            self.assertIn("tooling", first)
+            self.assertRegex(first["tooling"]["profile_lighting_py_sha256"], "^[0-9a-f]{64}$")
+
+            (root / "tracked.txt").write_text("base", encoding="utf-8")
+            (root / "untracked.txt").unlink()
+            clean = lighting.git_identity(root)
+            self.assertFalse(clean["dirty"])
+            self.assertIsNone(clean["dirty_diff_hash"])
 
 
 class DiscoveryTests(unittest.TestCase):
