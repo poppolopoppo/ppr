@@ -497,18 +497,20 @@ namespace pP::colony {
             // window alpha and the NoTitleBar flag so it never grows a title.
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.0f, 4.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{6.0f, 2.0f});
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{6.0f, 3.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{6.0f, 0.0f});
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kPanel.vec4());
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kPanel.vec4(0.80f));
             ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextPrimary.vec4());
             ImGui::Begin("##topbar", nullptr, kChromeFlags);
             const float fs = ImGui::GetFontSize();
             BarFlow flow{.m_avail = ImGui::GetContentRegionAvail().x, .m_gap = ImGui::GetStyle().ItemSpacing.x};
 
             ImFont *const heading_font = ui::theme::font(ui::theme::EFont::heading);
-            ImGui::PushFont(heading_font, heading_font->LegacySize);
-            // Baseline-align the logo with the framed controls beside it;
-            // otherwise the taller heading face sits on the line's top edge.
+            // The logo is sized to fill the row's frame box exactly: a taller
+            // heading becomes the row's tallest item, leaving every framed
+            // control riding the line's top edge instead of centred in it.
+            const float row_text_size = ImGui::GetFrameHeight() - ImGui::GetStyle().FramePadding.y;
+            ImGui::PushFont(heading_font, row_text_size);
             ImGui::AlignTextToFramePadding();
             flow.place(plainWidth("PPR"));
             ImGui::TextUnformatted("PPR");
