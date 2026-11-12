@@ -583,6 +583,10 @@ namespace pP::tests::detail::WorldLightingSettlement {
             setInjectedStageSubmitFailureForTest(stage);
         }
 
+        [[nodiscard]] std::error_code rearmCaptureForTest() {
+            return rearmFrameCapture();
+        }
+
         void onLaneFrameConsumed_(const RenderFrameResult &result) override {
             ApplicationEditor::onLaneFrameConsumed_(result);
             m_last_result = result;
@@ -704,103 +708,6 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_TEST_ASSERT(blob.get() != nullptr and blob->getBufferPointer() != nullptr);
         const auto *const source = static_cast<const std::byte *>(blob->getBufferPointer());
         return {source, source + blob->getBufferSize()};
-    }
-
-    struct EditorFrameObservation {
-        std::vector<std::byte> m_scene{};
-        std::vector<std::byte> m_history{};
-        std::vector<std::byte> m_exposure{};
-        std::vector<std::byte> m_fine_ch{};
-        std::vector<std::byte> m_pixels{};
-        u64 m_pixel_row_pitch{};
-        int2 m_pixel_extent{};
-        PostProcessPass::ExposureRoleForTest m_exposure_role{};
-        u64 m_accepted_frames{};
-        u32 m_history_index{};
-        u32 m_phase{};
-        bool m_history_established{};
-        GridWorldIdentity m_history_world{};
-    };
-
-    // Drives the real editor (update -> A/B/C -> present) with the given
-    // retained settings, captures the final surface, and reads the committed
-    // Hable scene/history, exposure and fine-CH bytes after a host wait.
-    [[nodiscard]] EditorFrameObservation runEditorObservation(
-        const ELightingDiagnostic diagnostic, const PostProcessSettings &post, const i32 sky_hour) {
-        SettlementEditorApp app{std::span<const char *const>{}};
-        PPR_TEST_ASSERT(not app.enableSurfaceReadbackAtStartup());
-        PPR_TEST_ASSERT(not app.boot());
-        bool torn_down = false;
-        PPR_DEFER {
-            if (not torn_down) {
-                std::ignore = app.teardown();
-            }
-        };
-
-        stageEditorChunk(app);
-        app.setPostProcessSettings(post, 1u);
-        app.setLightingInspectionSettings({diagnostic, 1u}, sky_hour);
-        constexpr auto frame_delta = std::chrono::milliseconds{16};
-        for (u32 frame = 0u; frame < 2u; ++frame) {
-            if (frame != 0u) {
-                retainEditorTerrain(app);
-            }
-            PPR_TEST_ASSERT(not app.tick(frame_delta));
-            PPR_TEST_ASSERT(not app.draw());
-            PPR_TEST_ASSERT(app.m_last_result.has_value());
-            PPR_TEST_ASSERT(not app.m_last_result->m_error);
-            PPR_TEST_ASSERT(app.m_last_result->m_presented);
-        }
-
-        PPR_TEST_ASSERT(not app.requestFrameCapture());
-        retainEditorTerrain(app);
-        PPR_TEST_ASSERT(not app.tick(frame_delta));
-        PPR_TEST_ASSERT(not app.draw());
-        PPR_TEST_ASSERT(app.m_last_result.has_value());
-        const RenderFrameResult &captured = *app.m_last_result;
-        PPR_TEST_ASSERT(not captured.m_error);
-        PPR_TEST_ASSERT(captured.m_presented);
-        PPR_TEST_ASSERT(captured.m_surface_pixels != nullptr);
-        PPR_TEST_ASSERT(not app.getRenderer().waitOnHost());
-
-        safe_ptr<IRhiService> rhi = app.getServices().get<IRhiService>();
-        PPR_TEST_ASSERT(rhi.isValid());
-        rhi::IDevice &device = rhi->getDevice();
-        const ReconstructionPass &reconstruction = app.getReconstructionPassForTest();
-        const PostProcessPass &post_pass = app.getPostProcessPassForTest();
-        PPR_TEST_ASSERT(reconstruction.historyEstablishedForTest());
-        rhi::ITexture *const scene = reconstruction.sceneTextureForTest();
-        rhi::ITexture *const history = reconstruction.historyTextureForTest();
-        rhi::ITexture *const exposure = post_pass.exposureTextureForTest();
-        PPR_TEST_ASSERT(scene != nullptr and history != nullptr and exposure != nullptr);
-
-        EditorFrameObservation observation{};
-        observation.m_scene = readEditorTexture(device, *scene);
-        observation.m_history = readEditorTexture(device, *history);
-        observation.m_exposure = readEditorTexture(device, *exposure);
-        observation.m_pixels = captured.m_surface_pixels->m_bytes;
-        observation.m_pixel_row_pitch = captured.m_surface_pixels->m_row_pitch;
-        observation.m_pixel_extent = captured.m_surface_pixels->m_extent;
-        observation.m_exposure_role = post_pass.exposureRoleForTest();
-        observation.m_history_index = reconstruction.historyIndexForTest();
-        observation.m_phase = reconstruction.acceptedPhaseForTest();
-        observation.m_history_established = reconstruction.historyEstablishedForTest();
-        observation.m_history_world = reconstruction.historyWorldForTest();
-
-        const WorldLightingPass *const lighting = app.getGridPass().activeWorldLightingForTest();
-        PPR_TEST_ASSERT(lighting != nullptr);
-        observation.m_accepted_frames = lighting->acceptedFrameForTest();
-        rhi::IBuffer *const fine_ch = lighting->fineCHForTest();
-        PPR_TEST_ASSERT(fine_ch != nullptr);
-        const u64 fine_offset = (30u * 512u + 30u) * sizeof(lighting::PackedCH);
-        observation.m_fine_ch.resize(64u * sizeof(lighting::PackedCH));
-        PPR_TEST_ASSERT(not make_error_code(
-            device.readBuffer(fine_ch, fine_offset, observation.m_fine_ch.size(), observation.m_fine_ch.data())));
-
-        rhi.reset();
-        PPR_TEST_ASSERT(not app.teardown());
-        torn_down = true;
-        return observation;
     }
 
     // Encodes one stage-B attempt (reconstruction then post) in its own
@@ -1265,65 +1172,187 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_TEST_ASSERT(not test_app.teardown());
     };
 
-    // Toggling diagnostics must change only the final display: the committed
-    // Hable scene/history, exposure slot bytes and fine-CH field are compared
-    // across real editor runs. Post/sky edits stay outside reconstruction and
-    // world-lighting reset policy.
-    PPR_UNIT_TEST (editor_diagnostics_change_output_without_touching_history_or_exposure) {
+    // Mid-history edits use one editor run: establish Hable/lighting state,
+    // then apply each retained setting without restarting. A reset triggered by
+    // the edit itself is observed immediately; the following frame must advance
+    // the normal history/lighting cadence and each setting must reach the real
+    // production path (positive controls).
+    PPR_UNIT_TEST (editor_mid_history_edits_do_not_reset_or_contaminate) {
+        SettlementEditorApp test_app{std::span<const char *const>{}};
+        PPR_TEST_ASSERT(not test_app.enableSurfaceReadbackAtStartup());
+        PPR_TEST_ASSERT(not test_app.boot());
+        bool torn_down = false;
+        PPR_DEFER {
+            if (not torn_down) {
+                std::ignore = test_app.teardown();
+            }
+        };
+
+        stageEditorChunk(test_app);
         const PostProcessSettings post_baseline{};
         PostProcessSettings post_edited{};
         post_edited.m_auto_exposure = false;
         post_edited.m_exposure_ev = 2.0f;
         post_edited.m_bloom_enabled = false;
         post_edited.m_bloom_threshold = 4.0f;
+        test_app.setPostProcessSettings(post_baseline, 1u);
+        test_app.setLightingInspectionSettings({ELightingDiagnostic::off, 1u}, -1);
 
-        const EditorFrameObservation off = runEditorObservation(ELightingDiagnostic::off, post_baseline, -1);
-        const EditorFrameObservation active = runEditorObservation(ELightingDiagnostic::occupancy, post_baseline, -1);
-        const EditorFrameObservation post_only = runEditorObservation(ELightingDiagnostic::off, post_edited, -1);
-        const EditorFrameObservation sky_only = runEditorObservation(ELightingDiagnostic::off, post_baseline, 12);
+        constexpr auto frame_delta = std::chrono::milliseconds{16};
+        const auto run_frame = [&](const bool retain, const bool capture) -> RenderFrameResult {
+            if (retain) {
+                retainEditorTerrain(test_app);
+            }
+            if (capture) {
+                PPR_TEST_ASSERT(not test_app.requestFrameCapture());
+            }
+            PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+            PPR_TEST_ASSERT(not test_app.draw());
+            PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+            PPR_TEST_ASSERT(not test_app.m_last_result->m_error);
+            PPR_TEST_ASSERT(test_app.m_last_result->m_presented);
+            if (capture) {
+                PPR_TEST_ASSERT(test_app.m_last_result->m_surface_pixels != nullptr);
+                PPR_TEST_ASSERT(not test_app.rearmCaptureForTest());
+            }
+            return *test_app.m_last_result;
+        };
 
-        // Diagnostics off vs active: the same submitted scene, Hable history and
-        // adapted-exposure bytes prove the overlay is a pure post-presentation
-        // reader. The C-stage stamp is the only additional output.
-        PPR_TEST_ASSERT(off.m_scene == active.m_scene);
-        PPR_TEST_ASSERT(off.m_history == active.m_history);
-        PPR_TEST_ASSERT(off.m_exposure == active.m_exposure);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_slot == active.m_exposure_role.m_slot);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_world == active.m_exposure_role.m_world);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_active_baseline == active.m_exposure_role.m_active_baseline);
-        PPR_TEST_ASSERT(off.m_history_index == active.m_history_index);
-        PPR_TEST_ASSERT(off.m_phase == active.m_phase);
-        PPR_TEST_ASSERT(off.m_history_world == active.m_history_world);
-        PPR_TEST_ASSERT(off.m_accepted_frames == active.m_accepted_frames);
+        safe_ptr<IRhiService> rhi = test_app.getServices().get<IRhiService>();
+        PPR_TEST_ASSERT(rhi.isValid());
+        rhi::IDevice &device = rhi->getDevice();
 
-        // ... while the presented pixels must differ with the overlay active.
-        PPR_TEST_ASSERT(off.m_pixel_extent.x == active.m_pixel_extent.x);
-        PPR_TEST_ASSERT(off.m_pixel_extent.y == active.m_pixel_extent.y);
-        PPR_TEST_ASSERT(off.m_pixel_row_pitch == active.m_pixel_row_pitch);
-        PPR_TEST_ASSERT(off.m_pixels != active.m_pixels);
+        struct Observation {
+            std::vector<std::byte> m_scene{};
+            std::vector<std::byte> m_history{};
+            std::vector<std::byte> m_exposure{};
+            std::vector<std::byte> m_fine_ch{};
+            std::vector<std::byte> m_pixels{};
+            u64 m_pixel_row_pitch{};
+            int2 m_pixel_extent{};
+            PostProcessPass::ExposureRoleForTest m_role{};
+            u64 m_accepted_frames{};
+            u32 m_history_index{};
+            u32 m_phase{};
+            bool m_history_established{};
+            GridWorldIdentity m_history_world{};
+            i32 m_sky_hour{};
+        };
 
-        // Post-only edits never feed reconstruction or world lighting: scene and
-        // history bytes and the fine-CH field stay identical. Exposure is
-        // expected to differ, so only its role slot/world/baseline is compared.
-        PPR_TEST_ASSERT(off.m_scene == post_only.m_scene);
-        PPR_TEST_ASSERT(off.m_history == post_only.m_history);
-        PPR_TEST_ASSERT(off.m_fine_ch == post_only.m_fine_ch);
-        PPR_TEST_ASSERT(off.m_accepted_frames == post_only.m_accepted_frames);
-        PPR_TEST_ASSERT(off.m_history_index == post_only.m_history_index);
-        PPR_TEST_ASSERT(off.m_phase == post_only.m_phase);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_slot == post_only.m_exposure_role.m_slot);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_world == post_only.m_exposure_role.m_world);
-        PPR_TEST_ASSERT(off.m_exposure_role.m_active_baseline == post_only.m_exposure_role.m_active_baseline);
+        const auto observe = [&](const RenderFrameResult *const captured) -> Observation {
+            PPR_TEST_ASSERT(not test_app.getRenderer().waitOnHost());
+            const ReconstructionPass &reconstruction = test_app.getReconstructionPassForTest();
+            const PostProcessPass &post_pass = test_app.getPostProcessPassForTest();
+            rhi::ITexture *const scene = reconstruction.sceneTextureForTest();
+            rhi::ITexture *const history = reconstruction.historyTextureForTest();
+            rhi::ITexture *const exposure = post_pass.exposureTextureForTest();
+            PPR_TEST_ASSERT(scene != nullptr and history != nullptr and exposure != nullptr);
+            const WorldLightingPass *const lighting = test_app.getGridPass().activeWorldLightingForTest();
+            PPR_TEST_ASSERT(lighting != nullptr);
+            rhi::IBuffer *const fine_ch = lighting->fineCHForTest();
+            PPR_TEST_ASSERT(fine_ch != nullptr);
 
-        // A sky edit changes the transport source/CH values by design, but it
-        // never resets the accepted lighting counter or the screen-history role.
-        PPR_TEST_ASSERT(sky_only.m_accepted_frames == off.m_accepted_frames);
-        PPR_TEST_ASSERT(sky_only.m_history_established);
-        PPR_TEST_ASSERT(sky_only.m_history_index == off.m_history_index);
-        PPR_TEST_ASSERT(sky_only.m_phase == off.m_phase);
-        PPR_TEST_ASSERT(sky_only.m_exposure_role.m_slot == off.m_exposure_role.m_slot);
-        PPR_TEST_ASSERT(sky_only.m_exposure_role.m_world == off.m_exposure_role.m_world);
-        PPR_TEST_ASSERT(sky_only.m_exposure_role.m_active_baseline == off.m_exposure_role.m_active_baseline);
+            Observation observation{};
+            observation.m_scene = readEditorTexture(device, *scene);
+            observation.m_history = readEditorTexture(device, *history);
+            observation.m_exposure = readEditorTexture(device, *exposure);
+            observation.m_role = post_pass.exposureRoleForTest();
+            observation.m_accepted_frames = lighting->acceptedFrameForTest();
+            observation.m_sky_hour = lighting->lastPreparedSkyHourForTest();
+            observation.m_history_index = reconstruction.historyIndexForTest();
+            observation.m_phase = reconstruction.acceptedPhaseForTest();
+            observation.m_history_established = reconstruction.historyEstablishedForTest();
+            observation.m_history_world = reconstruction.historyWorldForTest();
+            observation.m_fine_ch.resize(64u * sizeof(lighting::PackedCH));
+            const u64 fine_offset = (30u * 512u + 30u) * sizeof(lighting::PackedCH);
+            PPR_TEST_ASSERT(not make_error_code(
+                device.readBuffer(fine_ch, fine_offset, observation.m_fine_ch.size(), observation.m_fine_ch.data())));
+            if (captured != nullptr) {
+                PPR_TEST_ASSERT(captured->m_surface_pixels != nullptr);
+                observation.m_pixels = captured->m_surface_pixels->m_bytes;
+                observation.m_pixel_row_pitch = captured->m_surface_pixels->m_row_pitch;
+                observation.m_pixel_extent = captured->m_surface_pixels->m_extent;
+            }
+            return observation;
+        };
+
+        const auto assert_same_committed = [](const Observation &before, const Observation &after) {
+            PPR_TEST_ASSERT(before.m_scene == after.m_scene);
+            PPR_TEST_ASSERT(before.m_history == after.m_history);
+            PPR_TEST_ASSERT(before.m_exposure == after.m_exposure);
+            PPR_TEST_ASSERT(before.m_fine_ch == after.m_fine_ch);
+            PPR_TEST_ASSERT(before.m_role.m_slot == after.m_role.m_slot);
+            PPR_TEST_ASSERT(before.m_role.m_world == after.m_role.m_world);
+            PPR_TEST_ASSERT(before.m_role.m_active_baseline == after.m_role.m_active_baseline);
+            PPR_TEST_ASSERT(before.m_accepted_frames == after.m_accepted_frames);
+            PPR_TEST_ASSERT(before.m_history_index == after.m_history_index);
+            PPR_TEST_ASSERT(before.m_phase == after.m_phase);
+            PPR_TEST_ASSERT(before.m_history_established == after.m_history_established);
+            PPR_TEST_ASSERT(before.m_history_world == after.m_history_world);
+            PPR_TEST_ASSERT(before.m_sky_hour == after.m_sky_hour);
+        };
+
+        const auto assert_continuity = [](const Observation &before, const Observation &after) {
+            PPR_TEST_ASSERT(after.m_history_established);
+            PPR_TEST_ASSERT(after.m_history_world == before.m_history_world);
+            PPR_TEST_ASSERT(after.m_history_index == (before.m_history_index + 1u) % 2u);
+            PPR_TEST_ASSERT(after.m_phase == (before.m_phase + 1u) % 4u);
+            PPR_TEST_ASSERT(after.m_accepted_frames == before.m_accepted_frames + 1u);
+        };
+
+        // Three warm-up frames establish history and lighting; the fourth is
+        // captured as the mid-history baseline.
+        std::ignore = run_frame(false, false);
+        std::ignore = run_frame(true, false);
+        std::ignore = run_frame(true, false);
+        const RenderFrameResult baseline_result = run_frame(true, true);
+        const Observation baseline = observe(&baseline_result);
+        PPR_TEST_ASSERT(baseline.m_history_established);
+        PPR_TEST_ASSERT(baseline.m_accepted_frames >= 3u);
+        PPR_TEST_ASSERT(baseline.m_sky_hour == -1);
+
+        // Diagnostic toggle at the same committed point.
+        test_app.setLightingInspectionSettings({ELightingDiagnostic::occupancy, 1u}, -1);
+        const Observation diagnostic_boundary = observe(nullptr);
+        assert_same_committed(baseline, diagnostic_boundary);
+
+        const RenderFrameResult diagnostic_result = run_frame(true, true);
+        const Observation diagnostic = observe(&diagnostic_result);
+        PPR_TEST_ASSERT(diagnostic_result.m_inspection.has_value());
+        PPR_TEST_ASSERT(diagnostic_result.m_inspection->m_settings.m_diagnostic == ELightingDiagnostic::occupancy);
+        PPR_TEST_ASSERT(diagnostic.m_pixels != baseline.m_pixels);
+        assert_continuity(diagnostic_boundary, diagnostic);
+        PPR_TEST_ASSERT(diagnostic.m_sky_hour == -1);
+
+        // Post-only edit: committed state is untouched at the edit boundary;
+        // the next frame changes exposure (positive control) while the history
+        // and lighting cadence continue normally.
+        test_app.setPostProcessSettings(post_edited, 1u);
+        const Observation post_boundary = observe(nullptr);
+        assert_same_committed(diagnostic, post_boundary);
+
+        const RenderFrameResult post_result = run_frame(true, true);
+        const Observation post = observe(&post_result);
+        PPR_TEST_ASSERT(post.m_exposure != diagnostic.m_exposure);
+        assert_continuity(post_boundary, post);
+        PPR_TEST_ASSERT(post.m_sky_hour == -1);
+
+        // Sky edit: the retained selection reaches the lighting pass, changes
+        // CH/output content, and never resets the history/lighting cadence.
+        test_app.setLightingInspectionSettings({ELightingDiagnostic::off, 1u}, 12);
+        const Observation sky_boundary = observe(nullptr);
+        assert_same_committed(post, sky_boundary);
+
+        const RenderFrameResult sky_result = run_frame(true, true);
+        const Observation sky = observe(&sky_result);
+        assert_continuity(sky_boundary, sky);
+        PPR_TEST_ASSERT(sky.m_sky_hour == 12);
+        PPR_TEST_ASSERT(sky.m_fine_ch != post.m_fine_ch or sky.m_pixels != post.m_pixels);
+        PPR_TEST_ASSERT(not sky_result.m_inspection.has_value());
+
+        rhi.reset();
+        PPR_TEST_ASSERT(not test_app.teardown());
+        torn_down = true;
     };
 
     PPR_UNIT_TEST (editor_ambiguous_resolve_quarantines_and_teardown_recovers) {
@@ -1744,7 +1773,7 @@ namespace pP::tests {
                 detail::WorldLightingSettlement::rejected_resolve_preserves_exposure_and_retained_picture,
                 detail::WorldLightingSettlement::editor_scene_survives_a_rejected_resolve_and_settles_its_fence,
                 detail::WorldLightingSettlement::editor_inspection_stamp_matches_submitted_world_camera_and_revision,
-                detail::WorldLightingSettlement::editor_diagnostics_change_output_without_touching_history_or_exposure,
+                detail::WorldLightingSettlement::editor_mid_history_edits_do_not_reset_or_contaminate,
                 detail::WorldLightingSettlement::editor_ambiguous_resolve_quarantines_and_teardown_recovers,
                 detail::WorldLightingSettlement::lighting_status_failure_is_observed_at_pass_shutdown,
                 detail::WorldLightingSettlement::accepted_resolve_commits_history_and_exposure_exactly_once,

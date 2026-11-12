@@ -538,6 +538,7 @@ namespace pP {
         resources.m_bound_thermal_lut = inputs.m_thermal_lut;
         attempt.m_active_elapsed = frame.m_active_elapsed;
         resources.m_world = inputs.m_particles.current() ? inputs.m_particles.m_world : GridWorldIdentity{};
+        resources.m_last_sky_hour = frame.m_sky_hour;
 
         if (auto encoding = encodeProjection_(context); encoding) {
             // Encoding failed before any submission: release the armed slot so
@@ -1037,5 +1038,9 @@ namespace pP {
         if (m_resources) {
             m_resources->m_accepted_attempts = frame;
         }
+    }
+
+    i32 WorldLightingPass::lastPreparedSkyHourForTest() const noexcept {
+        return m_resources ? m_resources->m_last_sky_hour : -1;
     }
 }

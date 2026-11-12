@@ -250,6 +250,8 @@ export namespace pP {
         // exercises schedule identity far beyond 2^32 and counter exhaustion.
         [[nodiscard]] u64 acceptedFrameForTest() const noexcept;
         void setAcceptedFrameForTest(u64 frame) noexcept;
+        // Last validated prepare sky selection, independent of submission.
+        [[nodiscard]] i32 lastPreparedSkyHourForTest() const noexcept;
 
     private:
         // ------------------------------------------------------------------
@@ -333,6 +335,9 @@ export namespace pP {
             // baseline nor m_accepted_attempts.
             TimeSpan m_accepted_active_elapsed{};
             u64 m_attempt_sequence{};
+            // Last successfully validated prepare input; tests-only positive
+            // control that the retained sky selection reached this pass.
+            i32 m_last_sky_hour{-1};
             u32 m_status_cursor{};
             u32 m_attempt_slot{};
             bool m_armed{};
