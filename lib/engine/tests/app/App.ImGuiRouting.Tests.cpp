@@ -1676,7 +1676,7 @@ namespace pP::tests::detail {
                 .m_path = font_root / "Font Awesome 7 Free-Solid-900.otf",
                 .m_merge_glyphs = ui::icons::kMergeRanges,
                 .m_expected_bytes = kAwesomeBytes,
-                .m_size_pixels = 15.0f,
+                .m_size_pixels = 13.0f,
                 .m_sha256 = sha256DigestFromHex("daa92774861a14e9ccbccc5e73a5fba514271ba4d1bd7e5adbf952182bc00835"),
                 .m_merge_into_previous = true,
             };
