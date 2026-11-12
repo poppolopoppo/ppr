@@ -1,6 +1,9 @@
 module;
 #include "pP/Macros.h"
 #include "pP/UnitTest.h"
+// Internal engine header, not installed: the exact binary16 codec the
+// presentation row's motion pair shares with the resolved-cell codecs.
+#include "../../app/renderer/App.Renderer.Binary16.h"
 #include <slang.h>
 
 module engine.tests.app;
@@ -2586,6 +2589,208 @@ namespace pP::tests::detail::WorldLightingMaterial {
                                        sizeof(lighting::PackedInterval),
                                    sizeof(lighting::PackedInterval)));
     };
+
+    // ------------------------------------------------------------------
+    // packed particle presentation row
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (presentation_tint_rgb9e5_matches_the_authored_palette_bytes) {
+        // Authored palette tints: zero, full, dominant, dim and minimum-visible
+        // channels. Alpha is never part of the row.
+        constexpr std::array<u32, 8u> authored{
+            0x000000ffu, 0xffffffffu, 0xff0080ffu, 0x010203ffu, 0x11c840ffu, 0x808080ffu, 0xfe0102ffu, 0x7f7f7fffu};
+        for (const u32 rgba: authored) {
+            const float3 source{
+                static_cast<float>((rgba >> 24u) & 255u) / 255.0f, static_cast<float>((rgba >> 16u) & 255u) / 255.0f,
+                static_cast<float>((rgba >> 8u) & 255u) / 255.0f};
+            const Expected<u32> word = lighting::packRGB9E5(source);
+            PPR_TEST_ASSERT(word.has_value());
+            const float3 decoded = lighting::unpackRGB9E5(*word);
+            const std::array<float, 3u> actual{decoded.x, decoded.y, decoded.z};
+            const std::array<float, 3u> expected{source.x, source.y, source.z};
+            std::array<float, 3u> error{};
+            for (u32 channel = 0u; channel < expected.size(); ++channel) {
+                error[channel] = std::abs(actual[channel] - expected[channel]);
+                // At least as fine as the RGBA8 source it copies.
+                PPR_TEST_ASSERT(error[channel] <= 1.0f / 255.0f);
+            }
+
+            // The dominant channel keeps its claimed 1/256 absolute bound.
+            PPR_TEST_ASSERT(*std::ranges::max_element(error) <= 1.0f / 256.0f);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL presentation_tint rgba=0x{:08x} word=0x{:08x} error=({:.3e},{:.3e},"
+                    "{:.3e})",
+                    rgba, *word, error[0u], error[1u], error[2u]));
+        }
+
+        // An invalid tint is refused rather than encoded into the row.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float infinity = std::numeric_limits<float>::infinity();
+        const auto negative = lighting::packRGB9E5(float3{0.0f, -1.0f, 0.0f});
+        const auto not_a_number = lighting::packRGB9E5(float3{nan, 0.0f, 0.0f});
+        const auto infinite = lighting::packRGB9E5(float3{infinity, 0.0f, 0.0f});
+        const auto overflow = lighting::packRGB9E5(float3{0.0f, 0.0f, 65'409.0f});
+        PPR_TEST_ASSERT(not negative.has_value() and negative.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not not_a_number.has_value() and not_a_number.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not infinite.has_value() and infinite.error() == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not overflow.has_value() and overflow.error() == std::errc::result_out_of_range);
+    };
+
+    PPR_UNIT_TEST (presentation_motion_half_round_trips_and_clamps) {
+        // Finite displacements, both signs, including a half subnormal, encode
+        // and decode within one binary16 ulp.
+        constexpr std::array<double, 8u> finite{-63.9, -1.0, -0.1, -0x1p-20, 0.0, 0.1, 0.25, 63.9};
+        for (const double value: finite) {
+            const u16 bits = ::pP::details::encodeHalf(value);
+            const float decoded = ::pP::details::decodeHalf(bits);
+            const double magnitude = std::abs(value);
+            const double ulp = magnitude < 0x1p-14 ? 0x1p-24 : std::ldexp(1.0, std::ilogb(magnitude) - 10);
+            PPR_TEST_ASSERT(std::abs(static_cast<double>(decoded) - value) <= ulp);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL presentation_motion value={:.6f} bits=0x{:04x} decoded={:.6f}", value,
+                    bits, decoded));
+        }
+
+        // The +-64 cells/step clamp endpoints are exactly representable, so the
+        // shader clamp stores the endpoint and not its neighbour.
+        PPR_TEST_ASSERT(::pP::details::encodeHalf(64.0) == 0x5400u);
+        PPR_TEST_ASSERT(::pP::details::encodeHalf(-64.0) == 0xd400u);
+        PPR_TEST_ASSERT(::pP::details::decodeHalf(0x5400u) == 64.0f);
+        PPR_TEST_ASSERT(::pP::details::decodeHalf(0xd400u) == -64.0f);
+        // Negative zero canonicalizes, so a stationary row cannot store -0.
+        PPR_TEST_ASSERT(::pP::details::encodeHalf(-0.0) == 0u);
+    };
+
+    PPR_UNIT_TEST (presentation_material_word_reconstructs_the_canonical_pack_cell_word) {
+        constexpr std::array<double, 5u> temperatures{0.0, 293.15, 900.0, 3273.0, 65'504.0};
+        for (u32 material = 1u; material <= 8u; ++material) {
+            for (const double kelvin: temperatures) {
+                const auto canonical_word = lighting::packCell(static_cast<u16>(material), kelvin);
+                PPR_TEST_ASSERT(canonical_word.has_value());
+                const u32 canonical = *canonical_word;
+                for (const u32 class_flags: {0u, 1u, 2u, 3u}) {
+                    // material 12 | class 4 << 12 | binary16 temperature 16 << 16
+                    const u32 row = (canonical & 0xffffu) | (class_flags << 12u) | (canonical & 0xffff'0000u);
+                    PPR_TEST_ASSERT((row & 0xfffu) == material);
+                    PPR_TEST_ASSERT(((row >> 12u) & 0xfu) == class_flags);
+                    // canonical = material | (temperature << 16)
+                    PPR_TEST_ASSERT(((row & 0xfffu) | (row & 0xffff'0000u)) == canonical);
+                }
+            }
+        }
+
+        // The 12-bit domain is explicit. A truncating packer would alias the
+        // over-range id onto material 1, which is why it is rejected instead.
+        PPR_TEST_ASSERT(kGridParticleMaterialLimit == 4096u);
+        PPR_TEST_ASSERT((kGridParticleMaterialLimit & 0xfffu) == 0u);
+        PPR_TEST_ASSERT(((kGridParticleMaterialLimit + 1u) & 0xfffu) == 1u);
+    };
+
+    PPR_UNIT_TEST (presentation_position_precision_budget_pins_the_far_corner_quantum) {
+        // span64 renders 11.25 px per published 1/3 m cell.
+        constexpr double cell_metres = 1.0 / 3.0;
+        constexpr double pixels_per_cell = 11.25;
+        constexpr double budget_px = 1.0e-2;
+
+        for (const float corner: {341.33f, 1365.3f}) {
+            const double quantum_m = static_cast<double>(std::nextafter(corner, std::numeric_limits<float>::max())) -
+                                     static_cast<double>(corner);
+            const double quantum_px = quantum_m / cell_metres * pixels_per_cell;
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL presentation_position corner={:.2f}m quantum={:.3e}m px={:.3e} "
+                    "budget={:.3e}",
+                    corner, quantum_m, quantum_px, budget_px));
+            PPR_TEST_ASSERT(quantum_px <= budget_px);
+        }
+
+        // The rejected alternatives must exceed the same budget, so replacing the
+        // encoding fails here instead of shrinking precision silently: half's
+        // quantum at 341.33 m (2^8 <= x < 2^9) is 0.25 m, and 16-bit fixed point
+        // over 1024 cells is 1/64 cell.
+        PPR_TEST_ASSERT(0.25 / cell_metres * pixels_per_cell > budget_px);
+        PPR_TEST_ASSERT((1.0 / 64.0) * pixels_per_cell > budget_px);
+    };
+
+    PPR_UNIT_TEST (presentation_row_layout_matches_the_cpu_twin) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        // CPU twin: 24 bytes, 8-aligned, packed in the documented order.
+        PPR_TEST_ASSERT(sizeof(ParticleGpu) == 24u);
+        PPR_TEST_ASSERT(alignof(ParticleGpu) == 8u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
+
+        // Reflected on the device target this fixture initialized, so the same
+        // case proves the layout on Vulkan and on D3D12.
+        const auto verify = [&](const char *const file, const char *const module_name, const char *const parameter_name,
+                                const std::span<const std::pair<const char *, u32>> fields) {
+            shader::SharedModule module{};
+            PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+                std::filesystem::current_path() / "shaders" / file, module_name, module.writeRef()));
+            auto *const layout = module->getLayout();
+            PPR_TEST_ASSERT(layout != nullptr);
+            slang::TypeLayoutReflection *element = nullptr;
+            for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+                auto *const parameter = layout->getParameterByIndex(index);
+                if (std::string_view{parameter->getName()} == parameter_name) {
+                    element = parameter->getTypeLayout()->getElementTypeLayout();
+                    break;
+                }
+            }
+
+            PPR_TEST_ASSERT(element != nullptr);
+            PPR_TEST_ASSERT(element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(ParticleGpu));
+            PPR_TEST_ASSERT(element->getFieldCount() == static_cast<unsigned>(fields.size()));
+            for (const auto &[name, offset]: fields) {
+                bool matched = false;
+                for (unsigned index = 0u; index < element->getFieldCount(); ++index) {
+                    auto *const field = element->getFieldByIndex(index);
+                    if (std::string_view{field->getName()} != name) {
+                        continue;
+                    }
+
+                    const u32 measured = static_cast<u32>(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM));
+                    _.log(
+                        std::format(
+                            "WORLD_LIGHTING_MATERIAL presentation_row {} field={} offset={} expected={} size={}",
+                            module_name, name, measured, offset,
+                            field->getTypeLayout()->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM)));
+                    PPR_TEST_ASSERT(measured == offset);
+                    matched = true;
+                    break;
+                }
+
+                PPR_TEST_ASSERT(matched);
+            }
+        };
+
+        constexpr std::array<std::pair<const char *, u32>, 5u> writer_fields{{
+            {"position", 0u},
+            {"radius", 8u},
+            {"material_flags_temperature", 12u},
+            {"color_rgb9e5", 16u},
+            {"motion", 20u},
+        }};
+        constexpr std::array<std::pair<const char *, u32>, 5u> reader_fields{{
+            {"m_position", 0u},
+            {"m_radius_m", 8u},
+            {"m_material_flags_temperature", 12u},
+            {"m_color_rgb9e5", 16u},
+            {"m_motion", 20u},
+        }};
+        verify("grid_particle_prepare.slang", "grid_particle_prepare", "g_packed", writer_fields);
+        verify("grid_tiles.slang", "grid_tiles", "g_particles", reader_fields);
+    };
 }
 
 namespace pP::tests {
@@ -2616,6 +2821,11 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::opaque_thermal_glow_and_receive_only_thermal_exclusion,
                 detail::WorldLightingMaterial::inspection_settings_reject_unknown_views_and_levels,
                 detail::WorldLightingMaterial::inspection_views_decode_published_records_without_mutation,
+                detail::WorldLightingMaterial::presentation_tint_rgb9e5_matches_the_authored_palette_bytes,
+                detail::WorldLightingMaterial::presentation_motion_half_round_trips_and_clamps,
+                detail::WorldLightingMaterial::presentation_material_word_reconstructs_the_canonical_pack_cell_word,
+                detail::WorldLightingMaterial::presentation_position_precision_budget_pins_the_far_corner_quantum,
+                detail::WorldLightingMaterial::presentation_row_layout_matches_the_cpu_twin,
             });
         };
         return group;

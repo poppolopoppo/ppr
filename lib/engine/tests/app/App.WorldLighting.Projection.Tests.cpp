@@ -1,6 +1,9 @@
 module;
 #include "pP/Macros.h"
 #include "pP/UnitTest.h"
+// Internal engine header, not installed: the exact binary16 codec the
+// presentation row's motion pair shares with the resolved-cell codecs.
+#include "../../app/renderer/App.Renderer.Binary16.h"
 #include <slang.h>
 
 module engine.tests.app;
@@ -69,6 +72,10 @@ namespace pP::tests::detail::WorldLightingProjection {
         bool m_gas{};
         float m_gas_x{};
         float m_gas_y{};
+        // Solver hot-row displacement in native cells per step (carried[0..1]
+        // of ParticleWrite), the only motion the presentation row carries.
+        float m_displacement_x{};
+        float m_displacement_y{};
     };
 
     struct Fixture {
@@ -213,6 +220,10 @@ namespace pP::tests::detail::WorldLightingProjection {
                 PPR_TEST_ASSERT(spec.m_source_row < hot.size());
                 hot[spec.m_source_row].m_position[0] = spec.m_x;
                 hot[spec.m_source_row].m_position[1] = spec.m_y;
+                // ParticleWrite field order: carried[0..1] are displacementX/Y
+                // and carried[13] is enabled.
+                hot[spec.m_source_row].m_carried[0] = spec.m_displacement_x;
+                hot[spec.m_source_row].m_carried[1] = spec.m_displacement_y;
                 hot[spec.m_source_row].m_carried[13] = spec.m_enabled ? 1.0f : 0.0f;
                 cold[spec.m_source_row].m_fields[1] = std::numbers::pi_v<float>;
             }
@@ -1294,6 +1305,221 @@ namespace pP::tests::detail::WorldLightingProjection {
     };
 
     // ------------------------------------------------------------------
+    // packed particle presentation row
+    // ------------------------------------------------------------------
+
+    // Authored palette tint in the row's r/g/b byte order (low byte is alpha).
+    [[nodiscard]] float3 paletteTint(const u32 rgba) noexcept {
+        return float3{
+            static_cast<float>((rgba >> 24u) & 255u) / 255.0f, static_cast<float>((rgba >> 16u) & 255u) / 255.0f,
+            static_cast<float>((rgba >> 8u) & 255u) / 255.0f};
+    }
+
+    // One binary16 ulp at the magnitude of `value`.
+    [[nodiscard]] double halfUlp(const float value) noexcept {
+        const double magnitude = std::abs(static_cast<double>(value));
+        return magnitude == 0.0 ? std::ldexp(1.0, -24) : std::ldexp(1.0, std::ilogb(magnitude) - 10);
+    }
+
+    [[nodiscard]] bool motionMatches(const u16 bits, const float expected) noexcept {
+        return std::abs(static_cast<double>(::pP::details::decodeHalf(bits)) - static_cast<double>(expected)) <=
+               halfUlp(expected);
+    }
+
+    PPR_UNIT_TEST (packed_presentation_row_quantises_and_filters_rows) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        constexpr u32 kOverRangeMaterial = kGridParticleMaterialLimit + 1u;
+        constexpr float kNotANumber = std::numeric_limits<float>::quiet_NaN();
+
+        // Eight committed rows: packed, disabled, clamped, non-finite motion,
+        // gas, optical-blend material, out-of-domain material, non-finite
+        // position. The seven moving rows own source rows 0..6 exactly once —
+        // admission requires every row in [0, moving_count) to be present — and
+        // the gas row carries no source row. Committed positions are world cells;
+        // the published origin of 3.0 cells subtracts out, so 3.5 cells is 0.5
+        // world metres.
+        Scene scene;
+        const std::array specs{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = 3.5f,
+                .m_y = 3.5f,
+                .m_displacement_x = 0.1f,
+                .m_displacement_y = -0.25f},
+            ParticleSpec{
+                .m_id = 2u, .m_source_row = 1u, .m_material = kOpaque, .m_x = 4.5f, .m_y = 3.5f, .m_enabled = false},
+            ParticleSpec{
+                .m_id = 3u,
+                .m_source_row = 2u,
+                .m_material = kOpaque,
+                .m_x = 5.5f,
+                .m_y = 3.5f,
+                .m_displacement_x = 128.0f,
+                .m_displacement_y = -128.0f},
+            ParticleSpec{
+                .m_id = 4u,
+                .m_source_row = 3u,
+                .m_material = kOpaque,
+                .m_x = 6.5f,
+                .m_y = 3.5f,
+                .m_displacement_x = kNotANumber,
+                .m_displacement_y = 0.5f},
+            ParticleSpec{.m_id = 5u, .m_material = kEmissiveLiquid, .m_gas = true, .m_gas_x = 1.5f, .m_gas_y = 2.5f},
+            ParticleSpec{
+                .m_id = 6u,
+                .m_source_row = 4u,
+                .m_material = kReceiveOnly,
+                .m_x = 7.5f,
+                .m_y = 3.5f,
+                .m_displacement_x = 0.5f},
+            ParticleSpec{.m_id = 7u, .m_source_row = 5u, .m_material = kOverRangeMaterial, .m_x = 8.5f, .m_y = 3.5f},
+            ParticleSpec{.m_id = 8u, .m_source_row = 6u, .m_material = kOpaque, .m_x = kNotANumber, .m_y = 3.5f},
+        };
+        scene.publish(fixture, specs);
+
+        const auto makeVisual = [](const u32 material, const u32 rgba, const u32 flags) {
+            GridTerrainVisual visual{};
+            visual.m_material_id = material;
+            visual.m_color_rgba = rgba;
+            visual.m_surface_flags = flags;
+            return visual;
+        };
+        const std::array visuals{
+            makeVisual(kOpaque, 0xff8040ffu, 0u),
+            makeVisual(kReceiveOnly, 0x204080ffu, kGridSurfaceOpticalBlend),
+            makeVisual(kEmissiveLiquid, 0x40a0c0ffu, kGridSurfaceParticleLiquid),
+            makeVisual(kOverRangeMaterial, 0xffffffffu, 0u),
+        };
+
+        GridPass grid;
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not grid.shutdown());
+        };
+
+        GridPass::GridStagedFrame stage{};
+        stage.m_world_edge = kEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals.assign(visuals.begin(), visuals.end());
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = GridTileRange{0, 0, 128, 128}, .m_chunk_id = 0u});
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        auto view = scene.m_inputs.m_particles;
+        view.m_world = grid.activeWorldIdentity();
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_ortho_scale = 2048.0f;
+        Camera camera;
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{256, 256}}, ViewportLayout{}});
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+
+        {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            PPR_TEST_ASSERT(not grid.prepareGpuParticles(context));
+            submit(fixture, *encoder);
+        }
+
+        const auto buffers = grid.particleBuffersForTest();
+        PPR_TEST_ASSERT(buffers[0] != nullptr and buffers[1] != nullptr and buffers[2] != nullptr);
+        PPR_TEST_ASSERT(sizeof(ParticleGpu) == 24u and alignof(ParticleGpu) == 8u);
+        PPR_TEST_ASSERT(buffers[0]->getDesc().elementSize == sizeof(ParticleGpu));
+
+        std::array<ParticleGpu, specs.size()> rows{};
+        PPR_TEST_ASSERT(not make_error_code(
+            fixture.device().readBuffer(buffers[0], 0u, rows.size() * sizeof(ParticleGpu), rows.data())));
+        std::array<u32, 4u> args{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(buffers[1], 0u, sizeof(args), args.data())));
+        std::array<u32, 8u> ids{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(buffers[2], 0u, sizeof(ids), ids.data())));
+
+        // Only enabled, finite, in-domain rows are compacted. The indirect
+        // instance count is therefore the rejection count, and a rejected id can
+        // never appear in the draw list.
+        PPR_TEST_ASSERT(args[0u] == 6u);
+        PPR_TEST_ASSERT(args[1u] == 5u);
+        const std::array<u32, 5u> expected_ids{0u, 2u, 3u, 4u, 5u};
+        for (u32 index = 0u; index < expected_ids.size(); ++index) {
+            PPR_TEST_ASSERT(ids[index] == expected_ids[index]);
+        }
+
+        // Row 0: world metres (not cells) with every binary32 quantum intact,
+        // the derived physical radius, no class flag and a bit-exact canonical
+        // material word.
+        PPR_TEST_ASSERT(rows[0u].m_position[0u] == 0.5f and rows[0u].m_position[1u] == 0.5f);
+        PPR_TEST_ASSERT(std::abs(rows[0u].m_radius_m - 1.0f) <= 1.0e-6f);
+        PPR_TEST_ASSERT((rows[0u].m_material_flags_temperature & 0xfffu) == kOpaque);
+        PPR_TEST_ASSERT(((rows[0u].m_material_flags_temperature >> 12u) & 0xfu) == 0u);
+        const u32 canonical = (rows[0u].m_material_flags_temperature & 0xfffu) |
+                              (rows[0u].m_material_flags_temperature & 0xffff'0000u);
+        PPR_TEST_ASSERT(canonical == *lighting::packCell(kOpaque, 300.0));
+        PPR_TEST_ASSERT(motionMatches(rows[0u].m_motion[0u], 0.1f));
+        PPR_TEST_ASSERT(motionMatches(rows[0u].m_motion[1u], -0.25f));
+
+        // The tint is the authored palette colour within the RGBA8 source's own
+        // one-byte quantum; alpha was never stored.
+        const float3 decoded_tint = lighting::unpackRGB9E5(rows[0u].m_color_rgb9e5);
+        const float3 authored_tint = paletteTint(visuals[0u].m_color_rgba);
+        const std::array<float, 3u> decoded{decoded_tint.x, decoded_tint.y, decoded_tint.z};
+        const std::array<float, 3u> authored{authored_tint.x, authored_tint.y, authored_tint.z};
+        for (u32 channel = 0u; channel < authored.size(); ++channel) {
+            PPR_TEST_ASSERT(std::abs(decoded[channel] - authored[channel]) <= 1.0f / 255.0f);
+        }
+
+        // Row 2 clamps to exactly +/-64 native cells per step.
+        PPR_TEST_ASSERT(::pP::details::decodeHalf(rows[2u].m_motion[0u]) == 64.0f);
+        PPR_TEST_ASSERT(::pP::details::decodeHalf(rows[2u].m_motion[1u]) == -64.0f);
+        // Row 3 sanitises only the non-finite component to 0.
+        PPR_TEST_ASSERT(rows[3u].m_motion[0u] == 0u);
+        PPR_TEST_ASSERT(motionMatches(rows[3u].m_motion[1u], 0.5f));
+
+        // Row 4 is a gas row: metres from the metadata, no displacement, and the
+        // gas class bit set beside its material id.
+        PPR_TEST_ASSERT(rows[4u].m_position[0u] == 1.5f and rows[4u].m_position[1u] == 2.5f);
+        PPR_TEST_ASSERT(rows[4u].m_radius_m == 0.5f);
+        PPR_TEST_ASSERT(((rows[4u].m_material_flags_temperature >> 12u) & 0xfu) == 1u);
+        PPR_TEST_ASSERT(rows[4u].m_motion[0u] == 0u and rows[4u].m_motion[1u] == 0u);
+        // Row 5 derives the optical-blend class bit from its own visual.
+        PPR_TEST_ASSERT(((rows[5u].m_material_flags_temperature >> 12u) & 0xfu) == 2u);
+
+        // Disabled, out-of-domain material and non-finite position rows are
+        // rejected wholesale: a truncated 4097 would have decoded as material 1.
+        const ParticleGpu rejected{};
+        const auto isRejected = [&](const u32 row) {
+            return std::memcmp(&rows[row], &rejected, sizeof(ParticleGpu)) == 0;
+        };
+        PPR_TEST_ASSERT((kOverRangeMaterial & 0xfffu) == kOpaque);
+        PPR_TEST_ASSERT(isRejected(1u));
+        PPR_TEST_ASSERT(isRejected(6u));
+        PPR_TEST_ASSERT(isRejected(7u));
+
+        // Nothing in the draw list can carry a non-finite coordinate or a
+        // non-positive radius into a clip position.
+        for (u32 index = 0u; index < args[1u]; ++index) {
+            const ParticleGpu &row = rows[ids[index]];
+            PPR_TEST_ASSERT(std::isfinite(row.m_position[0u]) and std::isfinite(row.m_position[1u]));
+            PPR_TEST_ASSERT(std::isfinite(row.m_radius_m) and row.m_radius_m > 0.0f);
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_PROJECTION presentation_row bytes={} instances={} rejected={} tint=({:.4f},{:.4f},"
+                "{:.4f}) motion=({:.5f},{:.5f})",
+                sizeof(ParticleGpu), args[1u], specs.size() - args[1u], decoded[0u], decoded[1u], decoded[2u],
+                ::pP::details::decodeHalf(rows[0u].m_motion[0u]), ::pP::details::decodeHalf(rows[0u].m_motion[1u])));
+    };
+
+    // ------------------------------------------------------------------
     // C-stage inspection reader fences
     // ------------------------------------------------------------------
 
@@ -1358,6 +1584,7 @@ namespace pP::tests {
                 detail::WorldLightingProjection::shutdown_reports_an_uninspected_pending_error,
                 detail::WorldLightingProjection::reflected_projection_records_match_the_cpu_shapes,
                 detail::WorldLightingProjection::grid_pass_owns_the_projection_and_binds_resolved_cells,
+                detail::WorldLightingProjection::packed_presentation_row_quantises_and_filters_rows,
                 detail::WorldLightingProjection::inspection_read_extends_only_the_decoded_attempt,
             });
         };

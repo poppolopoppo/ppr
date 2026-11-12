@@ -74,6 +74,11 @@ namespace pP {
             const u64 id = (static_cast<u64>(row.m_id_high) << 32u) | row.m_id_low;
             const bool gas = row.m_source_row == 0xffff'ffffu;
             const u32 material = row.m_material_temperature & 0xffffu;
+            // The presentation row carries the material in 12 bits, so a committed
+            // id at or above kGridParticleMaterialLimit cannot be represented. The
+            // publication is admitted unchanged (the palette still addresses 16
+            // bits) and the pack shader rejects such a row instead of truncating
+            // it into a different valid material.
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 GridPass, id > prior_id and
                                   material > 0u and
@@ -156,6 +161,15 @@ namespace pP {
     // one-time initial inventory upload into the sole GPU circle path
     // ------------------------------------------------------------------
 
+    // Seeds are an admission path, not a position authority. Once a solver view
+    // is published (`GridParticleGpuView`), the GPU hot row is authoritative for
+    // every moving particle and the packet position is only the admission seed
+    // that placed the row here. The staged seed position is therefore consumed
+    // once, at admission, and never re-read by the draw path.
+    //
+    // `m_radius` is metres only: the gas path draws it directly and the packer
+    // re-derives the moving radius in metres from the cold volume. No cell-space
+    // radius crosses this seam.
     std::error_code GridPass::admitParticleSeeds_(rhi::IDevice &device) {
         if (not m_world.m_particle_seeds_dirty)
             return {};
@@ -179,6 +193,9 @@ namespace pP {
 
         std::ranges::sort(seeds, {}, [](const auto *seed) { return seed->m_id; });
 
+        // Hot64 mirrors the solver's 64-byte ParticleWrite by field order
+        // (position, displacement, F, D, liquid scalars, enabled); only the
+        // admission seed writes position[0..1] and enabled here.
         struct HotRow {
             std::array<float, 16u> m_fields{};
         };
@@ -195,6 +212,11 @@ namespace pP {
         const double volume_unit = cell * cell * static_cast<double>(m_world.m_reference_thickness_m);
         for (u32 row = 0u; row < seeds.size(); ++row) {
             const auto &seed = *seeds[row];
+            // Admission (renderer-owned) material ids must fit the row's 12-bit
+            // field; a solver publication is checked by the pack shader instead.
+            PPR_ASSERT(seed.m_material_id < kGridParticleMaterialLimit);
+            // Admission seed coordinates in native cells; the published hot row
+            // supersedes them as soon as a solver view exists.
             hot[row].m_fields[0u] = static_cast<float>(seed.m_position_x_m / cell + 3.0);
             hot[row].m_fields[1u] = static_cast<float>(seed.m_position_y_m / cell + 3.0);
             hot[row].m_fields[15u] = 1.0f;
@@ -214,6 +236,8 @@ namespace pP {
             const auto packed = lighting::packCell(static_cast<u16>(seed.m_material_id), seed.m_temperature_k);
             PPR_RETURN_ERROR_ON_FAIL(GridPass, packed);
             rows[row].m_material_temperature = *packed;
+            // Metres, not cells: the presentation row's radius unit for both the
+            // gas path and the moving path.
             rows[row].m_radius = static_cast<float>(
                 std::sqrt(seed.m_volume_m3 / static_cast<double>(m_world.m_reference_thickness_m) / std::numbers::pi));
         }
@@ -322,6 +346,37 @@ namespace pP {
                     frame->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticlePrepareFrame, m_count)
                 ? std::error_code{}
                 : std::make_error_code(std::errc::invalid_argument));
+
+        // The 24-byte presentation row is a reflected ABI contract, not an
+        // assumption: a target that lays out `half2 motion` or the material word
+        // differently fails program creation here instead of misreading every
+        // instance. The writer's names are the field contract grid_tiles decodes.
+        constexpr std::array<std::pair<const char *, u32>, 5u> packed_fields{{
+            {"position", 0u},
+            {"radius", 8u},
+            {"material_flags_temperature", 12u},
+            {"color_rgb9e5", 16u},
+            {"motion", 20u},
+        }};
+        bool packed_layout_matches = packed != nullptr and
+                                     packed->getFieldCount() == static_cast<unsigned>(packed_fields.size());
+        for (const auto &[name, offset]: packed_fields) {
+            bool matched = false;
+            for (unsigned index = 0u; packed_layout_matches and index < packed->getFieldCount(); ++index) {
+                auto *const member = packed->getFieldByIndex(index);
+                if (name != std::string_view{member->getName()}) {
+                    continue;
+                }
+
+                matched = member->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                break;
+            }
+
+            packed_layout_matches = packed_layout_matches and matched;
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, packed_layout_matches ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
         constexpr std::array<const char *, 4u> entries{
             "packParticles", "rankParticles", "scanParticleBlocks", "scatterParticles"};

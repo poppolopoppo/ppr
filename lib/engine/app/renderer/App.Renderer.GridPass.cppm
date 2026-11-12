@@ -104,6 +104,45 @@ export namespace pP {
     // Visual-only unavailable rows remain admissible with zero sigma.
     [[nodiscard]] std::error_code validateGridMaterialOptics(const GridTerrainVisual &visual);
 
+    // ------------------------------------------------------------------
+    // packed particle presentation row
+    // ------------------------------------------------------------------
+
+    // Material ids ride the presentation row in 12 bits, so the particle domain
+    // is capped at 4096 (16x the authored 256) even though the palette and the
+    // resolved-cell word address 16 bits. A larger id is rejected rather than
+    // truncated into a different valid material.
+    inline constexpr u32 kGridParticleMaterialLimit{4096u};
+
+    // Renderer-owned, packed 24-byte presentation row; staging traffic only, not
+    // part of the solver ABI or any packet. The shader mirrors are
+    // `PresentationRow` in grid_particle_prepare.slang (writer) and `ParticleGpu`
+    // in grid_tiles.slang (reader).
+    //
+    // Position and radius stay binary32 in world metres: the float32 ulp at the
+    // 1365 m map corner is 4.1e-3 px at span64, where an absolute half2 position
+    // would be 8.44 px. The quantised fields are the material/class/temperature
+    // word, the RGB9E5 tint and the binary16 motion pair.
+    struct alignas(8) ParticleGpu {
+        float m_position[2]{};
+        float m_radius_m{};
+        // material 12 bits | class flags 4 bits << 12 | binary16 Kelvin << 16.
+        // The material is not stored in its canonical packCell position; shading
+        // reconstructs `material | (temperature << 16)`.
+        u32 m_material_flags_temperature{};
+        // RGB9E5 tint from the palette's RGBA8 colour; alpha is not stored.
+        u32 m_color_rgb9e5{};
+        // binary16 pair: native cells per solver step, x low word / y high word.
+        u16 m_motion[2]{};
+    };
+    static_assert(sizeof(ParticleGpu) == 24u and alignof(ParticleGpu) == 8u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
+    static_assert(std::is_standard_layout_v<ParticleGpu> and std::is_trivially_copyable_v<ParticleGpu>);
+
     // Derived eight-byte transport source for one admitted visible row. Linear
     // texture_mean is the existing filtered albedo mean; missing albedo passes
     // white. Receive-only transparent rows and the empty entry are all zero.
@@ -760,16 +799,6 @@ export namespace pP {
         };
 
         [[nodiscard]] std::error_code ensurePipelineRoots_(rhi::IDevice &device, GridCachedPipeline &pipeline);
-
-        struct ParticleGpu {
-            float m_position[2]{};
-            float m_radius_m{};
-            u32 m_material_id{};
-            float m_color[4]{};
-        };
-        static_assert(sizeof(ParticleGpu) == 32u and alignof(ParticleGpu) == 4u);
-        static_assert(PPR_OFFSETOF(ParticleGpu, m_material_id) == 12u);
-        static_assert(PPR_OFFSETOF(ParticleGpu, m_color) == 16u);
 
         struct ParticleChunk {
             std::shared_ptr<const Array<GridParticleInstance>> m_source{};

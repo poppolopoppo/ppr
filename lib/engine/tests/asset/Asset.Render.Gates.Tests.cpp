@@ -3986,7 +3986,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f);
             }
             const auto stable = grid.observations();
-            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 396u);
+            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 380u);
             PPR_TEST_ASSERT(stable.m_background_targets == 3u);
             PPR_TEST_ASSERT(stable.m_background_target_bytes == 3u * 128u * 128u * 8u);
             for (u32 frame = 0u; frame < 6u; ++frame) {
@@ -4010,7 +4010,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u);
             }
             const auto empty = grid.observations();
-            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 276u);
+            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 260u);
             PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 3u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
@@ -4066,7 +4066,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u, nullptr, &admitted);
                 PPR_TEST_ASSERT(admitted);
                 const auto settled = grid.observations();
-                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 396u);
+                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 380u);
                 PPR_TEST_ASSERT(settled.m_texture_entries == stable.m_texture_entries);
                 PPR_TEST_ASSERT(settled.m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
                 PPR_TEST_ASSERT(settled.m_background_target_bytes == empty.m_background_target_bytes);

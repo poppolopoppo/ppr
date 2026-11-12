@@ -1,5 +1,6 @@
 module;
 #include "pP/Macros.h"
+#include "App.Renderer.Binary16.h"
 module engine.app;
 
 import :renderer.world_lighting;
@@ -14,82 +15,15 @@ namespace pP::lighting {
 
     namespace {
         // ------------------------------------------------------------------
-        // binary16 conversion
+        // shared codecs and admission checks
         // ------------------------------------------------------------------
 
-        // Exact IEEE binary16 -> binary32 decode. Half subnormals are
-        // normalized from their ten-bit significand; zero preserves its sign.
-        [[nodiscard]] float decodeHalf(const u16 bits) noexcept {
-            const u32 sign = (bits & 0x8000u) != 0u ? 0x8000'0000u : 0u;
-            const u32 exponent = (bits >> 10u) & 0x1fu;
-            u32 mantissa = bits & 0x3ffu;
-
-            if (exponent == 0u) {
-                if (mantissa == 0u) {
-                    return std::bit_cast<float>(sign);
-                }
-
-                u32 shift = 0u;
-                while ((mantissa & 0x400u) == 0u) {
-                    mantissa <<= 1u;
-                    ++shift;
-                }
-                mantissa &= 0x3ffu;
-                return std::bit_cast<float>(sign | ((113u - shift) << 23u) | (mantissa << 13u));
-            }
-
-            if (exponent == 31u) {
-                return std::bit_cast<float>(sign | 0x7f80'0000u | (mantissa << 13u));
-            }
-
-            return std::bit_cast<float>(sign | ((exponent + 112u) << 23u) | (mantissa << 13u));
-        }
-
-        // Exact binary16 nearest/ties-to-even encode for a validated finite
-        // value in [0, 65,504]. The caller owns domain rejection and the
-        // negative-zero canonicalization.
-        [[nodiscard]] u16 encodeHalf(const double value) noexcept {
-            if (value == 0.0) {
-                return 0u;
-            }
-
-            if (value < 0x1p-14) {
-                const double scaled = std::ldexp(value, 24);
-                const double base = std::floor(scaled);
-                const double fraction = scaled - base;
-                u32 quantized = static_cast<u32>(base);
-                if (fraction > 0.5 or (fraction == 0.5 and (quantized & 1u) != 0u)) {
-                    ++quantized;
-                }
-
-                // Rounding a subnormal up can reach the smallest normal.
-                return quantized >= 1024u ? u16{0x0400u} : static_cast<u16>(quantized);
-            }
-
-            const int exponent = std::ilogb(value);
-            const double scaled = std::ldexp(value, 10 - exponent);
-            const double base = std::floor(scaled);
-            const double fraction = scaled - base;
-            u32 significand = static_cast<u32>(base);
-            if (fraction > 0.5 or (fraction == 0.5 and (significand & 1u) != 0u)) {
-                ++significand;
-            }
-
-            int half_exponent = exponent;
-            if (significand == 2048u) {
-                significand = 1024u;
-                ++half_exponent;
-            }
-            if (half_exponent > 15) {
-                return 0x7c00u;
-            }
-
-            return static_cast<u16>((static_cast<u32>(half_exponent + 15) << 10u) | (significand - 1024u));
-        }
-
-        // ------------------------------------------------------------------
-        // shared admission checks
-        // ------------------------------------------------------------------
+        // The exact binary16 conversion is shared with the particle-presentation
+        // tests through App.Renderer.Binary16.h; there is one encoder in the
+        // repository, not a second copy per consumer. Fully qualified because
+        // `pP::lighting::details` already exists in this module.
+        using ::pP::details::decodeHalf;
+        using ::pP::details::encodeHalf;
 
         [[nodiscard]] bool finiteInRange(const float value, const float low, const float high) noexcept {
             return std::isfinite(value) and value >= low and value <= high;

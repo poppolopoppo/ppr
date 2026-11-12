@@ -62,7 +62,7 @@ ProjectionCandidate projectionCandidate(
         return result;
     }
 
-    float enabled = hot.carried[13];
+    float enabled = hot.enabled;
     if (!isfinite(enabled)) {
         result.status = 1u;
         return result;

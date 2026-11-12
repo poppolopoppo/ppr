@@ -108,12 +108,25 @@ ConstantBuffer<GridPassSwitch> g_grid_pass;
 Texture2D<float4> g_boundary_noise;
 // Written before the surface pass; this is never the active color attachment.
 Texture2D<float4> g_backdrop;
+// Renderer-owned packed 24-byte particle presentation row; the writer is
+// PresentationRow in grid_particle_prepare.slang and the CPU twin is
+// pP::ParticleGpu in App.Renderer.GridPass.cppm. Position and radius are world
+// metres (not cells and not quantised); the material, tint and motion fields are
+// packed. Every field name and offset reflects against the CPU twin.
 struct ParticleGpu {
-    float2 m_position;
-    float m_radius_m;
-    uint m_material_id;
-    float4 m_color;
+    float2 m_position;                    // 0:  world metres
+    float m_radius_m;                     // 8:  metres
+    uint m_material_flags_temperature;    // 12: material 12 | class 4 << 12 | binary16 K << 16
+    uint m_color_rgb9e5;                  // 16: RGB9E5 tint; alpha is not stored
+    half2 m_motion;                       // 20: native cells per solver step
 };
+static const uint kParticleMaterialMask = 0xfffu;
+
+// Shared-exponent RGB9E5 decode, matching the host lighting::unpackRGB9E5.
+float3 unpackParticleTint(uint word) {
+    int exponent=int((word>>27u)&0x1fu)-24;
+    return float3(float(word&0x1ffu),float((word>>9u)&0x1ffu),float((word>>18u)&0x1ffu))*exp2(float(exponent));
+}
 Texture2D<float4> g_particle_mask;
 SamplerState g_particle_mask_sampler;
 StructuredBuffer<ParticleGpu> g_particles;
@@ -1145,6 +1158,11 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
         float2(-1,-1),float2(1,1),float2(-1,1)};
     ParticleGpu particle=g_particles[instance];
+    // The row does not keep the canonical packCell word: material (12 bits),
+    // class flags (4 bits) and the binary16 temperature share one word, so
+    // shading reconstructs canonical = material | (temperature << 16). Alpha is
+    // not stored either; the material's own alpha supplies opacity.
+    uint material=particle.m_material_flags_temperature&kParticleMaterialMask;
     float3 right=normalize(mul(float4(1,0,0,0),g_grid_frame.m_inverse_view_projection).xyz);
     float3 up=normalize(mul(float4(0,1,0,0),g_grid_frame.m_inverse_view_projection).xyz);
     // The mask's disk radius is62 texels in a128-square texture. Its two-texel
@@ -1155,8 +1173,8 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
     output.uv=corners[vertex]*0.5+0.5;
-    output.material=particle.m_material_id;
-    output.color=particle.m_color;
+    output.material=material;
+    output.color=float4(unpackParticleTint(particle.m_color_rgb9e5),1.0);
     return output;
 }
 
