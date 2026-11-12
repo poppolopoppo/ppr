@@ -1444,3 +1444,61 @@ and operational acceptance. No Task 4 work has begun.
   size accounting or telemetry; default LSan still reports the pre-existing
   GTK/dbus window/portal leak set on windowed entries (identical with and
   without cache use; CTest entries pass).
+
+## Task 15 — Lighting Lab and 1024 admission complete
+
+- Commits: `c5db57be` (lab feature) and `a9066a3a` (review fixes + app-test
+  registration).
+- Initial review found five Important issues (lab glass transport-opaque;
+  sRGB-authored values vs specified linear bases; checkpoint admission not
+  wired; visual-acceptance overclaim; manifest-cap evidence/justification)
+  plus minors. Fix round addressed them; scoped re-review found all Important
+  findings addressed with no new Critical/Important breakage.
+- Delivered: ordinary `game.colony.worldgen` `populateLightingLab` through the
+  normal prepared-world factory; exact §6 rooms/doors/L/one-cell/seam/basin/
+  thermal/PBR/floor/actor geometry and material keys; 3×3072 basin seeds plus
+  64 oxygen with stable IDs/temperatures; deterministic content across seeds;
+  normal checkpoint round-trip; 1024 startup/admission with 2048/4096 rejected
+  before GPU preparation; guarded rendered-checkpoint admission API; 72 KiB
+  manifest cap (schema/keys unchanged); paired sky -1/12 manual-EV0/bloom-off
+  and default captures; `engine.tests.app` now links `WorldGen.LightingLab.cpp`.
+- Lab glass is now receive-only (strength 0.0) including the shared default-pack
+  glass record; authored sRGB bytes decode to the specified linear bases;
+  tests assert decoded values.
+- **Remaining owner/Task 19 gates:** per-case closeups, image-level sky
+  comparison, interactive save/reload UI (no production load UI), Windows/D3D12,
+  and the Task 11 camera-side visual convention. The stylized mirror glass still
+  authors strength 1.0 (uncommitted user work; note for the owner). Checkpoint v6
+  subdivision asymmetry and `summarizeLab` retained-memory under-report are
+  documented minors.
+- **Task 16 handoff:** replace the temporary diagnostic/contour fallback with
+  the approved inspection overlay; remove obsolete debug controls.
+
+## Bounded amendment — persistent compiled-shader cache
+
+- Commits: `c0b8a38b` `perf: cache compiled shader artifacts on disk`, `9d00c70`
+  `fix: silence shader-cache misses and ignore cache root`.
+- Mechanism: file-local `PersistentShaderCache : rhi::IPersistentCache` wired via
+  `DeviceDesc::persistentShaderCache`; slang-rhi hashes/looks up/writes entry
+  points (no module IR or pipeline cache). Root
+  `<cwd>/.ppr-shader-cache/<format-version>/<slang-build-tag>/<device-type>/`;
+  lowercase-hex key files; temp+rename; 128-byte key/64 MiB read caps; silent
+  misses; one-time disable info log. `.ppr-shader-cache/` is git-ignored.
+- Independent review found the miss path used throwing `io::mapFile`/`PPR_THROW`
+  and logged errors; fixed with `file_size`+`ifstream`+`slang_createBlob`,
+  temp names including the key hex, build-tag sanitization, codemap/ledger and
+  `.gitignore`. Scoped re-review: all findings addressed, no new
+  Critical/Important breakage; YAGNI clean.
+- Cold (empty directory) / warm measurement on the normally linked
+  `engine.tests.app`, serial:
+  `frame_fence` 6.50→5.55 s, `world_lighting_trace` 22.14→21.19,
+  `world_lighting_settlement` 32.94→28.59, `reconstruction` 8.28→8.15,
+  `asset.gpu_grid_particles` 6.56→5.11, `asset.gpu_misc` 7.03→5.13; validation
+  reconstruction 11.55→11.24 and settlement 33.58→29.53. Leaf counts identical,
+  0 `.tmp`, no rewrites; cold logs contain no cache-related errors. Frame_fence
+  warm served 38/38 entry points with 0 ms recorded compile in an earlier run.
+- Residual: warm `compile=0 ms`, create ≈1.5 ms, pipeline ≈6.8 ms; module
+  load/link/specialization, test GPU work, Debug + ASan/UBSan + core validation
+  remain. Windows/D3D12 rename/exists branch unrun; no eviction/telemetry.
+  Directed windowed runs still hit pre-existing libdbus LSan noise (CTest
+  passes). This is a measured backend-codegen saving, not a suite fix.
