@@ -1520,9 +1520,11 @@ and operational acceptance. No Task 4 work has begun.
   boundary the committed Hable scene/history bytes, exposure bytes/role,
   history index/phase/world, fine-CH bytes, sky selection and lighting counter
   are unchanged; the following frames advance the normal cadence. The diagnostic
-  toggle changes presented pixels and carries the inspection stamp; a post-only
-  edit changes exposure bytes (positive control); a sky edit reports the new
-  sky hour, changes CH/output content, and preserves history/lighting continuity.
+  toggle carries the inspection stamp (pixel diffs are jitter-confounded); a
+  post-only edit is proven through `PostProcessPass::lastPreparedSettingsForTest`
+  equaling the edited tuple (auto-exposure bytes are rewritten every frame); a
+  sky edit reports the new sky hour, requires a fine-CH change, and preserves
+  history/lighting continuity.
   The tautological local-only reconstruction leaf and the two-fresh-boot version
   were removed.
 - **Review Important 2 fixed:** the reader-fence leaf now keeps attempt 0
@@ -1544,7 +1546,7 @@ and operational acceptance. No Task 4 work has begun.
   driver stacks into unknown/DBus-only reports. With the CTest policy:
   `world_lighting_projection` 12 allocations/549 B suppressed, material 12/549,
   reconstruction 12/549, fine 12/549, cascade 12/549, trace 12/549, frame_fence
-  12/549; settlement (real windows) 75 allocations/113,955 B suppressed; all are
+  12/549; settlement (real windows) 72 allocations/108,371 B suppressed in the latest run; all are
   `libnvidia-glcore.so`/`libnvidia-glsi.so` frames inside Vulkan adapter
   enumeration or GLX `glXDestroyWindow`. Unsuppressed runs with the loader pinned
   retain the same NVIDIA frames; PPR frames appear only as callers of

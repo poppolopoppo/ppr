@@ -131,6 +131,13 @@ export namespace pP {
                                                                           : nullptr;
         }
 
+        // Settings retained by the most recent successful prepare. A value-only
+        // positive control that an edit actually reached this pass, independent
+        // of auto-exposure adaptation noise.
+        [[nodiscard]] PostProcessSettings lastPreparedSettingsForTest() const noexcept {
+            return m_pending_settings;
+        }
+
     private:
         // ------------------------------------------------------------------
         // per-output-slot cohort
