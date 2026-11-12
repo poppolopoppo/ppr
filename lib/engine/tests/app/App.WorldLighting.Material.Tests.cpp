@@ -3273,9 +3273,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         particle_material.m_opacity = 1.0f;
         particle_material.m_surface_flags = kGridSurfaceParticleSolid;
         // The solid description composites CH irradiance, the BRDF term and the
-        // material's own authored emission. This world publishes no fine CH, so
-        // the authored emission is what makes the painted pixel a deterministic
-        // non-clear colour.
+        // material's own authored emission. This world publishes an explicit zero
+        // fine-CH field, so the authored emission is what makes the painted pixel
+        // a deterministic non-clear colour.
         particle_material.m_emissive_rgb[0] = 1.0f;
         particle_material.m_emissive_rgb[1] = 0.5f;
         particle_material.m_emissive_rgb[2] = 0.2f;
@@ -3289,6 +3289,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         terrain.m_ior = 1.0f;
         terrain.m_opacity = 1.0f;
         terrain.m_roundness = 0.0f;
+
+        // A translucent terrain material makes the second terrain pass encode a
+        // real draw (it paints no cell here), so both terrain passes run.
+        GridTerrainVisual translucent{};
+        translucent.m_material_id = 3u;
+        translucent.m_color_rgba = 0x4080ffffu;
+        translucent.m_opacity = 0.5f;
+        translucent.m_surface_flags = kGridSurfaceOpticalBlend;
 
         // 1/16 m per pixel: the 64 px target spans 4 m from the camera origin,
         // so both probe stations are on screen and a 0.25 m drawn support covers
@@ -3326,11 +3334,27 @@ namespace pP::tests::detail::WorldLightingMaterial {
         GridStagedFrame stage{};
         stage.m_world_edge = WorldLightingPass::kWorldEdge;
         stage.m_cell_size_m = 1.0f;
-        stage.m_terrain_visuals = {particle_material, terrain};
+        stage.m_terrain_visuals = {particle_material, terrain, translucent};
         stage.m_tiles.push_back(
             GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
         stage.m_uploads.push_back(std::move(upload));
         PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        // The terrain passes shade from the published resolved cells, so the
+        // same opaque cell is published there (the particle hard clip reads the
+        // cell atlas above). Every other cell is vacuum and the fine CH field is
+        // an explicit zero, which is what the particle's solid description
+        // decodes here.
+        Array<u32> resolved(static_cast<std::size_t>(WorldLightingPass::kCellCount), 0u);
+        const auto terrain_cell = lighting::packCell(2u, 300.0);
+        PPR_TEST_ASSERT(terrain_cell.has_value());
+        resolved[2u * static_cast<std::size_t>(WorldLightingPass::kWorldEdge) + 1u] = *terrain_cell;
+        auto resolved_buffer = makeBuffer(
+            fixture.device(), resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        Array<lighting::PackedCH> fine_ch(lighting::kFineCHRecordCount, lighting::PackedCH{});
+        auto fine_ch_buffer = makeBuffer(
+            fixture.device(), fine_ch.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH), fine_ch.data());
+        PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(std::move(resolved_buffer), std::move(fine_ch_buffer)));
 
         const auto live = std::make_shared<std::atomic<u64>>(1u);
         u64 publication = 0u;
@@ -3401,16 +3425,29 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
 
             const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
-                return grid.prepareGpuParticles(context);
-            };
-            // Terrain first, particles second: the particle in an opaque cell can
-            // only stay hidden through the per-pixel opaque-terrain hard clip,
-            // and the vacuum particle has no terrain to hide behind.
-            const auto draw = [&](const DrawContext &context) -> std::error_code {
-                if (const auto ec = grid.render(context)) {
+                // Same order as the Editor: the terrain visibility table first,
+                // then the particle pack over the same ring slot.
+                if (const auto ec = grid.prepareGpuVisibility(context)) {
                     return ec;
                 }
-                return grid.renderParticles(context);
+                return grid.prepareGpuParticles(context);
+            };
+            // Production order (plan §3): particles (opaque then optical) ->
+            // terrain opaque -> gas -> terrain translucent. The vacuum particle
+            // therefore has to survive both terrain passes, and the particle in
+            // the opaque cell can only stay hidden through the per-pixel
+            // opaque-terrain hard clip.
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                if (const auto ec = grid.renderSolidLiquidParticles(context)) {
+                    return ec;
+                }
+                if (const auto ec = grid.renderGpuIndirect(context)) {
+                    return ec;
+                }
+                if (const auto ec = grid.renderGasParticles(context)) {
+                    return ec;
+                }
+                return grid.renderTranslucent(context);
             };
 
             DrawSubmission submission{"grid vacuum clip", DrawCallback{draw}};
@@ -3475,10 +3512,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // Cell units at the reference radius: a = 0.2690 cell, c = 0.0673 cell.
         PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidHalfExtentScale) * r_cell - 0.2690) <= 5.0e-4);
         PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidCornerScale) * r_cell - 0.0673) <= 5.0e-4);
-        // Rejected variants would clip at the frustum edge: a = R needs 1.638x
-        // the cull margin and the unrounded square needs 1.768x.
+        // Rejected variants would clip at the frustum edge: the rounded square of
+        // half-extent a = R (keeping the 0.25 a corner fraction) needs 1.638x the
+        // cull margin, and the unrounded square of half-extent a = R needs 1.768x.
         PPR_TEST_ASSERT(
-            gridParticleRoundedSquareSupport(kGridParticleSupportScale, 0.0f) > kGridParticleCullRadiusScale);
+            gridParticleRoundedSquareSupport(
+                kGridParticleSupportScale, kGridParticleSolidCornerFraction * kGridParticleSupportScale) >
+            kGridParticleCullRadiusScale);
         PPR_TEST_ASSERT(1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale);
         _.log(
             std::format(

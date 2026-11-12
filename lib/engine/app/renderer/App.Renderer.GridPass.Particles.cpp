@@ -1038,16 +1038,10 @@ namespace pP {
                 .scissorRectCount = 1u,
                 .vertexBuffers = {},
                 .indexBuffer = {}});
-        if (m_particle_timing_queries) {
-            context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
-        }
 
         context.m_pass.bindPipeline((*pipeline)->m_pipeline, root);
         markPipelineUse_(**pipeline, particle_slot);
         context.m_pass.drawIndirect(1u, rhi::BufferOffsetPair{slot.m_args});
-        if (m_particle_timing_queries) {
-            context.m_pass.writeTimestamp(m_particle_timing_queries, 11u);
-        }
         ++m_draw_commands;
 
         return {};
@@ -1075,6 +1069,11 @@ namespace pP {
             GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
                                                           : std::make_error_code(std::errc::operation_not_permitted));
 
+        // The particle interval opens at the first class draw...
+        if (m_particle_timing_queries) {
+            context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::opaque));
         return renderGpuParticleClass_(context, EGridParticleDrawClass::optical);
     }
@@ -1097,6 +1096,14 @@ namespace pP {
             GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
                                                           : std::make_error_code(std::errc::operation_not_permitted));
 
-        return renderGpuParticleClass_(context, EGridParticleDrawClass::gas);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::gas));
+        // ...and closes after the last class draw, so the pair spans the three
+        // classes even though the production order draws terrain opaque between
+        // the solid/liquid and gas lanes.
+        if (m_particle_timing_queries) {
+            context.m_pass.writeTimestamp(m_particle_timing_queries, 11u);
+        }
+
+        return {};
     }
 }

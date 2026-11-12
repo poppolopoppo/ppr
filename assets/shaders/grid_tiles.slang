@@ -1176,7 +1176,8 @@ struct ParticleVertexOutput {
     nointerpolation uint material:TEXCOORD2;
     nointerpolation float4 color:COLOR0;
     // Quad corner in units of the row's physical radius r: 64/62 for the gas
-    // mask, 1.25 for the liquid disk, 0.9538 for the solid rounded square.
+    // mask, and the shared support 1.25 for both restored classes (the
+    // fragment's SDF turns it into the phase-specific silhouette).
     nointerpolation float shape_scale:TEXCOORD3;
     // Canonical packCell word rebuilt from the row: material | temperature << 16.
     nointerpolation uint canonical:TEXCOORD4;

@@ -4074,7 +4074,7 @@ namespace pP {
     Expected<GridPass::GridCachedPipeline *> GridPass::opticalPipeline_(
         rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *const program,
         std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, const GridPipelineState state,
-        rhi::IShaderProgram *const reactive_program) {
+        rhi::ComPtr<rhi::IShaderProgram> *const reactive_program) {
         const auto formats = signature.colorFormats();
         const bool reactive = formats.size() == 2u and
                               formats[0] == rhi::Format::RGBA16Float and
@@ -4093,14 +4093,16 @@ namespace pP {
                           : std::make_error_code(std::errc::not_supported));
 
         // A reactive signature needs the matching MRT entry point. The caller
-        // names it explicitly, so no pointer comparison decides the lane.
+        // names the lane explicitly, so no pointer comparison decides it; the
+        // program slot is resolved only after ensureSpatialPrograms_ has had the
+        // chance to create it (the caller's arguments were evaluated earlier).
         auto *selected_program = program;
         if (reactive) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GridPass, ensureSpatialPrograms_(device, true));
+            auto *const lane = reactive_program != nullptr ? reactive_program->get() : nullptr;
             PPR_RETURN_UNEXPECTED_ON_FAIL(
-                GridPass,
-                reactive_program != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
-            selected_program = reactive_program;
+                GridPass, lane != nullptr ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            selected_program = lane;
         }
 
         if (cache and ((key and static_cast<const RenderPipelineSignature &>(*key) != signature) or
@@ -4216,7 +4218,7 @@ namespace pP {
 
         return opticalPipeline_(
             device, signature, program, entry.m_key, entry.m_pipeline, state,
-            particleClassReactiveProgram_(draw_class));
+            std::addressof(particleClassReactiveProgram_(draw_class)));
     }
 
     rhi::IShaderProgram *GridPass::particleClassProgram_(const EGridParticleDrawClass draw_class) const noexcept {
@@ -4228,10 +4230,10 @@ namespace pP {
         return gas ? m_gpu_particle_gas_program.get() : m_gpu_particle_solid_liquid_program.get();
     }
 
-    rhi::IShaderProgram *GridPass::particleClassReactiveProgram_(
-        const EGridParticleDrawClass draw_class) const noexcept {
-        return draw_class == EGridParticleDrawClass::gas ? m_reactive_particle_gas_program.get()
-                                                         : m_reactive_particle_solid_liquid_program.get();
+    rhi::ComPtr<rhi::IShaderProgram> &GridPass::particleClassReactiveProgram_(
+        const EGridParticleDrawClass draw_class) noexcept {
+        return draw_class == EGridParticleDrawClass::gas ? m_reactive_particle_gas_program
+                                                         : m_reactive_particle_solid_liquid_program;
     }
 
     rhi::IRenderPipeline *GridPass::particlePipelineForTest(const EGridParticleDrawClass draw_class) const noexcept {
@@ -4457,7 +4459,7 @@ namespace pP {
             const auto pipeline = opticalPipeline_(
                 context.m_device, context.m_render_pipeline_key, m_background_spatial_program, m_background_spatial_key,
                 m_background_spatial_pipeline, GridPipelineState{.m_label = "grid background spatial pipeline"},
-                m_reactive_background_program.get());
+                std::addressof(m_reactive_background_program));
             PPR_RETURN_ERROR_ON_FAIL(GridPass, pipeline);
             const u32 slot = m_background_cursor;
             auto *const root = (*pipeline)->m_slot_roots[slot].get();

@@ -192,8 +192,10 @@ export namespace pP {
             kGridParticleSupportScale + 1.0e-4f,
         "the solid rounded square is inscribed in the R support circle");
     static_assert(
-        gridParticleRoundedSquareSupport(kGridParticleSupportScale, 0.0f) > kGridParticleCullRadiusScale,
-        "the rejected a = R half-extent variant would clip; keep it rejected");
+        gridParticleRoundedSquareSupport(
+            kGridParticleSupportScale, kGridParticleSolidCornerFraction *kGridParticleSupportScale) >
+            kGridParticleCullRadiusScale,
+        "the rejected rounded a = R variant would clip; keep it rejected");
     static_assert(
         1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale,
         "the rejected unrounded a = R variant would clip; keep it rejected");
@@ -738,7 +740,9 @@ export namespace pP {
         [[nodiscard]] rhi::IRenderPipeline *particlePipelineForTest(EGridParticleDrawClass draw_class) const noexcept;
 
         // Diagnostic-only timestamp pairs: pack/cull, element splat, density
-        // splat, filter, composite, ordinary particles. The caller permits one
+        // splat, filter, composite, and the particle draw interval (10 opens at
+        // the first particle class, 11 closes after the last, so it spans the
+        // opaque, optical and gas class draws). The caller permits one
         // instrumented frame in flight and resets/reads after its exact fence.
         [[nodiscard]] std::error_code setParticleTimingQueriesForTest(
             rhi::ComPtr<rhi::IQueryPool> queries, FenceCompletionValue completed);
@@ -1034,11 +1038,14 @@ export namespace pP {
 
         // Every caller supplies the state explicitly: a `= {}` default would
         // need this nested type's default member initializers while GridPass is
-        // still incomplete at this declaration.
+        // still incomplete at this declaration. `reactive_program` names the MRT
+        // entry point for an MRT signature; it is a program *slot* because the
+        // program is created by ensureSpatialPrograms_ inside this call, after
+        // the caller's arguments were evaluated.
         [[nodiscard]] Expected<GridCachedPipeline *> opticalPipeline_(
             rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *program,
             std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, GridPipelineState state,
-            rhi::IShaderProgram *reactive_program = nullptr);
+            rhi::ComPtr<rhi::IShaderProgram> *reactive_program = nullptr);
         // One of the three particle draw classes with the state in plan §3: gas
         // keeps its depth-disabled lane with the blend state its fragment entry
         // implies, opaque tests and writes depth with blending off, optical
@@ -1203,8 +1210,10 @@ export namespace pP {
 
         // The program of one particle draw class for the current sampling policy.
         [[nodiscard]] rhi::IShaderProgram *particleClassProgram_(EGridParticleDrawClass draw_class) const noexcept;
-        [[nodiscard]] rhi::IShaderProgram *particleClassReactiveProgram_(
-            EGridParticleDrawClass draw_class) const noexcept;
+        // The MRT entry point slot of one class, resolved by the pipeline helper
+        // after ensureSpatialPrograms_ has created it.
+        [[nodiscard]] rhi::ComPtr<rhi::IShaderProgram> &particleClassReactiveProgram_(
+            EGridParticleDrawClass draw_class) noexcept;
 
         rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
