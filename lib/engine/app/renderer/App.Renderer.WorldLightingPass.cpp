@@ -86,11 +86,12 @@ namespace pP {
             u32 m_diagnostic{};
             u32 m_cascade_level{1u};
             u32 m_encode_srgb{};
-            u32 m_reserved{};
+            float m_cells_per_metre{1.0f};
         };
 
         static_assert(sizeof(InspectionStageFrame) == 96u);
         static_assert(alignof(InspectionStageFrame) == 16u);
+        static_assert(PPR_OFFSETOF(InspectionStageFrame, m_cells_per_metre) == 92u);
         static_assert(PPR_OFFSETOF(InspectionStageFrame, m_inverse_view_projection) == 0u);
         static_assert(PPR_OFFSETOF(InspectionStageFrame, m_viewport) == 64u);
         static_assert(PPR_OFFSETOF(InspectionStageFrame, m_diagnostic) == 80u);
@@ -860,7 +861,7 @@ namespace pP {
 
     std::error_code WorldLightingPass::encodeInspection_(
         const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
-        const bool encode_srgb) {
+        const bool encode_srgb, const float cells_per_metre) {
         auto &resources = *m_resources;
         auto &attempt = resources.m_status[resources.m_attempt_slot];
 
@@ -872,6 +873,7 @@ namespace pP {
         values.m_diagnostic = static_cast<u32>(settings.m_diagnostic);
         values.m_cascade_level = settings.m_cascade;
         values.m_encode_srgb = encode_srgb ? 1u : 0u;
+        values.m_cells_per_metre = cells_per_metre;
 
         auto &root = *resources.m_inspection_roots[resources.m_attempt_slot];
         rhi::ShaderCursor cursor{&root};
@@ -910,9 +912,17 @@ namespace pP {
     }
 
     std::error_code WorldLightingPass::renderInspection(
-        const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings) {
+        const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
+        const float cells_per_metre) {
         const hal::ProfileScope scope{"App.Pass.WorldLighting.Inspect"};
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, validateLightingInspectionSettings(settings));
+        // Every non-screen-addressed view converts unprojected metres to native
+        // cells with this factor. A non-finite or non-positive value would index
+        // a degenerate lattice, so it fails closed at the boundary.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, std::isfinite(cells_per_metre) and cells_per_metre > 0.0f
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
         if (settings.m_diagnostic == ELightingDiagnostic::off) {
             return {};
         }
@@ -970,7 +980,7 @@ namespace pP {
                                    : std::make_error_code(std::errc::not_supported));
 
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureInspectionPipeline_(context, signature, encode_srgb));
-        return encodeInspection_(context, camera, settings, encode_srgb);
+        return encodeInspection_(context, camera, settings, encode_srgb, cells_per_metre);
     }
 
     // ------------------------------------------------------------------

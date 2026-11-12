@@ -16,7 +16,7 @@ struct InspectFrame {
     uint m_diagnostic;
     uint m_cascade_level;
     uint m_encode_srgb;
-    uint m_reserved;
+    float m_cells_per_metre;
 };
 ConstantBuffer<InspectFrame> g_inspect;
 
@@ -161,8 +161,10 @@ float3 cascadePanel(float2 pixel, float2 panel_origin, float2 panel_size, bool t
 [shader("fragment")]
 float4 fragmentInspect(InspectVertexOutput input) : SV_Target {
     float2 uv = saturate(input.uv);
-    float3 world = worldOnPlane(uv);
-    int2 cell = int2(floor(world.xy));
+    // World metres -> native gameplay cells, converted once for every view that
+    // indexes published records. The cascade atlas is screen-addressed.
+    float2 native = worldOnPlane(uv).xy * g_inspect.m_cells_per_metre;
+    int2 cell = int2(floor(native));
     float3 color = float3(0.0);
 
     if (g_inspect.m_diagnostic == kDiagnosticCascade) {
@@ -180,18 +182,23 @@ float4 fragmentInspect(InspectVertexOutput input) : SV_Target {
         uint resolved = g_resolved_cells[index];
 
         if (g_inspect.m_diagnostic == kDiagnosticProbes) {
-            color = inspectionCurve(angularMean(world.xy));
+            color = inspectionCurve(angularMean(native));
 
-            // Fine probes sit every two native cells at world coordinate 2p+1.
-            // With fine = world*0.5, frac(fine) - 0.5 is zero at those probe
+            // Fine probes sit every two native cells at native coordinate 2p+1.
+            // With fine = native*0.5, frac(fine) - 0.5 is zero at those probe
             // centres, so these lines mark the fine-probe sampling points
-            // themselves; this is an inspection aid, not a scene feature.
-            float2 fine = world.xy * 0.5;
+            // themselves; this is an inspection aid, not a scene feature. The
+            // lattice keeps its true two-cell period and only fades: full
+            // strength at >=6 window pixels of spacing, gone at <=3, so an
+            // overview shows the underlying field instead of a dense pattern.
+            float2 fine = native * 0.5;
             float2 distance = abs(frac(fine) - 0.5);
             float2 footprint = max(fwidth(fine), float2(1.0e-6));
+            float spacing_px = 1.0 / max(footprint.x, footprint.y);
+            float fade = smoothstep(3.0, 6.0, spacing_px);
             float edge = min(distance.x / footprint.x, distance.y / footprint.y);
             if (edge < 0.5) {
-                color = lerp(color, float3(0.03), 0.55 * (1.0 - edge * 2.0));
+                color = lerp(color, float3(0.03), 0.55 * (1.0 - edge * 2.0) * fade);
             }
         } else if (g_inspect.m_diagnostic == kDiagnosticSource) {
             color = inspectionCurve(unpackRGB9E5(g_cell_source[index]));

@@ -1888,9 +1888,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         u32 m_diagnostic{};
         u32 m_cascade_level{1u};
         u32 m_encode_srgb{};
-        u32 m_reserved{};
+        float m_cells_per_metre{1.0f};
     };
     static_assert(sizeof(InspectionFrame) == 96u);
+    static_assert(PPR_OFFSETOF(InspectionFrame, m_cells_per_metre) == 92u);
 
     [[nodiscard]] CameraSnapshot inspectionCamera() noexcept {
         CameraSnapshot camera{};
@@ -1903,6 +1904,52 @@ namespace pP::tests::detail::WorldLightingMaterial {
         camera.m_viewport_size = float2{world_edge, world_edge};
         camera.m_aspect_ratio = 1.0f;
         return camera;
+    }
+
+    // A translated/zoomed camera over a native-cell span at the gameplay cell
+    // metric. The shader unprojects to metres and converts once, so the CPU
+    // mirror here must carry the same cells-per-metre scalar.
+    [[nodiscard]] CameraSnapshot inspectionMetricCamera(
+        const float cells_per_metre, const float2 min_native, const float2 span_native) noexcept {
+        CameraSnapshot camera{};
+        const float3 origin{min_native.x / cells_per_metre, min_native.y / cells_per_metre, -1.0f};
+        camera.m_origin = origin;
+        camera.m_view = float4x4::translate(-origin.x, -origin.y, 1.0f);
+        camera.m_projection = rhi::getOrthoMatrix(span_native.x / cells_per_metre, span_native.y / cells_per_metre);
+        camera.m_view_projection = camera.m_view * camera.m_projection;
+        camera.m_invert_view_projection = inverse(camera.m_view_projection);
+        camera.m_viewport_size = span_native;
+        camera.m_aspect_ratio = span_native.x / span_native.y;
+        return camera;
+    }
+
+    // CPU mirror of the shader's worldOnPlane: pixel -> native cell coordinate.
+    [[nodiscard]] float2 inspectionNativeAt(
+        const CameraSnapshot &camera, const float2 pixel, const float cells_per_metre, const int2 extent) noexcept {
+        const float2 uv{pixel.x / static_cast<float>(extent.x), pixel.y / static_cast<float>(extent.y)};
+        const float2 ndc{uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f};
+
+        float4 near_h = float4{ndc.x, ndc.y, 0.0f, 1.0f} * camera.m_invert_view_projection;
+        float4 far_h = float4{ndc.x, ndc.y, 1.0f, 1.0f} * camera.m_invert_view_projection;
+        near_h = near_h / near_h[3];
+        far_h = far_h / far_h[3];
+
+        const float3 direction{far_h.x - near_h.x, far_h.y - near_h.y, far_h.z - near_h.z};
+        PPR_TEST_ASSERT(std::abs(direction.z) > 1.0e-12f);
+        const float3 world{
+            near_h.x + direction.x * (-near_h.z / direction.z), near_h.y + direction.y * (-near_h.z / direction.z),
+            0.0f};
+        return float2{world.x * cells_per_metre, world.y * cells_per_metre};
+    }
+
+    // CPU mirror of the same mapping: native cell coordinate -> pixel.
+    [[nodiscard]] float2 inspectionPixelAt(
+        const CameraSnapshot &camera, const float2 native, const float cells_per_metre, const int2 extent) noexcept {
+        const float4 clip = float4{native.x / cells_per_metre, native.y / cells_per_metre, 0.0f, 1.0f} *
+                            camera.m_view_projection;
+        const float2 ndc{clip.x / clip[3], clip.y / clip[3]};
+        return float2{
+            (ndc.x + 1.0f) * 0.5f * static_cast<float>(extent.x), (1.0f - ndc.y) * 0.5f * static_cast<float>(extent.y)};
     }
 
     [[nodiscard]] float inspectionCurveScalar(const float3 rgb) noexcept {
@@ -1994,7 +2041,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         [[nodiscard]] TextureReadback draw(
             const InspectionResources &resources, const CameraSnapshot &camera, const u32 diagnostic, const u32 cascade,
-            const int2 extent) {
+            const int2 extent, const float cells_per_metre) {
             auto &device = m_fixture.device();
             auto target = makeInspectionTarget(device, extent);
             auto target_view = defaultView(target);
@@ -2009,6 +2056,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             // The test target is UNorm: the shader owns the one sRGB encode,
             // exactly like an SDR surface.
             frame.m_encode_srgb = 1u;
+            frame.m_cells_per_metre = cells_per_metre;
 
             rhi::ShaderCursor cursor{m_root};
             rhi::ShaderCursor constants;
@@ -2155,6 +2203,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         resolved[cell(8u, 8u)] = *lighting::packCell(1u, 300.0);
         resolved[cell(24u, 8u)] = *lighting::packCell(2u, 300.0);
         resolved[cell(56u, 8u)] = *lighting::packCell(3u, 300.0);
+        // Landmark row for the gameplay metric camera (h = 1/3 m): opaque white
+        // at cell (135,592), and its same-row map border cell (0,592).
+        resolved[cell(135u, 592u)] = *lighting::packCell(1u, 300.0);
+        resolved[cell(0u, 592u)] = *lighting::packCell(1u, 300.0);
         const u32 source_word = *lighting::packRGB9E5(float3{0.25f, 0.5f, 1.0f});
         source[cell(8u, 8u)] = source_word;
 
@@ -2225,17 +2277,17 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         const CameraSnapshot camera = inspectionCamera();
         const auto probe_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::probes), 1u, int2{2048, 2048});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::probes), 1u, int2{2048, 2048}, 1.0f);
         const auto source_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::source), 1u, int2{64, 64});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::source), 1u, int2{64, 64}, 1.0f);
         const auto occupancy_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::occupancy), 1u, int2{64, 64});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::occupancy), 1u, int2{64, 64}, 1.0f);
         const auto jump_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::jump), 1u, int2{64, 64});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::jump), 1u, int2{64, 64}, 1.0f);
         const auto cascade1_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 1u, int2{512, 512});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 1u, int2{512, 512}, 1.0f);
         const auto cascade5_pixels = renderer.draw(
-            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 5u, int2{512, 512});
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::cascade), 5u, int2{512, 512}, 1.0f);
 
         // probes: uniform fine field. A 2048-pixel target keeps the two-cell
         // fine-probe lattice a full pixel-width from the sample at cell centers
@@ -2290,6 +2342,48 @@ namespace pP::tests::detail::WorldLightingMaterial {
         };
         assertGray(right(cascade1_pixels), 0.5f);
         assertGray(right(cascade5_pixels), 0.25f);
+
+        // Landmark: a translated/zoomed camera at the gameplay 1/3 m cell metric.
+        // Native (135,592) is opaque white; its row neighbours outside the map
+        // and at the map border row stay distinguishable. A metre-as-cell
+        // mapping reads the landmark as (45,197), which is empty.
+        const float metric_cells_per_metre = 3.0f;
+        const CameraSnapshot metric_camera = inspectionMetricCamera(
+            metric_cells_per_metre, float2{-16.0f, 80.0f}, float2{1024.0f, 1024.0f});
+        const int2 metric_extent{2048, 2048};
+        const auto metric_pixels = renderer.draw(
+            inputs, metric_camera, static_cast<u32>(ELightingDiagnostic::occupancy), 1u, metric_extent,
+            metric_cells_per_metre);
+
+        const float2 landmark_native{135.5f, 592.5f};
+        const float2 landmark_pixel = inspectionPixelAt(
+            metric_camera, landmark_native, metric_cells_per_metre, metric_extent);
+        const float2 landmark_round_trip = inspectionNativeAt(
+            metric_camera, landmark_pixel, metric_cells_per_metre, metric_extent);
+        PPR_TEST_ASSERT(std::abs(landmark_round_trip.x - landmark_native.x) <= 1.0e-3f);
+        PPR_TEST_ASSERT(std::abs(landmark_round_trip.y - landmark_native.y) <= 1.0e-3f);
+        PPR_TEST_ASSERT(static_cast<int>(std::floor(landmark_round_trip.x)) == 135);
+        PPR_TEST_ASSERT(static_cast<int>(std::floor(landmark_round_trip.y)) == 592);
+
+        const auto metric_texel = [&](const float2 native) {
+            const float2 pixel = inspectionPixelAt(metric_camera, native, metric_cells_per_metre, metric_extent);
+            return InspectionRenderer::texel(
+                metric_pixels, static_cast<u32>(std::floor(pixel.x)), static_cast<u32>(std::floor(pixel.y)));
+        };
+
+        const auto landmark_texel = metric_texel(landmark_native);
+        PPR_TEST_ASSERT(
+            nearByte(landmark_texel[0], white) and
+            nearByte(landmark_texel[1], white) and
+            nearByte(landmark_texel[2], white));
+
+        const auto outside_texel = metric_texel(float2{-0.25f, 592.25f});
+        PPR_TEST_ASSERT(
+            nearByte(outside_texel[0], 0u) and nearByte(outside_texel[1], 0u) and nearByte(outside_texel[2], 0u));
+
+        const auto border_texel = metric_texel(float2{0.25f, 592.25f});
+        PPR_TEST_ASSERT(
+            nearByte(border_texel[0], white) and nearByte(border_texel[1], white) and nearByte(border_texel[2], white));
 
         // Read-only decode: no inspected record changed across any view.
         PPR_TEST_ASSERT(

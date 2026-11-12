@@ -3290,7 +3290,9 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, m_world.m_lighting and inspectionAvailable() ? std::error_code{}
                                                                    : std::make_error_code(std::errc::not_connected));
-        return m_world.m_lighting->renderInspection(context, camera, settings);
+        // The overlay indexes native cells; the world's authored metric is the
+        // only source of the reciprocal. It is converted here and nowhere else.
+        return m_world.m_lighting->renderInspection(context, camera, settings, 1.0f / m_world.m_cell_size_m);
     }
 
     std::error_code GridPass::setLightingBuffersForTest(

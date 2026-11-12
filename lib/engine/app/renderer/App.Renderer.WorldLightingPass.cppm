@@ -183,10 +183,12 @@ export namespace pP {
         // by `settings` from this pass's published data with the captured camera;
         // it writes no world, CH, cascade, source or history state. The caller
         // extends this pass's reader fences with the accepted submission through
-        // notifyReadSubmitted. Off is a no-op. Invalid selections or a world with
-        // no published data fail closed (invalid_argument / not_connected).
+        // notifyReadSubmitted. Off is a no-op. Invalid selections, a non-finite
+        // or non-positive `cells_per_metre`, or a world with no published data
+        // fail closed (invalid_argument / not_connected).
         [[nodiscard]] std::error_code renderInspection(
-            const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings);
+            const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
+            float cells_per_metre);
 
         // Normal availability query for production branching. True once the
         // world's resolved-cell/CH storage exists.
@@ -350,7 +352,7 @@ export namespace pP {
             const DrawContext &context, const RenderPipelineSignature &signature, bool encode_srgb);
         [[nodiscard]] std::error_code encodeInspection_(
             const DrawContext &context, const CameraSnapshot &camera, const LightingInspectionSettings &settings,
-            bool encode_srgb);
+            bool encode_srgb, float cells_per_metre);
         [[nodiscard]] std::error_code selectStatusSlot_(FenceCompletionValue completed) noexcept;
         [[nodiscard]] std::error_code encodeProjection_(const PreRenderContext &context);
         [[nodiscard]] std::error_code encodeAcceleration_(const PreRenderContext &context);
