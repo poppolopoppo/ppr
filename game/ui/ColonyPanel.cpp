@@ -514,6 +514,32 @@ namespace pP::colony {
             ImGui::PushFont(heading_font, row_text_size);
             ImGui::AlignTextToFramePadding();
             flow.place(plainWidth("PPR"));
+            // The ribbon has no backdrop, so the mark carries its own contrast:
+            // a dark one-pixel outline plus a short drop shadow keep "PPR"
+            // readable over the dark terrain and over the bright sky alike.
+            // The outline copies are emitted before the fill, which lands on
+            // top of them.
+            {
+                const ImVec2 cursor = ImGui::GetCursorScreenPos();
+                const ImVec2 text_pos{cursor.x, cursor.y + ImGui::GetStyle().FramePadding.y};
+                ImDrawList *const draw = ImGui::GetWindowDrawList();
+                const ImU32 outline = ImGui::GetColorU32(ui::theme::kCanvas.vec4(0.92f));
+                const ImU32 shadow = ImGui::GetColorU32(ui::theme::kCanvas.vec4(0.55f));
+                constexpr const char *kLogoLetters{"PPR"};
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 and dy == 0) {
+                            continue;
+                        }
+                        draw->AddText(
+                            ImVec2{text_pos.x + static_cast<float>(dx), text_pos.y + static_cast<float>(dy)}, outline,
+                            kLogoLetters);
+                    }
+                }
+
+                draw->AddText(ImVec2{text_pos.x + 0.5f, text_pos.y + 1.5f}, shadow, kLogoLetters);
+            }
+
             ImGui::TextUnformatted("PPR");
             ImGui::PopFont();
             const char *const pause_label = colony.m_paused ? ui::icons::kPlayLabel.data()
