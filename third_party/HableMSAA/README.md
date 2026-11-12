@@ -91,6 +91,8 @@ The shader requires an admitted permutation and exact 2x extents. It preserves
 signed finite linear HDR RGB and writes opaque composite alpha 1, not an opacity
 or depth history. Inputs must already contain correctly composed sample colours.
 
-The ordinary game and its independent post-processing remain unchanged. Real contour sample coverage,
-runtime admission, temporal reconstruction, resize/submission integration and
-4K cost qualification remain separate work. No FPS claim follows from this batch.
+The ordinary game now uses always-on Hable temporal reconstruction and
+independent post-processing. Runtime sample-pattern admission, real contour
+sample coverage and resize/submission integration were completed in Tasks
+4/11/12/14; 4K cost qualification remains unmeasured. No FPS claim follows from
+this batch.

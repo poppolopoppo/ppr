@@ -80,11 +80,13 @@ namespace pP::tests::detail::harness {
         PPR_TEST_ASSERT(std::string_view{recorder.m_location.file_name()}.ends_with("Core.TestHarness.Tests.cpp"));
     };
 
-    PPR_UNIT_TEST (formatted_log_label_keeps_the_original_value) {
+    PPR_UNIT_TEST (single_literal_binds_the_raw_overload) {
         RecordingRun recorder{_.getTestId()};
         UnitTest::IRun &run = recorder;
+        const auto line = static_cast<u32>(__LINE__) + 1u;
         run.log("literal without formatting");
         PPR_TEST_ASSERT(recorder.m_message == "literal without formatting");
+        PPR_TEST_ASSERT(recorder.m_location.line() == line);
     };
 
     PPR_UNIT_TEST (defaults_match_legacy) {
@@ -311,7 +313,7 @@ namespace pP::tests {
             detail::harness::explicit_seed_preserved_for_first_iteration,
             detail::harness::formatted_log_forwards_text_and_call_site,
             detail::harness::raw_log_forwards_text_and_call_site,
-            detail::harness::formatted_log_label_keeps_the_original_value,
+            detail::harness::single_literal_binds_the_raw_overload,
         });
     };
 

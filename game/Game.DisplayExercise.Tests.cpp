@@ -80,10 +80,10 @@ namespace pP::game::tests::detail::display_exercise {
         observation.m_history_reset_count = 1u;
         observation.m_history_last_reset = ReconstructionHistoryStamp{
             .m_world = observation.m_presented_world,
+            .m_frame = 10u,
             .m_grid = PresentationGrid{},
             .m_index = 0u,
             .m_phase = 0u,
-            .m_frame = 10u,
             .m_established = true,
             .m_reset = true};
         observation.m_live_revision = 1u;
@@ -735,10 +735,10 @@ namespace pP::game::tests::detail::display_exercise {
         observation.m_history_reset_count = 6u;
         observation.m_history_last_reset = ReconstructionHistoryStamp{
             .m_world = observation.m_presented_world,
+            .m_frame = observation.m_presented_frame,
             .m_grid = *grid,
             .m_index = 1u,
             .m_phase = 0u,
-            .m_frame = observation.m_presented_frame,
             .m_established = true,
             .m_reset = true};
         action = exercise.advance(observation, t0 + std::chrono::seconds{2});

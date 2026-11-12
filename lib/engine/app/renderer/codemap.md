@@ -53,8 +53,8 @@ resource transitions issued through this camera-free seam.
 ended and BEFORE command-buffer finish/submit, which is where submission-local
 numeric status copies observe the draws. A tail failure abandons the encoder, so
 the frame is definitely unsubmitted and its credit returns immediately. Surface
-passes still carry only `m_prepare`; presentation-stage tail wiring belongs to
-the integration work, not this seam.
+passes still carry only `m_prepare`; the presentation-stage numeric-status tail
+is wired by the editor's stage-C settlement (Task 14), not by this seam.
 
 Grid staged frames carry owned catalog visuals and an explicit cell metric.
 Supported scales are one metre for legacy fixtures and one third metre for

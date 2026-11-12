@@ -22,13 +22,14 @@ export namespace pP {
     /// W/P/R/S/B change); it never transfers GPU storage.
     struct ReconstructionHistoryStamp {
         GridWorldIdentity m_world{};
+        u64 m_frame{};
         PresentationGrid m_grid{};
         u32 m_index{};
         u32 m_phase{};
-        u64 m_frame{};
         bool m_established{};
         bool m_reset{};
     };
+    static_assert(sizeof(ReconstructionHistoryStamp) == 80u and alignof(ReconstructionHistoryStamp) == 8u);
 
     // ------------------------------------------------------------------
     // always-on temporal Hable reconstruction

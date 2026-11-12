@@ -26,6 +26,8 @@ RWStructuredBuffer<float4> g_codec_source_emission_out;
 RWStructuredBuffer<float4> g_codec_source_diffuse_out;
 RWStructuredBuffer<float2> g_codec_cell_out;
 RWStructuredBuffer<float4> g_codec_rgb9e5_out;
+StructuredBuffer<float4> g_codec_category_inputs;
+RWStructuredBuffer<uint> g_codec_category_out;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -48,4 +50,18 @@ void decodeRecords(uint3 id : SV_DispatchThreadID) {
     g_codec_cell_out[id.x] = float2(float(unpackCellMaterial(cell)), unpackCellTemperature(cell));
 
     g_codec_rgb9e5_out[id.x] = float4(unpackRGB9E5(g_codec_rgb9e5[id.x]), 0.0);
+}
+
+// Encode-category boundary probe: interval radiance 65,504 is the FP16 maximum
+// and must encode; a larger value is a representational overflow.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void intervalCategories(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= g_codec_probe.m_count) return;
+
+    float4 value = g_codec_category_inputs[id.x];
+    Interval interval;
+    interval.m_radiance = value.xyz;
+    interval.m_transmittance = value.w;
+    g_codec_category_out[id.x] = intervalPackCategory(interval);
 }

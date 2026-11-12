@@ -276,7 +276,7 @@ uint packRGB9E5(float3 rgb) {
 uint intervalPackCategory(Interval value) {
     if (!all(isfinite(value.m_radiance)) || any(value.m_radiance < 0.0)) return 1u;
     if (!isfinite(value.m_transmittance) || value.m_transmittance < 0.0 || value.m_transmittance > 1.0) return 1u;
-    if (any(value.m_radiance > 65408.0)) return 2u;
+    if (any(value.m_radiance > 65504.0)) return 2u;
     return 0u;
 }
 

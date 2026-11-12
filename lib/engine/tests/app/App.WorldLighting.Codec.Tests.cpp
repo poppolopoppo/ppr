@@ -939,6 +939,72 @@ namespace pP::tests::detail::WorldLightingCodec {
     };
 
     // ------------------------------------------------------------------
+    // GPU encode-category boundary (FP16 interval maximum)
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (gpu_interval_category_accepts_fp16_maximum_and_rejects_above) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+        auto &device = fixture.device();
+
+        shader::SharedModule module{};
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "tests" / "world_lighting_codec_probe.slang",
+            "world_lighting_codec_probe", module.writeRef()));
+
+        constexpr const char *const entries[] = {"intervalCategories"};
+        const auto program = makeProgram(device, module, entries);
+        auto pipeline = makeComputePipeline(device, program);
+
+        const std::array<float4, 6u> inputs{{
+            float4{65504.0f, 0.0f, 0.0f, 1.0f},
+            float4{65504.5f, 0.0f, 0.0f, 1.0f},
+            float4{65408.0f, 65408.0f, 65408.0f, 1.0f},
+            float4{-1.0f, 0.0f, 0.0f, 1.0f},
+            float4{std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 1.0f},
+            float4{1.0f, 1.0f, 1.0f, 1.5f},
+        }};
+        const auto input_buffer = makeStorageBuffer(
+            device, inputs.size() * sizeof(float4), sizeof(float4), inputs.data());
+        const auto output_buffer = makeStorageBuffer(device, inputs.size() * sizeof(u32), sizeof(u32));
+
+        setCodecProbe(*pipeline.m_root, static_cast<u32>(inputs.size()));
+        bindBuffer(*pipeline.m_root, "g_codec_category_inputs", input_buffer);
+        bindBuffer(*pipeline.m_root, "g_codec_category_out", output_buffer);
+
+        auto encoder = makeEncoder(fixture);
+        {
+            auto *const pass = encoder->beginComputePass();
+            PPR_TEST_ASSERT(pass != nullptr);
+            pass->bindPipeline(pipeline.m_pipeline, pipeline.m_root);
+            pass->dispatchCompute(1u, 1u, 1u);
+            pass->end();
+        }
+        submit(fixture, *encoder);
+
+        Array<u32> categories(inputs.size());
+        PPR_TEST_ASSERT(not make_error_code(
+            device.readBuffer(output_buffer, 0u, categories.size() * sizeof(u32), categories.data())));
+
+        // 0 = encodable, 1 = invalid arithmetic/state, 2 = representational
+        // overflow. The FP16 maximum is encodable; one step above is not.
+        PPR_TEST_ASSERT(categories[0u] == 0u);
+        PPR_TEST_ASSERT(categories[1u] == 2u);
+        PPR_TEST_ASSERT(categories[2u] == 0u);
+        PPR_TEST_ASSERT(categories[3u] == 1u);
+        PPR_TEST_ASSERT(categories[4u] == 1u);
+        PPR_TEST_ASSERT(categories[5u] == 1u);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_CODEC interval_category fp16_max={} above={} rgb9e5_max={} negative={} nan={} transmittance={}",
+                categories[0u], categories[1u], categories[2u], categories[3u], categories[4u], categories[5u]));
+    };
+
+    // ------------------------------------------------------------------
     // committed thermal table and binary64 reference
     // ------------------------------------------------------------------
 
@@ -1176,6 +1242,7 @@ namespace pP::tests {
                 detail::WorldLightingCodec::last_trace_frame_follows_the_four_frame_schedule,
                 detail::WorldLightingCodec::gpu_reflection_matches_record_strides_and_word_offsets,
                 detail::WorldLightingCodec::gpu_decodes_every_record_identically_to_the_cpu_codec,
+                detail::WorldLightingCodec::gpu_interval_category_accepts_fp16_maximum_and_rejects_above,
                 detail::WorldLightingCodec::binary64_reference_calibration_and_committed_table,
                 detail::WorldLightingCodec::gpu_thermal_sampling_matches_binary64_for_every_half_kelvin,
             });

@@ -304,8 +304,8 @@ bloom and metering cohorts are reused only through accepted-submit fences.
   lower-bucket sums; source/derivation are in `third_party/HableMSAA/README.md`.
   The raster threshold probe establishes finite coordinate brackets for tested
   pixels, not an exact/global native pattern guarantee. Runtime pattern
-  admission and real terrain sample coverage remain open; Task 12 owns the
-  temporal reconstruction integration.
+  admission and real terrain sample coverage were integrated in Tasks 11–14;
+  the standalone shader remains the qualification fixture.
 - `hable_temporal.slang` - always-on temporal Hable reconstruction
   (`reconstructTemporal`): quarter-pixel lattice, continuous diamond weights,
   contributing-original-sample bounds, reprojected history rejection and the
@@ -388,9 +388,10 @@ cached-copy entries remain for legacy composition. Both new entries require
 separate standard-location and sample-rate capability admission; the location
 flag alone is insufficient. The retired spatial runtime consumed the unresolved
 scene through `spatial_msaa4.slang`, retaining signed linear HDR until grading.
-No kernel math, temporal history or ordinary-world enablement is added here.
-The per-sample/source-route sample-program qualification remains available to
-Task 12; no runtime selector or spatial integration survives Task 2.
+The temporal Hable history and ordinary-world spatial integration were completed
+in Tasks 11–14; this entry itself adds no kernel math or history. The
+per-sample/source-route sample-program qualification is complete (Task 4); no
+runtime selector survives Task 2.
 
 The endpoint coefficient now has an explicit binary32 contract: RTE of the exact
 mean of the two authored FP32 values in [0,1], promoted to double by the CPU

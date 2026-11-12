@@ -16,8 +16,10 @@ license and independent frozen fixture reference are retained in that entry.
 The [Hable MSAA spatial prerequisite](HableMSAA/README.md) retains the original
 MIT-licensed spatial source, its SHA-256 and the derivation of the adaptation's
 deliberately corrected lower output buckets. It introduces no engine dependency.
-The standalone shader is exercised by sampling/filter fixtures; runtime sample
-pattern admission and reconstruction integration remain separate work.
+The standalone shader is exercised by sampling/filter fixtures; runtime
+sample-pattern admission and the temporal Hable reconstruction integration were
+completed in Tasks 4/11/12/14, so the standalone shader remains the
+qualification fixture rather than a runtime path.
 
 The [CIE 1931 2-degree colour-matching data](CIE/README.md) pins the CC BY-SA 4.0
 `CIE_xyz_1931_2deg.csv` dataset and its DOI/SHA-256 as the offline input for the

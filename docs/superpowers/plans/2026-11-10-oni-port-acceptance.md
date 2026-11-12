@@ -1,18 +1,20 @@
 # ONI port — final integrated verification and owner acceptance evidence
 
 Date: 2026-11-12
-Branch: `particles`, base revision `dee0168221af7db162f39c7be582b68f32bda4b2`
-(`docs: record profiling completion and begin final verification`)
+Branch: `particles`, verification base `dee0168221af7db162f39c7be582b68f32bda4b2`
+(`docs: record profiling completion and begin final verification`); the Task 19
+gate-fix and final-review commits are listed in the execution ledger.
 Host: Linux `pPd` (CachyOS), 32 logical CPUs, 62 GiB RAM, NVIDIA GeForce RTX 2080
 (TU104), Vulkan, driver `620.70.06` (Vulkan API 1.4.357).
 Status: **owner visual acceptance pending.** This document records verification
 evidence; it does not claim final delivery and Task 19 is not marked complete.
 
 Working tree: the user's unstaged `assets/worldgen/stylized/` work is preserved
-and untouched. One Task 19 diagnostic fix is present uncommitted:
-`assets/shaders/world_lighting_ch.slang` (initialize the `out CH` result on the
-numeric-failure path; details in "Execution-log audit"). No other tracked change
-was made.
+and untouched. The Task 19 diagnostic and gate fixes are committed in the
+follow-up commits recorded in the execution ledger (the CH numeric-failure
+initialization, settlement readback, matter/checkpoint gates, diagnostic
+routing and the final-review corrections). No unrelated tracked change is
+present.
 
 ## Spec coverage
 
@@ -518,6 +520,19 @@ JSON/stdout contracts are untouched.
   embed the capture command line (including the artifact directory name); they
   are verbatim vendor exports and were not edited.
 
+## Final whole-branch review corrections
+
+The final review returned **Approved for owner acceptance** with no
+merge-blocking findings and a small set of cheap corrections, all applied:
+
+| Item | Correction | Evidence |
+| --- | --- | --- |
+| Interval codec threshold | `intervalPackCategory` accepted only `<= 65408` while the host mirror and spec §4 accept FP16 maximum `65,504`; the shader now uses `65504.0` (RGB9E5/CH stay at 65408). A GPU probe entry `intervalCategories` tests 65,504 accepted (`0`), 65,504.5 rejected (`2`), 65,408 accepted (`0`), negative/NaN/transmittance rejected (`1`). | `gpu_interval_category_accepts_fp16_maximum_and_rejects_above`; codec 13/13 leaves pass |
+| `ReconstructionHistoryStamp` layout | Reordered `m_frame` before `m_grid` to remove 8 bytes of padding: **88 → 80 bytes**, static-asserted (`sizeof == 80`, `alignof == 8`); designated initializers updated. | `engine.tests.app.reconstruction` routine + GPU, `world_lighting_settlement` routine + GPU, display-exercise 22/22 all pass |
+| Stale pre-integration docs | `third_party/README.md`, `third_party/HableMSAA/README.md`, `assets/shaders/codemap.md` and `lib/engine/app/renderer/codemap.md` now describe the completed Tasks 11–14 integration instead of "remain separate work". | Docs-only; no code change |
+| Mislabeled test | `formatted_log_label_keeps_the_original_value` renamed `single_literal_binds_the_raw_overload` and now asserts the raw path's call-site line, keeping raw/formatted coverage distinct. | `core/test_harness` 17/17 |
+| OS-suspend active time | Documented limitation: minimize suspension is excluded; a system-sleep gap is one large `dt` and can saturate CH/simulation on resume. | Aggregated concerns |
+
 ## Aggregated deferred concerns, rulings and gates
 
 This section is the single disposition list for every concern found from Task 0
@@ -545,7 +560,7 @@ includes the reason. Nothing below silently drops a task report item.
 | 7 (`871c25b6`-era) | `initialize` resolves `IRhiService`; per-world shader compilation; `inspectAttempt_` fail-closed on submitted-without-finalize | **Accepted/deferred**: matches existing pass pattern; fail-closed is correct | Recompile cost on world replacement; no behavior defect |
 | 8 (`62621c92`) | Per-slot acceleration storage 3.49 MiB/world; two-arg `traceSegment` reports record 0; production tracing unwired then | **Accepted/deferred**: fence-safe slot reuse; detailed entry is the production path; Task 9/10 wired tracing | Memory cost only; no timing claim |
 | 9 (`d5f95024`) | Test robustness (optional deref/span checks); pre-fix evidence block retained | **Deferred minors** | Test clarity only |
-| 10 (`e628d018`) | False dedupe/renormalization claim in report; dead `L1OracleFrame::m_age`; redundant fine-edge assertion; unused 8 MiB L1 readback; hardcoded oracle constants | **Deferred minors**: report already corrected where contradicted; dead field remains | Test-only cleanliness; no delivered behavior |
+| 10 (`e628d018`) | False dedupe/renormalization claim in report; dead test-only `L1OracleFrame::m_age` (unused; no runtime path); redundant fine-edge assertion; unused 8 MiB L1 readback; hardcoded oracle constants | **Deferred minors**: report already corrected where contradicted; dead field remains | Test-only cleanliness; no delivered behavior |
 | 11 (`e5e073e5`, `0902f442`) | Literal spec camera `V` (sample→camera) with shipped orthographic camera | **Owner visual decision** (see rulings); no silent flip | If wrong, flip normal/camera convention (visual only) |
 | 11 | Legacy flat/contour path remains for `m_has_resolved_cells == 0` (pre-first-lighting/non-1024/diagnostic) | **Coordinator-ruled retain**: not used by rendered 1024 worlds; Task 15 documented it | Not a categorical substitute; owner may request later removal |
 | 12 (`6418d663`) | Unused `kSampleNodes`; stale extent comment; same-extent reset test not discriminating; no-floor rule proven via CPU mirror; GPU border checks interior-band only; report drift | **Deferred minors** | Test/documentation strength only |
@@ -554,7 +569,8 @@ includes the reason. Nothing below silently drops a task report item.
 | 14 | Windows/D3D12 three-submission/sample-rate/status evidence | **Owner gate** | Windows host |
 | 15 (`c5db57be`) | Manifest bound raised to 72 KiB; sub-cell seed asymmetry (v6 has no subdivision); no interactive load; GTK/dbus LSan; stylized mirror; retained-payload docs omit allocator/task overhead | **Accepted/deferred**: bound documented; restored particle columns authoritative; load remains owner gate | Manifest variants must stay within 72 KiB; save/reload owner gate |
 | 16 (`be0a29d6`, `7e017cc4`) | UI post-slider bounds literal; display-widget layer construction unchanged; retained-picture/non-1024 overlays absent by design; no Linux click automation | **Deferred/owner gate**: controls covered by config/UI tests; overlays intentionally absent | Owner closeups/click tests needed |
-| 17 (`871c25b6`…) | `ReconstructionHistoryStamp` 88 vs 80 bytes (8 padding); `historyStamp()` precondition/grouping; `RenderLane` result comment; clearing `out_result.m_reconstruction`; unreachable telemetry canaries; dead `Step` keep/revert fields; misleading minimized-suspension reason; no saved reconstruction-test log; one stale source-identity report reference | **Deferred minors** (ledger); none gate correctness | Layout/comment/test-label cleanup; owner may request |
+| 17 (`871c25b6`…) | `ReconstructionHistoryStamp` 88 vs 80 bytes (8 padding); `historyStamp()` precondition/grouping; `RenderLane` result comment; clearing `out_result.m_reconstruction`; unreachable telemetry canaries; dead `Step` keep/revert fields; misleading minimized-suspension reason; no saved reconstruction-test log; one stale source-identity report reference | **`ReconstructionHistoryStamp` layout fixed** in the final-review commit (80 bytes, static-asserted; initializers updated). Remaining items **deferred minors**; none gate correctness | Layout corrected; comment/test-label cleanup remains owner-optional |
+| 12/14 | OS-suspend active time: suspension by window minimize is excluded from Hable/CH accumulation, but a system-sleep gap arrives as one large `dt` and can saturate CH/simulation on resume | **Deferred/owner-known limitation**: not changed (no clock redesign in this port) | Resume can advance CH/simulation by one large step; a future explicit suspend/resume boundary would fix it |
 | 18 (`bfc16206`…) | Fixture README per-cycle suffix wording; unconditional "two ranges per frame" docs; report trace-byte/A-B wording; final-state staging trace path; `.pct` suffix; test-local old `post.present` label | **Deferred minors** (ledger) | Documentation/format only |
 | 19 (this branch) | `prepareLightingShowcase`/`lighting_showcase` pre-existing production function used by one GPU test | **Won't fix in this port**: predates checkpoint `6aa99aac`, outside the port's YAGNI boundary, current test consumer | None |
 | 19 | `App.MatterGpu` artifact-file `std::println(ostream&, ...)` writes | **Accepted**: timing/manifest/status artifact files, not stdout | None |
@@ -603,7 +619,9 @@ includes the reason. Nothing below silently drops a task report item.
 
 E41018 shader out-parameter warning; settlement GPU MSAA readback; stale liquid
 pool test adapted to the categorical path; matter-runtime queue lifetime (four
-fixtures); empty-world zero-row readback; complete test diagnostic routing to
+fixtures); empty-world zero-row readback; interval category FP16-maximum
+threshold; `ReconstructionHistoryStamp` 88→80-byte layout; stale pre-integration
+docs and test label; complete test diagnostic routing to
 `_.log` (all active-code test occurrences, including pre-existing ones); the
 narrow `IRun` formatted retained-log overload with call-site location; retained
 log stream serialization and format-under-lock (fixing the libc++ ostream-print
