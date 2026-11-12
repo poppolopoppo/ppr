@@ -1507,7 +1507,7 @@ and operational acceptance. No Task 4 work has begun.
 ## Task 16 — retained controls, inspection overlay and leak-evidence correction
 
 - Commits: `be0a29d6` `feat: expose retained display controls and world-lighting
-  inspection`; follow-up review/evidence commit `7e017cc4`.
+  inspection`; follow-up review/evidence commits `7e017cc4` and `aa251d4`.
 - Delivered: retained `game.world_light.diagnostic`/`game.world_light.cascade`
   and `game.pixel.scale` domains, sky wiring, the C-stage
   `world_lighting_inspect.slang` overlay (probes/source/occupancy/jump/cascade),
