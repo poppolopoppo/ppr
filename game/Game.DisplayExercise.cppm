@@ -223,7 +223,6 @@ export namespace pP::game {
         bool m_keep_after_ack{};
         bool m_revert_after_ack{};
         bool m_timeout_after_ack{};
-        bool m_require_pixel_grid{};
         bool m_require_inspection_stamp{};
         bool m_require_unchanged_world{};
         bool m_accept_clamp{};
@@ -312,7 +311,6 @@ export namespace pP::game {
             bool m_keep_after_ack{};
             bool m_revert_after_ack{};
             bool m_timeout_after_ack{};
-            bool m_require_pixel_grid{};
             bool m_require_inspection_stamp{};
             bool m_require_unchanged_world{};
             bool m_accept_clamp{};
@@ -345,7 +343,7 @@ export namespace pP::game {
             std::string case_id, u32 width, u32 height, bool accept_clamp = false, bool completes_case = true);
         void addLive_(
             std::string case_id, bool keep_world_light, WorldLightDisplaySettings world_light, bool keep_pixel,
-            PixelDisplaySettings pixel, bool keep_post, PostDisplaySettings post, bool require_pixel_grid = false,
+            PixelDisplaySettings pixel, bool keep_post, PostDisplaySettings post,
             bool require_inspection_stamp = false, bool completes_case = true);
         void addCapture_(std::string case_id, std::string image);
         void addFullscreenGroup_();

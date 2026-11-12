@@ -713,7 +713,6 @@ namespace pP::game::tests::detail::display_exercise {
         const auto directory = exerciseDirectory("pixel-history");
         DisplayExerciseTestStep live = step(EDisplayExerciseActionKind::live_picture, "pixel");
         live.m_pixel = PixelDisplaySettings{2u};
-        live.m_require_pixel_grid = true;
         std::array steps{live};
         PPR_TEST_ASSERT(not exercise.beginForTest(directory, startTime(), steps));
 
@@ -758,6 +757,41 @@ namespace pP::game::tests::detail::display_exercise {
                 PPR_TEST_ASSERT(entry.m_has_history_grid);
             }
         }
+    };
+
+    PPR_UNIT_TEST (non_pixel_live_edits_must_not_reset_history) {
+        DisplayExercise passing{};
+        const auto first = exerciseDirectory("live-history-pass");
+        DisplayExerciseTestStep live = step(EDisplayExerciseActionKind::live_picture, "live");
+        live.m_world_light.m_sky_hour = 0;
+        std::array steps{live};
+        PPR_TEST_ASSERT(not passing.beginForTest(first, startTime(), steps));
+        DisplayExerciseObservation observation = readyObservation();
+        observation.m_history_reset_count = 5u;
+        const TimePoint t0 = startTime();
+        auto action = passing.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        ++observation.m_live_revision;
+        ++observation.m_presented_frame;
+        observation.m_presented_live_revision = observation.m_live_revision;
+        observation.m_live_world_light.m_sky_hour = 0;
+        action = passing.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(caseStatus(passing, "live") == EDisplayExerciseStatus::passed);
+
+        DisplayExercise failing{};
+        const auto second = exerciseDirectory("live-history-reset");
+        PPR_TEST_ASSERT(not failing.beginForTest(second, startTime(), steps));
+        observation = readyObservation();
+        observation.m_history_reset_count = 5u;
+        action = failing.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        ++observation.m_live_revision;
+        ++observation.m_presented_frame;
+        observation.m_presented_live_revision = observation.m_live_revision;
+        observation.m_live_world_light.m_sky_hour = 0;
+        observation.m_history_reset_count = 6u;
+        action = failing.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(caseStatus(failing, "live") == EDisplayExerciseStatus::failed);
     };
 
     PPR_UNIT_TEST (invalid_draft_only_passes_for_the_schema_rejection) {
@@ -874,6 +908,7 @@ namespace pP::game::tests {
             detail::display_exercise::cleanup_keep_resolves_an_armed_trial_before_the_next_transaction,
             detail::display_exercise::trial_apply_keep_requires_arm_and_settles_without_late_revert,
             detail::display_exercise::pixel_case_records_exact_grid_and_history_reset,
+            detail::display_exercise::non_pixel_live_edits_must_not_reset_history,
             detail::display_exercise::invalid_draft_only_passes_for_the_schema_rejection,
             detail::display_exercise::output_directory_must_be_fresh_and_separate_from_the_executable,
             detail::display_exercise::passed_requires_every_case_and_clean_shutdown,

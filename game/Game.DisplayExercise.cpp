@@ -270,7 +270,7 @@ namespace pP::game {
 
     void DisplayExercise::addLive_(
         std::string case_id, const bool keep_world_light, WorldLightDisplaySettings world_light, const bool keep_pixel,
-        PixelDisplaySettings pixel, const bool keep_post, PostDisplaySettings post, const bool require_pixel_grid,
+        PixelDisplaySettings pixel, const bool keep_post, PostDisplaySettings post,
         const bool require_inspection_stamp, const bool completes_case) {
         Step step{};
         step.m_kind = EDisplayExerciseActionKind::live_picture;
@@ -281,7 +281,6 @@ namespace pP::game {
         step.m_keep_world_light = keep_world_light;
         step.m_keep_pixel = keep_pixel;
         step.m_keep_post = keep_post;
-        step.m_require_pixel_grid = require_pixel_grid;
         step.m_require_inspection_stamp = require_inspection_stamp;
         step.m_require_unchanged_world = true;
         step.m_completes_case = completes_case;
@@ -360,7 +359,7 @@ namespace pP::game {
         for (const u32 scale: {1u, 2u, 3u, 8u}) {
             const std::string id = std::format("pixel_p{}", scale);
             addCase_(id, "3-pixelization", std::format("Pixelization P{} at 1280x720", scale));
-            addLive_(id, true, {}, false, PixelDisplaySettings{scale}, true, {}, true, false);
+            addLive_(id, true, {}, false, PixelDisplaySettings{scale}, true, {}, false);
         }
         for (const auto [width, height]: {std::pair{1919u, 1079u}, std::pair{1921u, 1081u}}) {
             const std::string id = std::format("pixel_p2_{}x{}", width, height);
@@ -368,8 +367,8 @@ namespace pP::game {
             addWindowed_(id, width, height, false, false);
             // Exercise a real P transition at this odd extent, then verify the
             // requested P2 grid from the actual framebuffer.
-            addLive_(id, true, {}, false, PixelDisplaySettings{1u}, true, {}, false, false, false);
-            addLive_(id, true, {}, false, PixelDisplaySettings{2u}, true, {}, true, false, true);
+            addLive_(id, true, {}, false, PixelDisplaySettings{1u}, true, {}, false, false);
+            addLive_(id, true, {}, false, PixelDisplaySettings{2u}, true, {}, false, true);
         }
         addCase_("pixel_capture", "3-pixelization", "Pixelization group capture");
         addCapture_("pixel_capture", "03-pixelization.png");
@@ -436,12 +435,12 @@ namespace pP::game {
         for (const ELightingDiagnostic diagnostic: diagnostics) {
             const std::string id = std::format("diagnostic_{}", static_cast<u32>(diagnostic));
             addCase_(id, "5-inspection", std::format("Diagnostic view {}", static_cast<u32>(diagnostic)));
-            addLive_(id, false, lightDraft(12, diagnostic, 1u), true, {}, true, {}, false, true);
+            addLive_(id, false, lightDraft(12, diagnostic, 1u), true, {}, true, {}, true);
         }
         for (const u32 cascade: {1u, 5u}) {
             const std::string id = std::format("cascade_{}", cascade);
             addCase_(id, "5-inspection", std::format("Cascade inspection level {}", cascade));
-            addLive_(id, false, lightDraft(12, ELightingDiagnostic::cascade, cascade), true, {}, true, {}, false, true);
+            addLive_(id, false, lightDraft(12, ELightingDiagnostic::cascade, cascade), true, {}, true, {}, true);
         }
         addCase_("inspection_capture", "5-inspection", "Inspection group capture");
         addCapture_("inspection_capture", "05-inspection.png");
@@ -512,7 +511,7 @@ namespace pP::game {
         addCase_("reset_live_picture", "8-transactions", "Reset live lighting and post through their own action");
         addLive_(
             "reset_live_picture", false, lightDraft(23, ELightingDiagnostic::cascade, 5u), false,
-            PixelDisplaySettings{5u}, false, postDraft(false, 8.0f, 1.5f, -3.0f, 3.0f, true, 1.0f, 2.0f), false, false);
+            PixelDisplaySettings{5u}, false, postDraft(false, 8.0f, 1.5f, -3.0f, 3.0f, true, 1.0f, 2.0f));
         m_steps.back().m_completes_case = false;
         addStep_(
             Step{
@@ -878,7 +877,6 @@ namespace pP::game {
             step.m_keep_after_ack = source.m_keep_after_ack;
             step.m_revert_after_ack = source.m_revert_after_ack;
             step.m_timeout_after_ack = source.m_timeout_after_ack;
-            step.m_require_pixel_grid = source.m_require_pixel_grid;
             step.m_require_inspection_stamp = source.m_require_inspection_stamp;
             step.m_require_unchanged_world = source.m_require_unchanged_world;
             step.m_accept_clamp = source.m_accept_clamp;
@@ -1543,8 +1541,15 @@ namespace pP::game {
                         observed, now);
                     return true;
                 }
-                if (step.m_require_pixel_grid) {
-                    const u32 scale = observed.m_live_pixel.m_pixel_scale;
+                const u32 scale = observed.m_live_pixel.m_pixel_scale;
+                const bool pixel_changed = scale != m_await_pixel.m_pixel_scale;
+                const bool history_reset = observed.m_history_reset_count > m_await_history_reset_count;
+                if (not pixel_changed and history_reset) {
+                    completeStep_(
+                        step, EDisplayExerciseStatus::failed, "live edit reset reconstruction history", observed, now);
+                    return true;
+                }
+                if (pixel_changed) {
                     const auto grid = makePresentationGrid(observed.m_framebuffer_extent, scale);
                     if (not grid) {
                         completeStep_(
@@ -1562,10 +1567,8 @@ namespace pP::game {
                     const int2 expected_backing{
                         axis(observed.m_framebuffer_extent.x), axis(observed.m_framebuffer_extent.y)};
                     if (grid->m_window.x != observed.m_framebuffer_extent.x or
-                        grid->m_window.y != observed.m_framebuffer_extent.y or
-                        grid->m_pixel_scale != scale or
-                        grid->m_backing.x != expected_backing.x or
-                        grid->m_backing.y != expected_backing.y) {
+                        grid->m_window.y != observed.m_framebuffer_extent.y or grid->m_pixel_scale != scale or
+                        grid->m_backing.x != expected_backing.x or grid->m_backing.y != expected_backing.y) {
                         completeStep_(
                             step, EDisplayExerciseStatus::failed,
                             "observed presentation grid does not match exact W/P/R/S/B", observed, now);
@@ -1577,7 +1580,7 @@ namespace pP::game {
                             observed, now);
                         return true;
                     }
-                    if (observed.m_history_reset_count <= m_await_history_reset_count) {
+                    if (not history_reset) {
                         // A P change must reset history; wait for the accepted
                         // reset stamp rather than inferring it from the grid.
                         return false;
@@ -1585,14 +1588,14 @@ namespace pP::game {
                     const ReconstructionHistoryStamp &reset = observed.m_history_last_reset;
                     if (reset.m_grid != *grid) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::failed, "history reset used a different presentation grid",
-                            observed, now);
+                            step, EDisplayExerciseStatus::failed,
+                            "history reset used a different presentation grid", observed, now);
                         return true;
                     }
                     if (reset.m_world != m_baseline_world) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::failed, "history reset changed the world-lighting identity",
-                            observed, now);
+                            step, EDisplayExerciseStatus::failed,
+                            "history reset changed the world-lighting identity", observed, now);
                         return true;
                     }
                 }
@@ -1623,6 +1626,42 @@ namespace pP::game {
                     not samePost(observed.m_live_post, expected_post) or
                     not samePixel(observed.m_live_pixel, expected_pixel)) {
                     return false;
+                }
+                const bool pixel_changed =
+                    observed.m_live_pixel.m_pixel_scale != m_await_pixel.m_pixel_scale;
+                const bool history_reset =
+                    observed.m_history_reset_count > m_await_history_reset_count;
+                if (not pixel_changed and history_reset) {
+                    completeStep_(
+                        step, EDisplayExerciseStatus::failed,
+                        "live reset/restore reset reconstruction history", observed, now);
+                    return true;
+                }
+                if (pixel_changed) {
+                    const auto grid = makePresentationGrid(
+                        observed.m_framebuffer_extent, observed.m_live_pixel.m_pixel_scale);
+                    if (not grid) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::incomplete,
+                            withDetails("presentation grid unavailable", grid.error().message()), observed, now);
+                        return true;
+                    }
+                    if (not observed.m_history_available or not observed.m_history_established) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::incomplete, "reconstruction history state unavailable",
+                            observed, now);
+                        return true;
+                    }
+                    if (not history_reset) {
+                        return false;
+                    }
+                    if (observed.m_history_last_reset.m_grid != *grid or
+                        observed.m_history_last_reset.m_world != m_baseline_world) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::failed,
+                            "live reset/restore history evidence mismatch", observed, now);
+                        return true;
+                    }
                 }
                 completeStep_(
                     step, EDisplayExerciseStatus::passed,
