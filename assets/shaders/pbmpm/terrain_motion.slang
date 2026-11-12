@@ -443,6 +443,25 @@ float4 terrainRoundedLeg(float2 start, float2 delta) {
     }
 }
 
+// A transport exit publishes the point it chose. If that point is not certified,
+// project it to the nearest canonical boundary first, using the same bounded
+// recovery the contact path already uses (nearest 3x3 feature, at most three
+// representable outward steps). The rejection stays the last resort: field 6 is
+// recorded only when the bounded repair also fails. A passing position is
+// returned untouched, so a successful tick is bit-identical.
+float2 terrainRepairPublishedPosition(float2 position, uint row) {
+    if (g_environment.hasTerrain != 0u && !terrainPositionCertified(position)) {
+        TerrainFeature feature = terrainNearestFeature(position, row);
+        TerrainCone cone = terrainFeatureCone(feature, row);
+        position = terrainExteriorPoint(feature, cone, position, row);
+    }
+
+    // An unrepairable neighbourhood already recorded field 3 or field 4, so the
+    // final-position field remains the last-resort reason.
+    terrainValidatePosition(position, row);
+    return position;
+}
+
 void terrainTransportLimited<let ContactLimit : uint>(
     float2 oldPosition, float2 transport, inout float2 position, inout float2 carry, uint row, float friction) {
     if (g_environment.hasTerrain == 0u) return;
@@ -482,16 +501,14 @@ void terrainTransportLimited<let ContactLimit : uint>(
 
         float2 motion = leg.zw;
         if (all(motion == float2(0.0))) {
-            position = start;
-            terrainValidatePosition(position, row);
+            position = terrainRepairPublishedPosition(start, row);
             return;
         }
 
         float time;
         TerrainFeature feature;
         if (!terrainSweep(start, motion, row, time, feature)) {
-            position = target;
-            terrainValidatePosition(position, row);
+            position = terrainRepairPublishedPosition(target, row);
             return;
         }
 

@@ -150,13 +150,22 @@ rendered sprite radius is not a collision radius.
 Boundary rounding preserves already-certified representable points exactly.
 Equal ULP steps at different coordinate magnitudes can otherwise turn a valid
 concave-corner contact into interior penetration. Uncertified rounding uses at
-most three representable outward steps, not a fixed skin. Successful positions
-are certified against strict solid interior, including
+most three representable outward steps, not a fixed skin. The two transport exits
+that publish a chosen point (a representable leg with no motion, and a no-hit
+sweep) are the exception to the immediate rejection: when the chosen point is not
+certified they first attempt a bounded, counted exterior projection (the nearest
+3x3 canonical feature, then at most three representable outward steps), and
+reject only if that also fails. The published point therefore moves to the nearest
+certified boundary within that bound, never by a silent clamp, and a passing
+position is returned untouched so a successful tick is bit-identical. Successful
+positions are certified against strict solid interior, including
 after the guardian. Closed, zero-depth boundary contacts are allowed. Incomplete
 finite-domain entry reports flag 16 rather than inventing a domain collider.
 Ambiguous clipping, malformed feature topology, failed rounding certification,
 or unresolved transport beyond 32 contact events reports flag 256 and rejects the
-working transaction. For flag 256 the field records the resolution reason:
+working transaction; a failed exit repair records its own rounding or
+missing-feature field first and the final-position field 6 only when the repair
+also failed. For flag 256 the field records the resolution reason:
 1 reversed straight edge, 2 malformed vertex, 3 outward rounding, 4 missing local
 feature, 5 DDA exhaustion, 6 final position, 7 contact budget, 8 domain-entry proof.
 The budget counts contacts; a final no-hit sweep can complete sliding motion.

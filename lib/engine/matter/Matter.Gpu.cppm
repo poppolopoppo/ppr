@@ -19,10 +19,43 @@ export namespace pP::matter {
     struct GpuFailure {
         std::error_code m_cause{};
         u32 m_flags{};
+        // Second protocol word: the first-error claim latch, so a decoded verdict
+        // can be reported without re-deriving it from the other fields.
+        u32 m_claimed{};
         u32 m_node{0xffff'ffffu};
         u32 m_field{0xffff'ffffu};
         u32 m_particle{0xffff'ffffu};
         u32 m_body{0xffff'ffffu};
+    };
+
+    // ------------------------------------------------------------------
+    // working-batch poll verdict
+    // ------------------------------------------------------------------
+
+    /// A completed working batch is publishable; a rejected terrain-position
+    /// certificate is the one recoverable verdict and must be discarded.
+    enum class EGpuTickVerdict : u8 {
+        pending,
+        complete,
+        rejected_terrain_position,
+    };
+
+    /// Truthy only for a publishable candidate, so existing readiness checks keep
+    /// their meaning while a caller can still name the recoverable rejection.
+    struct GpuTickOutcome {
+        EGpuTickVerdict m_verdict{EGpuTickVerdict::pending};
+
+        [[nodiscard]] constexpr explicit operator bool() const noexcept {
+            return m_verdict == EGpuTickVerdict::complete;
+        }
+
+        [[nodiscard]] constexpr bool pending() const noexcept {
+            return m_verdict == EGpuTickVerdict::pending;
+        }
+
+        [[nodiscard]] constexpr bool rejectedTerrainPosition() const noexcept {
+            return m_verdict == EGpuTickVerdict::rejected_terrain_position;
+        }
     };
 
     struct GpuAccounting {
@@ -138,9 +171,11 @@ export namespace pP::matter {
         [[nodiscard]] Expected<std::optional<GpuSnapshot>> pollSnapshot();
         [[nodiscard]] std::error_code cancelSnapshot();
 
-        /// False means still pending. True proves the candidate's GPU validity.
-        /// Failure preserves the committed epoch and a copied diagnostic.
-        [[nodiscard]] Expected<bool> pollTick();
+        /// Pending means the fence has not completed. A complete candidate is
+        /// publishable. A terrain-position certificate rejection is a bounded
+        /// verdict: the caller discards the candidate and the committed epoch
+        /// stays published. Every other rejected verdict remains a fatal error.
+        [[nodiscard]] Expected<GpuTickOutcome> pollTick();
 
         /// External dependent simulation epoch validation precedes this commit.
         void publishTick() noexcept;
@@ -155,6 +190,9 @@ export namespace pP::matter {
 
         /// Focused operational fault seam: fail collection after completion proof.
         void injectCollectionFailureForTest(std::error_code cause) noexcept;
+        /// Focused verdict seam: replace the collected six error words so a
+        /// synthetic rejection can be classified without undocumented state.
+        void injectTickVerdictForTest(std::optional<std::array<u32, 6u>> words) noexcept;
         [[nodiscard]] GpuTimingInspection inspectTimingForTest() const noexcept;
 
         /// Freeze/capture and teardown use this explicit completion boundary.

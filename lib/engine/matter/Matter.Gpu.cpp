@@ -24,6 +24,13 @@ namespace pP::matter {
 
     namespace {
         constexpr u64 kErrorBytes = 6u * sizeof(u32);
+        // Terrain resolution group (flag bit 8) and the "final position" field of
+        // its legend. This exact verdict has an existing bounded recovery path and
+        // is the only rejection the host may recover; the other fields (reversed
+        // edge, malformed vertex, outward rounding, missing feature, DDA
+        // exhaustion, contact budget, domain-entry proof) stay fatal.
+        constexpr u32 kTerrainResolutionFlag = 256u;
+        constexpr u32 kTerrainFinalPositionField = 6u;
         constexpr std::array<const char *, 2u> kEntries{"fused0", "fused1"};
         constexpr std::array<const char *, 2u> kWaveEntries{"fused0Wave", "fused1Wave"};
 
@@ -416,6 +423,7 @@ namespace pP::matter {
         GpuAccounting m_accounting;
         GpuFailure m_failure;
         std::error_code m_injected_collection_error;
+        std::optional<std::array<u32, 6u>> m_injected_verdict;
         u64 m_next_signal{1u};
         u64 m_pending_signal{};
         u64 m_snapshot_signal{};
@@ -1356,7 +1364,7 @@ namespace pP::matter {
         return {};
     }
 
-    Expected<bool> GpuSolver::pollTick() {
+    Expected<GpuTickOutcome> GpuSolver::pollTick() {
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             MatterGpu, m_state and m_state->m_pending_signal != 0u
                            ? std::error_code{}
@@ -1364,7 +1372,7 @@ namespace pP::matter {
         State &state = *m_state;
         PPR_RETURN_UNEXPECTED_ON_FAIL(MatterGpu, state.m_failure.m_cause);
         if (state.m_complete)
-            return true;
+            return GpuTickOutcome{EGpuTickVerdict::complete};
 
         u64 completed{};
         auto *const timing = state.m_timing.get();
@@ -1391,7 +1399,7 @@ namespace pP::matter {
         }
 
         if (completed < state.m_pending_signal)
-            return false;
+            return GpuTickOutcome{EGpuTickVerdict::pending};
 
         const hal::ProfileScope scope{"Matter.Gpu.CollectTick"};
         if (state.m_sparse_encoding_open) {
@@ -1414,6 +1422,8 @@ namespace pP::matter {
         state.m_readback_mapped = true;
         std::array<u32, 6u> errors{};
         std::memcpy(errors.data(), mapped, kErrorBytes);
+        if (state.m_injected_verdict)
+            errors = *state.m_injected_verdict;
 
         if (const std::error_code error = make_error_code(state.m_device->unmapBuffer(state.m_particles.m_readback))) {
             state.m_failure.m_cause = error;
@@ -1423,6 +1433,7 @@ namespace pP::matter {
         state.m_readback_mapped = false;
         state.m_accounting.m_last_readback_bytes = kErrorBytes;
         state.m_failure.m_flags = errors[0];
+        state.m_failure.m_claimed = errors[1];
         if (errors[1] != 0u) {
             state.m_failure.m_node = errors[2];
             state.m_failure.m_field = errors[3];
@@ -1432,6 +1443,19 @@ namespace pP::matter {
 
         state.m_valid = errors[0] == 0u;
         if (not state.m_valid) {
+            const bool recoverable_position = errors[0] == kTerrainResolutionFlag and
+                                              errors[1] != 0u and
+                                              errors[3] == kTerrainFinalPositionField;
+
+            // A non-certified final transport position keeps the bounded recovery
+            // path in the shader and is the only verdict the host may recover: the
+            // caller discards this working batch, so the committed epoch and the
+            // publication identity never move. The cause stays empty because this
+            // is a verdict, not a failure; every other flag, and every other 256
+            // field, remains fatal exactly as today.
+            if (recoverable_position)
+                return GpuTickOutcome{EGpuTickVerdict::rejected_terrain_position};
+
             state.m_failure.m_cause = std::make_error_code(std::errc::result_out_of_range);
 
             PPR_LOG(
@@ -1454,7 +1478,7 @@ namespace pP::matter {
         }
 
         state.m_complete = true;
-        return true;
+        return GpuTickOutcome{EGpuTickVerdict::complete};
     }
 
     void GpuSolver::publishTick() noexcept {
@@ -1697,6 +1721,11 @@ namespace pP::matter {
     void GpuSolver::injectCollectionFailureForTest(const std::error_code cause) noexcept {
         PPR_ASSERT(m_state != nullptr);
         m_state->m_injected_collection_error = cause;
+    }
+
+    void GpuSolver::injectTickVerdictForTest(std::optional<std::array<u32, 6u>> words) noexcept {
+        PPR_ASSERT(m_state != nullptr);
+        m_state->m_injected_verdict = words;
     }
 
     GpuTimingInspection GpuSolver::inspectTimingForTest() const noexcept {

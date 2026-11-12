@@ -108,6 +108,9 @@ namespace pP::colony {
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_operation_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_transport_error);
+        // A new prepared owner is a regeneration/restore candidate: its verdict is
+        // evaluated from fresh state, so any prior stall belongs to the old owner.
+        clearMatterStall();
         return true;
     }
 
@@ -177,6 +180,8 @@ namespace pP::colony {
 
         PPR_ASSERT(m_particle_view.has_value());
         m_particle_view->m_joint_tick = m_tick_count;
+        // A resumed owner re-evaluates its verdict from the committed rows.
+        clearMatterStall();
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_transport_error);
         return true;
     }
@@ -289,6 +294,12 @@ namespace pP::colony {
             m_capture_awake_valid = true;
         }
 
+        // Detaching retires the verdict with the owner it was evaluated against.
+        m_matter_stalled = false;
+        if (m_matter_runtime != nullptr) {
+            m_matter_runtime->clearStall();
+        }
+
         m_matter_runtime = nullptr;
         return true;
     }
@@ -371,6 +382,7 @@ namespace pP::colony {
         m_snapshot_work.reset();
         m_snapshot_phase = ESnapshotPhase::idle;
         m_matter_pending = false;
+        m_matter_stalled = false;
         m_held_slices = 0u;
         m_pending_single_steps = 0u;
         m_preparing_runtime = nullptr;
@@ -448,9 +460,32 @@ namespace pP::colony {
                not m_edit and
                not m_pending_particle_tool and
                not m_matter_pending and
+               // A frozen verdict leaves the committed rows unchanged, so the
+               // identical tick would reproduce it. Only a state mutation may
+               // release the stall and submit again.
+               not m_matter_stalled and
                m_snapshot_phase == ESnapshotPhase::idle and
                m_held_slices == 0u and
                m_pending_single_steps == 0u;
+    }
+
+    bool ColonyDriver::matterStalled() const noexcept {
+        return m_matter_stalled;
+    }
+
+    u32 ColonyDriver::matterStallCount() const noexcept {
+        return m_matter_runtime != nullptr ? m_matter_runtime->stallCount() : 0u;
+    }
+
+    void ColonyDriver::clearMatterStall() {
+        if (not m_matter_stalled) {
+            return;
+        }
+
+        m_matter_stalled = false;
+        if (m_matter_runtime != nullptr) {
+            m_matter_runtime->clearStall();
+        }
     }
 
     const MatterState *ColonyDriver::matterState() const noexcept {
@@ -699,6 +734,24 @@ namespace pP::colony {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_operation_error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_transport_error);
             if (not (**completion).m_readback) {
+                if ((**completion).m_stall) {
+                    // A rejected terrain-position certificate is a bounded verdict,
+                    // not an error: the runtime already discarded the candidate, so
+                    // nothing is published, the committed epoch and publication
+                    // identity are intact, and the same tick must not be submitted
+                    // again from this unchanged state.
+                    m_matter_stalled = true;
+                    m_matter_pending = false;
+                    m_matter_bodies.clear();
+
+                    // The candidate never published, so its joint frontier is
+                    // abandoned rather than committed or stepped. Without this the
+                    // next tick could not begin a coupling at the same epoch.
+                    const physics::ParticleCouplingEpoch coupling{
+                        m_world_generation, m_tick_count, m_matter->m_identity.m_terrain_revision};
+                    PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, m_scene.cancelParticleCoupling(coupling));
+                }
+
                 // An acknowledged query may still observe an unsignalled GPU fence.
                 return false;
             }
@@ -772,6 +825,8 @@ namespace pP::colony {
         m_matter_pending = false;
         m_matter_bodies.clear();
         m_initial_matter_baseline_valid = false;
+        // A published tick proves the verdict changed, so any freeze ends here.
+        clearMatterStall();
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, (**completion).m_execution.m_transport_error);
         return true;
     }

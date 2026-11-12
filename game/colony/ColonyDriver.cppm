@@ -283,6 +283,9 @@ export namespace pP::colony {
         bool m_steps_bound{false};
         bool m_physics_ready{false};
         bool m_matter_pending{};
+        // Recoverable terrain-position verdict: matter is frozen at the last
+        // committed epoch until a state mutation can change it.
+        bool m_matter_stalled{};
         bool m_cpu_particles_current{true};
         bool m_capture_awake_valid{};
         // Irreversible admission latch; grouped with the existing byte-aligned state.
@@ -339,6 +342,9 @@ export namespace pP::colony {
 
         void clearToolState() noexcept;
 
+        /// Releases the recoverable stall after an admitted state mutation.
+        void clearMatterStall();
+
         void invalidateColliderCache() noexcept;
 
         /// H4a Slice 6: incremental view maintenance for a cache MISS. Diffs
@@ -377,6 +383,13 @@ export namespace pP::colony {
         [[nodiscard]] bool matterAttached() const noexcept;
         [[nodiscard]] bool physicsPending() const noexcept;
         [[nodiscard]] bool admitsElapsed() const noexcept;
+
+        /// A rejected terrain-position certificate froze matter at the last
+        /// committed epoch. Only a committed edit, regeneration, restore or an
+        /// explicit tool action can change the verdict and release it.
+        [[nodiscard]] bool matterStalled() const noexcept;
+        /// Consecutive recoverable rejections in the current frozen interval.
+        [[nodiscard]] u32 matterStallCount() const noexcept;
         [[nodiscard]] const MatterState *matterState() const noexcept;
         [[nodiscard]] std::optional<GridParticleGpuView> particleView() const noexcept;
         [[nodiscard]] std::shared_ptr<const MatterPhysicalLedger> particlePhysicalLedger() const noexcept;

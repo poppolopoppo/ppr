@@ -1520,9 +1520,12 @@ namespace pP::tests::detail::MatterGpu {
             PPR_TEST_ASSERT(not fixture.m_solver.drain());
             const auto complete = fixture.m_solver.pollTick();
             const auto failure = fixture.m_solver.failure();
+            // 0 is publishable; a non-publishable (recoverable) verdict is reported
+            // as 1 so the diagnostic never claims a rejection was a completed tick.
+            const int verdict_code = not complete ? complete.error().value() : (*complete ? 0 : 1);
             std::println(
-                status, "{},{},{},{},{},{},{},{}", tick, epoch, complete ? 0 : complete.error().value(),
-                failure.m_flags, failure.m_node, failure.m_field, failure.m_particle, failure.m_body);
+                status, "{},{},{},{},{},{},{},{}", tick, epoch, verdict_code, failure.m_flags, failure.m_node,
+                failure.m_field, failure.m_particle, failure.m_body);
             status.flush();
             PPR_TEST_ASSERT(not status.fail());
             PPR_TEST_ASSERT(complete and *complete);
@@ -2981,6 +2984,84 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(not unavailable_view and unavailable_view.error() == std::errc::not_connected);
     };
 
+    // ------------------------------------------------------------------
+    // recoverable terrain-position verdict
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (terrain_position_rejection_is_recoverable_and_other_verdicts_stay_fatal) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+
+        GpuParticle particle = restParticle();
+        particle.m_mass = 1.0e-6f;
+        fixture.replace({&particle, 1u});
+        const u64 epoch = fixture.m_solver.accounting().m_epoch;
+        const auto committed = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(committed and committed->m_epoch == epoch and committed->m_count == 1u);
+
+        // One submitted working batch, one injected verdict, one poll.
+        const auto poll_verdict = [&](const std::array<u32, 6u> &words) {
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+            fixture.m_solver.injectTickVerdictForTest(words);
+            auto outcome = fixture.m_solver.pollTick();
+            fixture.m_solver.injectTickVerdictForTest(std::nullopt);
+            return outcome;
+        };
+
+        // flags 256 / claimed / field 6 is the single recoverable verdict.
+        const auto recoverable = poll_verdict({256u, 1u, 0xffff'ffffu, 6u, 4455u, 0xffff'ffffu});
+        PPR_TEST_ASSERT(recoverable.has_value());
+        PPR_TEST_ASSERT(recoverable->rejectedTerrainPosition() and not *recoverable and not recoverable->pending());
+        PPR_TEST_ASSERT(
+            fixture.m_solver.failure().m_flags == 256u and
+            fixture.m_solver.failure().m_claimed == 1u and
+            fixture.m_solver.failure().m_field == 6u and
+            fixture.m_solver.failure().m_particle == 4455u);
+
+        // A verdict is not a failure: no cause, no epoch bump, no publication.
+        PPR_TEST_ASSERT(fixture.m_solver.failure().m_cause == std::error_code{});
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+        PPR_TEST_ASSERT(committed->m_live_epoch->load() == epoch);
+        const auto unchanged = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(unchanged and unchanged->m_hot == committed->m_hot and unchanged->m_cold == committed->m_cold);
+
+        // The rejected batch is discarded through the existing path, and the same
+        // committed epoch then still submits and publishes.
+        PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+        PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+        const auto resumed = fixture.m_solver.pollTick();
+        PPR_TEST_ASSERT(resumed and *resumed);
+        fixture.m_solver.publishTick();
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+
+        // Every other verdict stays fatal: flag 8, flag 264 (256|8), the other
+        // 256 fields including the deliberately excluded 3 and 7, and an
+        // unclaimed 256 word with no decoded field.
+        const u64 rejected_epoch = fixture.m_solver.accounting().m_epoch;
+        const auto fatal = [&](const std::array<u32, 6u> &words) {
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(rejected_epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+            fixture.m_solver.injectTickVerdictForTest(words);
+            const auto outcome = fixture.m_solver.pollTick();
+            fixture.m_solver.injectTickVerdictForTest(std::nullopt);
+            PPR_TEST_ASSERT(not outcome and outcome.error() == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == rejected_epoch);
+            PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+        };
+
+        fatal({8u, 1u, 0xffff'ffffu, 6u, 4455u, 0xffff'ffffu});
+        fatal({264u, 1u, 0xffff'ffffu, 6u, 4455u, 0xffff'ffffu});
+        for (const u32 field: {1u, 2u, 3u, 4u, 5u, 7u, 8u})
+            fatal({256u, 1u, 0xffff'ffffu, field, 4455u, 0xffff'ffffu});
+        fatal({256u, 0u, 0xffff'ffffu, 6u, 4455u, 0xffff'ffffu});
+        PPR_TEST_ASSERT(fixture.m_solver.failure().m_cause == std::errc::result_out_of_range);
+    };
+
     PPR_UNIT_TEST (resident_append_copies_the_current_prefix_and_uploads_only_new_rows) {
         Fixture fixture;
         PPR_DEFER {
@@ -3812,7 +3893,10 @@ namespace pP::tests::detail::MatterGpu {
                 PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
                 PPR_TEST_ASSERT(not fixture.m_solver.drain());
                 const auto ready = fixture.m_solver.pollTick();
-                if (not ready) {
+                // A recoverable terrain-position verdict is a value whose outcome is
+                // not publishable; report it as the rejected observation instead of
+                // falling through to the completed-tick assertion.
+                if (not ready or ready->rejectedTerrainPosition()) {
                     const auto failure = fixture.m_solver.failure();
                     _.log(
                         std::format(
@@ -3823,7 +3907,7 @@ namespace pP::tests::detail::MatterGpu {
                     break;
                 }
 
-                PPR_TEST_ASSERT(*ready);
+                PPR_TEST_ASSERT(ready and *ready);
                 fixture.m_solver.publishTick();
                 const auto rows = fixture.snapshot();
                 PPR_TEST_ASSERT(rows.size() == 1u);

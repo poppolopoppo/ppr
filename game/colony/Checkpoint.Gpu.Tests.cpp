@@ -877,6 +877,122 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not driver.setRadialForce({}));
     };
 
+    // ------------------------------------------------------------------
+    // recoverable terrain-position stall
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (terrain_position_rejection_freezes_matter_until_a_committed_mutation) {
+        Fixture fixture;
+        const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+
+        GpuOwner owner;
+        owner.initialize();
+        owner.restore(fixture.m_catalog, checkpoint, 5u);
+
+        constexpr std::array<u32, 6u> verdict{256u, 1u, 0xffff'ffffu, 6u, 4455u, 0xffff'ffffu};
+        const TimeSpan period = TimeSpan{std::chrono::seconds{1}} / owner.m_driver->tickHz();
+
+        // One admitted slice submits the working batch; the poll decodes the
+        // injected verdict and discards the candidate.
+        const auto stall = [&] {
+            PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginInjectTickVerdictForTest(verdict)));
+            owner.update(period);
+            PPR_TEST_ASSERT(owner.m_driver->physicsPending());
+            owner.drain();
+            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
+        };
+
+        const u64 epoch = owner.m_runtime.accounting()->m_epoch;
+        const u64 tick = owner.m_driver->tickCount();
+        const MatterIdentity identity = owner.m_driver->matterState()->m_identity;
+        const auto committed_view = owner.m_driver->particleView();
+        PPR_TEST_ASSERT(committed_view and committed_view->current());
+
+        stall();
+        PPR_TEST_ASSERT(owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 1u);
+        PPR_TEST_ASSERT(owner.m_runtime.stalled() and owner.m_runtime.stallCount() == 1u);
+        PPR_TEST_ASSERT(not owner.m_driver->admitsElapsed());
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+        PPR_TEST_ASSERT(owner.m_driver->matterState()->m_identity == identity);
+        PPR_TEST_ASSERT(owner.m_runtime.accounting()->m_epoch == epoch);
+        PPR_TEST_ASSERT(committed_view->current());
+        PPR_TEST_ASSERT(owner.m_runtime.failure()->m_flags == 256u);
+        PPR_TEST_ASSERT(owner.m_runtime.failure()->m_field == 6u);
+        PPR_TEST_ASSERT(owner.m_runtime.failure()->m_particle == 4455u);
+
+        // No spin: the application's gate passes zero elapsed while frozen, so
+        // nothing is resubmitted and the interval counter does not grow.
+        for (u32 frame = 0u; frame < 4u; ++frame) {
+            PPR_TEST_ASSERT(not owner.m_driver->admitsElapsed());
+            owner.update(TimeSpan{});
+        }
+
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 1u);
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+        PPR_TEST_ASSERT(not owner.m_driver->physicsPending());
+
+        // A non-mutating retry reproduces the verdict: counted, not looped.
+        owner.update(period);
+        owner.drain();
+        owner.update(TimeSpan{});
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 2u);
+        PPR_TEST_ASSERT(owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+
+        // Only published ticks exist: a save while stalled holds the last
+        // committed epoch, rows and identity.
+        const auto stalled_capture = captureWorldCheckpoint(
+            *owner.m_driver, owner.m_driver->preparedWorld()->generated());
+        PPR_TEST_ASSERT(stalled_capture.has_value());
+        PPR_TEST_ASSERT(stalled_capture->m_tick == tick);
+        PPR_TEST_ASSERT(stalled_capture->m_current_matter.m_identity == identity);
+        PPR_TEST_ASSERT(not validateWorldCheckpoint(*stalled_capture, *fixture.m_catalog));
+
+        // The stall is a runtime verdict, not saved state: the restored driver is
+        // not stalled and continues from the last committed epoch.
+        owner.restore(fixture.m_catalog, *stalled_capture, 5u);
+        PPR_TEST_ASSERT(not owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 0u);
+        PPR_TEST_ASSERT(not owner.m_runtime.stalled() and owner.m_runtime.stallCount() == 0u);
+        PPR_TEST_ASSERT(owner.m_driver->matterState()->m_identity == identity);
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+
+        // Determinism: the same committed rows and verdict stall at the same
+        // committed epoch with the same decoded row and field.
+        const u64 restored_epoch = owner.m_runtime.accounting()->m_epoch;
+        stall();
+        PPR_TEST_ASSERT(owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_runtime.failure()->m_particle == 4455u);
+        PPR_TEST_ASSERT(owner.m_runtime.failure()->m_field == 6u);
+        PPR_TEST_ASSERT(owner.m_runtime.accounting()->m_epoch == restored_epoch);
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() == tick);
+
+        // A committed terrain edit is a state mutation: the freeze ends and the
+        // counter resets. The queued dig is prepared and settled through the
+        // existing edit path, so this exercises the commit site rather than the
+        // explicit tool action.
+        PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginInjectTickVerdictForTest(std::nullopt)));
+        PPR_TEST_ASSERT(not owner.m_driver->requestDig({127u, 40u}, 2u, 1u));
+        for (u32 attempt = 0u; attempt < 8u and owner.m_driver->digTotal() == 0u; ++attempt) {
+            const auto error = owner.m_driver->update(attempt == 0u ? period : TimeSpan{});
+            PPR_TEST_ASSERT(not error or error == std::errc::device_or_resource_busy);
+            (void) owner.m_driver->takeEditRejection();
+            if (owner.m_driver->physicsPending()) {
+                owner.drain();
+                owner.update(TimeSpan{});
+            }
+        }
+
+        PPR_TEST_ASSERT(owner.m_driver->digTotal() != 0u);
+        PPR_TEST_ASSERT(not owner.m_driver->matterStalled());
+        PPR_TEST_ASSERT(owner.m_driver->matterStallCount() == 0u);
+        PPR_TEST_ASSERT(not owner.m_runtime.stalled());
+        PPR_TEST_ASSERT(owner.m_driver->tickCount() > tick);
+        PPR_TEST_ASSERT(owner.m_runtime.accounting()->m_epoch > restored_epoch);
+    };
+
     PPR_UNIT_TEST (attached_dig_preparation_retry_publishes_inventory_once_without_render_ack) {
         constexpr DigRect second_dig{{255u, 127u}, 2u, 2u};
         static_assert(second_dig.m_width > 0u and second_dig.m_width <= kMaxDigEdge);

@@ -125,6 +125,9 @@ export namespace pP::colony {
         std::optional<MatterReadback> m_readback{};
         std::optional<GridParticleGpuView> m_view{};
         std::shared_ptr<const MatterPhysicalLedger> m_physical_ledger{};
+        /// Decoded recoverable verdict: the polled candidate was discarded, so no
+        /// readback exists and the committed epoch stays published.
+        std::optional<matter::GpuFailure> m_stall{};
         RenderLaneOperationCompletion m_execution{};
     };
 
@@ -148,10 +151,17 @@ export namespace pP::colony {
         u64 m_generation{};
         matter::GpuAccounting m_last_accounting{};
         matter::GpuFailure m_last_failure{};
+        /// Recoverable verdict that froze matter at the last committed epoch.
+        /// A runtime verdict, never checkpointed state.
+        std::optional<matter::GpuFailure> m_last_stall{};
+        u32 m_stall_count{};
 
         [[nodiscard]] Expected<MatterRequest> enqueue(
             RenderLaneOperation operation, std::shared_ptr<std::optional<MatterReadback>> readback = {},
-            bool shutdown = false, bool discard = false);
+            bool shutdown = false, bool discard = false, std::shared_ptr<std::optional<matter::GpuFailure>> stall = {});
+
+        /// One entry diagnostic per armed stall, with all six decoded words.
+        void reportStall_(const matter::GpuFailure &verdict);
 
     public:
         MatterRuntime();
@@ -179,6 +189,10 @@ export namespace pP::colony {
         /// Routes the solver's existing post-completion failure seam through its owner.
         [[nodiscard]] Expected<MatterRequest> beginInjectCollectionFailureForTest(std::error_code cause);
 
+        /// Routes the solver's verdict seam so a synthetic rejection is classified
+        /// by the production rule. std::nullopt restores real device verdicts.
+        [[nodiscard]] Expected<MatterRequest> beginInjectTickVerdictForTest(std::optional<std::array<u32, 6u>> words);
+
         // Explicit demand capture remains frozen through CPU reconstruction.
         [[nodiscard]] Expected<MatterRequest> beginSnapshot(MatterIdentity source);
         [[nodiscard]] Expected<MatterRequest> beginPollSnapshot(MatterIdentity source);
@@ -201,5 +215,20 @@ export namespace pP::colony {
         /// Copies of last acknowledged device state, including during pending work.
         [[nodiscard]] Expected<matter::GpuAccounting> accounting();
         [[nodiscard]] Expected<matter::GpuFailure> failure();
+
+        // ------------------------------------------------------------------
+        // recoverable terrain-position stall
+        // ------------------------------------------------------------------
+
+        /// True after a terrain-position certificate rejection discarded a
+        /// candidate and froze matter at the last committed epoch.
+        [[nodiscard]] bool stalled() const noexcept;
+
+        /// Consecutive recoverable rejections since the stall was last released.
+        [[nodiscard]] u32 stallCount() const noexcept;
+
+        /// Releases the verdict. The caller admits a state mutation that can change
+        /// it: a committed terrain edit, regeneration, restore or a tool action.
+        void clearStall();
     };
 }

@@ -382,6 +382,16 @@ namespace pP::game::tests::detail::lighting_lab {
         }
         PPR_TEST_ASSERT(cursor == particles.size());
 
+        // The recorded solver rejection (flag 256 / field 6) names row 4455. In
+        // this deterministic sorted seeding that row is the second basin's water,
+        // so the recoverable verdict is a transport-position condition and not a
+        // magma or temperature one.
+        constexpr std::size_t kRecordedRejectionRow = 4455u;
+        const double water_temperature = static_cast<double>(basin_temperatures[1u]);
+        PPR_TEST_ASSERT(kRecordedRejectionRow < particles.size());
+        PPR_TEST_ASSERT(particles[kRecordedRejectionRow].m_material == water);
+        PPR_TEST_ASSERT(std::abs(particles[kRecordedRejectionRow].m_temperature_k - water_temperature) < 1.0e-9);
+
         std::vector<u64> ids;
         ids.reserve(particles.size());
         for (const auto &particle: particles) {

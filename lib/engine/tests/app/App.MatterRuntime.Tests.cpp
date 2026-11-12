@@ -721,6 +721,27 @@ namespace pP::tests::detail::MatterAdapter {
             std::ignore = success(runtime.beginSubmitResident(source->m_identity, {}, 0u));
             std::ignore = success(runtime.beginDrain());
             auto collected = success(runtime.beginPoll(source->m_identity));
+            if (not collected.m_readback) {
+                // An empty terrain cannot reject a finite falling row as strict
+                // solid interior, so this leaf must always publish. If the
+                // recoverable terrain-position verdict does appear, report its
+                // decoded words and prove the defined exit -- the candidate was
+                // discarded, nothing was published and the committed epoch is
+                // intact -- instead of waiting for a readback that cannot arrive.
+                const auto failure = runtime.failure();
+                const auto accounting = runtime.accounting();
+                PPR_TEST_ASSERT(failure.has_value() and accounting.has_value());
+                std::fprintf(
+                    stderr,
+                    "[map-resident-unpublishable] edge=%u flags=%08x claimed=%u node=%08x field=%08x row=%08x "
+                    "body=%08x epoch=%llu stalled=%u\n",
+                    edge, static_cast<unsigned>(failure->m_flags), static_cast<unsigned>(failure->m_claimed),
+                    static_cast<unsigned>(failure->m_node), static_cast<unsigned>(failure->m_field),
+                    static_cast<unsigned>(failure->m_particle), static_cast<unsigned>(failure->m_body),
+                    static_cast<unsigned long long>(accounting->m_epoch), static_cast<unsigned>(runtime.stalled()));
+                PPR_TEST_ASSERT(not runtime.stalled());
+            }
+
             PPR_TEST_ASSERT(collected.m_readback.has_value());
             PPR_TEST_ASSERT(collected.m_readback->m_particles.empty());
             PPR_TEST_ASSERT(collected.m_readback->m_accounting.m_substeps == matter::kGameSubsteps);
@@ -753,30 +774,40 @@ namespace pP::tests::detail::MatterAdapter {
 
             // Keep the accepted terrain and all physical records valid while
             // isolating GPU-row admission at the selected solver's upper bound.
-            auto invalid_gpu_row = *source;
-            invalid_gpu_row.m_particles.front().m_position_x = static_cast<float>(edge) + 8.0f;
-            const auto rejected_gpu_row = completeInline(
-                runtime, runtime.beginPrepareResidentWorld(invalid_gpu_row, *terrain));
-            PPR_TEST_ASSERT(rejected_gpu_row.m_execution.m_operation_error == std::errc::invalid_argument);
-            PPR_TEST_ASSERT(published.m_view->current());
+            //
+            // Both admission probes are bound predicates rather than per-edge tick
+            // behavior, and each one fully initializes a solver (a fresh Slang
+            // session dominates this leaf's cost under dual validation) before the
+            // host rejects it. They therefore run once at the selected upper bound;
+            // the resident tick, frozen snapshot and publication cycle above still
+            // covers every edge.
+            if (edge == 4096u) {
+                auto invalid_gpu_row = *source;
+                invalid_gpu_row.m_particles.front().m_position_x = static_cast<float>(edge) + 8.0f;
+                const auto rejected_gpu_row = completeInline(
+                    runtime, runtime.beginPrepareResidentWorld(invalid_gpu_row, *terrain));
+                PPR_TEST_ASSERT(rejected_gpu_row.m_execution.m_operation_error == std::errc::invalid_argument);
+                PPR_TEST_ASSERT(published.m_view->current());
 
-            // A coherent record/row pair just beyond the physical map still
-            // fits the solver padding. Only the selected world bound rejects it.
-            auto invalid_physical_record = *source;
-            auto &outside_record = invalid_physical_record.m_records.front();
-            auto &outside_row = invalid_physical_record.m_particles.front();
-            outside_record.m_x_m = (static_cast<double>(edge) + 0.5) * cell_metres;
-            outside_row.m_position_x = static_cast<float>(
-                outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin));
-            PPR_TEST_ASSERT(outside_row.m_position_x < static_cast<float>(source->m_profile.m_grid_width - 3u));
-            PPR_TEST_ASSERT(
-                outside_row.m_position_x ==
-                static_cast<float>(outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin)));
+                // A coherent record/row pair just beyond the physical map still
+                // fits the solver padding. Only the selected world bound rejects it.
+                auto invalid_physical_record = *source;
+                auto &outside_record = invalid_physical_record.m_records.front();
+                auto &outside_row = invalid_physical_record.m_particles.front();
+                outside_record.m_x_m = (static_cast<double>(edge) + 0.5) * cell_metres;
+                outside_row.m_position_x = static_cast<float>(
+                    outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin));
+                PPR_TEST_ASSERT(outside_row.m_position_x < static_cast<float>(source->m_profile.m_grid_width - 3u));
+                PPR_TEST_ASSERT(
+                    outside_row.m_position_x ==
+                    static_cast<float>(
+                        outside_record.m_x_m / cell_metres + static_cast<double>(colony::kMatterOrigin)));
 
-            const auto rejected_physical_record = completeInline(
-                runtime, runtime.beginPrepareResidentWorld(invalid_physical_record, std::move(*terrain)));
-            PPR_TEST_ASSERT(rejected_physical_record.m_execution.m_operation_error == std::errc::invalid_argument);
-            PPR_TEST_ASSERT(published.m_view->current());
+                const auto rejected_physical_record = completeInline(
+                    runtime, runtime.beginPrepareResidentWorld(invalid_physical_record, std::move(*terrain)));
+                PPR_TEST_ASSERT(rejected_physical_record.m_execution.m_operation_error == std::errc::invalid_argument);
+                PPR_TEST_ASSERT(published.m_view->current());
+            }
 
             std::fprintf(
                 stderr, "[map-resident] edge=%u grid=%u particles=%zu dy=%.9g epoch=%llu\n", edge,

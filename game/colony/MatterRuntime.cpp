@@ -729,6 +729,7 @@ namespace pP::colony {
         std::optional<RenderLaneOperationTicket> m_ticket{};
         matter::GpuAccounting m_accounting{};
         matter::GpuFailure m_failure{};
+        std::optional<matter::GpuFailure> m_stall{};
         u64 m_generation{};
         bool m_shutdown{};
         bool m_cancelled{};
@@ -769,7 +770,7 @@ namespace pP::colony {
 
     Expected<MatterRequest> MatterRuntime::enqueue(
         RenderLaneOperation operation, std::shared_ptr<std::optional<MatterReadback>> readback, const bool shutdown,
-        const bool discard) {
+        const bool discard, std::shared_ptr<std::optional<matter::GpuFailure>> stall) {
         if (m_pending) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::device_or_resource_busy);
         }
@@ -782,8 +783,14 @@ namespace pP::colony {
         auto *const result = pending.get();
         const auto state = m_state;
         pending->m_operation = std::make_unique<RenderLaneOperation>(
-            [state, result, discard, operation = std::move(operation)]() mutable -> std::error_code {
+            [state, result, discard, stall, operation = std::move(operation)]() mutable -> std::error_code {
                 const auto error = operation();
+                // A lane operation cannot see its own Pending record, so a decoded
+                // recoverable verdict travels through the caller's sink.
+                if (stall) {
+                    result->m_stall = std::move(*stall);
+                }
+
                 if (state and state->m_active) {
                     result->m_accounting = state->m_active->accounting();
                     result->m_failure = state->m_submit_error ? matter::GpuFailure{.m_cause = state->m_submit_error}
@@ -876,6 +883,7 @@ namespace pP::colony {
             m_last_failure = m_pending->m_failure;
             result.m_view = std::move(m_pending->m_view);
             result.m_physical_ledger = std::move(m_pending->m_physical_ledger);
+            result.m_stall = std::move(m_pending->m_stall);
             if (m_pending->m_readback) {
                 result.m_readback = std::move(*m_pending->m_readback);
             }
@@ -886,6 +894,10 @@ namespace pP::colony {
         if (shut_down) {
             m_state.reset();
             m_lane = nullptr;
+        }
+
+        if (result.m_stall) {
+            reportStall_(*result.m_stall);
         }
 
         return std::optional{std::move(result)};
@@ -1098,17 +1110,34 @@ namespace pP::colony {
     Expected<MatterRequest> MatterRuntime::beginPoll(const MatterIdentity source) {
         const auto state = m_state;
         const auto result = std::make_shared<std::optional<MatterReadback>>();
+        const auto stall = std::make_shared<std::optional<matter::GpuFailure>>();
         return enqueue(
-            [state, source, result]() -> std::error_code {
+            [state, source, result, stall]() -> std::error_code {
                 if (not state or not state->m_active or state->m_identity != source or not state->m_submitted) {
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
                 }
 
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_submit_error);
 
-                const auto ready = state->m_active->pollTick();
-                PPR_RETURN_ERROR_ON_FAIL(GameMatter, ready);
-                if (not *ready) {
+                const auto outcome = state->m_active->pollTick();
+                PPR_RETURN_ERROR_ON_FAIL(GameMatter, outcome);
+                if (outcome->pending()) {
+                    return {};
+                }
+
+                if (outcome->rejectedTerrainPosition()) {
+                    // The rejected working batch is dropped by the same ordered
+                    // cleanup beginDiscard performs (no snapshot is open, so the
+                    // tick is not in flight), inlined because a lane operation
+                    // cannot enqueue. The committed pair is untouched, the epoch
+                    // and publication identity cannot move, and the caller sees
+                    // the not-ready shape plus the decoded verdict instead of an
+                    // error.
+                    PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_active->discardTick());
+                    state->m_submitted = false;
+                    state->m_ready = false;
+                    state->m_submit_error = {};
+                    *stall = state->m_active->failure();
                     return {};
                 }
 
@@ -1120,7 +1149,7 @@ namespace pP::colony {
                 state->m_ready = true;
                 return {};
             },
-            result);
+            result, false, false, stall);
     }
 
     Expected<MatterRequest> MatterRuntime::beginPublish(const MatterIdentity source) {
@@ -1434,6 +1463,79 @@ namespace pP::colony {
             if (state and state->m_active) {
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_active->drain());
             }
+            return {};
+        });
+    }
+
+    void MatterRuntime::reportStall_(const matter::GpuFailure &verdict) {
+        m_last_stall = verdict;
+        ++m_stall_count;
+
+        // One entry diagnostic per armed stall, never per frame or poll. The
+        // sentence names the row and the frozen epoch; the fields carry all six
+        // protocol words so the boundary against flag 8 stays auditable.
+        const auto message = std::format(
+            "terrain position certificate rejected row {}: final position not certified; "
+            "matter frozen at epoch {} (consecutive stall {})",
+            verdict.m_particle, m_last_accounting.m_epoch, m_stall_count);
+        PPR_LOG_RAW(
+            GameMatter, warning, message,
+            {
+                {"flags", verdict.m_flags},
+                {"claimed", verdict.m_claimed},
+                {"node", verdict.m_node},
+                {"field", verdict.m_field},
+                {"particle_row", verdict.m_particle},
+                {"body", verdict.m_body},
+                {"epoch", m_last_accounting.m_epoch},
+                {"stall_count", m_stall_count},
+            });
+    }
+
+    bool MatterRuntime::stalled() const noexcept {
+        return m_last_stall.has_value();
+    }
+
+    u32 MatterRuntime::stallCount() const noexcept {
+        return m_stall_count;
+    }
+
+    void MatterRuntime::clearStall() {
+        if (not m_last_stall) {
+            return;
+        }
+
+        const matter::GpuFailure released = *m_last_stall;
+        const u32 stalls = std::exchange(m_stall_count, 0u);
+        m_last_stall.reset();
+
+        // One resume diagnostic for the frozen interval just released.
+        const auto message = std::format(
+            "terrain position certificate stall released after {} consecutive rejection(s); "
+            "matter resumes from committed epoch {}",
+            stalls, m_last_accounting.m_epoch);
+        PPR_LOG_RAW(
+            GameMatter, warning, message,
+            {
+                {"flags", released.m_flags},
+                {"claimed", released.m_claimed},
+                {"node", released.m_node},
+                {"field", released.m_field},
+                {"particle_row", released.m_particle},
+                {"body", released.m_body},
+                {"stalls", stalls},
+                {"epoch", m_last_accounting.m_epoch},
+            });
+    }
+
+    Expected<MatterRequest> MatterRuntime::beginInjectTickVerdictForTest(std::optional<std::array<u32, 6u>> words) {
+        const auto state = m_state;
+        return enqueue([state, words]() -> std::error_code {
+            if (not state or not state->m_active or state->m_submitted) {
+                PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::device_or_resource_busy);
+            }
+
+            state->m_active->injectTickVerdictForTest(words);
             return {};
         });
     }

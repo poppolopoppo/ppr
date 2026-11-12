@@ -547,6 +547,9 @@ namespace pP::colony {
         }
 
         m_pending_particle_tool = command;
+        // An explicit tool action is a state mutation that can change the frozen
+        // verdict, so the next admitted tick is evaluated from the new inventory.
+        clearMatterStall();
         return {};
     }
 
@@ -711,6 +714,19 @@ namespace pP::colony {
                 const auto finished = finishMatterPhysics();
                 PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, finished);
                 if (not *finished) {
+                    if (m_matter_stalled) {
+                        // The rejected candidate ended this slice without a
+                        // publication. The frozen state owns the joint tick
+                        // identity, so the slice and every queued catch-up slice
+                        // are dropped instead of replaying an identical tick. An
+                        // explicit single-step request was attempted once and is
+                        // consumed, so it cannot retry every frame.
+                        m_held_slices = 0u;
+                        if (m_pending_single_steps != 0u) {
+                            --m_pending_single_steps;
+                        }
+                    }
+
                     return {};
                 }
             } else {
@@ -1135,6 +1151,8 @@ namespace pP::colony {
 
             if (m_edit->m_inventory_only) {
                 m_edit.reset();
+                // A committed inventory mutation can change the frozen verdict.
+                clearMatterStall();
                 PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
                 return {};
             }
@@ -1168,6 +1186,9 @@ namespace pP::colony {
             m_dig_stats.m_last_chunks = std::move(m_edit->m_touched);
             commitDoorBinding_();
             m_edit.reset();
+            // The committed terrain edit changes both rows and coverage, so the
+            // freeze ends and the next tick evaluates a new verdict.
+            clearMatterStall();
             PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, (**completion).m_execution.m_transport_error);
             return {};
         }
@@ -1194,6 +1215,8 @@ namespace pP::colony {
         // The transaction is committed even if the postcommit physics wake fails.
         commitDoorBinding_();
         m_edit.reset();
+        // A committed terrain edit can change the frozen verdict.
+        clearMatterStall();
         PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, wake_error);
         return {};
     }
