@@ -491,24 +491,17 @@ namespace pP::colony {
             const ImGuiIO &io = ImGui::GetIO();
             ImGui::SetNextWindowPos(ImVec2{0.0f, 0.0f}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{io.DisplaySize.x, 0.0f}, ImGuiCond_Always);
-            // Chrome ribbon: no band at all. The row draws straight over the
-            // scene with square corners, no window or frame borders, and flat
-            // controls that only appear on hover, so the strip never competes
-            // with the world behind it and has no box to mis-align against.
+            // Chrome ribbon: the band itself is transparent and borderless so
+            // it never competes with the scene or exposes a box to mis-align
+            // against. The controls inside keep their normal raised frames,
+            // borders and text colours.
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{8.0f, 4.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{6.0f, 3.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{6.0f, 0.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
             ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::theme::kPanel.vec4(0.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextPrimary.vec4());
-            ImGui::PushStyleColor(ImGuiCol_Button, ui::theme::kRaised.vec4(0.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ui::theme::kRaised.vec4(0.45f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ui::theme::kAccent.vec4(0.28f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, ui::theme::kRaised.vec4(0.0f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ui::theme::kRaised.vec4(0.45f));
-            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ui::theme::kAccent.vec4(0.28f));
             ImGui::Begin("##topbar", nullptr, kChromeFlags);
             const float fs = ImGui::GetFontSize();
             BarFlow flow{.m_avail = ImGui::GetContentRegionAvail().x, .m_gap = ImGui::GetStyle().ItemSpacing.x};
@@ -650,8 +643,8 @@ namespace pP::colony {
             // below overlap the band.
             const float height = ImGui::GetWindowHeight();
             ImGui::End();
-            ImGui::PopStyleColor(9);
-            ImGui::PopStyleVar(6);
+            ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar(5);
             return height;
         }
 
