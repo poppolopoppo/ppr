@@ -6,6 +6,12 @@
 // coarse and fine tracing never evaluate a BRDF, normal, roughness or Fresnel
 // factor. Diffuse feedback samples the prior fine CH DC field at the native
 // cell centre with the approved isometric normalisation.
+//
+// The cell's whole outgoing radiance is scaled by the physical fill the
+// projection accumulated for that cell. A partially filled cell emits a
+// partially filled cell's worth; the reserved-interval count and occupancy
+// classification are unchanged, so the tracer still treats the cell as one
+// opaque entry.
 #include "thermal_emission.slang"
 #include "world_lighting_codec.slang"
 #include "numeric_status.slang"
@@ -22,10 +28,18 @@ StructuredBuffer<uint> g_resolved_cells;
 StructuredBuffer<TerrainVisual> g_visuals;
 StructuredBuffer<SourceMaterial> g_source_materials;
 StructuredBuffer<PackedCH> g_prior_ch;
+// Per-cell Q16 physical fill and the particle winner rank that owns the cell.
+// Both are produced by the projection in the same submission and are read-only
+// here.
+StructuredBuffer<uint> g_cell_fill;
+StructuredBuffer<uint> g_best_row;
 RWStructuredBuffer<uint> g_cell_source;
 
 // Y0 = 1/sqrt(2*pi): the angular mean of a circular-harmonic field is C0*Y0.
 static const float kY0 = 0.39894228040143267794;
+
+// Q16 fill quantum, mirrored from world_lighting_projection.slang.
+static const float kFillQuantum = 65536.0;
 
 // Bilinear DC sample at the native cell centre. Fine probe centres sit at
 // (probe+0.5)*2 native cells, so the fine coordinate is (cell+0.5)/2-0.5.
@@ -79,7 +93,19 @@ void prepareSource(uint2 cell : SV_DispatchThreadID) {
     float3 thermal = thermalRGB(unpackCellTemperature(resolved));
     float3 previous = priorAngularMean(cell);
 
-    float3 value = emission + thermal + diffuse * previous;
+    // Fill factor of the whole cell. A terrain-owned cell has no particle
+    // winner, so it emits at the full authored value and stays bit-identical.
+    // A particle-owned cell whose rows contributed no fill carries legacy
+    // presentation-only rows, where zero means "unavailable": it also keeps the
+    // full value rather than going black. The factor is exactly 1.0 whenever
+    // the cell is at least one cell-volume full, which is the normal case.
+    uint fill = g_cell_fill[index];
+    float fill_factor = 1.0;
+    if (g_best_row[index] != 0xffffffffu) {
+        fill_factor = fill == 0u ? 1.0 : min(1.0, float(fill) / kFillQuantum);
+    }
+
+    float3 value = fill_factor * (emission + thermal + diffuse * previous);
     uint category = rgb9e5PackCategory(value);
     if (category != 0u) {
         numericRecordFailure(

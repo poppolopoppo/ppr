@@ -36,6 +36,12 @@ namespace pP::tests::detail::WorldLightingProjection {
     inline constexpr u32 kEmissiveOpaque = 3u;
     inline constexpr u32 kEmissiveLiquid = 4u;
 
+    // Q16 physical-fill words: one quarter-volume candidate, the two-candidate
+    // half cell, and the exactly-full cell volume.
+    inline constexpr u32 kFillQuarter{0x4000u};
+    inline constexpr u32 kFillHalf{0x8000u};
+    inline constexpr u32 kFillFull{0x10000u};
+
     constexpr u32 cellIndex(const u32 x, const u32 y) noexcept {
         return y * kEdge + x;
     }
@@ -72,6 +78,9 @@ namespace pP::tests::detail::WorldLightingProjection {
         bool m_gas{};
         float m_gas_x{};
         float m_gas_y{};
+        // Committed physical fill V/(cell^2*thickness). Zero is the legacy
+        // "unavailable" word; the transport source then keeps its full value.
+        float m_physical_fill{};
         // Solver hot-row displacement in native cells per step (carried[0..1]
         // of ParticleWrite), the only motion the presentation row carries.
         float m_displacement_x{};
@@ -179,6 +188,9 @@ namespace pP::tests::detail::WorldLightingProjection {
         rhi::ComPtr<rhi::IBuffer> m_source_materials{};
         rhi::ComPtr<rhi::IBuffer> m_thermal_lut{};
         lighting::WorldLightingInputs m_inputs{};
+        // Source palette uploaded by the next publish. Zero (the default) keeps
+        // the cached source black; a magnitude assertion sets its own entries.
+        std::array<lighting::SourceMaterial, kMaterialCount> m_source_palette{};
         u64 m_publication{};
 
         Scene() {
@@ -202,6 +214,7 @@ namespace pP::tests::detail::WorldLightingProjection {
                 row.m_source_row = spec.m_gas ? 0xffff'ffffu : spec.m_source_row;
                 row.m_material_temperature = *lighting::packCell(static_cast<u16>(spec.m_material), spec.m_temperature);
                 row.m_radius = spec.m_gas ? 0.5f : 1.0f;
+                row.m_physical_fill_bits = std::bit_cast<u32>(spec.m_physical_fill);
                 if (spec.m_gas) {
                     row.m_gas_x = spec.m_gas_x;
                     row.m_gas_y = spec.m_gas_y;
@@ -289,13 +302,12 @@ namespace pP::tests::detail::WorldLightingProjection {
             m_visuals = makeShaderBuffer(device, sizeof(visuals), 96u, visuals.data());
 
             // The same accepted attempt now also prepares the cached source, so
-            // the world's full publication set is present: an all-zero derived
-            // source palette and an all-zero thermal table make the source
-            // cache black without changing the projection/acceleration contract
-            // under test.
-            const std::array<lighting::SourceMaterial, kMaterialCount> sources{};
+            // the world's full publication set is present: the source palette
+            // (zero unless a test authors one) and an all-zero thermal table
+            // make the source cache black without changing the
+            // projection/acceleration contract under test.
             m_source_materials = makeShaderBuffer(
-                device, sizeof(sources), sizeof(lighting::SourceMaterial), sources.data());
+                device, sizeof(m_source_palette), sizeof(lighting::SourceMaterial), m_source_palette.data());
             const std::vector<u8> thermal(lighting::kThermalLutBytes, 0u);
             m_thermal_lut = makeShaderBuffer(device, thermal.size(), lighting::kThermalLutStride, thermal.data());
         }
@@ -340,6 +352,20 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_TEST_ASSERT(not make_error_code(
             fixture.device().readBuffer(pass.resolvedCellsForTest(), 0u, cells.size() * sizeof(u32), cells.data())));
         return cells;
+    }
+
+    [[nodiscard]] u32 readFillWord(Fixture &fixture, WorldLightingPass &pass, const u32 cell) {
+        u32 word{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(
+            pass.fillCellsForTest(), static_cast<u64>(cell) * sizeof(u32), sizeof(word), &word)));
+        return word;
+    }
+
+    [[nodiscard]] u32 readSourceWord(Fixture &fixture, WorldLightingPass &pass, const u32 cell) {
+        u32 word{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(
+            pass.sourceCellsForTest(), static_cast<u64>(cell) * sizeof(u32), sizeof(word), &word)));
+        return word;
     }
 
     [[nodiscard]] u32 statusWord(WorldLightingPass &pass, const u32 record, const u32 word) {
@@ -1012,6 +1038,455 @@ namespace pP::tests::detail::WorldLightingProjection {
     };
 
     // ------------------------------------------------------------------
+    // per-cell physical-fill reduction
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (fill_reduction_sums_each_candidate_once_and_keeps_the_winner) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        Scene scene;
+
+        // One quarter-volume candidate contributes exactly one quarter.
+        const std::array single{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.5f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+        };
+        scene.publish(fixture, single);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        auto attempt = encodeAttempt(fixture, pass, scene.m_inputs);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(70u, 70u)) == packMaterialTemperature(kOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(70u, 70u)) == kFillQuarter);
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(71u, 70u)) == 0u);
+
+        // Two candidates in that cell: the nearer centre still owns the single
+        // resolved word while the fill word is the exact sum of both rows.
+        const std::array pair{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.5f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 1u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(70.75f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+        };
+        scene.publish(fixture, pair);
+        attempt = encodeAttempt(fixture, pass, scene.m_inputs, 1u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(2u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(70u, 70u)) == packMaterialTemperature(kOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(70u, 70u)) == kFillHalf);
+
+        // The same two candidates with their stable IDs, and therefore their
+        // metadata row order, exchanged: the winner rank and the integer fill
+        // sum are unchanged, so dispatch and row order cannot select them.
+        const std::array reversed{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(70.75f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 1u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.5f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+        };
+        scene.publish(fixture, reversed);
+        attempt = encodeAttempt(fixture, pass, scene.m_inputs, 2u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(3u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(3u));
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(70u, 70u)) == packMaterialTemperature(kOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(70u, 70u)) == kFillHalf);
+
+        // Four quarter-volume candidates fill exactly one cell volume. Each
+        // admitted row is counted once: a fill accumulated by both reduction
+        // passes, or once per duplicate row, would double this word.
+        const std::array dense{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.5f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 1u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.75f),
+                .m_y = worldPosition(70.5f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 3u,
+                .m_source_row = 2u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.5f),
+                .m_y = worldPosition(70.75f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 4u,
+                .m_source_row = 3u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(70.75f),
+                .m_y = worldPosition(70.75f),
+                .m_physical_fill = 0.25f},
+        };
+        scene.publish(fixture, dense);
+        attempt = encodeAttempt(fixture, pass, scene.m_inputs, 3u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(4u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(4u));
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(70u, 70u)) == packMaterialTemperature(kOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(70u, 70u)) == kFillFull);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_PROJECTION fill_reduction quarter={:x} half={:x} full={:x}", kFillQuarter, kFillHalf,
+                kFillFull));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
+    // fill-weighted transport source
+    // ------------------------------------------------------------------
+
+    // Binary-exact authored emission for the source-magnitude assertions:
+    // (1.0, 0.5, 0.25) survives RGB9E5 exactly. The fixture's thermal table is
+    // all zero and its fine CH starts black, so the cached source is exactly
+    // f*L with no tolerance involved.
+    [[nodiscard]] lighting::SourceMaterial fillTestSource() {
+        const auto record = lighting::makeSourceMaterial(
+            float3{1.0f, 0.5f, 0.25f}, 1.0, float3{0.0f, 0.0f, 0.0f}, float3{0.0f, 0.0f, 0.0f}, 1.0f);
+        PPR_TEST_ASSERT(record.has_value());
+        return *record;
+    }
+
+    [[nodiscard]] u32 scaledSourceWord(const u32 emission_word, const float factor) {
+        const float3 emission = lighting::unpackRGB9E5(emission_word);
+        const auto word = lighting::packRGB9E5(float3{emission.x * factor, emission.y * factor, emission.z * factor});
+        PPR_TEST_ASSERT(word.has_value());
+        return *word;
+    }
+
+    PPR_UNIT_TEST (source_scales_with_cell_fill_and_is_bit_identical_at_full_fill) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        Scene scene;
+        const lighting::SourceMaterial authored = fillTestSource();
+        scene.m_source_palette[kEmissiveOpaque] = authored;
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // The same native cell is republished with 1, 2, 4 and 6 quarter-volume
+        // candidates at its centre. Reusing the cell also proves clearWinners
+        // resets the fill word instead of accumulating it across frames.
+        const auto quarter_particles = [](const u32 count) {
+            std::vector<ParticleSpec> specs{};
+            for (u32 index = 0u; index < count; ++index) {
+                specs.push_back(
+                    ParticleSpec{
+                        .m_id = index + 1u,
+                        .m_source_row = index,
+                        .m_material = kEmissiveOpaque,
+                        .m_x = worldPosition(80.5f),
+                        .m_y = worldPosition(80.5f),
+                        .m_physical_fill = 0.25f});
+            }
+
+            return specs;
+        };
+
+        const std::array<u32, 4u> counts{1u, 2u, 4u, 6u};
+        const std::array<float, 4u> factors{0.25f, 0.5f, 1.0f, 1.0f};
+        for (u32 step = 0u; step < counts.size(); ++step) {
+            const auto specs = quarter_particles(counts[step]);
+            scene.publish(fixture, specs);
+            const auto attempt = encodeAttempt(fixture, pass, scene.m_inputs, step == 0u ? kFenceValueNone : step);
+            PPR_TEST_ASSERT(not attempt.m_prepare);
+            PPR_TEST_ASSERT(not attempt.m_finalize);
+            pass.notifySubmitted(step + 1u);
+            PPR_TEST_ASSERT(not pass.collectCompleted(step + 1u));
+
+            const u32 expected = scaledSourceWord(authored.m_emission, factors[step]);
+            const u32 measured = readSourceWord(fixture, pass, cellIndex(80u, 80u));
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_PROJECTION fill_source particles={} factor={} word={:x} expected={:x}",
+                    counts[step], factors[step], measured, expected));
+            PPR_TEST_ASSERT(measured == expected);
+        }
+
+        // Sigma V = 1.0 is the Lab's normal full cell: the fill factor is
+        // exactly 1.0 and the packed word is the unweighted source.
+        PPR_TEST_ASSERT(scaledSourceWord(authored.m_emission, 1.0f) == authored.m_emission);
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (cell_source_never_accumulates_per_particle) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        Scene scene;
+        const lighting::SourceMaterial authored = fillTestSource();
+        scene.m_source_palette[kEmissiveOpaque] = authored;
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // One particle fills the whole cell.
+        const std::array full{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(80.5f),
+                .m_y = worldPosition(80.5f),
+                .m_physical_fill = 1.0f},
+        };
+        scene.publish(fixture, full);
+        auto attempt = encodeAttempt(fixture, pass, scene.m_inputs);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+        const u32 single_word = readSourceWord(fixture, pass, cellIndex(80u, 80u));
+
+        // Two particles that together fill the same cell. The source is one
+        // value per cell, so the two configurations are identical; a source
+        // that summed per-particle emission would double it. (Two particles
+        // each identical to the first one above would instead double the fill,
+        // which is the fill reduction's contract, not a second source.)
+        const std::array halves{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(80.5f),
+                .m_y = worldPosition(80.5f),
+                .m_physical_fill = 0.5f},
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 1u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(80.5f),
+                .m_y = worldPosition(80.5f),
+                .m_physical_fill = 0.5f},
+        };
+        scene.publish(fixture, halves);
+        attempt = encodeAttempt(fixture, pass, scene.m_inputs, 1u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(2u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+        const u32 halves_word = readSourceWord(fixture, pass, cellIndex(80u, 80u));
+
+        PPR_TEST_ASSERT(single_word == authored.m_emission);
+        PPR_TEST_ASSERT(halves_word == single_word);
+        _.log(
+            std::format("WORLD_LIGHTING_PROJECTION no_accumulation single={:x} halves={:x}", single_word, halves_word));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (two_quarter_filled_cells_add_up_to_one_half_filled_cell) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        Scene scene;
+        const lighting::SourceMaterial authored = fillTestSource();
+        scene.m_source_palette[kEmissiveOpaque] = authored;
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        // Two quarter-filled emissive particles in two independent cells.
+        const std::array two_cells{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(90.5f),
+                .m_y = worldPosition(90.5f),
+                .m_physical_fill = 0.25f},
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 1u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(91.5f),
+                .m_y = worldPosition(90.5f),
+                .m_physical_fill = 0.25f},
+        };
+        scene.publish(fixture, two_cells);
+        auto attempt = encodeAttempt(fixture, pass, scene.m_inputs);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+        const float3 left = lighting::unpackRGB9E5(readSourceWord(fixture, pass, cellIndex(90u, 90u)));
+        const float3 right = lighting::unpackRGB9E5(readSourceWord(fixture, pass, cellIndex(91u, 90u)));
+
+        // One particle filling half of one cell.
+        const std::array half{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(92.5f),
+                .m_y = worldPosition(90.5f),
+                .m_physical_fill = 0.5f},
+        };
+        scene.publish(fixture, half);
+        attempt = encodeAttempt(fixture, pass, scene.m_inputs, 1u);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(2u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(2u));
+
+        const u32 half_word = readSourceWord(fixture, pass, cellIndex(92u, 90u));
+        const float3 half_rgb = lighting::unpackRGB9E5(half_word);
+
+        // Quarter and half magnitudes are exact powers of two here, so the
+        // per-channel sum is binary-exact.
+        PPR_TEST_ASSERT(half_word == scaledSourceWord(authored.m_emission, 0.5f));
+        PPR_TEST_ASSERT(left.x + right.x == half_rgb.x);
+        PPR_TEST_ASSERT(left.y + right.y == half_rgb.y);
+        PPR_TEST_ASSERT(left.z + right.z == half_rgb.z);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_PROJECTION two_cells sum=({}, {}, {}) single_half=({}, {}, {})", left.x + right.x,
+                left.y + right.y, left.z + right.z, half_rgb.x, half_rgb.y, half_rgb.z));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (fill_factor_leaves_gas_receive_only_terrain_and_legacy_cells_alone) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        Scene scene;
+        const lighting::SourceMaterial authored = fillTestSource();
+        scene.m_source_palette[kEmissiveOpaque] = authored;
+
+        // Terrain-owned: a candidate in an emissive terrain cell returns before
+        // the fill atomic, so the cell keeps the full authored value.
+        scene.m_terrain_words[cellIndex(97u, 97u)] = packMaterialTemperature(kEmissiveOpaque, 300.0);
+
+        const std::array specs{
+            // Gas: no cell nomination, no fill and no source.
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_gas = true,
+                .m_gas_x = 95.5f,
+                .m_gas_y = 95.5f},
+            // Receive-only with half a cell of fill: still exactly zero source.
+            ParticleSpec{
+                .m_id = 2u,
+                .m_source_row = 0u,
+                .m_material = kReceiveOnly,
+                .m_x = worldPosition(96.5f),
+                .m_y = worldPosition(96.5f),
+                .m_physical_fill = 0.5f},
+            // The candidate inside the terrain-owned cell.
+            ParticleSpec{
+                .m_id = 3u,
+                .m_source_row = 1u,
+                .m_material = kOpaque,
+                .m_x = worldPosition(97.5f),
+                .m_y = worldPosition(97.5f),
+                .m_physical_fill = 0.25f},
+            // A legacy presentation-only row: zero means fill unavailable, so
+            // the cell keeps today's full value instead of going black.
+            ParticleSpec{
+                .m_id = 4u,
+                .m_source_row = 2u,
+                .m_material = kEmissiveOpaque,
+                .m_x = worldPosition(98.5f),
+                .m_y = worldPosition(98.5f)},
+        };
+        scene.publish(fixture, specs);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        const auto attempt = encodeAttempt(fixture, pass, scene.m_inputs);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(95u, 95u)) == 0u);
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(95u, 95u)) == 0u);
+        PPR_TEST_ASSERT(readSourceWord(fixture, pass, cellIndex(95u, 95u)) == 0u);
+
+        PPR_TEST_ASSERT(readCell(fixture, pass, cellIndex(96u, 96u)) == packMaterialTemperature(kReceiveOnly, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(96u, 96u)) == kFillHalf);
+        PPR_TEST_ASSERT(readSourceWord(fixture, pass, cellIndex(96u, 96u)) == 0u);
+
+        PPR_TEST_ASSERT(
+            readCell(fixture, pass, cellIndex(97u, 97u)) == packMaterialTemperature(kEmissiveOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(97u, 97u)) == 0u);
+        PPR_TEST_ASSERT(readSourceWord(fixture, pass, cellIndex(97u, 97u)) == authored.m_emission);
+
+        PPR_TEST_ASSERT(
+            readCell(fixture, pass, cellIndex(98u, 98u)) == packMaterialTemperature(kEmissiveOpaque, 300.0));
+        PPR_TEST_ASSERT(readFillWord(fixture, pass, cellIndex(98u, 98u)) == 0u);
+        PPR_TEST_ASSERT(readSourceWord(fixture, pass, cellIndex(98u, 98u)) == authored.m_emission);
+
+        _.log(std::format("WORLD_LIGHTING_PROJECTION fill_guards gas=0 receive_only=0 terrain=full legacy=full"));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
     // reflected shader ABI
     // ------------------------------------------------------------------
 
@@ -1041,13 +1516,14 @@ namespace pP::tests::detail::WorldLightingProjection {
             return 0u;
         };
 
-        for (const auto &[name, expected]: std::array<std::pair<const char *, u32>, 8u>{{
+        for (const auto &[name, expected]: std::array<std::pair<const char *, u32>, 9u>{{
                  {"g_numerical", 64u},
                  {"g_metadata", 32u},
                  {"g_visuals", 96u},
                  {"g_terrain", 4u},
                  {"g_best_key", 4u},
                  {"g_best_row", 4u},
+                 {"g_cell_fill", 4u},
                  {"g_resolved", 4u},
                  {"g_numeric_status", 4u},
              }}) {
@@ -1096,11 +1572,12 @@ namespace pP::tests::detail::WorldLightingProjection {
             return std::numeric_limits<u32>::max();
         };
 
-        for (const auto &[element, field, expected]: std::array<std::tuple<const char *, const char *, u32>, 6u>{{
+        for (const auto &[element, field, expected]: std::array<std::tuple<const char *, const char *, u32>, 7u>{{
                  {"g_visuals", "emissiveStrength", 60u},
                  {"g_visuals", "surfaceFlags", 76u},
                  {"g_metadata", "materialTemperature", 12u},
                  {"g_metadata", "sourceRow", 8u},
+                 {"g_metadata", "physicalFillBits", 28u},
                  {"g_numerical", "positionX", 0u},
                  {"g_numerical", "positionY", 4u},
              }}) {
@@ -1681,6 +2158,11 @@ namespace pP::tests {
                 detail::WorldLightingProjection::
                     second_prepare_before_submission_is_rejected_without_disturbing_the_attempt,
                 detail::WorldLightingProjection::shutdown_reports_an_uninspected_pending_error,
+                detail::WorldLightingProjection::fill_reduction_sums_each_candidate_once_and_keeps_the_winner,
+                detail::WorldLightingProjection::source_scales_with_cell_fill_and_is_bit_identical_at_full_fill,
+                detail::WorldLightingProjection::cell_source_never_accumulates_per_particle,
+                detail::WorldLightingProjection::two_quarter_filled_cells_add_up_to_one_half_filled_cell,
+                detail::WorldLightingProjection::fill_factor_leaves_gas_receive_only_terrain_and_legacy_cells_alone,
                 detail::WorldLightingProjection::reflected_projection_records_match_the_cpu_shapes,
                 detail::WorldLightingProjection::grid_pass_owns_the_projection_and_binds_resolved_cells,
                 detail::WorldLightingProjection::packed_presentation_row_quantises_and_filters_rows,

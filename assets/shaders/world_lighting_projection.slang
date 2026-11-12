@@ -6,6 +6,11 @@
 // the ordered distance/class key, best_row the stable-ID metadata row rank that
 // owns the winning key. Dispatch order and GPU wave layout never select the
 // winner, and no winning payload races with the index reduction.
+//
+// A third row-major uint32 grid accumulates the cell's Q16 physical fill with a
+// 32-bit integer atomic add. Because the accumulator is an integer, the sum is
+// order-independent under the same contract as the key minima; it never feeds
+// the winner selection.
 #include "grid_particle_native.slang"
 #include "numeric_status.slang"
 #include "world_lighting_codec.slang"
@@ -28,7 +33,14 @@ StructuredBuffer<TerrainVisual> g_visuals;
 StructuredBuffer<uint> g_terrain;
 RWStructuredBuffer<uint> g_best_key;
 RWStructuredBuffer<uint> g_best_row;
+RWStructuredBuffer<uint> g_cell_fill;
 RWStructuredBuffer<uint> g_resolved;
+
+// Q16 fixed-point quantum of one cell's physical fill. A uint32 accumulator
+// wraps only after 2^32 quantum units, i.e. 65536 cell-volumes of fill in one
+// cell (262144 quarter-volume particles). That cannot occur in a committed
+// world, so the bound is recorded here instead of being guarded at runtime.
+static const float kFillQuantum = 65536.0;
 
 static const uint kProjectionStatusClear = 0u;
 static const uint kProjectionStatusKeys = 1u;
@@ -114,6 +126,7 @@ void clearWinners(uint3 id: SV_DispatchThreadID) {
     if (id.x < cells) {
         g_best_key[id.x] = 0xffffffffu;
         g_best_row[id.x] = 0xffffffffu;
+        g_cell_fill[id.x] = 0u;
     }
 
     if (id.x < kNumericStatusRecords * kNumericStatusWords) {
@@ -151,6 +164,14 @@ void reduceKeys(uint3 id: SV_DispatchThreadID) {
 
     // Existing terrain material takes precedence in its cell.
     if (g_terrain[candidate.cell] != 0u) return;
+
+    // Every admitted categorical candidate contributes its own Q16 physical
+    // fill exactly once, so the source stage can scale the cell's emitted
+    // radiance by the fill of the whole cell rather than by one winner. A row
+    // with unavailable fill contributes zero; the source stage then keeps the
+    // legacy full value. Gas returned above and terrain-owned cells returned
+    // just before, so neither contributes fill or nominates the cell.
+    InterlockedAdd(g_cell_fill[candidate.cell], uint(round(asfloat(metadata.physicalFillBits) * kFillQuantum)));
 
     InterlockedMin(g_best_key[candidate.cell], candidate.key);
 }

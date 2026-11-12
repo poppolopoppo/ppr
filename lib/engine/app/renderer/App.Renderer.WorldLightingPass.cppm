@@ -108,10 +108,13 @@ export namespace pP {
 
     class WorldLightingPass {
     public:
-        // Native projection domain: one resolved u32 per cell, row-major.
+        // Native projection domain: one resolved u32 per cell, row-major. Three
+        // scratch grids back the reduction: the ordered key, the stable-ID row
+        // rank and the Q16 physical-fill accumulation, one 4 MiB grid each.
         static constexpr u32 kWorldEdge{1024u};
         static constexpr u32 kCellCount{kWorldEdge * kWorldEdge};
         static constexpr u32 kResolvedCellBytes{kCellCount * sizeof(u32)};
+        static constexpr u32 kScratchGridCount{3u};
         static constexpr u32 kScratchGridBytes{kResolvedCellBytes};
 
         // Full-domain acceleration: three visibility levels in one structured
@@ -248,6 +251,10 @@ export namespace pP {
         // ------------------------------------------------------------------
 
         [[nodiscard]] rhi::IBuffer *resolvedCellsForTest() const noexcept;
+        // Q16 physical-fill accumulation of the last submitted projection, one
+        // word per native cell. The transport source reads it; tests observe it
+        // directly instead of inferring the sum from a source magnitude.
+        [[nodiscard]] rhi::IBuffer *fillCellsForTest() const noexcept;
         // Current attempt slot's visibility masks and jump table. They are
         // allocated per slot, so a snapshot stays readable after a later
         // attempt selects another slot.
@@ -314,7 +321,9 @@ export namespace pP {
         };
 
         struct ProjectionResources {
-            std::array<rhi::ComPtr<rhi::IBuffer>, 2u> m_scratch{};
+            // best_key, best_row and the Q16 cell-fill accumulation. All three
+            // are cleared by clearWinners and reused in place per world.
+            std::array<rhi::ComPtr<rhi::IBuffer>, kScratchGridCount> m_scratch{};
             rhi::ComPtr<rhi::IBuffer> m_resolved{};
             // One zero metadata row keeps the constant resolve binding valid for
             // a zero-particle world without inventing a publication.

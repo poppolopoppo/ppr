@@ -74,8 +74,8 @@ namespace pP {
         }
 
         for (auto *const buffer:
-            {resources.m_scratch[0u].get(), resources.m_scratch[1u].get(), resources.m_resolved.get(),
-                attempt.m_status.get()}) {
+            {resources.m_scratch[0u].get(), resources.m_scratch[1u].get(), resources.m_scratch[2u].get(),
+                resources.m_resolved.get(), attempt.m_status.get()}) {
             encoder.setBufferState(buffer, rhi::ResourceState::UnorderedAccess);
         }
 
@@ -98,6 +98,7 @@ namespace pP {
             if (entry == 0u) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_key", resources.m_scratch[0u]));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_row", resources.m_scratch[1u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_fill", resources.m_scratch[2u]));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
             } else if (entry == 3u) {
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_terrain", inputs.m_terrain));
@@ -114,6 +115,9 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_terrain", inputs.m_terrain));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_key", resources.m_scratch[0u]));
                 if (entry == 1u) {
+                    // The key reduction owns the per-cell fill accumulation; the
+                    // row reduction only refines the winning row.
+                    PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_fill", resources.m_scratch[2u]));
                     PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
                 } else {
                     PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_row", resources.m_scratch[1u]));
@@ -135,9 +139,10 @@ namespace pP {
             return {};
         };
 
-        // Clear every scratch cell and all four status records, then reduce the
-        // same immutable committed input twice and overwrite every resolved
-        // cell. The resolve runs even for a zero-particle world.
+        // Clear every scratch grid (ordered key, row rank and Q16 fill) and all
+        // four status records, then reduce the same immutable committed input
+        // twice and overwrite every resolved cell. The resolve runs even for a
+        // zero-particle world.
         constexpr u32 cell_groups = WorldLightingPass::kCellCount / 256u;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(0u, cell_groups));
         if (count != 0u) {

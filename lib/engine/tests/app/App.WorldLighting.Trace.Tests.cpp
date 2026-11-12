@@ -1370,6 +1370,72 @@ namespace pP::tests::detail::WorldLightingTrace {
     };
 
     // ------------------------------------------------------------------
+    // fill-weighted source magnitude through the tracer
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (fill_scaled_cell_source_survives_the_tracer_unchanged) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto palette_values = makePalette();
+        const auto palette = uploadPalette(fixture, palette_values);
+
+        // The cached source is already fill-weighted: a 0.5-filled emissive cell
+        // publishes half the authored radiance. The tracer must return exactly
+        // that word and still stop the path, unchanged by this amendment.
+        const auto emission_word = *lighting::packRGB9E5(float3{1.0f, 0.5f, 0.25f});
+        const auto half_word = *lighting::packRGB9E5(float3{0.5f, 0.25f, 0.125f});
+        const auto source = uploadSource(fixture, half_word);
+        TraceProbe probe{fixture};
+
+        CategoricalMap map;
+        map.occupy(500u, 500u, kEmissiveOpaque);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const auto attempt = encodeAcceleration(fixture, pass, palette, map);
+        PPR_TEST_ASSERT(not attempt.m_prepare);
+        PPR_TEST_ASSERT(not attempt.m_finalize);
+        pass.notifySubmitted(1u);
+        PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+        const std::array<float4, 2u> segments{
+            makeSegment(float2{100.5f, 500.5f}, float2{900.5f, 500.5f}),
+            makeSegment(float2{900.5f, 500.5f}, float2{100.5f, 500.5f}),
+        };
+
+        const auto result = probe.run(
+            pass.resolvedCellsForTest(), palette.get(), attempt.m_snapshot.m_jump, source.get(),
+            std::span<const float4>{segments.data(), segments.size()});
+
+        const float3 half = lighting::unpackRGB9E5(half_word);
+        const float3 full = lighting::unpackRGB9E5(emission_word);
+        PPR_TEST_ASSERT(half.x != full.x and half.y != full.y and half.z != full.z);
+
+        for (u32 index = 0u; index < segments.size(); ++index) {
+            const u32 base = index * 5u;
+            PPR_TEST_ASSERT(result.m_words[base] == cellIndex(500u, 500u));
+            PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[base + 1u]) == half.x);
+            PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[base + 2u]) == half.y);
+            PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[base + 3u]) == half.z);
+            // An occupied cell still closes the path: the fill factor scales the
+            // returned radiance only, never the transmittance rule.
+            PPR_TEST_ASSERT(std::bit_cast<float>(result.m_words[base + 4u]) == 0.0f);
+        }
+
+        PPR_TEST_ASSERT(result.m_status[0u] == kNoNumericIndex);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_TRACE fill_scaled_source radiance=({}, {}, {}) transmittance=0", half.x, half.y,
+                half.z));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
     // receive-only path, negative exact boundary and overflow status
     // ------------------------------------------------------------------
 
@@ -1457,6 +1523,7 @@ namespace pP::tests {
                 detail::WorldLightingTrace::acceleration_rebuild_drops_previous_occupancy,
                 detail::WorldLightingTrace::reflected_visibility_records_match_cpu_shapes,
                 detail::WorldLightingTrace::nonfinite_trace_reports_numeric_failure,
+                detail::WorldLightingTrace::fill_scaled_cell_source_survives_the_tracer_unchanged,
                 detail::WorldLightingTrace::receive_only_path_negative_boundary_and_overflow_status,
             });
         };

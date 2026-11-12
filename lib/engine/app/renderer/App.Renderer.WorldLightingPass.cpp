@@ -377,12 +377,16 @@ namespace pP {
         }
 
         const std::array<NumericStatusRecord, kNumericStatusRecords> initial_status{};
-        for (u32 index = 0u; index < 2u; ++index) {
+        constexpr std::array<const char *, kScratchGridCount> scratch_labels{
+            "world-lighting best-key scratch",
+            "world-lighting best-row scratch",
+            "world-lighting cell-fill scratch",
+        };
+        for (u32 index = 0u; index < kScratchGridCount; ++index) {
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass,
-                projectionStorageBuffer(
-                    device, kScratchGridBytes, sizeof(u32), nullptr, resources.m_scratch[index],
-                    index == 0u ? "world-lighting best-key scratch" : "world-lighting best-row scratch"));
+                WorldLightingPass, projectionStorageBuffer(
+                                       device, kScratchGridBytes, sizeof(u32), nullptr, resources.m_scratch[index],
+                                       scratch_labels[index]));
         }
 
         PPR_RETURN_ERROR_ON_FAIL(
@@ -1001,6 +1005,10 @@ namespace pP {
 
     rhi::IBuffer *WorldLightingPass::resolvedCellsForTest() const noexcept {
         return m_resources ? m_resources->m_resolved.get() : nullptr;
+    }
+
+    rhi::IBuffer *WorldLightingPass::fillCellsForTest() const noexcept {
+        return m_resources ? m_resources->m_scratch[2u].get() : nullptr;
     }
 
     rhi::IBuffer *WorldLightingPass::accelerationVisibilityForTest() const noexcept {

@@ -362,6 +362,11 @@ namespace pP {
         encoder.setBufferState(inputs.m_source_materials, rhi::ResourceState::ShaderResource);
         encoder.setBufferState(inputs.m_thermal_lut, rhi::ResourceState::ShaderResource);
         encoder.setBufferState(prior_ch, rhi::ResourceState::ShaderResource);
+        // The projection wrote the particle row rank and the Q16 fill word
+        // earlier in this submission. These transitions order those atomics
+        // before the source stage's read of them.
+        encoder.setBufferState(resources.m_scratch[1u], rhi::ResourceState::ShaderResource);
+        encoder.setBufferState(resources.m_scratch[2u], rhi::ResourceState::ShaderResource);
 
         const auto bind = [&](const u32 entry, const u32 level) -> std::error_code {
             auto &root = *resources.m_cascade_roots[entry][resources.m_attempt_slot];
@@ -384,6 +389,11 @@ namespace pP {
                     WorldLightingPass, bind_buffer("g_source_materials", inputs.m_source_materials));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_thermal_lut", inputs.m_thermal_lut));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_prior_ch", prior_ch));
+                // Fill-weighted transport source: the cell's own winner rank and
+                // the Q16 fill the projection accumulated for it. Both are
+                // read-only here and neither changes the winner selection.
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cell_fill", resources.m_scratch[2u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_best_row", resources.m_scratch[1u]));
                 PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_source_frame"].getDereferenced(constants));
 
                 const SourceStageFrame values{.m_status_record = kNumericStageSource};

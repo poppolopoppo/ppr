@@ -2078,6 +2078,13 @@ namespace pP::tests::detail::WorldLightingCascade {
         PPR_TEST_ASSERT(
             stride_of(std::filesystem::current_path() / "shaders" / "world_lighting_source.slang", "g_thermal_lut") ==
             16u);
+        // The fill-weighted source reads the projection's winner rank and the
+        // Q16 cell fill as two row-major uint32 grids.
+        PPR_TEST_ASSERT(
+            stride_of(std::filesystem::current_path() / "shaders" / "world_lighting_source.slang", "g_cell_fill") ==
+            4u);
+        PPR_TEST_ASSERT(
+            stride_of(std::filesystem::current_path() / "shaders" / "world_lighting_source.slang", "g_best_row") == 4u);
 
         // Constant blocks match the CPU mirrors byte for byte.
         const auto constants_of = [&](const std::filesystem::path &file, const std::string_view name) {
