@@ -150,3 +150,28 @@ void probeCategoricalBase(uint3 thread : SV_DispatchThreadID,
     g_probe_detail[base_index + 7u] = float4(
         visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b, 0.0);
 }
+
+// ------------------------------------------------------------------
+// particle terrain-occlusion decision
+// ------------------------------------------------------------------
+// Reads the committed resolved/ownership words and the real palette record for
+// each probed native cell and reports the shared occlusion decision. The probe
+// exercises grid_tiles' production helper; the particle fragment applies it.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void probeTerrainOcclusion(uint3 thread : SV_DispatchThreadID) {
+    if (thread.x >= g_material_probe.m_count) return;
+
+    // field 0: committed native-cell index in x
+    uint cell = uint(probeField(thread.x, 0u).x);
+    uint resolved = g_resolved_cells[cell];
+    uint resolved_material = unpackCellMaterial(resolved);
+    GridVisual terrain = g_terrain_visuals[min(resolved_material, 65535u)];
+    uint best_row = g_best_row[cell];
+    bool occludes = terrainOccludesParticle(resolved_material, terrain.m_material_id,
+        (terrain.m_surface_flags & kSurfaceOpticalBlend) != 0u, best_row);
+    // Exactly representable diagnostics: decision, resolved material id and the
+    // committed-ownership flag. No raw 32-bit word is cast through float.
+    g_probe_detail[thread.x] = float4(occludes ? 1.0 : 0.0, float(resolved_material),
+        best_row != 0xffffffffu ? 1.0 : 0.0, 0.0);
+}

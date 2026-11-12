@@ -3248,6 +3248,139 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 optical_desc.depthStencil.depthTestEnable, optical_desc.depthStencil.depthWriteEnable));
     };
 
+    PPR_UNIT_TEST (opaque_terrain_ownership_occludes_solid_and_liquid_particles) {
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        // Palette slot n carries material id n, except slot 3, which deliberately
+        // carries a different id to exercise the palette identity guard the
+        // fragment applies before retiring a particle.
+        std::array<GridTerrainVisual, 4u> palette{};
+        palette[1u].m_material_id = 1u;
+        palette[1u].m_color_rgba = 0xffff'ffffu;
+        palette[1u].m_surface_flags = 0u;
+        palette[2u].m_material_id = 2u;
+        palette[2u].m_color_rgba = 0x4080'ffffu;
+        palette[2u].m_surface_flags = kGridSurfaceOpticalBlend;
+        palette[3u].m_material_id = 4u;
+        palette[3u].m_color_rgba = 0xffff'ffffu;
+
+        const auto word = [](const u32 material, const double temperature) {
+            const auto packed = lighting::packCell(static_cast<u16>(material), temperature);
+            PPR_TEST_ASSERT(packed.has_value());
+            return *packed;
+        };
+
+        // Destination cells, one per case.
+        //   0 opaque terrain-owned, carrying the particle's own material id;
+        //   1 the same resolved material id, but a committed particle owns it;
+        //   2 a particle-owned dig cell;
+        //   3 an empty cell;
+        //   4 optical (glass/water) terrain-owned;
+        //   5 a material absent from the palette (identity mismatch).
+        const std::array<u32, 6u> resolved{
+            word(1u, 300.0), word(1u, 500.0), word(1u, 500.0), 0u, word(2u, 300.0), word(3u, 300.0)};
+        const std::array<u32, 6u> best_row{0xffff'ffffu, 7u, 7u, 0xffff'ffffu, 0xffff'ffffu, 0xffff'ffffu};
+
+        std::vector<float4> fields(6u * 8u);
+        for (u32 index = 0u; index < resolved.size(); ++index) {
+            fields[index * 8u + 0u] = float4{static_cast<float>(index), 0.0f, 0.0f, 0.0f};
+        }
+
+        auto &device = fixture.device();
+        auto palette_buffer = makeBuffer(
+            device, palette.size() * sizeof(GridTerrainVisual), sizeof(GridTerrainVisual), palette.data());
+        auto resolved_buffer = makeBuffer(device, resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        auto best_row_buffer = makeBuffer(device, best_row.size() * sizeof(u32), sizeof(u32), best_row.data());
+        auto fields_buffer = makeBuffer(device, fields.size() * sizeof(float4), sizeof(float4), fields.data());
+        auto detail = makeBuffer(device, resolved.size() * sizeof(float4), sizeof(float4), nullptr, true);
+
+        auto program = fixture.makeProgram(
+            std::filesystem::current_path() / "shaders" / "tests" / "world_lighting_material_probe.slang",
+            "probeTerrainOcclusion");
+        rhi::ComPtr<rhi::IComputePipeline> pipeline{};
+        rhi::ComputePipelineDesc pipeline_description{};
+        pipeline_description.program = program.get();
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_description, pipeline.writeRef())));
+        rhi::ComPtr<rhi::IShaderObject> root{};
+        PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(program, root.writeRef())));
+
+        struct alignas(16) ProbeFrame {
+            u32 m_count{};
+            u32 m_reserved[3]{};
+        } frame{};
+        frame.m_count = static_cast<u32>(resolved.size());
+        rhi::ShaderCursor cursor{root.get()};
+        rhi::ShaderCursor constants{};
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_material_probe"].getDereferenced(constants)));
+        PPR_TEST_ASSERT(not make_error_code(constants.setData(&frame, sizeof(frame))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_fields"].setBinding(rhi::Binding(fields_buffer))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_probe_detail"].setBinding(rhi::Binding(detail))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved_buffer))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_best_row"].setBinding(rhi::Binding(best_row_buffer))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_terrain_visuals"].setBinding(rhi::Binding(palette_buffer))));
+
+        rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+        encoder->setBufferState(detail, rhi::ResourceState::UnorderedAccess);
+        {
+            auto *const pass = encoder->beginComputePass();
+            PPR_TEST_ASSERT(pass != nullptr);
+            PPR_DEFER {
+                pass->end();
+            };
+            pass->bindPipeline(pipeline, root);
+            pass->dispatchCompute(1u, 1u, 1u);
+        }
+        encoder->setBufferState(detail, rhi::ResourceState::CopySource);
+        fixture.submit(*encoder);
+
+        std::vector<float4> result(6u);
+        PPR_TEST_ASSERT(
+            not make_error_code(device.readBuffer(detail, 0u, sizeof(float4) * result.size(), result.data())));
+        const auto occludes = [](const float4 &record) { return record.x != 0.0f; };
+        const auto material = [](const float4 &record) { return static_cast<u32>(record.y); };
+        const auto particle_owned = [](const float4 &record) { return record.z != 0.0f; };
+
+        for (u32 index = 0u; index < result.size(); ++index) {
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_occlusion cell={} material={} particle_owned={} occludes={}",
+                    index, material(result[index]), particle_owned(result[index]), occludes(result[index])));
+        }
+
+        // Opaque terrain-owned cell, carrying the particle's own material id:
+        // the committed ownership grid still hides the particle.
+        PPR_TEST_ASSERT(material(result[0u]) == 1u);
+        PPR_TEST_ASSERT(not particle_owned(result[0u]));
+        PPR_TEST_ASSERT(occludes(result[0u]));
+
+        // The same resolved material id with a committed particle winner is not
+        // terrain-owned: ownership, not material identity, selects the cell.
+        PPR_TEST_ASSERT(material(result[1u]) == 1u);
+        PPR_TEST_ASSERT(particle_owned(result[1u]));
+        PPR_TEST_ASSERT(not occludes(result[1u]));
+
+        // Particle-owned dig cell: the particle draws.
+        PPR_TEST_ASSERT(not occludes(result[2u]));
+
+        // Empty cell: no material, no occlusion.
+        PPR_TEST_ASSERT(material(result[3u]) == 0u);
+        PPR_TEST_ASSERT(not occludes(result[3u]));
+
+        // Optical (glass/water) terrain-owned: the particle keeps blending under.
+        PPR_TEST_ASSERT(material(result[4u]) == 2u);
+        PPR_TEST_ASSERT(not particle_owned(result[4u]));
+        PPR_TEST_ASSERT(not occludes(result[4u]));
+
+        // Palette identity mismatch: not an admitted terrain material.
+        PPR_TEST_ASSERT(material(result[5u]) == 3u);
+        PPR_TEST_ASSERT(not occludes(result[5u]));
+    };
+
     PPR_UNIT_TEST (excavated_vacuum_survives_and_opaque_terrain_clips_the_particle) {
         Fixture fixture{};
         fixture.initialize();
@@ -3603,6 +3736,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_descriptions_use_the_rows_own_phase_material,
                 detail::WorldLightingMaterial::particle_shapes_share_one_support_bound,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
+                detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,
             });
         };

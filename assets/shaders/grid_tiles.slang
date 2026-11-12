@@ -1440,6 +1440,20 @@ float particleFalloff(float2 local) {
     return t*t*(3.0-2.0*t);
 }
 
+// Pure full-cell occlusion decision. A particle is hidden by its destination
+// native cell only when the cell is owned by opaque terrain: it carries a
+// material, the committed projection recorded no particle winner for it, the
+// resolved material matches the palette record (identity guard), and the
+// material is not optical-blend. Ownership is the committed winner grid, not the
+// material id, so terrain sharing a dug particle's material still occludes;
+// optical terrain keeps the existing blend-under behaviour. Shared with the
+// nonvisual material probe so the asserted decision is this one.
+bool terrainOccludesParticle(uint resolved_material, uint terrain_material_id, bool terrain_optical,
+    uint best_row) {
+    return resolved_material!=0u && best_row==0xffffffffu &&
+        terrain_material_id==resolved_material && !terrain_optical;
+}
+
 float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
@@ -1475,6 +1489,27 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // Solids also carry their rounded-square mask.
     bool inside_solid_shape=liquid || particleSolidDistance(local)<=0.0;
     if (!inside_solid_shape || falloff<=(blend_class ? 0.0 : kParticleDiscardThreshold)) discard;
+
+    // Full-cell terrain occlusion: an opaque terrain-owned destination cell
+    // hides the particle. The per-pixel hard clip below refines contour edges;
+    // this is the whole-cell guarantee for quads whose sample lands on the cell
+    // interior. The ownership bit authorizes the committed winner-grid read, so
+    // a fallback/stale attempt never reads out of range. Particle-owned (dug)
+    // cells and empty cells draw, and optical terrain keeps blending under.
+    if ((g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)!=0u) {
+        uint occluder_cell=resolvedCellIndex(input.fine_position);
+        if (occluder_cell!=0xffffffffu) {
+            uint resolved=g_resolved_cells[occluder_cell];
+            uint occluder_material=unpackCellMaterial(resolved);
+            if (occluder_material!=0u) {
+                GridVisual occluder=g_terrain_visuals[min(occluder_material,65535u)];
+                if (terrainOccludesParticle(occluder_material,occluder.m_material_id,
+                    (occluder.m_surface_flags&kSurfaceOpticalBlend)!=0u,g_best_row[occluder_cell])) {
+                    discard;
+                }
+            }
+        }
+    }
 
     // The per-pixel terrain hard clip is kept as the second line of defence for
     // pixels where draw order alone is not enough.
