@@ -452,6 +452,10 @@ namespace pP::tests::detail::MatterAdapter {
             return completion;
         };
 
+        // The test owns this queue; it must outlive runtime shutdown and be
+        // released before RHI teardown (device-owned children keep the device
+        // alive otherwise).
+        rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_DEFER {
             if (outstanding) {
                 std::ignore = await(Expected<colony::MatterRequest>{*outstanding});
@@ -463,11 +467,12 @@ namespace pP::tests::detail::MatterAdapter {
 
             lane.requestStop();
             PPR_TEST_ASSERT(not lane.join());
+            queue.setNull();
             PPR_TEST_ASSERT(not rhi_service->shutdown());
             PPR_TEST_ASSERT(not shaders->shutdown());
         };
 
-        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        queue = acquireGraphicsQueue(rhi_service->getDevice());
         std::ignore = success(runtime.beginInitialize(
             &lane, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
 
@@ -641,6 +646,7 @@ namespace pP::tests::detail::MatterAdapter {
         auto rhi_service = IRhiService::get();
         colony::MatterRuntime runtime;
         bool shaders_attempted = false, rhi_attempted = false, cleaned = false;
+        rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_DEFER {
             if (not cleaned) {
                 // Best-effort assertion-unwind cleanup must not throw another
@@ -656,6 +662,7 @@ namespace pP::tests::detail::MatterAdapter {
                 }
 
                 if (stopped) {
+                    queue.setNull();
                     const auto rhi_error = rhi_attempted ? rhi_service->shutdown() : std::error_code{};
                     const auto shader_error = shaders_attempted ? shaders->shutdown() : std::error_code{};
                     if (rhi_error or shader_error) {
@@ -682,7 +689,7 @@ namespace pP::tests::detail::MatterAdapter {
             return completion;
         };
 
-        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        queue = acquireGraphicsQueue(rhi_service->getDevice());
         std::ignore = success(runtime.beginInitialize(
             nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
         std::optional<float> first_displacement;
@@ -779,6 +786,9 @@ namespace pP::tests::detail::MatterAdapter {
         }
 
         std::ignore = success(runtime.beginShutdown());
+        // The test owns this graphics queue. Release it before RHI teardown so
+        // no test-owned device child keeps the device alive past shutdown.
+        queue.setNull();
         PPR_TEST_ASSERT(not rhi_service->shutdown());
         PPR_TEST_ASSERT(not shaders->shutdown());
         cleaned = true;
@@ -792,8 +802,10 @@ namespace pP::tests::detail::MatterAdapter {
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
         PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
+        rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_DEFER {
             PPR_TEST_ASSERT(not completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error);
+            queue.setNull();
             PPR_TEST_ASSERT(not rhi_service->shutdown());
             PPR_TEST_ASSERT(not shaders->shutdown());
         };
@@ -813,7 +825,7 @@ namespace pP::tests::detail::MatterAdapter {
             return completion;
         };
 
-        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        queue = acquireGraphicsQueue(rhi_service->getDevice());
         std::ignore = success(runtime.beginInitialize(
             nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()));
         auto source = colony::makeMatterState(records(), 1.0, 1.0, colony::kMatterGravityY, 94u);
@@ -1024,14 +1036,16 @@ namespace pP::tests::detail::MatterAdapter {
         rhi_service->setCoreValidation(true);
         rhi_service->setGpuAssistedValidation(true);
         PPR_TEST_ASSERT(not rhi_service->initialize(kFixtureBackend, *shaders));
+        rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_DEFER {
             PPR_TEST_ASSERT(not driver.shutdown());
             PPR_TEST_ASSERT(not completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error);
+            queue.setNull();
             PPR_TEST_ASSERT(not rhi_service->shutdown());
             PPR_TEST_ASSERT(not shaders->shutdown());
         };
 
-        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        queue = acquireGraphicsQueue(rhi_service->getDevice());
         PPR_TEST_ASSERT(not completeInline(
             runtime, runtime.beginInitialize(
                          nullptr, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path()))
@@ -1082,12 +1096,14 @@ namespace pP::tests::detail::MatterAdapter {
         colony::MatterRuntime runtime;
         colony::ColonyDriver driver;
         bool shaders_attempted = false, rhi_attempted = false;
+        rhi::ComPtr<rhi::ICommandQueue> queue{};
         PPR_DEFER {
             const auto driver_error = driver.shutdown();
             const auto runtime_error = completeInline(runtime, runtime.beginShutdown()).m_execution.m_operation_error;
             // RHI/shaders are dependencies, not independent cleanup, when
             // completion is unknown. Retain them rather than release off-lane.
             PPR_TEST_ASSERT(not runtime_error);
+            queue.setNull();
             const auto rhi_error = rhi_attempted ? rhi_service->shutdown() : std::error_code{};
             const auto shader_error = shaders_attempted ? shaders->shutdown() : std::error_code{};
 
@@ -1108,7 +1124,7 @@ namespace pP::tests::detail::MatterAdapter {
             stderr, "[matter-domain-device] api=%s adapter=%s workload=empty-particle-dense-grid-lifecycle-pause\n",
             device.apiName ? device.apiName : "unavailable", device.adapterName ? device.adapterName : "unavailable");
 
-        auto queue = acquireGraphicsQueue(rhi_service->getDevice());
+        queue = acquireGraphicsQueue(rhi_service->getDevice());
         const auto unavailable = runtime.beginInitialize(
             &stopped_lane, rhi_service->getDevice(), *queue, *shaders, std::filesystem::current_path());
         PPR_TEST_ASSERT(not unavailable and unavailable.error() == std::errc::not_connected);

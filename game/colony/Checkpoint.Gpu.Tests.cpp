@@ -387,8 +387,13 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(view and view->m_metadata and view->m_metadata->m_version > 0u);
             Array<GridParticleMetadataRow> published(view->m_metadata->m_count);
             PPR_TEST_ASSERT(not make_error_code(m_queue->waitOnHost()));
-            PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().readBuffer(
-                view->m_metadata->m_rows, 0u, published.size() * sizeof(GridParticleMetadataRow), published.data())));
+            // An empty restored world publishes a valid zero-row set; a
+            // zero-byte read with a null destination is rejected by the device.
+            if (not published.empty()) {
+                PPR_TEST_ASSERT(not make_error_code(m_rhi->getDevice().readBuffer(
+                    view->m_metadata->m_rows, 0u, published.size() * sizeof(GridParticleMetadataRow),
+                    published.data())));
+            }
             for (const auto &row: published) {
                 const u64 id = u64{row.m_id_high} << 32u | row.m_id_low;
                 const auto record = std::ranges::find_if(

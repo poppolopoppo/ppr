@@ -2504,6 +2504,9 @@ namespace pP::tests::detail::MatterGpu {
         std::array<u64, 2u> holes{};
         std::array<u64, 2u> samples{};
         std::array<u64, 2u> outside_painted{};
+        std::array<u64, 2u> precedence_samples{};
+        std::array<u64, 2u> precedence_ok{};
+        std::array<u64, 2u> water_pixels{};
         for (u32 state = 0u; state < 2u; ++state) {
             u64 hash = 14695981039346656037ull;
             double rms_motion_squared = 0.0;
@@ -2528,12 +2531,93 @@ namespace pP::tests::detail::MatterGpu {
                 PPR_TEST_ASSERT(output.good());
             }
 
+            // Approved categorical presentation: project the frozen solver rows
+            // into native cells with the same ordered key the production
+            // projection uses (nearest cell centre, stable-ID tie, terrain
+            // precedence). One terrain cell inside the deep ROI proves that
+            // existing terrain material wins over a nominating particle.
+            constexpr u32 kPoolEdge = WorldLightingPass::kWorldEdge;
+            constexpr u32 kPrecedenceX = 21u;
+            constexpr u32 kPrecedenceY = 15u;
+            std::vector<u32> resolved(WorldLightingPass::kCellCount, 0u);
+            std::vector<u32> best_key(WorldLightingPass::kCellCount, 0xffffffffu);
+            std::vector<u32> best_row(WorldLightingPass::kCellCount, 0xffffffffu);
+            resolved[kPrecedenceY * kPoolEdge + kPrecedenceX] = *lighting::packCell(2u, 300.0);
+            for (u32 row = 0u; row < frozen[state].size(); ++row) {
+                const auto &particle = frozen[state][row];
+                const float native_x = particle.m_position_x - 3.0f;
+                const float native_y = particle.m_position_y - 3.0f;
+                if (not std::isfinite(native_x) or
+                    not std::isfinite(native_y) or
+                    native_x < 0.0f or
+                    native_y < 0.0f or
+                    native_x > static_cast<float>(kPoolEdge) or
+                    native_y > static_cast<float>(kPoolEdge)) {
+                    continue;
+                }
+
+                const auto axis = [](const float native) {
+                    return std::min<u32>(
+                        static_cast<u32>(std::floor(std::min(native, static_cast<float>(kPoolEdge)))), kPoolEdge - 1u);
+                };
+                const u32 cell_x = axis(native_x);
+                const u32 cell_y = axis(native_y);
+                const u32 cell = cell_y * kPoolEdge + cell_x;
+                if (resolved[cell] != 0u) {
+                    continue;
+                }
+
+                const float delta_x = native_x - (static_cast<float>(cell_x) + 0.5f);
+                const float delta_y = native_y - (static_cast<float>(cell_y) + 0.5f);
+                float distance2 = delta_x * delta_x + delta_y * delta_y;
+                if (distance2 == 0.0f) {
+                    distance2 = 0.0f;
+                }
+
+                const u32 key = std::bit_cast<u32>(distance2);
+                if (key < best_key[cell] or (key == best_key[cell] and row < best_row[cell])) {
+                    best_key[cell] = key;
+                    best_row[cell] = row;
+                }
+            }
+            for (u32 cell = 0u; cell < resolved.size(); ++cell) {
+                if (resolved[cell] == 0u and best_row[cell] != 0xffffffffu) {
+                    resolved[cell] = *lighting::packCell(1u, 300.0);
+                }
+            }
+
             for (u32 variant = 0u; variant < (glossy_qa ? 2u : 1u); ++variant) {
                 const bool glossy = variant != 0u;
                 {
                     GridPass grid;
                     PPR_TEST_ASSERT(
                         not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+                    const auto shader_buffer = [&](const u64 bytes, const u32 stride, const void *const data) {
+                        rhi::BufferDesc desc{};
+                        desc.size = bytes;
+                        desc.elementSize = stride;
+                        desc.usage = static_cast<rhi::BufferUsage>(
+                            static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                            static_cast<u32>(rhi::BufferUsage::CopySource));
+                        desc.defaultState = rhi::ResourceState::ShaderResource;
+                        rhi::ComPtr<rhi::IBuffer> result;
+                        PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, data, result.writeRef())));
+                        return result;
+                    };
+
+                    // A constant fine-CH field (DC = 1/Y0) makes the categorical
+                    // material response unit-lit; fine-CH fitting itself is
+                    // covered by the world-lighting fine tests.
+                    std::vector<lighting::PackedCH> fine_ch(lighting::kFineCHRecordCount);
+                    lighting::CH unit{};
+                    unit.m_coefficients[0] = float3{2.5066282746f, 2.5066282746f, 2.5066282746f};
+                    const auto packed_unit = lighting::packCH(unit);
+                    PPR_TEST_ASSERT(packed_unit.has_value());
+                    std::fill(fine_ch.begin(), fine_ch.end(), *packed_unit);
+                    PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(
+                        shader_buffer(resolved.size() * sizeof(u32), sizeof(u32), resolved.data()),
+                        shader_buffer(
+                            fine_ch.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH), fine_ch.data())));
                     PPR_DEFER {
                         const auto submitted = renderer.lastSubmittedFenceValue();
                         if (submitted != kFenceValueNone) {
@@ -2574,6 +2658,13 @@ namespace pP::tests::detail::MatterGpu {
                         }
                     }
 
+                    // Terrain material 2 occupies one interior pool cell; the
+                    // categorical projection keeps it ahead of the particles.
+                    GridTerrainVisual terrain{};
+                    terrain.m_material_id = 2u;
+                    terrain.m_color_rgba = 0xff0000ffu;
+                    terrain.m_ior = 1.0f;
+                    stage.m_terrain_visuals.push_back(terrain);
                     stage.m_terrain_visuals.push_back(water);
                     stage.m_tiles.push_back(
                         GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
@@ -2648,6 +2739,9 @@ namespace pP::tests::detail::MatterGpu {
                         ppm << "P6\n512 512\n255\n";
                     }
 
+                    const auto native_cell = [](const double source) {
+                        return static_cast<u32>(std::floor(source - 3.0));
+                    };
                     for (u32 y = 0u; y < 512u; ++y) {
                         for (u32 x = 0u; x < 512u; ++x) {
                             const auto *const pixel = bytes + y * layout.rowPitch + x * 4u;
@@ -2656,13 +2750,29 @@ namespace pP::tests::detail::MatterGpu {
                             // Inventory is 360 source-cell areas in a 24-cell-wide
                             // basin (15 cells deep). This deep ROI excludes walls by
                             // >=5 source cells, floor by >=4, and free surface by >=7.
+                            // The approved categorical projection selects one
+                            // material per native cell, so the renderer contract is
+                            // exact cell coverage: each particle-nominated cell is
+                            // painted and each empty or terrain-precedence cell is not.
                             if (not glossy and
                                 source_x > 17.0 and
                                 source_x < 31.0 and
                                 source_y > 16.0 and
                                 source_y < 20.0) {
                                 ++samples[index];
-                                holes[index] += pixel[2] < 200u ? 1u : 0u;
+                                const u32 cell_x = native_cell(source_x);
+                                const u32 cell_y = native_cell(source_y);
+                                const u32 cell = cell_y * kPoolEdge + cell_x;
+                                const bool blue = pixel[2] >= 200u;
+                                if (cell_x == kPrecedenceX and cell_y == kPrecedenceY) {
+                                    ++precedence_samples[index];
+                                    precedence_ok[index] += pixel[0] > pixel[2] ? 1u : 0u;
+                                } else if (best_row[cell] != 0xffffffffu) {
+                                    ++water_pixels[index];
+                                    holes[index] += blue ? 0u : 1u;
+                                } else {
+                                    outside_painted[index] += blue ? 1u : 0u;
+                                }
                             }
 
                             if (not glossy and
@@ -2704,6 +2814,9 @@ namespace pP::tests::detail::MatterGpu {
             PPR_TEST_ASSERT(samples[index] > 0u);
             PPR_TEST_ASSERT(outside_painted[index] == 0u);
             PPR_TEST_ASSERT(holes[index] == 0u);
+            PPR_TEST_ASSERT(precedence_samples[index] > 0u);
+            PPR_TEST_ASSERT(precedence_ok[index] == precedence_samples[index]);
+            PPR_TEST_ASSERT(water_pixels[index] > 0u);
         }
     };
 
