@@ -50,7 +50,8 @@ Windows/D3D12 is unavailable on this host and remains an unmet gate unless run.
 | 14 | complete (commits `8c5cf6b0`, `fd03d4c6`; reviews clean; credit ruling recorded) |
 | 15 | complete (commits `c5db57be` and the review-fix follow-up; review issues fixed; Task 16 fallback removal recorded) |
 | 16 | complete (commits `be0a29d6`, `7e017cc4`; leak evidence NVIDIA-only; Windows/D3D12 pending) |
-| 17–19 | pending |
+| 17 | complete (commits `871c25b6`, `f89043fc`, `363b5acf`, `900c84ae`, `177b46cb`; reviews clean; 6 host minimize/restore cases incomplete) |
+| 18–19 | pending |
 
 ## Task 0 — evidence
 
@@ -1631,3 +1632,34 @@ and operational acceptance. No Task 4 work has begun.
 - Gates: Linux minimize/restore is host-incomplete; Windows/D3D12 unmeasured;
   RHI exposes no GPU driver version (recorded as unavailable); owner visual
   acceptance remains Task 19.
+
+## Task 17 — display exercise complete
+
+- Commits: `871c25b6` (feature), `f89043fc`/`363b5acf`/`900c84ae`
+  (exact R/S/B/history evidence, non-pixel history preservation, live Reset
+  evidence), `ecf8313c`/`177b46cb` (ledger/format).
+- Review: initial review found five Important evidence/correctness issues
+  (P cases passed without exact R/S/B/history; Apply+Keep no-op; Reset left an
+  armed trial; fullscreen JSON overwritten; telemetry constants). Fix round
+  addressed them; scoped re-review found all findings addressed, no new
+  Critical/Important breakage.
+- Delivered: game-owned `DisplayExercise` state machine with copied observations
+  and typed production panel/window intents; nine §7 groups; exact observed-
+  framebuffer R/S/B and real reconstruction history-reset/world stamps; genuine
+  Apply+Keep and Reset trials; tested fullscreen requested/observed modes with
+  dedup; per-case actions/timestamps/requested values; measured stale-ACK and
+  post-close canaries; isolated fresh output directory + overlay; incremental
+  atomic schema-1 JSON/PNGs/logs; exit 0/1/2/3.
+- Real `clang-rel` run: exit 3, **91 passed / 6 incomplete / 0 failed / 0
+  unsupported**, clean shutdown, 47.3 s, full artifact set. The six incomplete
+  cases are the host-unacknowledged XWayland minimize/restore/focus events.
+- **Deferred minors for Task 19 audit:** `ReconstructionHistoryStamp` has 8
+  bytes avoidable padding (88 vs 80) and should be reordered; `historyStamp()`
+  precondition/grouping vs the rejected path; `RenderLane` result comment;
+  clearing `out_result.m_reconstruction`; telemetry positive branches are
+  structurally unreachable canaries and do not gate the final status; residual
+  dead `Step` keep/revert fields; misleading minimized-suspension reason; no
+  saved reconstruction-test log; one stale source-identity reference in the
+  report.
+- **Unavailable gates:** Windows/D3D12; real minimize/focus events; GPU driver
+  version unavailable in RHI; owner visual acceptance remains Task 19.
