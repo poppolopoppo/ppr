@@ -1596,7 +1596,8 @@ and operational acceptance. No Task 4 work has begun.
 
 ## Task 17 — permanent real-window display exercise complete
 
-- Commits: `871c25b6` (feature) plus `pending-commit` (review: exact/non-vacuous
+- Commits: `871c25b6` (feature), `f89043fc` (exact/non-vacuous evidence),
+  `363b5acf` (non-pixel history preservation) and `900c84a` (live Reset history
   evidence).
 - Delivered: game-owned `game.display_exercise` injected-time state machine,
   mutually exclusive `--exercise-display --exercise-output=DIR`, isolated fresh
@@ -1611,14 +1612,15 @@ and operational acceptance. No Task 4 work has begun.
   that arms a trial is completed through its follow-up Keep.
 - Evidence fixes: exact observed-framebuffer R/S/B for P1/2/3/8 and both odd
   extents at P2; `ReconstructionPass::historyStamp()` provides the accepted
-  history reset/world/grid/index/phase, and P cases require that real reset with
-  unchanged world identity. Apply+Keep now applies a genuinely different window
+  history reset/world/grid/index/phase, and P changes require that real reset
+  with unchanged world identity; non-pixel live edits assert the reset count is
+  unchanged. Apply+Keep now applies a genuinely different window
   and records trial armed/kept. Fullscreen cases retain the tested requested mode
   and observed logical/framebuffer/monitor/refresh, with identical modes
   deduplicated. Per-case action/requested values, timestamps, final extents and
   binary/source identity are recorded. Stale-ACK advancement and post-close
   emissions are measured counters, not constants.
-- Verification: focused `game/display_exercise` 21/21 and `game/game_config`
+- Verification: focused `game/display_exercise` 22/22 and `game/game_config`
   30/30; `engine.tests.app.reconstruction` passed; real `clang-rel` run exited 3
   with 91 passed / 6 incomplete / 0 failed / 0 unsupported and clean shutdown.
   The six incomplete cases are the two minimize/restore rounds and suspension
