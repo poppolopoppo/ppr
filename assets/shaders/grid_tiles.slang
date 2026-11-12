@@ -38,8 +38,15 @@ struct GridFrame {
     float m_camera_forward_y;
     float m_camera_forward_z;
     uint m_camera_ortho;
+    // Availability bits for the categorical publication. Bit 0 is the resolved
+    // cell and fine-CH publication this terrain pass shades from; bit 1 is the
+    // committed particle-ownership grid (g_best_row) bound for this submission's
+    // projection attempt. Consumers that only need the categorical publication
+    // test the word as nonzero.
     uint m_has_resolved_cells;
 };
+static const uint kGridFrameHasResolvedCells = 1u;
+static const uint kGridFrameHasParticleOwnership = 2u;
 
 // CPU mirror GridTilePayload: 32 B = 16 rect + 4 material + 4 base
 // + 4 flags + 4 pad,
@@ -167,6 +174,11 @@ StructuredBuffer<DiagnosticColor> g_diagnostic_colors;
 // and the device's one thermal table. GridPass owns the immutable BRDF table.
 static const uint kResolvedEdge = 1024u;
 StructuredBuffer<uint> g_resolved_cells;
+// Committed per-native-cell winner grid from the same projection attempt, one
+// word per cell; 0xffffffff means no particle winner. Terrain reads it only to
+// retire the categorical base of particle-owned cells (plan §3). It is
+// read-only here and never identifies ownership by material.
+StructuredBuffer<uint> g_best_row;
 StructuredBuffer<PackedCH> g_fine_ch;
 #include "world_lighting_ch.slang"
 #include "thermal_emission.slang"
@@ -660,10 +672,13 @@ float4 decorateSurface(float4 surface, float2 decoration) {
 // visible categorical material response
 // ------------------------------------------------------------------
 
-uint resolvedCellAt(float2 fine_position) {
+// Native-cell index of the continuous world-plane sample, or 0xffffffff when
+// it lies outside the published domain. The resolved word and the committed
+// ownership word are both addressed by this same index.
+uint resolvedCellIndex(float2 fine_position) {
     int2 cell = int2(floor(fine_position));
-    if (any(cell < int2(0)) || any(cell >= int2(int(kResolvedEdge)))) return 0u;
-    return g_resolved_cells[uint(cell.y) * kResolvedEdge + uint(cell.x)];
+    if (any(cell < int2(0)) || any(cell >= int2(int(kResolvedEdge)))) return 0xffffffffu;
+    return uint(cell.y) * kResolvedEdge + uint(cell.x);
 }
 
 // Decode all nine coefficients at each bilinear tap, then interpolate them at
@@ -971,9 +986,24 @@ float4 shadeGridReactive(
     // and selects exactly one native packed cell. This runs before the retired
     // contour/material selection so MSAA4 does not pay for work it discards.
     if (g_grid_frame.m_has_resolved_cells != 0u && diagnostic_mode == 0u) {
-        uint resolved = resolvedCellAt(input.fine_position);
+        uint resolved_index = resolvedCellIndex(input.fine_position);
+        uint resolved = resolved_index == 0xffffffffu ? 0u : g_resolved_cells[resolved_index];
         uint resolved_material = unpackCellMaterial(resolved);
         if (resolved_material == 0u) discard;
+
+        // Base retirement (plan §3): a native cell the committed projection
+        // assigned to a particle presents only that particle union, never the
+        // categorical cell fill at the winner's material. Ownership is the
+        // committed winner grid of the same cell, never the resolved material,
+        // so terrain-owned cells (including terrain sharing a dug particle's
+        // material id) and empty cells are unchanged. This covers both the
+        // opaque and the optical terrain pass below, which share this branch.
+        // The bit is clear when no committed ownership grid is bound (a fixture
+        // publication with no particle attempt), which keeps that surface.
+        if ((g_grid_frame.m_has_resolved_cells & kGridFrameHasParticleOwnership) != 0u &&
+            particleOwnsCell(resolved_index, g_best_row)) {
+            discard;
+        }
 
         GridVisual active = g_terrain_visuals[min(resolved_material, 65535u)];
         if (active.m_material_id != resolved_material) discard;

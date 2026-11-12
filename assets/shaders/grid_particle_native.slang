@@ -64,6 +64,24 @@ static const float kParticleSolidInnerHalfExtentScale = kParticleSolidHalfExtent
 static const float kParticleFalloffInnerFraction = 2.0/3.0;
 static const float kParticleDiscardThreshold = 0.5;
 
+// ------------------------------------------------------------------
+// committed particle ownership
+// ------------------------------------------------------------------
+// One rule for categorical base retirement, shared by the terrain fragment and
+// its nonvisual probe: a native cell is particle-owned exactly when the
+// committed projection recorded a candidate winner for it, i.e. the winner grid
+// still holds the no-winner word 0xffffffff. Terrain wins precedence before
+// nomination, so a terrain-owned cell always keeps that word. Material identity
+// is never consulted: a dug particle can share its material id with the terrain
+// in the same cell, and that terrain is still terrain-owned.
+//
+// The grid is a parameter rather than a global in this include: the projection
+// owns an RW view of the same 4 MiB buffer while the source, terrain and probe
+// readers own read-only views, and all of them include this header.
+bool particleOwnsCell(uint cell, StructuredBuffer<uint> best_row) {
+    return best_row[cell] != 0xffffffffu;
+}
+
 // The caller proves the sourceRow before loading Hot. Gas never uses a Hot row.
 // This is shared by census and immutable optical snapshot, before any culling.
 ParticleNativeCell particleNativeCell(MetadataRow metadata,float2 movingPosition,float enabled,bool sourceValid,

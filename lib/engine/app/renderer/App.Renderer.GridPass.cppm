@@ -1080,6 +1080,10 @@ export namespace pP {
         // material roots always declare. Idempotent; owns the creation so a
         // background-only path cannot reach a null buffer.
         [[nodiscard]] std::error_code ensureLightingFallback_(rhi::IDevice &device);
+        // Keeps a static g_best_row binding valid on roots that declare it when
+        // no current projection attempt owns the committed winner grid. The
+        // shader's ownership bit is clear in that case, so it is never read.
+        [[nodiscard]] std::error_code bindOwnershipFallback_(rhi::ShaderCursor &cursor) const;
         // Background frame tail: captured camera position, forward and
         // orthographic flag, plus the shared optical frame fields.
         void fillBackgroundFrame_(GridFrame &frame) const noexcept;
@@ -1106,6 +1110,11 @@ export namespace pP {
         // Binds the terrain pass selector into a shader cursor.
         [[nodiscard]] std::error_code bindGridPass_(
             rhi::ShaderCursor &cursor, u32 pass, EGridParticleDrawClass particle_class = EGridParticleDrawClass::gas);
+
+        // Availability word mirrored by g_grid_frame.m_has_resolved_cells: bit 0
+        // is the categorical publication, bit 1 the committed particle-ownership
+        // grid bound for this submission's projection attempt.
+        [[nodiscard]] u32 lightingAvailability_() const noexcept;
 
         // Reclaims deferred pipelines/roots at or below `completed`.
         void reclaimCompleted_(FenceCompletionValue completed) noexcept;

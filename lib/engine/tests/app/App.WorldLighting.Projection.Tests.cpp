@@ -1637,6 +1637,10 @@ namespace pP::tests::detail::WorldLightingProjection {
         upload.m_cell_words.assign(GridPass::kCellsPerChunk, 0u);
         // World cell (40, 40) carries terrain and must win over the particle.
         upload.m_cell_words[40u * 128u + 40u] = packMaterialTemperature(7u, 900.0);
+        // World cell (30, 30) is terrain with the *same material id* as the
+        // particle in (60, 60). Ownership is the committed winner grid, so this
+        // cell must keep its categorical base.
+        upload.m_cell_words[30u * 128u + 30u] = packMaterialTemperature(1u, 300.0);
         stage.m_uploads.push_back(std::move(upload));
         PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
         const auto cells_prepared = grid.tryPrepareCellUploads(fixture.device(), kFenceValueNone);
@@ -1706,6 +1710,9 @@ namespace pP::tests::detail::WorldLightingProjection {
         WorldLightingPass *const pass = grid.activeWorldLightingForTest();
         PPR_TEST_ASSERT(pass != nullptr);
         PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(40u, 40u)) == packMaterialTemperature(7u, 900.0));
+        // Terrain sharing the particle's material id: ownership is the committed
+        // winner grid, so this cell stays terrain-owned.
+        PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(30u, 30u)) == packMaterialTemperature(1u, 300.0));
         PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(60u, 60u)) == packMaterialTemperature(1u, 500.0));
         PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(0u, 0u)) == 0u);
 
@@ -1765,20 +1772,128 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(out, 0u, sizeof(bound), bound.data())));
         PPR_TEST_ASSERT(bound[0u] == *lighting::packCell(1u, 500.0));
 
+        // ------------------------------------------------------------------
+        // categorical base retirement
+        // ------------------------------------------------------------------
+        // The terrain fragment retires a cell only when the committed winner
+        // grid assigned it to a particle. The probe reads the same resolved and
+        // ownership words the terrain addresses and writes the decision, so
+        // particle-owned, terrain-owned (including the same-material-ID cell) and
+        // empty cells are asserted without a visual harness.
+        shader::ComPtr<slang::IEntryPoint> ownership_entry{};
+        PPR_TEST_ASSERT(not make_error_code(probe->findEntryPointByName("probeOwnership", ownership_entry.writeRef())));
+        slang::IComponentType *ownership_entries[]{ownership_entry.get()};
+        rhi::ShaderProgramDesc ownership_description{};
+        ownership_description.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        ownership_description.slangGlobalScope = probe.get();
+        ownership_description.slangEntryPoints = ownership_entries;
+        ownership_description.slangEntryPointCount = 1u;
+        rhi::ComPtr<rhi::IShaderProgram> ownership_program;
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().createShaderProgram(
+            ownership_description, ownership_program.writeRef(), diagnostics.writeRef())));
+        rhi::ComputePipelineDesc ownership_pipeline_description{};
+        ownership_pipeline_description.program = ownership_program;
+        rhi::ComPtr<rhi::IComputePipeline> ownership_pipeline;
+        PPR_TEST_ASSERT(not make_error_code(
+            fixture.device().createComputePipeline(ownership_pipeline_description, ownership_pipeline.writeRef())));
+        rhi::ComPtr<rhi::IShaderObject> ownership_root;
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createRootShaderObject(ownership_program, ownership_root.writeRef())));
+        rhi::ShaderCursor ownership_cursor{ownership_root};
+
+        // The first attempt is submitted and collected, so its scratch winner
+        // grid is no longer this submission's output. The binder rejects it.
+        PPR_TEST_ASSERT(pass->bindTerrainOwnership(ownership_cursor) == std::errc::resource_unavailable_try_again);
+
+        const std::array<u32, 4u> ownership_cells{
+            cellIndex(60u, 60u), cellIndex(40u, 40u), cellIndex(30u, 30u), cellIndex(0u, 0u)};
+        const auto ownership_cells_buffer = makeShaderBuffer(
+            fixture.device(), sizeof(ownership_cells), sizeof(u32), ownership_cells.data());
+        const auto ownership_out = makeStorageBuffer(
+            fixture.device(), ownership_cells.size() * sizeof(u32) * 4u, sizeof(u32) * 4u);
+
+        struct OwnershipProbeParameters {
+            u32 m_count;
+            u32 m_reserved[3];
+        };
+        const OwnershipProbeParameters ownership_parameters{safe_narrowing(ownership_cells.size()), {}};
+        rhi::ShaderCursor ownership_constants;
+        PPR_TEST_ASSERT(
+            not make_error_code(ownership_cursor["g_ownership_probe"].getDereferenced(ownership_constants)));
+        PPR_TEST_ASSERT(
+            not make_error_code(ownership_constants.setData(&ownership_parameters, sizeof(ownership_parameters))));
+        PPR_TEST_ASSERT(not make_error_code(
+            ownership_cursor["g_ownership_cells"].setBinding(rhi::Binding(ownership_cells_buffer))));
+        PPR_TEST_ASSERT(
+            not make_error_code(ownership_cursor["g_ownership_out"].setBinding(rhi::Binding(ownership_out))));
+
+        {
+            // A current attempt: the probe dispatch follows the projection in
+            // this submission, and the binder reads this attempt's grid.
+            auto ownership_encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *ownership_encoder, 1u, {}};
+            PPR_TEST_ASSERT(not grid.prepareWorldLighting(context, WorldLightingFrame{}));
+            PPR_TEST_ASSERT(not pass->bindTerrainOwnership(ownership_cursor));
+            auto *const resolved = pass->resolvedCellsForTest();
+            PPR_TEST_ASSERT(
+                not make_error_code(ownership_cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved))));
+            {
+                auto *const compute = ownership_encoder->beginComputePass();
+                PPR_TEST_ASSERT(compute != nullptr);
+                compute->bindPipeline(ownership_pipeline, ownership_root);
+                compute->dispatchCompute(1u, 1u, 1u);
+                compute->end();
+            }
+            PPR_TEST_ASSERT(not grid.finalizeWorldLighting(context));
+            submit(fixture, *ownership_encoder);
+            grid.notifyWorldLightingSubmitted(2u);
+            PPR_TEST_ASSERT(not grid.collectWorldLightingCompleted(2u));
+        }
+
+        std::array<u32, 16u> ownership{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().readBuffer(ownership_out, 0u, sizeof(ownership), ownership.data())));
+        for (u32 index = 0u; index < ownership_cells.size(); ++index) {
+            const u32 resolved = ownership[index * 4u + 0u];
+            const u32 best_row = ownership[index * 4u + 1u];
+            const u32 owned = ownership[index * 4u + 2u];
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_PROJECTION ownership cell={} resolved={} best_row={} owned={}", index, resolved,
+                    best_row, owned));
+        }
+
+        // Particle-owned: the committed winner row and the retirement decision.
+        PPR_TEST_ASSERT(ownership[0u * 4u + 0u] == packMaterialTemperature(1u, 500.0));
+        PPR_TEST_ASSERT(ownership[0u * 4u + 1u] == 1u);
+        PPR_TEST_ASSERT(ownership[0u * 4u + 2u] == 1u);
+        // Opaque terrain: no winner word, so the base is kept.
+        PPR_TEST_ASSERT(ownership[1u * 4u + 0u] == packMaterialTemperature(7u, 900.0));
+        PPR_TEST_ASSERT(ownership[1u * 4u + 1u] == 0xffff'ffffu);
+        PPR_TEST_ASSERT(ownership[1u * 4u + 2u] == 0u);
+        // Terrain with the particle's own material id: still terrain-owned.
+        PPR_TEST_ASSERT(ownership[2u * 4u + 0u] == packMaterialTemperature(1u, 300.0));
+        PPR_TEST_ASSERT(ownership[2u * 4u + 1u] == 0xffff'ffffu);
+        PPR_TEST_ASSERT(ownership[2u * 4u + 2u] == 0u);
+        // Empty cell: unchanged, the lit backdrop remains.
+        PPR_TEST_ASSERT(ownership[3u * 4u + 0u] == 0u);
+        PPR_TEST_ASSERT(ownership[3u * 4u + 1u] == 0xffff'ffffu);
+        PPR_TEST_ASSERT(ownership[3u * 4u + 2u] == 0u);
+
         // A completed numeric failure reaches the GridPass owner boundary with
         // the range category, while the already-submitted resolved cells stay
         // exactly as published (no rollback of in-place state).
         {
             auto failure_encoder = makeEncoder(fixture);
-            PreRenderContext context{fixture.device(), *failure_encoder, 1u, {}};
+            PreRenderContext context{fixture.device(), *failure_encoder, 2u, {}};
             PPR_TEST_ASSERT(not grid.prepareWorldLighting(context, WorldLightingFrame{}));
             PPR_TEST_ASSERT(not grid.finalizeWorldLighting(context));
             submit(fixture, *failure_encoder);
-            grid.notifyWorldLightingSubmitted(2u);
+            grid.notifyWorldLightingSubmitted(3u);
             auto words = pass->pendingStatusWordsForTest();
             PPR_TEST_ASSERT(words.size() == kNumericStatusRecords * kNumericStatusWords);
             words[kStatusStageCells * kNumericStatusWords + 1u] = 5u;
-            PPR_TEST_ASSERT(grid.collectWorldLightingCompleted(2u) == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT(grid.collectWorldLightingCompleted(3u) == std::errc::result_out_of_range);
         }
 
         PPR_TEST_ASSERT(readCell(fixture, *pass, cellIndex(60u, 60u)) == *lighting::packCell(1u, 500.0));

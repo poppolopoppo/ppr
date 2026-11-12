@@ -188,6 +188,26 @@ export namespace pP {
         // armed; binding errors propagate.
         [[nodiscard]] std::error_code bindFineCH(rhi::ShaderCursor &cursor) const;
 
+        // Binds the committed per-native-cell winner grid that decides
+        // categorical base retirement (plan §3). The terrain root is the only
+        // production reader; a program that does not declare the field succeeds
+        // without a binding. The terrain draw follows the projection in the same
+        // submission, so the projection write is ordered before this read. Fails
+        // closed with resource_unavailable_try_again unless this submission's
+        // projection attempt is armed; a stale or unavailable attempt is
+        // rejected instead of binding last attempt's winners.
+        [[nodiscard]] std::error_code bindTerrainOwnership(rhi::ShaderCursor &cursor) const;
+
+        // True when this submission's armed projection attempt owns the scratch
+        // winner grid, so terrain may retire particle-owned cells from it.
+        [[nodiscard]] bool ownershipAvailable() const noexcept {
+            return m_resources and
+                   m_resources->m_scratch[1u] and
+                   m_resources->m_resolved and
+                   m_resources->m_armed and
+                   m_resources->m_status[m_resources->m_attempt_slot].m_pending;
+        }
+
         // Read-only C-stage inspection overlay. Draws the retained view selected
         // by `settings` from this pass's published data with the captured camera;
         // it writes no world, CH, cascade, source or history state. The caller

@@ -815,6 +815,33 @@ namespace pP {
         return {};
     }
 
+    std::error_code WorldLightingPass::bindTerrainOwnership(rhi::ShaderCursor &cursor) const {
+        // The terrain fragment is the only production reader; particle roots and
+        // other material consumers keep the same shared module without
+        // referencing the field, so they succeed without a binding.
+        const rhi::ShaderCursor ownership = cursor["g_best_row"];
+        if (not ownership.isValid()) {
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, m_resources and m_resources->m_scratch[1u] and m_resources->m_resolved
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::not_connected));
+        // The terrain draw follows the projection in the same submission, so the
+        // committed winner grid belongs to this attempt. A retained scratch grid
+        // after a discarded or superseded attempt would retire cells from winners
+        // that do not match the resolved cells the terrain draws; reject it.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass,
+            ownershipAvailable() ? std::error_code{} : std::make_error_code(std::errc::resource_unavailable_try_again));
+
+        rhi::IBuffer *const best_row = m_resources->m_scratch[1u].get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLightingPass, ownership.setBinding(rhi::Binding(best_row, projectionRange(best_row))));
+        return {};
+    }
+
     // ------------------------------------------------------------------
     // retained inspection overlay
     // ------------------------------------------------------------------

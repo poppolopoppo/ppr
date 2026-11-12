@@ -3415,6 +3415,17 @@ namespace pP {
             // The world-lighting owner is the single supplier of resolved cells,
             // fine CH, source palette and thermal table.
             PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLighting(cursor));
+            // Base retirement (plan §3): the terrain fragment reads this attempt's
+            // committed winner grid. A stale or unavailable attempt is rejected by
+            // the binder and degrades to no retirement with the zero fallback; the
+            // frame's ownership bit is clear, so the shader never reads last
+            // attempt's winners. Real binding failures propagate.
+            const std::error_code ownership = m_world.m_lighting->bindTerrainOwnership(cursor);
+            if (ownership == std::errc::resource_unavailable_try_again) {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+            } else {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership);
+            }
         } else {
             if (m_test_resolved and m_test_fine_ch) {
                 auto *const resolved = m_test_resolved.get();
@@ -3431,6 +3442,11 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
             }
+
+            // No committed particle-ownership grid exists here, so the terrain
+            // shader's ownership bit stays clear. Keep a valid binding in the
+            // root's layout; the shader never reads this fallback.
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
 
             // GridPass's admitted world owns the fallback source/thermal pair.
             PPR_RETURN_ERROR_ON_FAIL(
@@ -3462,6 +3478,22 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             cursor["g_contour_cases"].setBinding(rhi::Binding(m_contour_cases, makeFullRange(m_contour_cases))));
+        return {};
+    }
+
+    std::error_code GridPass::bindOwnershipFallback_(rhi::ShaderCursor &cursor) const {
+        // Roots that do not declare the committed ownership grid (particle and
+        // material programs) need no binding.
+        const rhi::ShaderCursor ownership = cursor["g_best_row"];
+        if (not ownership.isValid()) {
+            return {};
+        }
+
+        // The shader gates its read on the frame's ownership bit, so this zero
+        // fallback is never read: it only keeps the root's static binding valid
+        // when no current projection attempt owns the committed winner grid.
+        auto *const fallback = m_lighting_fallback.get();
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership.setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
         return {};
     }
 
@@ -3698,6 +3730,26 @@ namespace pP {
         return {};
     }
 
+    // Mirror of the availability bits documented on g_grid_frame's
+    // m_has_resolved_cells in grid_tiles.slang: bit 0 is the categorical
+    // publication, bit 1 the committed particle-ownership grid that this
+    // submission's projection attempt wrote.
+    static constexpr u32 kGridFrameHasResolvedCells{1u};
+    static constexpr u32 kGridFrameHasParticleOwnership{2u};
+
+    u32 GridPass::lightingAvailability_() const noexcept {
+        const bool resolved = (m_test_resolved and m_test_fine_ch) or
+                              (m_world.m_lighting and
+                                  m_world.m_lighting->hasPublishedCells() and
+                                  m_world.m_world_edge == WorldLightingPass::kWorldEdge);
+        u32 flags = resolved ? kGridFrameHasResolvedCells : 0u;
+        if (resolved and m_world.m_lighting and m_world.m_lighting->ownershipAvailable()) {
+            flags |= kGridFrameHasParticleOwnership;
+        }
+
+        return flags;
+    }
+
     std::error_code GridPass::encodeTerrainIndirect_(
         const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *const queries, const u32 first_query,
         const u32 pass) {
@@ -3721,12 +3773,7 @@ namespace pP {
         frame.m_camera_forward_y = m_camera_view.m_forward.y;
         frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
-        frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
-                                             (m_world.m_lighting and
-                                                 m_world.m_lighting->hasPublishedCells() and
-                                                 m_world.m_world_edge == WorldLightingPass::kWorldEdge)
-                                         ? 1u
-                                         : 0u;
+        frame.m_has_resolved_cells = lightingAvailability_();
         fillOpticalFrame_(frame);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, pipeline.m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
@@ -3787,12 +3834,7 @@ namespace pP {
         frame.m_camera_forward_y = m_camera_view.m_forward.y;
         frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
-        frame.m_has_resolved_cells = (m_test_resolved and m_test_fine_ch) or
-                                             (m_world.m_lighting and
-                                                 m_world.m_lighting->hasPublishedCells() and
-                                                 m_world.m_world_edge == WorldLightingPass::kWorldEdge)
-                                         ? 1u
-                                         : 0u;
+        frame.m_has_resolved_cells = lightingAvailability_();
         fillOpticalFrame_(frame);
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));
