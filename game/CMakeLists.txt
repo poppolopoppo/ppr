@@ -1,5 +1,18 @@
+# Record the source revision this binary was configured from. Git is optional;
+# an unavailable repository records an explicit unknown rather than a placeholder
+# that looks like evidence.
+execute_process(
+    COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse HEAD
+    OUTPUT_VARIABLE PPR_GAME_SOURCE_IDENTITY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT PPR_GAME_SOURCE_IDENTITY)
+    set(PPR_GAME_SOURCE_IDENTITY "unknown")
+endif()
+
 # Define the executable target
 add_executable(app.game main.cpp)
+target_compile_definitions(app.game PRIVATE PPR_GAME_SOURCE_IDENTITY="${PPR_GAME_SOURCE_IDENTITY}")
 
 target_sources(app.game
     PUBLIC
@@ -126,6 +139,7 @@ add_custom_target(run-app-game
 # engine test tiers never depend upward on game modules.
 if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     add_executable(game.tests Game.Tests.Main.cpp)
+    target_compile_definitions(game.tests PRIVATE PPR_GAME_SOURCE_IDENTITY="${PPR_GAME_SOURCE_IDENTITY}")
 
     target_sources(game.tests
         PUBLIC

@@ -71,12 +71,21 @@ namespace pP::game::tests::detail::display_exercise {
         observation.m_framebuffer_extent = int2{1280, 720};
         observation.m_focused = true;
         observation.m_world_ready = true;
-        observation.m_world_presented = true;
         observation.m_presented_frame = 10u;
         observation.m_presented_generation = 1u;
         observation.m_presented_world = GridWorldIdentity{
             .m_job_id = 1u, .m_world_generation = 1u, .m_content_fingerprint = 0xabcdu};
-        observation.m_world_identity = observation.m_presented_world;
+        observation.m_history_available = true;
+        observation.m_history_established = true;
+        observation.m_history_reset_count = 1u;
+        observation.m_history_last_reset = ReconstructionHistoryStamp{
+            .m_world = observation.m_presented_world,
+            .m_grid = PresentationGrid{},
+            .m_index = 0u,
+            .m_phase = 0u,
+            .m_frame = 10u,
+            .m_established = true,
+            .m_reset = true};
         observation.m_live_revision = 1u;
         observation.m_presented_live_revision = 1u;
         observation.m_startup_display = observation.m_committed;
@@ -195,6 +204,7 @@ namespace pP::game::tests::detail::display_exercise {
         PPR_TEST_ASSERT(not exercise.staleAckAdvanced());
 
         observation.m_confirm_armed = false;
+        observation.m_presented_frame = 12u;
         action = exercise.advance(observation, t0 + std::chrono::seconds{10});
         PPR_TEST_ASSERT(action.has_value() and action->has_value());
         PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::quit);
@@ -452,6 +462,7 @@ namespace pP::game::tests::detail::display_exercise {
         PPR_TEST_ASSERT(action.has_value() and action->has_value());
         PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::keep_display);
 
+        observation.m_presented_frame = 12u;
         action = exercise.advance(observation, t0 + std::chrono::seconds{3});
         PPR_TEST_ASSERT(action.has_value() and action->has_value());
         PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::reset_display);
@@ -521,6 +532,7 @@ namespace pP::game::tests::detail::display_exercise {
         auto action = rejected.advance(observation, startTime() + std::chrono::seconds{1});
         PPR_TEST_ASSERT(action.has_value() and action->has_value());
         observation.m_action_error = std::make_error_code(std::errc::invalid_argument);
+        observation.m_action_message = "display.refresh_hz: Refresh is an exclusive fullscreen request only";
         observation.m_action_submitted = false;
         action = rejected.advance(observation, startTime() + std::chrono::seconds{2});
         PPR_TEST_ASSERT(caseStatus(rejected, "invalid") == EDisplayExerciseStatus::passed);
@@ -570,6 +582,225 @@ namespace pP::game::tests::detail::display_exercise {
         PPR_TEST_ASSERT(action.has_value() and action->has_value());
         PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::quit);
         PPR_TEST_ASSERT(caseStatus(exercise, "policy") == EDisplayExerciseStatus::passed);
+    };
+
+    PPR_UNIT_TEST (matching_ack_without_fresh_surface_does_not_advance) {
+        DisplayExercise exercise{};
+        const auto directory = exerciseDirectory("ack-no-surface");
+        DisplayExerciseTestStep apply = step(EDisplayExerciseActionKind::apply_display, "apply");
+        apply.m_draft.m_window_mode = EDisplayWindowMode::windowed;
+        apply.m_draft.m_width = 800u;
+        apply.m_draft.m_height = 600u;
+        std::array steps{apply};
+        PPR_TEST_ASSERT(not exercise.beginForTest(directory, startTime(), steps));
+
+        DisplayExerciseObservation observation = readyObservation();
+        observation.m_surface_generation = 5u;
+        observation.m_presented_generation = 5u;
+        observation.m_committed.m_width = 1280u;
+        observation.m_committed.m_height = 720u;
+        const TimePoint t0 = startTime();
+        auto action = exercise.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+
+        // Matching values without a fresh presented surface are not enough.
+        observation.m_settings_revision = 2u;
+        observation.m_surface_generation = 6u;
+        observation.m_committed.m_width = 800u;
+        observation.m_committed.m_height = 600u;
+        observation.m_logical_extent = int2{800, 600};
+        observation.m_framebuffer_extent = int2{800, 600};
+        action = exercise.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(action.has_value() and not action->has_value());
+        PPR_TEST_ASSERT(caseStatus(exercise, "apply") == EDisplayExerciseStatus::pending);
+
+        observation.m_presented_generation = 6u;
+        observation.m_presented_frame = 11u;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{3});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT(caseStatus(exercise, "apply") == EDisplayExerciseStatus::passed);
+    };
+
+    PPR_UNIT_TEST (cleanup_keep_resolves_an_armed_trial_before_the_next_transaction) {
+        DisplayExercise exercise{};
+        const auto directory = exerciseDirectory("cleanup-keep");
+        DisplayExerciseTestStep first = step(EDisplayExerciseActionKind::apply_display, "first");
+        first.m_draft.m_width = 800u;
+        first.m_draft.m_height = 600u;
+        DisplayExerciseTestStep second = step(EDisplayExerciseActionKind::apply_display, "second");
+        second.m_draft.m_width = 1024u;
+        second.m_draft.m_height = 768u;
+        std::array steps{first, second};
+        PPR_TEST_ASSERT(not exercise.beginForTest(directory, startTime(), steps));
+
+        DisplayExerciseObservation observation = readyObservation();
+        const TimePoint t0 = startTime();
+        auto action = exercise.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+
+        observation.m_settings_revision = 2u;
+        observation.m_surface_generation = 2u;
+        observation.m_presented_generation = 2u;
+        observation.m_presented_frame = 11u;
+        observation.m_committed.m_width = 800u;
+        observation.m_committed.m_height = 600u;
+        observation.m_logical_extent = int2{800, 600};
+        observation.m_framebuffer_extent = int2{800, 600};
+        observation.m_confirm_armed = true;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::keep_display);
+        PPR_TEST_ASSERT(caseStatus(exercise, "first") == EDisplayExerciseStatus::incomplete);
+
+        observation.m_confirm_armed = false;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{3});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::apply_display);
+        PPR_TEST_ASSERT((**action).m_case == "second");
+    };
+
+    PPR_UNIT_TEST (trial_apply_keep_requires_arm_and_settles_without_late_revert) {
+        DisplayExercise exercise{};
+        const auto directory = exerciseDirectory("trial-keep");
+        DisplayExerciseTestStep apply = step(EDisplayExerciseActionKind::apply_display, "trial", false);
+        apply.m_draft.m_width = 1024u;
+        apply.m_draft.m_height = 768u;
+        apply.m_keep_after_ack = true;
+        apply.m_require_trial_armed = true;
+        std::array steps{apply, step(EDisplayExerciseActionKind::keep_display, "trial")};
+        PPR_TEST_ASSERT(not exercise.beginForTest(directory, startTime(), steps));
+
+        DisplayExerciseObservation observation = readyObservation();
+        const TimePoint t0 = startTime();
+        auto action = exercise.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+
+        observation.m_settings_revision = 2u;
+        observation.m_surface_generation = 2u;
+        observation.m_presented_generation = 2u;
+        observation.m_presented_frame = 11u;
+        observation.m_committed.m_width = 1024u;
+        observation.m_committed.m_height = 768u;
+        observation.m_logical_extent = int2{1024, 768};
+        observation.m_framebuffer_extent = int2{1024, 768};
+        observation.m_confirm_armed = false;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(action.has_value() and not action->has_value());
+        PPR_TEST_ASSERT(not exercise.confirmationStarted());
+
+        observation.m_confirm_armed = true;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{3});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::keep_display);
+        PPR_TEST_ASSERT(exercise.confirmationStarted());
+
+        observation.m_confirm_armed = false;
+        observation.m_presented_frame = 12u;
+        action = exercise.advance(observation, t0 + std::chrono::seconds{4});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::quit);
+        PPR_TEST_ASSERT(caseStatus(exercise, "trial") == EDisplayExerciseStatus::passed);
+        for (const DisplayExerciseCase &entry: exercise.cases()) {
+            if (entry.m_id == "trial") {
+                PPR_TEST_ASSERT(entry.m_trial_armed);
+                PPR_TEST_ASSERT(entry.m_trial_kept);
+            }
+        }
+    };
+
+    PPR_UNIT_TEST (pixel_case_records_exact_grid_and_history_reset) {
+        DisplayExercise exercise{};
+        const auto directory = exerciseDirectory("pixel-history");
+        DisplayExerciseTestStep live = step(EDisplayExerciseActionKind::live_picture, "pixel");
+        live.m_pixel = PixelDisplaySettings{2u};
+        live.m_require_pixel_grid = true;
+        std::array steps{live};
+        PPR_TEST_ASSERT(not exercise.beginForTest(directory, startTime(), steps));
+
+        DisplayExerciseObservation observation = readyObservation();
+        observation.m_live_pixel = PixelDisplaySettings{3u};
+        observation.m_framebuffer_extent = int2{1919, 1079};
+        observation.m_logical_extent = int2{1919, 1079};
+        observation.m_history_reset_count = 5u;
+        const TimePoint t0 = startTime();
+        auto action = exercise.advance(observation, t0 + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT((**action).m_kind == EDisplayExerciseActionKind::live_picture);
+
+        const auto grid = makePresentationGrid(int2{1919, 1079}, 2u);
+        PPR_TEST_ASSERT(grid.has_value());
+        observation.m_live_pixel = PixelDisplaySettings{2u};
+        ++observation.m_live_revision;
+        ++observation.m_presented_frame;
+        observation.m_presented_live_revision = observation.m_live_revision;
+        observation.m_history_reset_count = 6u;
+        observation.m_history_last_reset = ReconstructionHistoryStamp{
+            .m_world = observation.m_presented_world,
+            .m_grid = *grid,
+            .m_index = 1u,
+            .m_phase = 0u,
+            .m_frame = observation.m_presented_frame,
+            .m_established = true,
+            .m_reset = true};
+        action = exercise.advance(observation, t0 + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        PPR_TEST_ASSERT(caseStatus(exercise, "pixel") == EDisplayExerciseStatus::passed);
+        for (const DisplayExerciseCase &entry: exercise.cases()) {
+            if (entry.m_id == "pixel") {
+                PPR_TEST_ASSERT(entry.m_has_presentation_grid);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_resolved.x == 960);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_resolved.y == 540);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_raster.x == 480);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_raster.y == 270);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_backing.x == 960);
+                PPR_TEST_ASSERT(entry.m_presentation_grid.m_backing.y == 540);
+                PPR_TEST_ASSERT(entry.m_history_reset);
+                PPR_TEST_ASSERT(entry.m_has_history_grid);
+            }
+        }
+    };
+
+    PPR_UNIT_TEST (invalid_draft_only_passes_for_the_schema_rejection) {
+        DisplayExercise wrong_error{};
+        const auto first = exerciseDirectory("invalid-wrong");
+        DisplayExerciseTestStep invalid = step(EDisplayExerciseActionKind::invalid_draft, "invalid");
+        invalid.m_expect_rejection = true;
+        std::array steps{invalid};
+        PPR_TEST_ASSERT(not wrong_error.beginForTest(first, startTime(), steps));
+        DisplayExerciseObservation observation = readyObservation();
+        auto action = wrong_error.advance(observation, startTime() + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        observation.m_action_error = std::make_error_code(std::errc::device_or_resource_busy);
+        observation.m_action_message = "A picture change is already in flight.";
+        action = wrong_error.advance(observation, startTime() + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(caseStatus(wrong_error, "invalid") == EDisplayExerciseStatus::failed);
+
+        DisplayExercise schema{};
+        const auto second = exerciseDirectory("invalid-schema");
+        PPR_TEST_ASSERT(not schema.beginForTest(second, startTime(), steps));
+        observation = readyObservation();
+        action = schema.advance(observation, startTime() + std::chrono::seconds{1});
+        PPR_TEST_ASSERT(action.has_value() and action->has_value());
+        observation.m_action_error = std::make_error_code(std::errc::invalid_argument);
+        observation.m_action_message = "display.refresh_hz: Refresh is an exclusive fullscreen request only";
+        action = schema.advance(observation, startTime() + std::chrono::seconds{2});
+        PPR_TEST_ASSERT(caseStatus(schema, "invalid") == EDisplayExerciseStatus::passed);
+    };
+
+    PPR_UNIT_TEST (output_directory_must_be_fresh_and_separate_from_the_executable) {
+        const auto directory = exerciseDirectory("freshness");
+        std::filesystem::create_directories(directory);
+        {
+            std::ofstream stale{directory / "stale.txt", std::ios::binary};
+            stale << "stale";
+        }
+        DisplayExercise nonempty{};
+        PPR_TEST_ASSERT(nonempty.begin(directory, startTime()) == std::errc::directory_not_empty);
+
+        DisplayExercise executable_dir{};
+        const std::filesystem::path executable = hal::process::currentExecutablePath();
+        PPR_TEST_ASSERT(not executable.empty());
+        PPR_TEST_ASSERT(executable_dir.begin(executable.parent_path(), startTime()) == std::errc::invalid_argument);
     };
 
     PPR_UNIT_TEST (passed_requires_every_case_and_clean_shutdown) {
@@ -639,6 +870,12 @@ namespace pP::game::tests {
             detail::display_exercise::save_and_reload_compare_acknowledged_values,
             detail::display_exercise::invalid_draft_never_reaches_native_submission,
             detail::display_exercise::policy_only_apply_does_not_wait_for_a_surface_change,
+            detail::display_exercise::matching_ack_without_fresh_surface_does_not_advance,
+            detail::display_exercise::cleanup_keep_resolves_an_armed_trial_before_the_next_transaction,
+            detail::display_exercise::trial_apply_keep_requires_arm_and_settles_without_late_revert,
+            detail::display_exercise::pixel_case_records_exact_grid_and_history_reset,
+            detail::display_exercise::invalid_draft_only_passes_for_the_schema_rejection,
+            detail::display_exercise::output_directory_must_be_fresh_and_separate_from_the_executable,
             detail::display_exercise::passed_requires_every_case_and_clean_shutdown,
         });
     };

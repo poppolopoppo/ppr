@@ -424,6 +424,7 @@ namespace pP {
                            m_history_world != world or
                            m_history_camera_cut != camera_cut or
                            not (m_history_grid == grid);
+        m_last_begin_reset = reset;
         const u32 phase = reset ? 0u : (m_phase + 1u) % kPhaseCount;
         // With a reused committed pair, always write the non-committed member
         // so even a reset attempt cannot overwrite the accepted history bytes

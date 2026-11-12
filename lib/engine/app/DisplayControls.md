@@ -173,11 +173,18 @@ bounded deadlines. It emits typed panel/window intents one at a time:
   quit intent and requires the ordinary drain to complete.
 
 A display acknowledgement advances only when the resolved revision moved, the
-transaction is idle and the committed window/policy values match the requested
-draft. A stale or mismatched acknowledgement never completes a case or starts
-another action, and an outstanding native transaction never overlaps a new
-trial. Keep/Revert timeout starts only after that matching acknowledgement; the
-timeout case waits for the real production confirmation timer and its revert.
+transaction is idle, the host consumed its acknowledgement watch and the
+committed window/policy values match the requested draft. A matching-value
+acknowledgement without a fresh actual-present frame does not advance either: a
+window change must present at least the acknowledged surface generation. A stale
+or mismatched acknowledgement never completes a case or starts another action,
+and an outstanding native transaction never overlaps a new trial.
+Keep/Revert timeout starts only after that matching acknowledgement; the timeout
+case waits for the real production confirmation timer and its revert. Every Keep
+requires the trial to be disarmed and a fresh presented frame with unchanged
+committed values, so a late revert cannot masquerade as a kept trial. Reset that
+arms a trial is completed only through its follow-up Keep; a case cannot finish
+with an armed confirmation.
 
 The ordered case groups are baseline load/present, windowed 1280x720 / 1919x1079
 / 1921x1081 / 640x481 plus the platform minimum and three odd/even pairs,
@@ -188,7 +195,12 @@ boundaries, disruptive Apply+Keep / Apply+Revert / Apply+timeout / Reset / Save 
 isolated resolver reload / invalid-draft rejection, and two real minimize/restore
 cycles followed by quit. Actual monitor modes are discovered; requested logical
 window sizes are recorded separately from observed framebuffer extents and all
-pixelization R/S/B checks use the framebuffer.
+pixelization checks recompute and record exact
+`R=ceil(W/P)`, `S=ceil(R/2)`, `B=2*S` from the actual observed framebuffer and
+require the accepted reconstruction history to have reset with that exact
+presentation grid and unchanged world identity. `ReconstructionPass::historyStamp()`
+publishes that value-only committed role (world, grid, index, phase, reset,
+frame); no image readback or derived grid-change claim substitutes for it.
 
 Deadlines are 10 s per transition after readiness, the existing confirmation
 duration plus 10 s for rollback, 180 s for initial world admission and 900 s for
@@ -196,8 +208,15 @@ the whole run. A miss preserves state and reports `incomplete`; capability
 absence is `unsupported`; contradictory advertised support or a failed operation
 is `failed`. Overall `passed` requires every applicable case and clean shutdown.
 `display-exercise.json` (schema version 1) is written incrementally and
-atomically with identity, capabilities, ordered cases, acknowledgements,
-extents, revisions, timestamps, images and cleanup; `display-exercise.log` and
+atomically with binary/source identity, capabilities, ordered cases, the tested
+action and requested values, observed/final logical and framebuffer extents,
+fullscreen monitor/mode, acknowledgements, exact presentation grids, history
+reset/role, trial armed/kept evidence, per-case timestamps, images and cleanup.
+Discovered fullscreen cases are inserted in group 7, identical modes are
+deduplicated with the covering case named, and a retained odd window is recorded
+with its rationale. The output directory must be fresh (non-empty/stale
+directories are rejected) and must not equal the executable directory, so the
+exercise can never overwrite the user's picture-settings overlay. `display-exercise.log` and
 PNG captures are retained beside it. Exit codes are 0=passed, 1=failed,
 2=invalid invocation, 3=incomplete-or-unsupported. Screenshots support owner
 inspection; they are not automated visual approval.

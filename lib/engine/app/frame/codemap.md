@@ -57,7 +57,9 @@ executor per frame, sweeps fence completion on the lane, and settles queued work
   distinct. Records retain their natural alignment. A drawn C-stage inspection
   overlay additionally posts `LightingInspectionStamp` (settings, matched
   submitted world identity, captured camera revision, accepted C submission);
-  absent means no overlay was drawn. The lane reserves
+  absent means no overlay was drawn. Stage-B settlement also posts the optional
+  value-only `ReconstructionHistoryStamp` (accepted world/grid/index/phase,
+  frame-local reset, frame id); absent means B was never attempted. The lane reserves
   `sizeof(result) + alignof(result) - 1` bytes per raw-channel payload and uses
   the same `std::align` address for placement, reads and destruction; RawChannel
   itself continues to guarantee only u64-aligned payloads. Frame handles and

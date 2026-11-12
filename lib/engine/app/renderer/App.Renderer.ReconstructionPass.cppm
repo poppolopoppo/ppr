@@ -13,6 +13,24 @@ import std;
 
 export namespace pP {
     // ------------------------------------------------------------------
+    // value-only accepted-history observation
+    // ------------------------------------------------------------------
+
+    /// Copyable proof of the reconstruction history role committed by one
+    /// accepted stage-B submission. `m_reset` is true only when that frame's
+    /// beginFrame chose a fresh history (first frame, world/camera cut or any
+    /// W/P/R/S/B change); it never transfers GPU storage.
+    struct ReconstructionHistoryStamp {
+        GridWorldIdentity m_world{};
+        PresentationGrid m_grid{};
+        u32 m_index{};
+        u32 m_phase{};
+        u64 m_frame{};
+        bool m_established{};
+        bool m_reset{};
+    };
+
+    // ------------------------------------------------------------------
     // always-on temporal Hable reconstruction
     // ------------------------------------------------------------------
     // Owns the padded 4x scene target and the single-sample resolved history
@@ -79,6 +97,18 @@ export namespace pP {
         // Accepted stage-B state. It moves only on notifySubmitted, so a test
         // can prove an accepted resolve commits exactly once and a later
         // rejected attempt commits nothing.
+        /// Value-only committed history observation for the frame result.
+        /// Must be called after `notifySubmitted`/`discardUnsubmitted` has
+        /// settled the frame; it reads no GPU resource.
+        [[nodiscard]] ReconstructionHistoryStamp historyStamp() const noexcept {
+            return ReconstructionHistoryStamp{
+                .m_world = m_history_world,
+                .m_grid = m_history_grid,
+                .m_index = m_history_index,
+                .m_phase = m_phase,
+                .m_established = m_history_established,
+                .m_reset = m_last_begin_reset};
+        }
         [[nodiscard]] bool historyEstablishedForTest() const noexcept {
             return m_history_established;
         }
@@ -176,6 +206,7 @@ export namespace pP {
         u32 m_history_index{};
         u32 m_phase{};
         bool m_history_established{};
+        bool m_last_begin_reset{};
 
         // Per-frame root objects and the retirement cursor. Nothing is
         // destroyed before its readers complete.

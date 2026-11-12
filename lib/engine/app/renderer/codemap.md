@@ -27,7 +27,10 @@ The earlier Hable spatial prerequisite remains qualified in `spatial_msaa4.slang
 Bx by By single-sample history pair, supplies the padded/jittered `CameraSnapshot`, reconstructs
 the quarter-pixel lattice over B, and exposes only the R valid rectangle to post-processing.
 `beginFrame` proposes resources and phase without committing; `notifySceneSubmitted` pins stage-A
-scene writes; `notifySubmitted` commits camera/grid/cut/history role/phase. Camera cuts, world
+scene writes; `notifySubmitted` commits camera/grid/cut/history role/phase.
+`historyStamp()` publishes that accepted role as a value-only observation
+(world, presentation grid, index, phase, reset, frame) for the frame result; it
+transfers no GPU storage. Camera cuts, world
 replacement and W/P/R/S/B changes reset screen history; pan/zoom reprojects; exposure, bloom and
 sky edits preserve it. There is no reactive image, velocity field or alternate AA mode. The
 `assets/shaders/hable_temporal.slang` kernel is the temporal article's algorithm, not the spatial

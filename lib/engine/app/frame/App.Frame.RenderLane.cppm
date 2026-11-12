@@ -8,6 +8,7 @@ import :renderer;
 import :renderer.frame_fence;
 import :renderer.grid_pass;
 import :renderer.presentation;
+import :renderer.reconstruction_pass;
 import :renderer.triangle_pass;
 import :renderer.world_lighting_pass;
 import :ui.imgui;
@@ -225,6 +226,9 @@ export namespace pP {
         // Actual active bundle rendered by a successful surface presentation.
         // Independent of staging/edit acknowledgments; empty on every other fate.
         GridWorldIdentity m_presented_grid{};
+        // Value-only accepted reconstruction history role for this frame.
+        // Absent when stage B was never attempted.
+        std::optional<ReconstructionHistoryStamp> m_reconstruction{};
 
         // Same actual-present proof for the selected jointly committed resident
         // state. CPU preparation frames and every non-present fate leave it empty.

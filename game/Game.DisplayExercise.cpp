@@ -21,6 +21,10 @@ namespace pP::game {
         constexpr std::string_view kReportFileName{"display-exercise.json"};
         constexpr std::string_view kLogFileName{"display-exercise.log"};
         constexpr std::string_view kBuildKind{PPR_ENABLE_DEBUG ? "debug" : "release"};
+#ifndef PPR_GAME_SOURCE_IDENTITY
+#define PPR_GAME_SOURCE_IDENTITY "unknown"
+#endif
+        constexpr std::string_view kSourceIdentity{PPR_GAME_SOURCE_IDENTITY};
 
         [[nodiscard]] DisplayDraft windowedDraft(const u32 width, const u32 height) {
             DisplayDraft draft{};
@@ -115,6 +119,66 @@ namespace pP::game {
     } // namespace
 
     // ------------------------------------------------------------------
+    // action names and requested payloads
+    // ------------------------------------------------------------------
+
+    std::string_view DisplayExercise::actionName_(const EDisplayExerciseActionKind kind) noexcept {
+        switch (kind) {
+            case EDisplayExerciseActionKind::apply_display: return "apply_display";
+            case EDisplayExerciseActionKind::keep_display: return "keep_display";
+            case EDisplayExerciseActionKind::revert_display: return "revert_display";
+            case EDisplayExerciseActionKind::reset_display: return "reset_display";
+            case EDisplayExerciseActionKind::save_display: return "save_display";
+            case EDisplayExerciseActionKind::live_picture: return "live_picture";
+            case EDisplayExerciseActionKind::reset_live_picture: return "reset_live_picture";
+            case EDisplayExerciseActionKind::restore_live_baseline: return "restore_live_baseline";
+            case EDisplayExerciseActionKind::invalid_draft: return "invalid_draft";
+            case EDisplayExerciseActionKind::minimize_window: return "minimize_window";
+            case EDisplayExerciseActionKind::restore_window: return "restore_window";
+            case EDisplayExerciseActionKind::reload_overlay: return "reload_overlay";
+            case EDisplayExerciseActionKind::capture_image: return "capture_image";
+            case EDisplayExerciseActionKind::wait_suspension: return "wait_suspension";
+            case EDisplayExerciseActionKind::quit: return "quit";
+        }
+        return "unknown";
+    }
+
+    std::string DisplayExercise::describeRequested_(
+        const Step &step, const DisplayExerciseObservation &observed) const {
+        switch (step.m_kind) {
+            case EDisplayExerciseActionKind::apply_display:
+            case EDisplayExerciseActionKind::invalid_draft:
+                return std::format(
+                    "window_mode={} monitor={} width={} height={} refresh_hz={} pacing={} cap_hz={} paced_vsync={} throttle_unfocused={}",
+                    static_cast<u32>(step.m_draft.m_window_mode), step.m_draft.m_monitor, step.m_draft.m_width,
+                    step.m_draft.m_height, step.m_draft.m_refresh_hz, static_cast<u32>(step.m_draft.m_pacing),
+                    step.m_draft.m_cap_hz, step.m_draft.m_paced_vsync, step.m_draft.m_throttle_unfocused);
+            case EDisplayExerciseActionKind::live_picture: {
+                const WorldLightDisplaySettings light = step.m_keep_world_light ? observed.m_live_world_light
+                                                                                : step.m_world_light;
+                const PixelDisplaySettings pixel = step.m_keep_pixel ? observed.m_live_pixel : step.m_pixel;
+                const PostDisplaySettings post = step.m_keep_post ? observed.m_live_post : step.m_post;
+                return std::format(
+                    "pixel_scale={} sky_hour={} diagnostic={} cascade={} auto_exposure={} exposure_ev={} adaptation_tau={} ev_min={} ev_max={} bloom={} bloom_intensity={} bloom_threshold={}",
+                    pixel.m_pixel_scale, light.m_sky_hour, static_cast<u32>(light.m_diagnostic), light.m_cascade,
+                    post.m_auto_exposure, post.m_exposure_ev, post.m_adaptation_tau, post.m_ev_min, post.m_ev_max,
+                    post.m_bloom, post.m_bloom_intensity, post.m_bloom_threshold);
+            }
+            case EDisplayExerciseActionKind::capture_image: return "image=" + step.m_image;
+            case EDisplayExerciseActionKind::minimize_window:
+            case EDisplayExerciseActionKind::restore_window:
+            case EDisplayExerciseActionKind::reset_display:
+            case EDisplayExerciseActionKind::reset_live_picture:
+            case EDisplayExerciseActionKind::restore_live_baseline:
+            case EDisplayExerciseActionKind::save_display:
+            case EDisplayExerciseActionKind::reload_overlay:
+            case EDisplayExerciseActionKind::wait_suspension:
+            case EDisplayExerciseActionKind::quit: return std::string{actionName_(step.m_kind)};
+            default: return std::string{actionName_(step.m_kind)};
+        }
+    }
+
+    // ------------------------------------------------------------------
     // status and exit mapping
     // ------------------------------------------------------------------
 
@@ -166,12 +230,14 @@ namespace pP::game {
         apply.m_completes_case = false;
         apply.m_keep_after_ack = true;
         apply.m_accept_clamp = accept_clamp;
+        apply.m_record_as_tested = true;
         addStep_(std::move(apply));
 
         Step keep{};
         keep.m_kind = EDisplayExerciseActionKind::keep_display;
         keep.m_case = std::move(case_id);
         keep.m_completes_case = completes_case;
+        keep.m_record_as_tested = false;
         addStep_(std::move(keep));
     }
 
@@ -184,6 +250,7 @@ namespace pP::game {
         apply.m_completes_case = not revert;
         apply.m_revert_after_ack = revert;
         apply.m_timeout_after_ack = timeout;
+        apply.m_record_as_tested = true;
         addStep_(std::move(apply));
 
         if (revert) {
@@ -191,6 +258,7 @@ namespace pP::game {
             back.m_kind = EDisplayExerciseActionKind::revert_display;
             back.m_case = std::move(case_id);
             back.m_completes_case = true;
+            back.m_record_as_tested = false;
             addStep_(std::move(back));
         }
     }
@@ -203,7 +271,7 @@ namespace pP::game {
     void DisplayExercise::addLive_(
         std::string case_id, const bool keep_world_light, WorldLightDisplaySettings world_light, const bool keep_pixel,
         PixelDisplaySettings pixel, const bool keep_post, PostDisplaySettings post, const bool require_pixel_grid,
-        const bool require_inspection_stamp) {
+        const bool require_inspection_stamp, const bool completes_case) {
         Step step{};
         step.m_kind = EDisplayExerciseActionKind::live_picture;
         step.m_case = std::move(case_id);
@@ -216,7 +284,7 @@ namespace pP::game {
         step.m_require_pixel_grid = require_pixel_grid;
         step.m_require_inspection_stamp = require_inspection_stamp;
         step.m_require_unchanged_world = true;
-        step.m_completes_case = true;
+        step.m_completes_case = completes_case;
         addStep_(std::move(step));
     }
 
@@ -250,12 +318,14 @@ namespace pP::game {
             "Primary monitor highest known refresh at a supported resolution");
         addCase_("fullscreen_capture", "7-fullscreen", "Fullscreen group capture");
         addCapture_("fullscreen_capture", "07-fullscreen.png");
+        // Monitor cases are discovered at runtime; insert them by group rather
+        // than appending after the later transaction/window-lifecycle groups.
+        m_fullscreen_case_insert = m_cases.size();
     }
 
     void DisplayExercise::buildPermanentPlan_() {
         m_cases.clear();
         m_steps.clear();
-        m_quit_step = std::numeric_limits<std::size_t>::max();
 
         // 1. initial load/present and baseline capture.
         addCase_("initial_load", "1-initial-load", "Initial load, baseline identity, extents and image");
@@ -296,7 +366,10 @@ namespace pP::game {
             const std::string id = std::format("pixel_p2_{}x{}", width, height);
             addCase_(id, "3-pixelization", std::format("Pixelization P2 at {}x{}", width, height));
             addWindowed_(id, width, height, false, false);
-            addLive_(id, true, {}, false, PixelDisplaySettings{2u}, true, {}, true, false);
+            // Exercise a real P transition at this odd extent, then verify the
+            // requested P2 grid from the actual framebuffer.
+            addLive_(id, true, {}, false, PixelDisplaySettings{1u}, true, {}, false, false, false);
+            addLive_(id, true, {}, false, PixelDisplaySettings{2u}, true, {}, true, false, true);
         }
         addCase_("pixel_capture", "3-pixelization", "Pixelization group capture");
         addCapture_("pixel_capture", "03-pixelization.png");
@@ -339,6 +412,9 @@ namespace pP::game {
             postDraft(true, 0.0f, 0.7f, -4.0f, 4.0f, false));
         addCase_("post_capture", "4-exposure-bloom", "Exposure and bloom group capture");
         addCapture_("post_capture", "04-post.png");
+        addCase_("post_restore_baseline_end", "4-exposure-bloom", "Restore startup live values after exposure/bloom");
+        addStep_(
+            Step{.m_kind = EDisplayExerciseActionKind::restore_live_baseline, .m_case = "post_restore_baseline_end"});
 
         // 5. sky hours, every diagnostic enum and cascade inspection levels.
         addCase_("inspection_restore_baseline", "5-inspection", "Restore startup live values");
@@ -369,6 +445,13 @@ namespace pP::game {
         }
         addCase_("inspection_capture", "5-inspection", "Inspection group capture");
         addCapture_("inspection_capture", "05-inspection.png");
+        addCase_(
+            "inspection_restore_baseline_end", "5-inspection",
+            "Restore startup live values after sky/diagnostic/cascade");
+        addStep_(
+            Step{
+                .m_kind = EDisplayExerciseActionKind::restore_live_baseline,
+                .m_case = "inspection_restore_baseline_end"});
 
         // 6. pacing, cap domain, VSync and unfocused throttling.
         struct PacingCase final {
@@ -404,8 +487,9 @@ namespace pP::game {
         addFullscreenGroup_();
 
         // 8. disruptive trials, Reset, Save, isolated reload and invalid drafts.
-        addCase_("trial_apply_keep", "8-transactions", "Apply then Keep");
-        addWindowed_("trial_apply_keep", 1280u, 720u);
+        addCase_("trial_apply_keep", "8-transactions", "Apply a different window, wait for the armed trial, then Keep");
+        addWindowed_("trial_apply_keep", 1024u, 768u);
+        m_steps[m_steps.size() - 2u].m_require_trial_armed = true;
         addCase_("trial_apply_revert", "8-transactions", "Apply then Revert");
         addApplyThen_("trial_apply_revert", windowedDraft(1919u, 1079u), true, false);
         addCase_("trial_apply_timeout", "8-transactions", "Apply then production confirmation timeout");
@@ -417,7 +501,13 @@ namespace pP::game {
             Step{
                 .m_kind = EDisplayExerciseActionKind::reset_display,
                 .m_case = "reset_display_overrides",
-                .m_completes_case = true});
+                .m_completes_case = false});
+        addStep_(
+            Step{
+                .m_kind = EDisplayExerciseActionKind::keep_display,
+                .m_case = "reset_display_overrides",
+                .m_completes_case = true,
+                .m_record_as_tested = false});
 
         addCase_("reset_live_picture", "8-transactions", "Reset live lighting and post through their own action");
         addLive_(
@@ -455,6 +545,7 @@ namespace pP::game {
             Step iconify{};
             iconify.m_kind = EDisplayExerciseActionKind::minimize_window;
             iconify.m_case = minimize;
+            iconify.m_record_as_tested = true;
             addStep_(std::move(iconify));
 
             const std::string suspension = std::format("minimized_suspension_{}", round);
@@ -462,6 +553,7 @@ namespace pP::game {
             Step wait{};
             wait.m_kind = EDisplayExerciseActionKind::wait_suspension;
             wait.m_case = suspension;
+            wait.m_record_as_tested = false;
             addStep_(std::move(wait));
 
             const std::string restore = std::format("restore_{}", round);
@@ -470,13 +562,13 @@ namespace pP::game {
             resume.m_kind = EDisplayExerciseActionKind::restore_window;
             resume.m_case = restore;
             resume.m_require_minimized = true;
+            resume.m_record_as_tested = true;
             addStep_(std::move(resume));
         }
         addCase_("quit", "9-window-lifecycle", "Ordinary production quit and clean drain");
         Step quit{};
         quit.m_kind = EDisplayExerciseActionKind::quit;
         quit.m_case = "quit";
-        m_quit_step = m_steps.size();
         addStep_(std::move(quit));
     }
 
@@ -508,6 +600,18 @@ namespace pP::game {
 
         markCase_("fullscreen_discovery", EDisplayExerciseStatus::passed, "capabilities enumerated");
 
+        // Discovered per-monitor cases are inserted inside group 7 rather than
+        // appended after the later groups.
+        const auto addFullscreenCase = [this](std::string id, std::string description) {
+            DisplayExerciseCase entry{};
+            entry.m_id = std::move(id);
+            entry.m_group = "7-fullscreen";
+            entry.m_description = std::move(description);
+            entry.m_status = EDisplayExerciseStatus::pending;
+            m_cases.insert(m_cases.begin() + static_cast<std::ptrdiff_t>(m_fullscreen_case_insert), std::move(entry));
+            ++m_fullscreen_case_insert;
+        };
+
         Array<Step> inserted{};
         const auto appendSteps = [&](const std::string &case_id, const std::string_view monitor,
                                      const DisplayModeCapability &mode) {
@@ -517,12 +621,14 @@ namespace pP::game {
             fullscreen.m_draft = fullscreenDraft(monitor, mode.m_width, mode.m_height, mode.m_refresh_hz);
             fullscreen.m_completes_case = false;
             fullscreen.m_accept_clamp = true;
+            fullscreen.m_record_as_tested = true;
             inserted.push_back(std::move(fullscreen));
 
             Step keep{};
             keep.m_kind = EDisplayExerciseActionKind::keep_display;
             keep.m_case = case_id;
             keep.m_completes_case = false;
+            keep.m_record_as_tested = false;
             inserted.push_back(std::move(keep));
 
             Step back{};
@@ -530,13 +636,46 @@ namespace pP::game {
             back.m_case = case_id;
             back.m_draft = windowedDraft(1280u, 720u);
             back.m_completes_case = false;
+            back.m_record_as_tested = false;
             inserted.push_back(std::move(back));
 
             Step back_keep{};
             back_keep.m_kind = EDisplayExerciseActionKind::keep_display;
             back_keep.m_case = case_id;
             back_keep.m_completes_case = true;
+            back_keep.m_record_as_tested = false;
             inserted.push_back(std::move(back_keep));
+        };
+
+        struct CoveredMode final {
+            std::string m_monitor{};
+            std::string m_case{};
+            u32 m_width{};
+            u32 m_height{};
+            std::optional<u32> m_refresh_hz{};
+        };
+        Array<CoveredMode> covered{};
+        const auto coveringCase = [&](const std::string_view monitor,
+                                      const DisplayModeCapability &mode) -> const CoveredMode * {
+            for (const CoveredMode &entry: covered) {
+                if (entry.m_monitor == monitor and
+                    entry.m_width == mode.m_width and
+                    entry.m_height == mode.m_height and
+                    entry.m_refresh_hz == mode.m_refresh_hz) {
+                    return &entry;
+                }
+            }
+            return nullptr;
+        };
+        const auto noteCovered = [&](std::string_view monitor, const std::string &case_id,
+                                     const DisplayModeCapability &mode) {
+            covered.push_back(
+                CoveredMode{
+                    .m_monitor = std::string{monitor},
+                    .m_case = case_id,
+                    .m_width = mode.m_width,
+                    .m_height = mode.m_height,
+                    .m_refresh_hz = mode.m_refresh_hz});
         };
 
         // Every enumerated unambiguous monitor at its current supported mode.
@@ -551,18 +690,18 @@ namespace pP::game {
                 }
             }
             if (ambiguous) {
-                addCase_(case_id, "7-fullscreen", "Monitor fullscreen (ambiguous duplicate name)");
+                addFullscreenCase(case_id, "Monitor fullscreen (ambiguous duplicate name)");
                 markCase_(case_id, EDisplayExerciseStatus::unsupported, "ambiguous duplicate monitor name");
                 continue;
             }
             if (monitor.m_current.m_width == 0u or monitor.m_current.m_height == 0u) {
-                addCase_(case_id, "7-fullscreen", "Monitor fullscreen (no current mode)");
+                addFullscreenCase(case_id, "Monitor fullscreen (no current mode)");
                 markCase_(case_id, EDisplayExerciseStatus::unsupported, "monitor reports no current mode");
                 continue;
             }
-            addCase_(
-                case_id, "7-fullscreen", std::format("Monitor '{}' fullscreen at its current mode", monitor.m_name));
+            addFullscreenCase(case_id, std::format("Monitor '{}' fullscreen at its current mode", monitor.m_name));
             appendSteps(case_id, monitor.m_name, monitor.m_current);
+            noteCovered(monitor.m_name, case_id, monitor.m_current);
         }
 
         // Primary monitor resolution/refresh boundaries, deduplicated.
@@ -622,7 +761,14 @@ namespace pP::game {
                     markCase_(case_id, EDisplayExerciseStatus::unsupported, "no supported mode");
                     return;
                 }
+                if (const CoveredMode *covered_by = coveringCase(primary->m_name, *mode); covered_by != nullptr) {
+                    markCase_(
+                        case_id, EDisplayExerciseStatus::passed,
+                        "identical mode already exercised by " + covered_by->m_case);
+                    return;
+                }
                 appendSteps(std::string{case_id}, primary->m_name, *mode);
+                noteCovered(primary->m_name, std::string{case_id}, *mode);
             };
 
             appendPrimary("fullscreen_primary_smallest", smallest);
@@ -646,13 +792,41 @@ namespace pP::game {
         if (output.empty()) {
             PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, std::make_error_code(std::errc::invalid_argument));
         }
+        // Never let the exercise write its isolated overlay over the user's
+        // executable-adjacent picture settings.
         std::error_code error{};
-        std::filesystem::create_directories(output, error);
-        if (error) {
-            PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, error);
+        const std::filesystem::path executable = hal::process::currentExecutablePath();
+        if (not executable.empty()) {
+            const std::filesystem::path executable_dir = std::filesystem::weakly_canonical(
+                executable.parent_path(), error);
+            if (not error) {
+                const std::filesystem::path output_dir = std::filesystem::weakly_canonical(output, error);
+                if (not error and output_dir == executable_dir) {
+                    PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, std::make_error_code(std::errc::invalid_argument));
+                }
+            }
+            error = {};
         }
-        if (not std::filesystem::is_directory(output, error) or error) {
-            PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, error ? error : std::make_error_code(std::errc::not_a_directory));
+
+        // Fresh artifact directory only: a stale/non-empty directory is
+        // rejected instead of mixing old images, JSON, logs or an overlay.
+        if (std::filesystem::exists(output, error)) {
+            if (error) {
+                PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, error);
+            }
+            if (not std::filesystem::is_directory(output, error) or error) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    DisplayExercise, error ? error : std::make_error_code(std::errc::not_a_directory));
+            }
+            if (not std::filesystem::is_empty(output, error) or error) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    DisplayExercise, error ? error : std::make_error_code(std::errc::directory_not_empty));
+            }
+        } else {
+            std::filesystem::create_directories(output, error);
+            if (error) {
+                PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, error);
+            }
         }
 
         m_output = output;
@@ -668,11 +842,6 @@ namespace pP::game {
         }
 
         buildPermanentPlan_();
-        if (m_quit_step == std::numeric_limits<std::size_t>::max()) {
-            addCase_("quit", "9-window-lifecycle", "Ordinary production quit and clean drain");
-            m_quit_step = m_steps.size();
-            addStep_(Step{.m_kind = EDisplayExerciseActionKind::quit, .m_case = "quit"});
-        }
 
         writeLog_(std::format("begin output={}", m_output.string()));
         PPR_RETURN_ERROR_ON_FAIL(DisplayExercise, writeReport_());
@@ -689,7 +858,7 @@ namespace pP::game {
         m_cases.clear();
         m_steps.clear();
         m_next_step = 0u;
-        m_quit_step = std::numeric_limits<std::size_t>::max();
+        m_fullscreen_case_insert = m_cases.size();
         for (const DisplayExerciseTestStep &source: steps) {
             if (source.m_case.empty()) {
                 continue;
@@ -713,12 +882,12 @@ namespace pP::game {
             step.m_require_inspection_stamp = source.m_require_inspection_stamp;
             step.m_require_unchanged_world = source.m_require_unchanged_world;
             step.m_accept_clamp = source.m_accept_clamp;
+            step.m_require_trial_armed = source.m_require_trial_armed;
             addStep_(std::move(step));
         }
 
         if (findCase_("quit") == nullptr) {
             addCase_("quit", "test", "Ordinary production quit and clean drain");
-            m_quit_step = m_steps.size();
             addStep_(Step{.m_kind = EDisplayExerciseActionKind::quit, .m_case = "quit"});
         }
         return writeReport_();
@@ -817,6 +986,22 @@ namespace pP::game {
             return std::optional<DisplayExerciseAction>{};
         }
 
+        if (m_cleanup_pending) {
+            if (not observed.m_confirm_armed and not observed.m_transaction_pending) {
+                m_cleanup_pending = false;
+                m_cleanup_keep_sent = false;
+                writeLog_("trial cleanup keep settled");
+            } else if (now - m_await_start > secondsSpan(5.0f)) {
+                m_cleanup_pending = false;
+                m_stop_reason = "cleanup Keep did not resolve the trial";
+                m_status = EDisplayExerciseStatus::incomplete;
+                beginStopping_(m_stop_reason);
+                return std::optional<DisplayExerciseAction>{};
+            } else {
+                return std::optional<DisplayExerciseAction>{};
+            }
+        }
+
         if (m_status == EDisplayExerciseStatus::pending and now - m_begin > secondsSpan(kDisplayExerciseRunSeconds)) {
             m_stop_reason = "run deadline";
             markUnreached_("run deadline");
@@ -865,13 +1050,15 @@ namespace pP::game {
             if (observed.m_transaction_pending) {
                 return std::optional<DisplayExerciseAction>{};
             }
-            m_quit_emitted = true;
-            ++m_emitted_actions;
             writeLog_("emit quit");
             DisplayExerciseAction action{};
             action.m_kind = EDisplayExerciseActionKind::quit;
             action.m_case = "quit";
-            return std::optional<DisplayExerciseAction>{std::move(action)};
+            auto published = publish_(std::move(action));
+            if (published) {
+                m_quit_emitted = true;
+            }
+            return published;
         }
 
         if (m_awaiting_step) {
@@ -898,12 +1085,13 @@ namespace pP::game {
                 m_cleanup_keep_sent = false;
             } else if (transactional and not m_cleanup_keep_sent) {
                 m_cleanup_keep_sent = true;
-                ++m_emitted_actions;
+                m_cleanup_pending = true;
+                m_await_start = now;
                 writeLog_(std::format("emit trial cleanup keep before case={}", step.m_case));
                 DisplayExerciseAction action{};
                 action.m_kind = EDisplayExerciseActionKind::keep_display;
                 action.m_case = step.m_case;
-                return std::optional<DisplayExerciseAction>{std::move(action)};
+                return publish_(std::move(action));
             }
 
             if (step.m_expand_fullscreen) {
@@ -920,11 +1108,15 @@ namespace pP::game {
                 ++m_next_step;
                 continue;
             }
-            ++m_emitted_actions;
+            auto published = publish_(std::move(*action));
+            if (not published) {
+                ++m_next_step;
+                continue;
+            }
             m_awaiting_step = index;
             ++m_next_step;
             m_phase = EPhase::awaiting;
-            return std::optional<DisplayExerciseAction>{std::move(*action)};
+            return published;
         }
 
         if (not m_quit_emitted) {
@@ -991,7 +1183,7 @@ namespace pP::game {
                     return incomplete("draft conversion failed");
                 }
                 if (not step.m_expect_rejection and
-                    requestsWindowChange_(*settings, observed.m_committed, observed.m_capabilities)) {
+                    requestsWindowChange_(*settings, observed.m_committed, m_capabilities)) {
                     if (not m_capabilities_available) {
                         return unsupported(
                             m_capabilities_error ? m_capabilities_error.message()
@@ -1025,6 +1217,19 @@ namespace pP::game {
         return true;
     }
 
+    std::optional<DisplayExerciseAction> DisplayExercise::publish_(DisplayExerciseAction action) {
+        if (m_actions_suppressed) {
+            // Real telemetry: any emission path reached after a user close is
+            // counted, so the injected-time test fails instead of trusting a
+            // constant zero.
+            ++m_emitted_after_close;
+            writeLog_(std::format("suppressed emission after close case={}", action.m_case));
+            return std::nullopt;
+        }
+        ++m_emitted_actions;
+        return action;
+    }
+
     std::optional<DisplayExerciseAction> DisplayExercise::emitStep_(
         Step &step, const DisplayExerciseObservation &observed, const TimePoint now) {
         m_await_start = now;
@@ -1034,24 +1239,22 @@ namespace pP::game {
         m_await_frame = observed.m_presented_frame;
         m_await_live_revision = observed.m_live_revision;
         m_await_iconify_events = observed.m_iconify_events;
-        m_await_presented_generation = observed.m_presented_generation;
+        m_await_history_reset_count = observed.m_history_reset_count;
         m_await_pixel = observed.m_live_pixel;
         m_await_logical = observed.m_logical_extent;
-        m_await_ack_seen = false;
         m_await_confirmed = false;
         m_await_window_change = false;
         if (step.m_kind == EDisplayExerciseActionKind::apply_display or
             step.m_kind == EDisplayExerciseActionKind::invalid_draft) {
             if (const auto settings = displaySettingsFrom(step.m_draft)) {
-                m_await_window_change = requestsWindowChange_(*settings, observed.m_committed, observed.m_capabilities);
+                m_await_window_change = requestsWindowChange_(*settings, observed.m_committed, m_capabilities);
             }
         } else if (step.m_kind == EDisplayExerciseActionKind::revert_display) {
             // The production trial restore pins the observed pre-trial geometry,
             // so a revert is a native resize exactly when the applied trial was.
             m_await_window_change = m_last_apply_window_change;
         } else if (step.m_kind == EDisplayExerciseActionKind::reset_display) {
-            m_await_window_change = requestsWindowChange_(
-                m_baseline_display, observed.m_committed, observed.m_capabilities);
+            m_await_window_change = requestsWindowChange_(m_baseline_display, observed.m_committed, m_capabilities);
         }
 
         DisplayExerciseAction action{};
@@ -1066,13 +1269,6 @@ namespace pP::game {
             case EDisplayExerciseActionKind::apply_display:
             case EDisplayExerciseActionKind::invalid_draft: action.m_draft = step.m_draft; break;
             case EDisplayExerciseActionKind::live_picture:
-                if (step.m_require_pixel_grid) {
-                    m_await_grid = {};
-                    if (const auto grid = makePresentationGrid(
-                            observed.m_framebuffer_extent, observed.m_live_pixel.m_pixel_scale)) {
-                        m_await_grid = *grid;
-                    }
-                }
                 action.m_world_light = step.m_keep_world_light ? observed.m_live_world_light : step.m_world_light;
                 action.m_pixel = step.m_keep_pixel ? observed.m_live_pixel : step.m_pixel;
                 action.m_post = step.m_keep_post ? observed.m_live_post : step.m_post;
@@ -1080,6 +1276,15 @@ namespace pP::game {
             default: break;
         }
 
+        if (DisplayExerciseCase *entry = findCase_(step.m_case); entry != nullptr and step.m_record_as_tested) {
+            entry->m_action = std::string{actionName_(step.m_kind)};
+            entry->m_requested = describeRequested_(step, observed);
+            entry->m_start_seconds = time::seconds(now >= m_begin ? now - m_begin : TimeSpan{});
+            if (step.m_draft.m_width != 0u or step.m_draft.m_height != 0u) {
+                entry->m_requested_width = step.m_draft.m_width;
+                entry->m_requested_height = step.m_draft.m_height;
+            }
+        }
         writeLog_(
             std::format(
                 "emit case={} kind={} revision={} frame={} logical={}x{}", step.m_case, static_cast<u32>(step.m_kind),
@@ -1183,20 +1388,21 @@ namespace pP::game {
                 // configuration. A stale/mismatched acknowledgement never
                 // completes a case or advances the plan.
                 if (not awaitMatchesDraft_(step, observed)) {
+                    m_pending_stale_ack = true;
                     writeLog_(
                         std::format(
                             "stale/mismatched ack case={} revision={}", step.m_case, observed.m_settings_revision));
                     return false;
                 }
-                m_await_ack_seen = true;
+                m_pending_stale_ack = false;
                 if (not freshSurfacePresented()) {
                     if (now - m_last_wait_log > secondsSpan(1.0f)) {
                         m_last_wait_log = now;
                         writeLog_(
                             std::format(
-                                "waiting fresh surface case={} baseline_frame={} presented_frame={} baseline_generation={} presented_generation={} surface_generation={}",
-                                step.m_case, m_await_frame, observed.m_presented_frame, m_await_presented_generation,
-                                observed.m_presented_generation, observed.m_surface_generation));
+                                "waiting fresh surface case={} baseline_frame={} presented_frame={} presented_generation={} surface_generation={}",
+                                step.m_case, m_await_frame, observed.m_presented_frame, observed.m_presented_generation,
+                                observed.m_surface_generation));
                     }
                     return false;
                 }
@@ -1224,6 +1430,9 @@ namespace pP::game {
                 if (observed.m_confirm_armed) {
                     m_confirmation_started = true;
                 }
+                if (step.m_require_trial_armed and not observed.m_confirm_armed) {
+                    return false;
+                }
                 if (step.m_timeout_after_ack) {
                     if (not observed.m_confirm_armed) {
                         completeStep_(
@@ -1249,11 +1458,21 @@ namespace pP::game {
                         observed, now);
                     return true;
                 }
-                if (not observed.m_confirm_armed and not observed.m_transaction_pending) {
-                    completeStep_(step, EDisplayExerciseStatus::passed, "trial kept", observed, now);
+                if (observed.m_confirm_armed or observed.m_transaction_pending) {
+                    return false;
+                }
+                if (observed.m_presented_frame <= m_await_frame) {
+                    return false;
+                }
+                if (not displaySettingsEqual(observed.m_committed, m_await_prior)) {
+                    completeStep_(
+                        step, EDisplayExerciseStatus::failed,
+                        "committed values changed after Keep (late revert/timeout)", observed, now);
                     return true;
                 }
-                return false;
+                completeStep_(
+                    step, EDisplayExerciseStatus::passed, "trial kept; committed values unchanged", observed, now);
+                return true;
 
             case EDisplayExerciseActionKind::revert_display: {
                 const bool acked = observed.m_settings_revision > m_await_revision and
@@ -1296,6 +1515,12 @@ namespace pP::game {
                 if (not freshSurfacePresented()) {
                     return false;
                 }
+                if (step.m_completes_case and observed.m_confirm_armed) {
+                    completeStep_(
+                        step, EDisplayExerciseStatus::incomplete,
+                        "Reset acknowledgement left an armed confirmation trial", observed, now);
+                    return true;
+                }
                 if (not displaySettingsEqual(observed.m_committed, m_baseline_display)) {
                     completeStep_(
                         step, EDisplayExerciseStatus::failed, "reset acknowledgement did not restore startup values",
@@ -1319,21 +1544,57 @@ namespace pP::game {
                     return true;
                 }
                 if (step.m_require_pixel_grid) {
-                    const auto grid = makePresentationGrid(
-                        observed.m_framebuffer_extent, observed.m_live_pixel.m_pixel_scale);
+                    const u32 scale = observed.m_live_pixel.m_pixel_scale;
+                    const auto grid = makePresentationGrid(observed.m_framebuffer_extent, scale);
                     if (not grid) {
                         completeStep_(
                             step, EDisplayExerciseStatus::incomplete,
                             withDetails("presentation grid unavailable", grid.error().message()), observed, now);
                         return true;
                     }
-                    if (observed.m_live_pixel.m_pixel_scale != m_await_pixel.m_pixel_scale and *grid == m_await_grid) {
+                    // Independent exact R=ceil(W/P), S=ceil(R/2), B=2*S from the
+                    // actual observed framebuffer, not the requested window.
+                    const auto axis = [scale](const i32 extent) -> i32 {
+                        const i64 r = (static_cast<i64>(extent) + static_cast<i64>(scale) - 1) / scale;
+                        const i64 s = (r + 1) / 2;
+                        return static_cast<i32>(2 * s);
+                    };
+                    const int2 expected_backing{
+                        axis(observed.m_framebuffer_extent.x), axis(observed.m_framebuffer_extent.y)};
+                    if (grid->m_window.x != observed.m_framebuffer_extent.x or
+                        grid->m_window.y != observed.m_framebuffer_extent.y or
+                        grid->m_pixel_scale != scale or
+                        grid->m_backing.x != expected_backing.x or
+                        grid->m_backing.y != expected_backing.y) {
                         completeStep_(
-                            step, EDisplayExerciseStatus::incomplete,
-                            "pixelization change did not produce a distinct presentation grid", observed, now);
+                            step, EDisplayExerciseStatus::failed,
+                            "observed presentation grid does not match exact W/P/R/S/B", observed, now);
                         return true;
                     }
-                    m_await_grid = *grid;
+                    if (not observed.m_history_available or not observed.m_history_established) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::incomplete, "reconstruction history state unavailable",
+                            observed, now);
+                        return true;
+                    }
+                    if (observed.m_history_reset_count <= m_await_history_reset_count) {
+                        // A P change must reset history; wait for the accepted
+                        // reset stamp rather than inferring it from the grid.
+                        return false;
+                    }
+                    const ReconstructionHistoryStamp &reset = observed.m_history_last_reset;
+                    if (reset.m_grid != *grid) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::failed, "history reset used a different presentation grid",
+                            observed, now);
+                        return true;
+                    }
+                    if (reset.m_world != m_baseline_world) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::failed, "history reset changed the world-lighting identity",
+                            observed, now);
+                        return true;
+                    }
                 }
                 if (step.m_require_inspection_stamp) {
                     const bool overlay_expected = observed.m_live_world_light.m_diagnostic != ELightingDiagnostic::off;
@@ -1376,18 +1637,28 @@ namespace pP::game {
                     return true;
                 }
                 if (observed.m_action_error) {
+                    const bool specific = observed.m_action_error ==
+                                              std::make_error_code(std::errc::invalid_argument) and
+                                          (observed.m_action_message.find("display.refresh_hz") != std::string::npos or
+                                              observed.m_action_message.find("Refresh") != std::string::npos);
+                    if (not specific) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::failed,
+                            withDetails("invalid draft was not rejected by the schema rule", observed.m_action_message),
+                            observed, now);
+                        return true;
+                    }
+                    if (observed.m_settings_revision != m_await_revision or
+                        observed.m_logical_extent.x != m_await_logical.x or
+                        observed.m_logical_extent.y != m_await_logical.y) {
+                        completeStep_(
+                            step, EDisplayExerciseStatus::failed, "invalid draft rejection still mutated native state",
+                            observed, now);
+                        return true;
+                    }
                     completeStep_(
-                        step, EDisplayExerciseStatus::passed, "invalid draft rejected before native mutation", observed,
-                        now);
-                    return true;
-                }
-                if (now - m_await_start > secondsSpan(1.0f) and
-                    observed.m_settings_revision == m_await_revision and
-                    observed.m_logical_extent.x == m_await_logical.x and
-                    observed.m_logical_extent.y == m_await_logical.y) {
-                    completeStep_(
-                        step, EDisplayExerciseStatus::passed, "draft produced no submission or native mutation",
-                        observed, now);
+                        step, EDisplayExerciseStatus::passed,
+                        "invalid draft rejected by the schema rule before mutation", observed, now);
                     return true;
                 }
                 return false;
@@ -1497,17 +1768,63 @@ namespace pP::game {
     void DisplayExercise::completeStep_(
         Step &step, const EDisplayExerciseStatus status, std::string reason, const DisplayExerciseObservation &observed,
         const TimePoint now) {
+        EDisplayExerciseStatus effective = status;
+        if (effective == EDisplayExerciseStatus::passed and
+            step.m_completes_case and
+            observed.m_confirm_armed and
+            (step.m_kind == EDisplayExerciseActionKind::apply_display or
+                step.m_kind == EDisplayExerciseActionKind::reset_display)) {
+            effective = EDisplayExerciseStatus::incomplete;
+            reason = "case completed with an armed confirmation trial";
+        }
+        if (effective == EDisplayExerciseStatus::passed and
+            (step.m_kind == EDisplayExerciseActionKind::apply_display or
+                step.m_kind == EDisplayExerciseActionKind::reset_display or
+                step.m_kind == EDisplayExerciseActionKind::revert_display) and
+            m_pending_stale_ack) {
+            // Real stale-ACK telemetry: a case completed while the last observed
+            // acknowledgement was mismatched. This must remain false.
+            m_stale_ack_advanced = true;
+        }
+        m_pending_stale_ack = false;
+
         if (DisplayExerciseCase *entry = findCase_(step.m_case); entry != nullptr) {
-            if (step.m_draft.m_width != 0u or step.m_draft.m_height != 0u) {
-                entry->m_requested_width = step.m_draft.m_width;
-                entry->m_requested_height = step.m_draft.m_height;
+            entry->m_final_logical = observed.m_logical_extent;
+            entry->m_final_framebuffer = observed.m_framebuffer_extent;
+            entry->m_end_seconds = time::seconds(now >= m_begin ? now - m_begin : TimeSpan{});
+            if (step.m_record_as_tested) {
+                entry->m_observed_logical = observed.m_logical_extent;
+                entry->m_observed_framebuffer = observed.m_framebuffer_extent;
+                entry->m_fullscreen = observed.m_fullscreen;
+                entry->m_monitor = observed.m_monitor;
+                entry->m_refresh_hz = observed.m_refresh_hz;
+                entry->m_ack_revision = observed.m_settings_revision;
+                entry->m_presented_frame = observed.m_presented_frame;
+                entry->m_trial_armed = entry->m_trial_armed or observed.m_confirm_armed;
+                entry->m_trial_seconds_left = observed.m_confirm_seconds_left;
+                if (step.m_kind == EDisplayExerciseActionKind::live_picture) {
+                    if (const auto grid = makePresentationGrid(
+                            observed.m_framebuffer_extent, observed.m_live_pixel.m_pixel_scale)) {
+                        entry->m_presentation_grid = *grid;
+                        entry->m_has_presentation_grid = true;
+                    }
+                    entry->m_history_reset = observed.m_history_available and
+                                             observed.m_history_reset_count > m_await_history_reset_count;
+                    if (entry->m_history_reset) {
+                        entry->m_history_grid = observed.m_history_last_reset.m_grid;
+                        entry->m_has_history_grid = true;
+                        entry->m_history_reset_frame = observed.m_history_last_reset.m_frame;
+                        entry->m_history_index = observed.m_history_last_reset.m_index;
+                        entry->m_history_phase = observed.m_history_last_reset.m_phase;
+                    }
+                }
             }
-            entry->m_observed_logical = observed.m_logical_extent;
-            entry->m_observed_framebuffer = observed.m_framebuffer_extent;
-            entry->m_ack_revision = observed.m_settings_revision;
-            entry->m_presented_frame = observed.m_presented_frame;
-            if (status != EDisplayExerciseStatus::passed or step.m_completes_case) {
-                entry->m_status = status;
+            if (step.m_kind == EDisplayExerciseActionKind::keep_display) {
+                entry->m_trial_kept = not observed.m_confirm_armed and not observed.m_transaction_pending;
+                entry->m_trial_seconds_left = observed.m_confirm_seconds_left;
+            }
+            if (effective != EDisplayExerciseStatus::passed or step.m_completes_case) {
+                entry->m_status = effective;
                 entry->m_reason = std::move(reason);
             }
         }
@@ -1521,7 +1838,7 @@ namespace pP::game {
         writeLog_(
             std::format(
                 "step case={} status={} revision={} frame={} presentation_generation={} surface_generation={} logical={}x{} framebuffer={}x{} focused={} iconified={} focus_losses={} iconify_events={}",
-                step.m_case, displayExerciseStatusName(status), observed.m_settings_revision,
+                step.m_case, displayExerciseStatusName(effective), observed.m_settings_revision,
                 observed.m_presented_frame, observed.m_presented_generation, observed.m_surface_generation,
                 observed.m_logical_extent.x, observed.m_logical_extent.y, observed.m_framebuffer_extent.x,
                 observed.m_framebuffer_extent.y, observed.m_focused, observed.m_iconified, observed.m_focus_losses,
@@ -1582,7 +1899,7 @@ namespace pP::game {
             // The production controller may canonicalise the friendly monitor
             // name to its stable OS identity before acknowledging.
             bool via_identity = false;
-            for (const DisplayMonitorCapability &monitor: observed.m_capabilities.m_monitors) {
+            for (const DisplayMonitorCapability &monitor: m_capabilities.m_monitors) {
                 if (monitor.m_name == draft.m_monitor and
                     not monitor.m_identity.empty() and
                     committed.m_monitor == monitor.m_identity) {
@@ -1742,6 +2059,13 @@ namespace pP::game {
         return std::format("[{},{}]", value.x, value.y);
     }
 
+    std::string DisplayExercise::jsonGrid_(const PresentationGrid &grid) {
+        return std::format(
+            "{{\"window\":{},\"resolved\":{},\"raster\":{},\"backing\":{},\"pixel_scale\":{}}}",
+            jsonVector_(grid.m_window), jsonVector_(grid.m_resolved), jsonVector_(grid.m_raster),
+            jsonVector_(grid.m_backing), grid.m_pixel_scale);
+    }
+
     std::string DisplayExercise::statusText_(const EDisplayExerciseStatus status) {
         return std::string{displayExerciseStatusName(status)};
     }
@@ -1752,9 +2076,9 @@ namespace pP::game {
             "{{\n\"schema_version\":1,\n\"status\":{},\n\"command\":\"exercise-display\",\n",
             jsonString_(statusText_(m_status)));
         json += std::format(
-            "\"identity\":{{\"executable\":{},\"bytes\":{},\"build\":{},\"backend\":{},\"gpu\":{},\"source_identity\":\"recorded in task report\"}},\n",
+            "\"identity\":{{\"executable\":{},\"bytes\":{},\"build\":{},\"backend\":{},\"gpu\":{},\"source_identity\":{},\"driver\":\"unavailable in RHI DeviceInfo\"}},\n",
             jsonString_(m_executable_path), m_executable_bytes, jsonString_(kBuildKind), jsonString_(m_backend),
-            jsonString_(m_gpu));
+            jsonString_(m_gpu), jsonString_(kSourceIdentity));
         json += "\"invocation\":{\"profile\":\"lighting_lab\",\"map_size\":1024,\"seed\":\"0x000000000000002a\",";
         json += std::format("\"output\":{},\"explicit_cli_assignments\":[", jsonString_(m_output.string()));
         for (std::size_t index = 0u; index < m_cli_assignments.size(); ++index) {
@@ -1808,17 +2132,28 @@ namespace pP::game {
             m_baseline_post.m_exposure_ev, m_baseline_post.m_adaptation_tau, m_baseline_post.m_ev_min,
             m_baseline_post.m_ev_max, m_baseline_post.m_bloom, m_baseline_post.m_bloom_intensity,
             m_baseline_post.m_bloom_threshold);
+        json += std::format(
+            "\"retained_odd_extent\":{{\"width\":1921,\"height\":1081,\"through\":\"6-pacing\",\"reason\":{}}},\n",
+            jsonString_(
+                "Group 3 leaves the odd 1921x1081 window in place so exposure, bloom, sky, diagnostic, cascade and pacing cases exercise a real odd framebuffer; group 7 restores 1280x720."));
 
         json += "\"cases\":[";
         for (std::size_t index = 0u; index < m_cases.size(); ++index) {
             const DisplayExerciseCase &entry = m_cases[index];
             json += std::format(
-                "{}{{\"id\":{},\"group\":{},\"description\":{},\"status\":{},\"reason\":{},\"requested_logical\":[{},{}],\"observed_logical\":{},\"observed_framebuffer\":{},\"ack_revision\":{},\"presented_frame\":{},\"image\":{}}}",
+                "{}{{\"id\":{},\"group\":{},\"description\":{},\"status\":{},\"reason\":{},\"action\":{},\"requested\":{},\"requested_logical\":[{},{}],\"observed_logical\":{},\"observed_framebuffer\":{},\"final_logical\":{},\"final_framebuffer\":{},\"fullscreen\":{},\"monitor\":{},\"refresh_hz\":{},\"ack_revision\":{},\"presented_frame\":{},\"timestamps\":{{\"start_seconds\":{:.3f},\"end_seconds\":{:.3f}}},\"presentation_grid\":{},\"history\":{{\"reset\":{},\"frame\":{},\"index\":{},\"phase\":{},\"grid\":{}}},\"trial\":{{\"armed\":{},\"kept\":{},\"seconds_left\":{:.2f}}},\"image\":{}}}",
                 index == 0u ? "" : ",", jsonString_(entry.m_id), jsonString_(entry.m_group),
                 jsonString_(entry.m_description), jsonString_(statusText_(entry.m_status)), jsonString_(entry.m_reason),
-                entry.m_requested_width, entry.m_requested_height, jsonVector_(entry.m_observed_logical),
-                jsonVector_(entry.m_observed_framebuffer), entry.m_ack_revision, entry.m_presented_frame,
-                jsonString_(entry.m_image));
+                jsonString_(entry.m_action), jsonString_(entry.m_requested), entry.m_requested_width,
+                entry.m_requested_height, jsonVector_(entry.m_observed_logical),
+                jsonVector_(entry.m_observed_framebuffer), jsonVector_(entry.m_final_logical),
+                jsonVector_(entry.m_final_framebuffer), entry.m_fullscreen, jsonString_(entry.m_monitor),
+                entry.m_refresh_hz ? std::format("{}", *entry.m_refresh_hz) : "null", entry.m_ack_revision,
+                entry.m_presented_frame, entry.m_start_seconds, entry.m_end_seconds,
+                entry.m_has_presentation_grid ? jsonGrid_(entry.m_presentation_grid) : "null", entry.m_history_reset,
+                entry.m_history_reset_frame, entry.m_history_index, entry.m_history_phase,
+                entry.m_has_history_grid ? jsonGrid_(entry.m_history_grid) : "null", entry.m_trial_armed,
+                entry.m_trial_kept, entry.m_trial_seconds_left, jsonString_(entry.m_image));
         }
         json += "],\n";
 

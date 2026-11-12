@@ -588,6 +588,10 @@ namespace demo {
         u64 m_exercise_presented_generation{};
         u64 m_exercise_presented_live_revision{};
         GridWorldIdentity m_exercise_presented_world{};
+        bool m_exercise_history_available{};
+        bool m_exercise_history_established{};
+        u64 m_exercise_history_reset_count{};
+        ReconstructionHistoryStamp m_exercise_history_last_reset{};
         bool m_exercise_presented_inspection{};
         LightingInspectionSettings m_exercise_presented_inspection_settings{};
         u64 m_exercise_focus_losses{};
@@ -3198,17 +3202,17 @@ namespace demo {
                     m_exercise_capabilities_error = capabilities.error();
                 }
             }
-            observation.m_capabilities = m_exercise_capabilities;
-            observation.m_capabilities_available = m_exercise_capabilities_valid;
-            observation.m_capabilities_error = m_exercise_capabilities_error;
+            if (m_display_exercise->needsCapabilities()) {
+                observation.m_capabilities = m_exercise_capabilities;
+                observation.m_capabilities_available = m_exercise_capabilities_valid;
+                observation.m_capabilities_error = m_exercise_capabilities_error;
+            }
 
             observation.m_committed = displayController().committed();
             observation.m_settings_revision = displayController().resolved().m_revision;
             observation.m_surface_generation = displayController().applied().m_generation;
-            observation.m_transaction = displayController().transactionState();
             observation.m_transaction_pending = displayController().pending().has_value();
             observation.m_ack_settled = not m_ui_state.m_display.m_watch_ack;
-            observation.m_transaction_error = displayController().transactionError();
             observation.m_confirm_armed = m_ui_state.m_display.m_confirm.m_armed;
             observation.m_confirm_seconds_left = m_ui_state.m_display.m_confirm.m_seconds_left;
 
@@ -3242,18 +3246,17 @@ namespace demo {
             observation.m_throttle_active = display_view.m_throttle_active;
 
             observation.m_world_ready = m_driver and m_driver_ready and not m_world_modal and m_world_published;
-            observation.m_world_presented = m_world_frame_presented;
             observation.m_presented_frame = m_exercise_presented_frame;
             observation.m_presented_generation = m_exercise_presented_generation;
             observation.m_presented_world = m_exercise_presented_world;
-            observation.m_world_identity = GridWorldIdentity{
-                .m_job_id = 0u,
-                .m_world_generation = m_driver ? m_driver->worldGeneration() : 0u,
-                .m_content_fingerprint = m_candidate_fingerprint};
             observation.m_presented_inspection = m_exercise_presented_inspection;
             observation.m_presented_inspection_settings = m_exercise_presented_inspection_settings;
             observation.m_live_revision = m_exercise_live_revision;
             observation.m_presented_live_revision = m_exercise_presented_live_revision;
+            observation.m_history_available = m_exercise_history_available;
+            observation.m_history_established = m_exercise_history_established;
+            observation.m_history_reset_count = m_exercise_history_reset_count;
+            observation.m_history_last_reset = m_exercise_history_last_reset;
 
             observation.m_live_world_light = m_ui_state.m_world_light;
             observation.m_live_pixel = game::PixelDisplaySettings{m_ui_state.m_pixel_scale};
@@ -6348,6 +6351,14 @@ namespace demo {
         void settleGameFrame_(const RenderFrameResult &result) {
             if (m_display_exercise) {
                 settleExerciseCapture_(result);
+                if (result.m_reconstruction) {
+                    m_exercise_history_available = true;
+                    m_exercise_history_established = result.m_reconstruction->m_established;
+                    if (result.m_reconstruction->m_reset) {
+                        ++m_exercise_history_reset_count;
+                        m_exercise_history_last_reset = *result.m_reconstruction;
+                    }
+                }
                 if (result.m_presented and not result.m_error and not result.m_dropped) {
                     m_exercise_presented_frame = result.m_frame_id;
                     m_exercise_presented_generation = result.m_surface_generation;

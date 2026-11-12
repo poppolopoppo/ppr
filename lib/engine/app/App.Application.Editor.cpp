@@ -1377,6 +1377,13 @@ namespace pP {
         RenderStageResult &stage = out.m_stages[kRenderStageResolve];
         stage.m_error = error;
         stage.m_settlement = FrameSettlement::kRejected;
+        if (m_reconstruction) {
+            // A rejected/not-attempted B commits nothing: report the accepted
+            // history role and explicitly clear the frame-local reset fact.
+            out.m_reconstruction = m_reconstruction->historyStamp();
+            out.m_reconstruction->m_frame = out.m_frame_id;
+            out.m_reconstruction->m_reset = false;
+        }
 
         if (error == std::make_error_code(std::errc::operation_not_permitted)) {
             m_reconstruction->discardUnsubmitted();
@@ -1395,6 +1402,10 @@ namespace pP {
             stage.m_settlement = FrameSettlement::kSubmitted;
             m_reconstruction->notifySubmitted(after);
             m_post_process->notifySubmitted(after);
+            if (m_reconstruction) {
+                out.m_reconstruction = m_reconstruction->historyStamp();
+                out.m_reconstruction->m_frame = out.m_frame_id;
+            }
             return;
         }
 

@@ -1593,3 +1593,39 @@ and operational acceptance. No Task 4 work has begun.
   was not clicked through on Linux; owner visual acceptance remains Task 19.
   The cold-start/test/authoring-preview `m_has_resolved_cells == 0` fallback
   remains with a Task 19 removal decision.
+
+## Task 17 — permanent real-window display exercise complete
+
+- Commits: `871c25b6` (feature) plus `pending-commit` (review: exact/non-vacuous
+  evidence).
+- Delivered: game-owned `game.display_exercise` injected-time state machine,
+  mutually exclusive `--exercise-display --exercise-output=DIR`, isolated fresh
+  persistence, schema-1 atomic JSON/log/PNG artifacts, and the ordered nine-group
+  matrix. Actions are the production panel/window intents (Apply/Keep/Revert/
+  timeout/Reset/Save/live edits/minimize/restore/reload/quit); no GUI click,
+  mocked window, alternate renderer or second policy.
+- Acknowledgement model: matching revision/values/settled-watch plus a fresh
+  actual-present frame at or beyond the acknowledged surface generation; stale,
+  mismatched and matching-value ACKs without a fresh surface never advance. A
+  Keep requires disarm and a fresh frame with unchanged committed values; a Reset
+  that arms a trial is completed through its follow-up Keep.
+- Evidence fixes: exact observed-framebuffer R/S/B for P1/2/3/8 and both odd
+  extents at P2; `ReconstructionPass::historyStamp()` provides the accepted
+  history reset/world/grid/index/phase, and P cases require that real reset with
+  unchanged world identity. Apply+Keep now applies a genuinely different window
+  and records trial armed/kept. Fullscreen cases retain the tested requested mode
+  and observed logical/framebuffer/monitor/refresh, with identical modes
+  deduplicated. Per-case action/requested values, timestamps, final extents and
+  binary/source identity are recorded. Stale-ACK advancement and post-close
+  emissions are measured counters, not constants.
+- Verification: focused `game/display_exercise` 21/21 and `game/game_config`
+  30/30; `engine.tests.app.reconstruction` passed; real `clang-rel` run exited 3
+  with 91 passed / 6 incomplete / 0 failed / 0 unsupported and clean shutdown.
+  The six incomplete cases are the two minimize/restore rounds and suspension
+  checks: this XWayland host accepts `iconifyWindow` on a valid window but emits
+  no iconified/focus-loss event. Exact R/S/B, trial, fullscreen, timestamps and
+  source-identity fields are present in `display-exercise.json`; artifacts are
+  under `.superpowers/sdd/2026-11-10-oni-port/task-17-artifacts/`.
+- Gates: Linux minimize/restore is host-incomplete; Windows/D3D12 unmeasured;
+  RHI exposes no GPU driver version (recorded as unavailable); owner visual
+  acceptance remains Task 19.

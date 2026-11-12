@@ -100,8 +100,6 @@ export namespace pP::game {
         /// acknowledgement is only actionable after the production poll has
         /// consumed it (and armed the Keep/Revert trial when applicable).
         bool m_ack_settled{true};
-        EDisplayTransaction m_transaction{EDisplayTransaction::idle};
-        std::error_code m_transaction_error{};
         bool m_confirm_armed{};
         float m_confirm_seconds_left{};
 
@@ -125,15 +123,17 @@ export namespace pP::game {
 
         // presentation identity:
         bool m_world_ready{};
-        bool m_world_presented{};
         u64 m_presented_frame{};
         u64 m_presented_generation{};
         GridWorldIdentity m_presented_world{};
-        GridWorldIdentity m_world_identity{};
         bool m_presented_inspection{};
         LightingInspectionSettings m_presented_inspection_settings{};
         u64 m_live_revision{};
         u64 m_presented_live_revision{};
+        bool m_history_available{};
+        bool m_history_established{};
+        u64 m_history_reset_count{};
+        ReconstructionHistoryStamp m_history_last_reset{};
 
         // live session values (the same values the Display window edits):
         WorldLightDisplaySettings m_live_world_light{};
@@ -179,12 +179,32 @@ export namespace pP::game {
         std::string m_description{};
         EDisplayExerciseStatus m_status{EDisplayExerciseStatus::pending};
         std::string m_reason{};
+        std::string m_action{};
+        std::string m_requested{};
         u32 m_requested_width{};
         u32 m_requested_height{};
         int2 m_observed_logical{zero_v};
         int2 m_observed_framebuffer{zero_v};
+        int2 m_final_logical{zero_v};
+        int2 m_final_framebuffer{zero_v};
+        bool m_fullscreen{};
+        std::string m_monitor{};
+        std::optional<u32> m_refresh_hz{};
+        PresentationGrid m_presentation_grid{};
+        bool m_has_presentation_grid{};
+        PresentationGrid m_history_grid{};
+        bool m_has_history_grid{};
+        bool m_history_reset{};
+        u64 m_history_reset_frame{};
+        u32 m_history_index{};
+        u32 m_history_phase{};
+        bool m_trial_armed{};
+        bool m_trial_kept{};
+        float m_trial_seconds_left{};
         u64 m_ack_revision{};
         u64 m_presented_frame{};
+        double m_start_seconds{};
+        double m_end_seconds{};
         std::string m_image{};
     };
 
@@ -207,6 +227,7 @@ export namespace pP::game {
         bool m_require_inspection_stamp{};
         bool m_require_unchanged_world{};
         bool m_accept_clamp{};
+        bool m_require_trial_armed{};
     };
 
     // ------------------------------------------------------------------
@@ -295,7 +316,9 @@ export namespace pP::game {
             bool m_require_inspection_stamp{};
             bool m_require_unchanged_world{};
             bool m_accept_clamp{};
+            bool m_require_trial_armed{};
             bool m_require_minimized{};
+            bool m_record_as_tested{true};
             bool m_keep_world_light{};
             bool m_keep_pixel{};
             bool m_keep_post{};
@@ -323,7 +346,7 @@ export namespace pP::game {
         void addLive_(
             std::string case_id, bool keep_world_light, WorldLightDisplaySettings world_light, bool keep_pixel,
             PixelDisplaySettings pixel, bool keep_post, PostDisplaySettings post, bool require_pixel_grid = false,
-            bool require_inspection_stamp = false);
+            bool require_inspection_stamp = false, bool completes_case = true);
         void addCapture_(std::string case_id, std::string image);
         void addFullscreenGroup_();
         void expandFullscreen_(const DisplayExerciseObservation &observed);
@@ -336,6 +359,7 @@ export namespace pP::game {
             const DisplayExerciseObservation &observed, TimePoint now);
         [[nodiscard]] std::optional<DisplayExerciseAction> emitStep_(
             Step &step, const DisplayExerciseObservation &observed, TimePoint now);
+        [[nodiscard]] std::optional<DisplayExerciseAction> publish_(DisplayExerciseAction action);
         [[nodiscard]] bool gateStep_(Step &step, const DisplayExerciseObservation &observed);
         [[nodiscard]] bool pollAwaiting_(const DisplayExerciseObservation &observed, TimePoint now);
         void captureBaseline_(const DisplayExerciseObservation &observed, TimePoint now);
@@ -364,7 +388,11 @@ export namespace pP::game {
         [[nodiscard]] std::string reportJson_() const;
         [[nodiscard]] static std::string jsonString_(std::string_view value);
         [[nodiscard]] static std::string jsonVector_(const int2 &value);
+        [[nodiscard]] static std::string jsonGrid_(const PresentationGrid &grid);
         [[nodiscard]] static std::string statusText_(EDisplayExerciseStatus status);
+        [[nodiscard]] static std::string_view actionName_(EDisplayExerciseActionKind kind) noexcept;
+        [[nodiscard]] std::string describeRequested_(
+            const Step &step, const DisplayExerciseObservation &observed) const;
 
         // ------------------------------------------------------------------
         // state
@@ -376,7 +404,7 @@ export namespace pP::game {
         Array<Step> m_steps{};
         Array<DisplayExerciseCase> m_cases{};
         std::size_t m_next_step{};
-        std::size_t m_quit_step{std::numeric_limits<std::size_t>::max()};
+        std::size_t m_fullscreen_case_insert{};
         std::optional<std::size_t> m_awaiting_step{};
 
         EPhase m_phase{EPhase::idle};
@@ -393,8 +421,10 @@ export namespace pP::game {
         u64 m_emitted_actions{};
         u64 m_emitted_after_close{};
         bool m_stale_ack_advanced{};
+        bool m_pending_stale_ack{};
         bool m_confirmation_started{};
         bool m_cleanup_keep_sent{};
+        bool m_cleanup_pending{};
         bool m_need_capabilities{true};
         u32 m_capability_waits{};
         DisplayCapabilities m_capabilities{};
@@ -421,11 +451,9 @@ export namespace pP::game {
         u64 m_await_frame{};
         u64 m_await_live_revision{};
         u64 m_await_iconify_events{};
-        u64 m_await_presented_generation{};
-        PresentationGrid m_await_grid{};
+        u64 m_await_history_reset_count{};
         PixelDisplaySettings m_await_pixel{};
         int2 m_await_logical{zero_v};
-        bool m_await_ack_seen{};
         bool m_await_confirmed{};
         bool m_await_window_change{};
         bool m_last_apply_window_change{};
