@@ -133,7 +133,7 @@ float3 backgroundLayerRadiance(float3 linear_rgb, float2 world, float2 camera, f
 float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler) {
-    const bool lit = g_grid_frame.m_has_resolved_cells != 0u;
+    const bool lit = g_grid_frame.m_has_resolved_cells != 0u && g_grid_frame.m_camera_ortho != 0u;
     float2 world;
     if (lit) {
         // A lit view never substitutes the near-plane fallback: an unvalidated

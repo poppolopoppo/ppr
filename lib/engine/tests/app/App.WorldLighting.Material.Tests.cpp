@@ -1785,6 +1785,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         Camera camera{ECameraProjection::orthographic};
         camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, kEdge, kEdge}});
         const auto snapshot = camera.getSnapshot();
+
+        // Same position and extent through the perspective projection: the
+        // background must keep the authored unlit fallback, never the lit path.
+        CameraModel perspective_model = model;
+        perspective_model.m_camera_mode = ECameraProjection::perspective;
+        Camera perspective_camera{ECameraProjection::perspective};
+        perspective_camera.updateModel(TimeSpan{}, perspective_model, Viewport{PixelRect{0, 0, kEdge, kEdge}});
+        const auto perspective_snapshot = perspective_camera.getSnapshot();
+
         const auto viewport = rhi::Viewport::fromSize(float(kEdge), float(kEdge));
         const auto scissor = rhi::ScissorRect::fromSize(kEdge, kEdge);
 
@@ -1802,15 +1811,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(
             not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
 
-        const auto capture = [&](const lighting::CH &ch) {
+        const auto capture = [&](const CameraSnapshot &camera_snapshot, const lighting::CH &ch) {
             PPR_TEST_ASSERT(not grid.setLightingBuffersForTest(resolved_buffer, make_ch(ch)));
-            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera_snapshot, false));
             const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
-                if (const auto ec = grid.prepareBackgroundInputs(context, snapshot, viewport, scissor)) {
+                if (const auto ec = grid.prepareBackgroundInputs(context, camera_snapshot, viewport, scissor)) {
                     return ec;
                 }
 
-                return grid.prepareBackground(context, snapshot, viewport, scissor);
+                return grid.prepareBackground(context, camera_snapshot, viewport, scissor);
             };
             const auto draw = [&](const DrawContext &context) -> std::error_code {
                 return grid.renderBackground(context);
@@ -1842,7 +1851,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         // A nonunit uniform field must appear exactly once: squaring it or
         // applying it to alpha fails these values.
-        const auto lit = capture(uniformCH(float3{0.5f, 0.25f, 0.125f}));
+        const auto lit = capture(snapshot, uniformCH(float3{0.5f, 0.25f, 0.125f}));
         const auto lit_center = pixel(lit, kEdge / 2u, kEdge / 2u);
         _.log(
             std::format(
@@ -1853,8 +1862,22 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(lit_center[2] - 0.125f) <= 0.003f);
         PPR_TEST_ASSERT(std::abs(lit_center[3] - 1.0f) <= 0.003f);
 
+        // A perspective camera has no affine z=0 receiving plane, so the same
+        // staged background must use the authored unlit fallback: the nonzero
+        // uniform field leaves the white layer white instead of black.
+        const auto unlit = capture(perspective_snapshot, uniformCH(float3{0.5f, 0.25f, 0.125f}));
+        const auto unlit_center = pixel(unlit, kEdge / 2u, kEdge / 2u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL background_receiver unlit=({:.4f},{:.4f},{:.4f},{:.4f})", unlit_center[0],
+                unlit_center[1], unlit_center[2], unlit_center[3]));
+        PPR_TEST_ASSERT(std::abs(unlit_center[0] - 1.0f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(unlit_center[1] - 1.0f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(unlit_center[2] - 1.0f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(unlit_center[3] - 1.0f) <= 0.003f);
+
         // A zero field yields zero reflected HDR while the layer stays opaque.
-        const auto dark = capture(lighting::CH{});
+        const auto dark = capture(snapshot, lighting::CH{});
         const auto dark_center = pixel(dark, kEdge / 2u, kEdge / 2u);
         assert_black(dark_center);
         PPR_TEST_ASSERT(std::abs(dark_center[3] - 1.0f) <= 0.003f);
