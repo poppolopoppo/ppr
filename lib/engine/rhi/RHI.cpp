@@ -303,6 +303,7 @@ namespace pP {
             // trees then stay unreachable instead of being misread.
             static constexpr std::string_view kFormatVersion{"1"};
             static constexpr std::size_t kMaxKeyBytes{128};
+            static constexpr std::size_t kMaxBuildTagLength{64};
             static constexpr std::uintmax_t kMaxEntryBytes{64u * 1024u * 1024u};
 #if defined(_WIN32)
             // MAX_PATH counts the whole path including the terminator.
@@ -313,8 +314,9 @@ namespace pP {
 #endif
 
             /// Builds the cache, or returns nullptr after one info log when the
-            /// root cannot be created. A disabled cache is never installed on
-            /// the device, so no per-call failure path runs.
+            /// root cannot be created. A failed root is never installed on the
+            /// device; failures after installation disable the cache silently
+            /// (the first one logs once) instead of failing each lookup.
             static PersistentShaderCache *create_(
                 const rhi::DeviceType device_type, slang::IGlobalSession *const global_session) {
                 std::error_code ec;
@@ -384,7 +386,8 @@ namespace pP {
                     return SLANG_E_INVALID_ARG;
                 }
 
-                const std::filesystem::path destination = entryPath_(key);
+                const std::string hex = keyHex_(key);
+                const std::filesystem::path destination = entryPath_(hex);
                 if (destination.empty()) {
                     return SLANG_OK;
                 }
@@ -396,15 +399,19 @@ namespace pP {
                 }
 
                 // A per-process temporary keeps concurrent writers off each
-                // other; the rename below publishes the finished entry.
-                const std::filesystem::path temporary = m_root /
-                                                        std::format(
-                                                            ".{}.{}.tmp", processId_(),
-                                                            m_sequence.fetch_add(1u, std::memory_order_relaxed));
+                // other; the rename below publishes the finished entry. The
+                // key hex keeps a crash leftover traceable to its entry.
+                const std::filesystem::path temporary = temporaryPath_(
+                    hex, m_sequence.fetch_add(1u, std::memory_order_relaxed));
+                if (temporary.empty()) {
+                    return SLANG_OK;
+                }
 
                 {
                     std::ofstream stream{temporary, std::ios::binary | std::ios::trunc};
                     if (not stream) {
+                        std::error_code ignored;
+                        std::filesystem::remove(temporary, ignored);
                         disable_("temporary entry not writable");
                         return SLANG_FAIL;
                     }
@@ -454,23 +461,36 @@ namespace pP {
                     return SLANG_E_INVALID_ARG;
                 }
 
-                const std::filesystem::path entry = entryPath_(key);
+                const std::string hex = keyHex_(key);
+                const std::filesystem::path entry = entryPath_(hex);
                 if (entry.empty()) {
                     noteMiss_();
                     return SLANG_E_NOT_FOUND;
                 }
 
-                std::expected<MappedFile, std::error_code> mapped = io::mapFile(entry);
-                if (not mapped or mapped->size() == 0u or mapped->size() > kMaxEntryBytes) {
+                // Silent miss path: a cold cache must not emit an error. Only
+                // non-throwing size/open/read calls run here. The size check
+                // enforces the read cap before any bytes are read.
+                std::error_code size_ec;
+                const std::uintmax_t entry_size = std::filesystem::file_size(entry, size_ec);
+                if (size_ec or entry_size == 0u or entry_size > kMaxEntryBytes) {
                     noteMiss_();
                     return SLANG_E_NOT_FOUND;
                 }
 
+                std::vector<std::byte> bytes(static_cast<std::size_t>(entry_size));
+                std::ifstream stream{entry, std::ios::binary};
+                stream.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+                if (not stream or stream.gcount() != static_cast<std::streamsize>(bytes.size())) {
+                    noteMiss_();
+                    return SLANG_E_NOT_FOUND;
+                }
+                stream.close();
+
                 // slang_createBlob returns one reference. The ComPtr takes that
                 // reference over so a failure cannot leak, and detach hands the
                 // caller exactly the reference it owns.
-                rhi::ComPtr<ISlangBlob> blob{
-                    Slang::INIT_ATTACH, ::slang_createBlob(mapped->span().data(), mapped->size())};
+                rhi::ComPtr<ISlangBlob> blob{Slang::INIT_ATTACH, ::slang_createBlob(bytes.data(), bytes.size())};
                 if (not blob) {
                     return SLANG_E_OUT_OF_MEMORY;
                 }
@@ -484,7 +504,7 @@ namespace pP {
             explicit PersistentShaderCache(std::filesystem::path root) : m_root{std::move(root)} {
             }
 
-            [[nodiscard]] std::filesystem::path entryPath_(ISlangBlob *const key) const {
+            [[nodiscard]] static std::string keyHex_(ISlangBlob *const key) {
                 const std::size_t key_size = key->getBufferSize();
                 if (key_size == 0u or key_size > kMaxKeyBytes) {
                     return {};
@@ -496,20 +516,38 @@ namespace pP {
                 }
 
                 constexpr char hex_digits[] = "0123456789abcdef";
-                std::string name{};
-                name.reserve(key_size * 2u + 4u);
+                std::string hex{};
+                hex.reserve(key_size * 2u);
                 for (std::size_t index = 0u; index < key_size; ++index) {
                     const unsigned value = std::to_integer<unsigned>(key_bytes[index]);
-                    name.push_back(hex_digits[value >> 4u]);
-                    name.push_back(hex_digits[value & 0x0fu]);
+                    hex.push_back(hex_digits[value >> 4u]);
+                    hex.push_back(hex_digits[value & 0x0fu]);
                 }
-                name += ".bin";
+                return hex;
+            }
 
-                std::filesystem::path entry = m_root / name;
+            [[nodiscard]] std::filesystem::path entryPath_(const std::string &hex) const {
+                if (hex.empty()) {
+                    return {};
+                }
+
+                std::filesystem::path entry = m_root / (hex + ".bin");
                 if (entry.native().size() > kMaxPathLength) {
                     return {};
                 }
                 return entry;
+            }
+
+            [[nodiscard]] std::filesystem::path temporaryPath_(const std::string &hex, const u32 sequence) const {
+                if (hex.empty()) {
+                    return {};
+                }
+
+                std::filesystem::path temporary = m_root / std::format("{}.{}.{}.tmp", hex, processId_(), sequence);
+                if (temporary.native().size() > kMaxPathLength) {
+                    return {};
+                }
+                return temporary;
             }
 
             void disable_(const char *const reason) {
@@ -550,6 +588,13 @@ namespace pP {
                     if (isBuildTagCharacter_(character)) {
                         sanitized.push_back(character);
                     }
+                }
+
+                // A single path component must not traverse ('.', '..'),
+                // and an unexpectedly long tag is omitted rather than
+                // truncated, which could alias two builds.
+                if (sanitized == "." or sanitized == ".." or sanitized.size() > kMaxBuildTagLength) {
+                    return {};
                 }
                 return sanitized;
             }

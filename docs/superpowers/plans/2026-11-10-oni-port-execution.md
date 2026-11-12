@@ -1365,3 +1365,82 @@ and operational acceptance. No Task 4 work has begun.
   (API + tests only); per-case closeups/image-level sky comparison and
   interactive save/reload remain owner/Task 19 gates. Default LSan reports the
   pre-existing GTK/dbus 23-allocation leak set on both lab and frontier runs.
+
+## Amendment — persistent compiled-shader cache
+
+- Commits: `c0b8a38b` (feature) and `fix: silence shader-cache misses and
+  ignore cache root` (review follow-up). Files: `lib/engine/rhi/RHI.cpp`,
+  `.gitignore`, `lib/engine/rhi/codemap.md`, this ledger. Task 15 files and the
+  unstaged `assets/worldgen/stylized/` user work are untouched.
+- **API evidence:** `rhi::IPersistentCache` (write/query, concurrent-call
+  contract) at `out/build/clang-dev/ppr-slang-rhi-msaa/include/slang-rhi.h:4335-4350`;
+  `DeviceDesc::persistentShaderCache` at `:3660`; device `ComPtr` addRef at
+  `out/cpm_cache/slang-rhi/6e3a/src/device.cpp:432` and `src/device.h:523`;
+  key preparation/query-on-miss/write-on-success at `src/shader.cpp:162-227`;
+  Slang key covers dependencies + target settings (`slang.h:5528-5535`);
+  `slang_createBlob` returns one reference (`slang.h:5903`);
+  `getBuildTagString` (`slang.h:4160-4162`); compilation reports
+  `isCached`/compile timings (`slang-rhi.h:237-250`, `:4066`).
+- **Mechanism:** file-local `PersistentShaderCache final :
+  slang_rhi::IPersistentCache` in `RHI.cpp` (no exported alias). Root
+  `<cwd>/.ppr-shader-cache/<format-version>/<slang-build-tag>/<device-type>/`;
+  entry = lowercase hex of the opaque key + `.bin`; no header/checksum/hash;
+  no target-format segment. Build tags filtered to `[A-Za-z0-9._-]`, `.`/`..`
+  and >64-character tags omitted. Writes use `<hex>.<pid>.<counter>.tmp` and
+  publish by same-directory `rename`; destination-exists after a lost race is
+  success. Keys >128 bytes or paths over the platform limit are miss/no-store;
+  reads >64 MiB are rejected before reading. Misses use non-throwing
+  `file_size` + `ifstream`, so an empty cache emits no error log. A root that
+  cannot be created is never installed; a later write failure disables the
+  process cache after one info log; first hit/miss log once each. Service owns
+  one reference beside the device, sets the desc before `createDevice`, clears
+  it in the failure guard, and releases it after the device in `shutdown()`.
+  Deliberately unbuilt: module IR cache, pipeline cache, eviction/size
+  caps/stats/CLI clear/telemetry, shared sessions/devices, config/env/public
+  API, fsync/mutex. Reset is deleting the directory.
+- **Cold/warm, direct serial `--no-shuffle` runs on the normal build**
+  (clang-dev Debug+ASan, RTX 2080; cold = first run with an empty
+  `.ppr-shader-cache`; warm = populated):
+
+  | entry | cold | warm | leaves | `.bin` |
+  |---|---|---|---|---|
+  | `app/frame_fence` | 6.50 s | 5.57 / 5.55 s | 29/29 | 11 |
+  | `app/world_lighting_trace` | 22.14 s | 21.16 / 21.22 s | 9/9 | 11 |
+  | `app/world_lighting_settlement` | 32.94 s | 28.63 / 28.54 s | 19/19 | 62 |
+  | `app/reconstruction` | 8.28 s | 8.07 / 8.22 s | 25/25 | 4 |
+  | `asset gpu_grid_particles` | 6.56 s | 5.05 / 5.16 s | 8/8 | 14 |
+  | `asset gpu_misc` | 7.03 s | 5.18 / 5.08 s | 27/27 | 28 |
+  | `reconstruction` + `PPR_TEST_GPU_VALIDATION=1` | 11.55 s | 11.18 / 11.30 s | 25/25 | 4 |
+  | `settlement` + `PPR_TEST_GPU_VALIDATION=1` | 33.58 s | 29.53 s | 19/19 | 62 |
+
+  Equivalent CTest entries on the normally linked `engine.tests.app` all pass
+  cold and warm with identical leaf counts and `.bin` counts, zero `.tmp`
+  leftovers and no rewritten entries: frame_fence 6.70→5.59 s, trace
+  22.10→21.41 s, settlement 355.84→256.02 s, reconstruction 8.85→8.48 s,
+  grid 56.23→22.31 s, misc 82.73→34.45 s, reconstruction validation
+  11.87→11.34 s, settlement validation 364.19→264.65 s. Real-window CTest wall
+  times swing by 2–6× between identical warm runs (50–100 s observed for the
+  same asset shard), so materiality is read from the direct serial table; CTest
+  supplies pass/leaf/empty-temp equivalence. Reconstruction benefits least
+  (4 shader entries; delta within warm-run variance); the other entries reduce
+  materially and repeatably. Keep.
+- **Residual front-end cost** (temporary compilation-report instrumentation,
+  reverted before commit): `frame_fence` warm serves 38/38 entry points with
+  `compile=0 ms`, `create=1.5 ms`, `pipeline=6.8 ms`; the cold device recorded
+  938–955 ms of compile (Slang 715–723 ms + downstream 223–229 ms) from 11
+  misses (27/38 were already cached in-process). The remaining warm 5.5 s is
+  Slang module load/link/specialization, device/pipeline setup and the test's
+  GPU work; available instrumentation does not split those (`getCompilerElapsedTime`
+  reports 0 ms once artifacts are served; HAL profile scopes are no-ops on
+  Linux clang-dev).
+- **No-error evidence:** with temporary per-entry severity tracing, a cold
+  `frame_fence` run (11 file misses) produced zero cache-related error entries:
+  0 `throw exception`/`mapFile`/`failed to map`/`shader cache disabled`
+  markers, and the same 4 pre-existing retained error-level entries as the warm
+  run (2 Shader E41018 notices, 2 Renderer deliberate-failure lines). The
+  previous `io::mapFile` miss path logged a category-Hal `throw exception` at
+  error severity on every cold lookup; that path is gone.
+- **Known gates:** Windows/D3D12 rename/exists branch unrun; no eviction,
+  size accounting or telemetry; default LSan still reports the pre-existing
+  GTK/dbus window/portal leak set on windowed entries (identical with and
+  without cache use; CTest entries pass).

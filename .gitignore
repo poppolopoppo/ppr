@@ -639,6 +639,9 @@ http-client.private.env.json
 # ImGui runtime state
 imgui.ini
 
+# Persistent compiled-shader cache (engine.rhi writes it under the process CWD)
+.ppr-shader-cache/
+
 # BEGIN oh-my-opencode-slim worktrees
 .slim/worktrees/
 .slim/worktrees.json

@@ -8,8 +8,9 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
 
 ## Design
 
-- Global fragment includes `pP/Macros.h` + `slang.h`/`slang-com-ptr.h`/`slang-com-helper.h`/`slang-rhi.h`/
-  `slang-rhi/shader-cursor.h`; `import engine.core; import engine.math; import engine.shader; import std;`.
+- Global fragment includes `pP/Macros.h` + host `<process.h>`/`<unistd.h>` (cache temp-name pid) + `slang.h`/
+  `slang-com-ptr.h`/`slang-com-helper.h`/`slang-rhi.h`/`slang-rhi/shader-cursor.h`; `import engine.core;
+  import engine.math; import engine.shader; import std;`.
   `namespace slang_rhi { using namespace rhi; }` normalizes the upstream namespace.
 - Thin `using slang_rhi::X` aliases in `pP::rhi`: `ComPtr` (via `Slang::`), `IRHI`/`IAdapter`/`IBuffer`/
   `ICommandBuffer`/`ICommandEncoder`/`ICommandQueue`/`IComputePipeline`/`IComputePassEncoder`/`IDebugCallback`/
@@ -51,8 +52,22 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   one sampler; buffers cover bag/material/payload storage. `Feature::Bindless`
   stays out of `requiredFeatures` (weak hardware must still create a device);
   pass caches check `hasFeature(Bindless)` at init instead.
+- Persistent compiled-shader cache (file-local `PersistentShaderCache final : slang_rhi::IPersistentCache` in
+  `RHI.cpp`, no exported alias): compiled entry-point artifacts are stored under
+  `<current_path()>/.ppr-shader-cache/<format-version>/<slang-build-tag>/<device-type>/`, named by the
+  lowercase hex of slang-rhi's opaque key + `.bin` (the key already covers compiler/target/entry-point
+  identity; no header, checksum or hash). Build tags are filtered to `[A-Za-z0-9._-]`, omit `.`/`..` and
+  anything over 64 characters, and the segment is omitted when empty. Writes use
+  `<hex>.<pid>.<counter>.tmp` in the same directory and publish with `rename`; a lost rename race keeps the
+  existing entry. Keys >128 bytes or paths over the platform limit are miss/no-store, reads >64 MiB are a
+  miss, and misses use non-throwing `file_size` + `ifstream` so a cold cache emits no error log. A root that
+  cannot be created is never installed; a later write failure disables the process cache after the single
+  info log. First hit/miss per process log once at info. No eviction, size cap, fsync, mutex, pipeline
+  cache, env knob or public API; reset is deleting the directory. `getDeviceTypeName_` supplies the
+  device-type segment.
 - `IRhiService : IService` (`pP::`, `safe_ptr` singleton via `get()`): 9 methods — `initialize(DeviceType, IShaderService&)`, `setCoreValidation`/`isCoreValidationEnabled`, `setGpuAssistedValidation`/`isGpuAssistedValidationEnabled`, `shutdown()`, `getInstance()` (`*slang_rhi::getRHI()`), `getDevice()` (`*m_device`), `createRenderPipeline(desc,
-  out)` (forwards to `m_device->createRenderPipeline`). `SlangRhiService` (`RHI.cpp`, `ComPtr<IDevice> m_device`):
+  out)` (forwards to `m_device->createRenderPipeline`). `SlangRhiService` (`RHI.cpp`, `ComPtr<IDevice> m_device`,
+  `ComPtr<slang_rhi::IPersistentCache> m_shader_cache`):
   idempotence guard (`m_device` → warning + `errc::ok`); null `getRHI()` → `no_interface`; `#if PPR_ENABLE_LOGGING`
   + `isDebugLayersEnabled()` debug layers (`setDebugLayerOptions{m_debug_options}` with `coreValidation`/`GPUAssistedValidation` fields, no `.required` field; required `Feature::{Surface, Rasterization}` with `safe_narrowing(size)` count;
   `DeviceDesc{deviceType, slang.slangGlobalSession = shader_service.getGlobalSession(), requiredFeatures,
@@ -61,8 +76,8 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
   `createDevice` via `PPR_RETURN_ERROR_ON_FAIL`, then `setTargetFormat(toSlangCompileTarget_(device->getDeviceType()))`
   (targets the actual created device type, not the requested one: `DXBC` for Default/D3D11/D3D12, `SPIRV`
   for Vulkan/WGPU, `METAL`, `SHADER_HOST_CALLABLE` for CPU, `CUDA_OBJECT_CODE` for CUDA;
-  `getDeviceTypeName_` (`#if PPR_ENABLE_LOGGING`-gated alongside `SlangRhiDebugCallback`) logs
-  `default/d3d11/d3d12/vulkan/metal/cpu/cuda/wgpu`);
+  `getDeviceTypeName_` (unconditionally compiled: used by both logging and the
+  shader-cache device-type directory) logs `default/d3d11/d3d12/vulkan/metal/cpu/cuda/wgpu`);
   A scope guard releases the local device and destroys the process-global instance if initialization fails before
   `m_device` is stored. `shutdown()` releases the service device when present, then unconditionally calls
   `slang_rhi::destroyRHI()`, so repeated shutdown is safe and, when upstream returns a destroy error, it can be
@@ -73,12 +88,15 @@ mapping, row-major/row-vector projection helpers, and the `IRhiService` device-l
 ## Flow
 
 `IShaderService::get()->initialize()` (global + row-major session) →
-`IRhiService::get()->initialize(deviceType, shaderService)` (`getRHI()` → debug layers → `DeviceDesc` with
-shader global session → `createDevice` → `setTargetFormat(toSlangCompileTarget_(device->getDeviceType()))` →
+`IRhiService::get()->initialize(deviceType, shaderService)` (`getRHI()` → debug layers →
+`desc.slang.slangGlobalSession` and, when the version-namespaced root is usable,
+`m_shader_cache.attach(PersistentShaderCache::create_(...))` +
+`desc.persistentShaderCache` → `createDevice` → `setTargetFormat(toSlangCompileTarget_(device->getDeviceType()))` →
   `m_device` stored + info log) → surfaces/pipelines (`createRenderPipeline` → `IDevice`) → `Renderer` submits
-  frames → `shutdown()` (`m_device.setNull()` then unconditional `slang_rhi::destroyRHI()`) → shader `shutdown()`
-  drops session then global session. The device must be released before the process-global instance teardown;
-  upstream may reject or assert on destruction while any device reference remains live.
+  frames → `shutdown()` (`m_device.setNull()` → `m_shader_cache.setNull()` → unconditional
+  `slang_rhi::destroyRHI()`) → shader `shutdown()` drops session then global session. The device must be
+  released before the process-global instance teardown; upstream may reject or assert on destruction while
+  any device reference remains live.
 `getOrthoMatrix`/`getPerspectiveMatrix` are pure free functions consumed at pass/scene level.
 
 ## Integration
