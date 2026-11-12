@@ -1805,3 +1805,36 @@ and operational acceptance. No Task 4 work has begun.
   `PBMPM.Tick` present live; analyze-twice byte-identical; A/B compare
   like-for-like.
 - **Owner visual acceptance pending; Task 19 not complete.**
+
+### Task 19 follow-up — gate fixes and diagnostic routing (2026-11-12)
+
+- Commits: `0abca2e6` `fix: finalize validation evidence and shader warning`,
+  `9ab0690` `fix: repair matter and checkpoint GPU validation gates`,
+  `c433315` `refactor: route test diagnostics through the unit-test log`, and
+  `9c3318e` `refactor: add formatted retained test log and complete diagnostic
+  audit`.
+- Gate repairs: the liquid-pool leaf now asserts the approved categorical
+  resolved-cell presentation (terrain precedence included) instead of the
+  retired envelope draw; every matter-runtime fixture releases its graphics
+  queue between runtime shutdown and RHI teardown; the empty checkpoint restore
+  skips the zero-row metadata readback. The final full GPU matrix is **32/32
+  passed** (exit 0, 1680.73 s, `ctest-gpu-validation-final.log`). One prior
+  timeout, `matter_pressure_gpu`, measured 591 s against a 600 s ceiling and was
+  raised to 900 s with assertions unchanged.
+- Diagnostic routing: the complete active-code `std::print` inventory was
+  audited (203 occurrences, not only the 96 checkpoint additions). All
+  test-suite diagnostics now use the `IRun` formatted retained-log overload
+  (`_.log(std::format(...))`), with a call-site source location and a mutex
+  against the logger's background worker; fixtures/helpers take
+  `UnitTest::IRun &_`. Only framework/CLI output and artifact-file stream writes
+  remain (classified in the acceptance report). Normal `world_lighting_fine`
+  output is 21 harness lines with 0 diagnostics; a forced failure prints the
+  formatted retained message with the test call-site line. Focused
+  `Core.TestHarness` coverage passes 17/17.
+- Zero-warning build gate remains **unmet** for the two libc++
+  `-Wreserved-module-identifier` warnings on CMake's std-module object edge;
+  exact diagnostics and bounded options are recorded in the acceptance report.
+- Every deferred/unresolved concern from Tasks 0–18, every coordinator ruling and
+  every unaddressed gate is aggregated in
+  `docs/superpowers/plans/2026-11-10-oni-port-acceptance.md` § "Aggregated
+  deferred concerns, rulings and gates"; no item is dropped from its task report.

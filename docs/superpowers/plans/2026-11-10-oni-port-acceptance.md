@@ -120,27 +120,43 @@ Full-log inspection result:
 
 - **Zero compilation/link errors** and **zero warnings from project code** in
   both presets (all project translation units use `-Werror`).
-- **Two warnings in each preset from the system libc++ module object edges**:
-  `/usr/share/libc++/v1/std.cppm:163:15: warning: 'std' is a reserved name for a
-  module [-Wreserved-module-identifier]` and the identical
-  `std.compat.cppm:80:15` warning. They are emitted by the CMake-synthesized
-  `@cmake_cxx_std` object compile (`/usr/bin/clang++ … -c /usr/share/libc++/v1/std.cppm`),
-  which does not inherit the target warning flags. The repository already
-  applies `-Wno-reserved-module-identifier` to the BMI-precompile edge
-  (`cmake/compiler/Clang.cmake:25`, documented in `cmake/compiler/codemap.md`)
-  for exactly this vendor source; the object edge remains unsuppressed.
-  This is pre-existing toolchain behavior exposed by a full clean build, not
-  port code.
-- **Zero-warning gate: UNMET as literally specified.** Hiding it by adding a
-  suppression to the dependency would violate the owner's "do not exempt a
-  dependency" rule; the exact bounded remedy (route the existing approved
-  suppression to the std-module object edge, or accept the vendor diagnostic)
-  needs an owner/coordinator ruling. `clang-rel` additionally reported no other
-  warnings; configure reported only informational status (including
-  `cppcheck requested but executable not found`, which is not a compiler
-  warning).
+- **Two warnings in each preset from the system libc++ module object edges.**
+  Exact diagnostics, identical in both presets:
+  `/usr/share/libc++/v1/std.cppm:163:15: warning: 'std' is a reserved name for
+  a module [-Wreserved-module-identifier]` and
+  `/usr/share/libc++/v1/std.compat.cppm:80:15: warning: 'std' is a reserved name
+  for a module [-Wreserved-module-identifier]` (one per file, `0` errors).
+  They are emitted by CMake's synthesized object edge
+  `lib/engine/core/CMakeFiles/@cmake_cxx_std.dir/usr/share/libc++/v1/std.cppm.o`,
+  whose command is
+  `/usr/bin/clang++ -I/usr/share/libc++/v1 -isystem <repo>/include -stdlib=libc++ <config flags> -std=c++23 @…std.cppm.o.modmap -c /usr/share/libc++/v1/std.cppm`.
+  That edge does not inherit project warning flags (it has no `-Wall`/`-Werror`),
+  so the default-on Clang 23 diagnostic is emitted; the BMI-precompile edge
+  already carries the repository's `-Wno-reserved-module-identifier`. CMake
+  4.4.5 provides no option for this synthesized object edge.
+- **Zero-warning gate: UNMET as literally specified.** Bounded options, none of
+  which this task may take unilaterally:
+  1. owner acceptance of the two dependency-only (libc++/Clang) warnings as
+     non-project diagnostics;
+  2. a toolchain/libc++ change where the standard module no longer triggers the
+     diagnostic under this Clang (e.g. libc++ in-source suppression), which is
+     outside this repository's control;
+  3. a scoped `-Wno-reserved-module-identifier` on the std-module object edge —
+     explicitly forbidden by the owner for this task.
+  No suppression, log filter or dependency exemption was added. `clang-rel`
+  reported no other warnings; configure reported only informational status
+  (including `cppcheck requested but executable not found`, which is not a
+  compiler warning).
+
 - Incremental rebuilds after the shader fix only re-staged assets
-  (`rebuild-after-shader-fix.log`, exit 0, no compile warnings).
+  (exit 0, no compile warnings).
+- Post-fix builds (gate fixes, test-diagnostic routing, `IRun` overload,
+  retained-log mutex, deadline change): `cmake --build --preset clang-dev
+  --target engine.tests.app engine.tests.asset game.tests engine.tests.core`
+  exit 0 with no warnings; `cmake --preset clang-rel` +
+  `cmake --build --preset clang-rel --target <same four targets> -j16` exit 0
+  with no warnings. The final GPU matrix ran on the post-fix `clang-dev` binary.
+  The clean-build zero-warning gate above remains the authoritative gate.
 
 Shader-cache state: runtime persistent shader cache `.ppr-shader-cache/v1`
 (52 entries, 1.2 MiB, gitignored) was warm for the captured runs; it is a
@@ -156,31 +172,47 @@ leaves) with `-LE gpu_validation`.
 | --- | --- | --- | --- |
 | Inventory | `ctest --test-dir out/build/clang-dev -N` | 0 | 68 entries; log `/tmp/opencode/task19/logs/ctest-inventory.txt` |
 | Routine | `ctest --test-dir out/build/clang-dev -j4 --output-on-failure -LE gpu_validation` | 0 | **36/36 passed**, 1036.35 s wall; log `…/ctest-routine.log` |
-| GPU validation | `ctest --test-dir out/build/clang-dev -L gpu_validation --output-on-failure` (serialized) | 8 | **28/32 passed**, 1510.93 s wall; log `…/ctest-gpu-validation.log` |
+| GPU validation (pre-fix) | `ctest --test-dir out/build/clang-dev -L gpu_validation --output-on-failure` | 8 | 28/32 passed, 1510.93 s; log `…/ctest-gpu-validation.log` |
+| GPU validation (final) | same command, serialized, after all Task 19 fixes | **0** | **32/32 passed**, 1680.73 s wall; log `…/ctest-gpu-validation-final.log` |
 
-GPU-validation failures and disposition (full detail in the log):
+GPU-validation failures and disposition (all four repaired; see commits
+`0abca2e6` and `9ab0690`):
 
-| Entry | Failure | Disposition |
+| Entry | Root cause | Fix / evidence |
 | --- | --- | --- |
-| `engine.tests.app.world_lighting_settlement_gpu_validation` | `editor_mid_history_edits_do_not_reset_or_contaminate` read `reconstruction.sceneTextureForTest()`, which is a 4x MSAA target; Slang-RHI's debug layer rejects `readTexture` on MSAA (`RHI.cpp(116): Multisample textures cannot be read`). The invalid readback only surfaced under validation. | **Fixed in the test**: the MSAA scene pointer remains an existence check; the accepted single-sample Hable history is the committed screen-content byte evidence (it was already compared). Reruns: GPU twin 1/1 passed, 322 s, exit 0 (`…/ctest-settlement-gpu-rerun.log`); routine twin 1/1 passed, 314 s, exit 0 (`…/ctest-settlement-routine-rerun.log`). |
-| `engine.tests.app.matter_material_gpu` | `app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes` deterministically fails with `holes=11144/11144`. The QA capture is uniform clear colour; `GridPass::renderGpuParticles_` returns early because the fixture's materials are liquid (`envelopes_only`), and Task 11 deliberately retired the solid/liquid envelope draw. | **Explained: stale test coverage of a retired rendering path**, not a production lighting defect. The leaf needs retirement/re-scope by its owning task; not modified here. Evidence: `…/logs/matter-pool-individual.log`, `…/logs/matter-pool-qa2.log`, PPMs under `/tmp/opencode/task19/matter-pool-qa/`. |
-| `engine.tests.app.matter_runtime_scene_gpu` | After three map-edge runs, `SLANG_RHI_ASSERT(m_liveDeviceCount == 0)` in `RHI::destroy()` aborts the process. | **Reproduced in isolation** (`…/logs/matter-runtime-scene-individual.log`). The test tears down RHI from its `PPR_DEFER` while the `MatterRuntime` local (declared before the guard) still owns GPU references; this is a test-teardown lifetime defect, not a lighting regression. Requires an owning-task fix. |
-| `game.tests.matter_sand_gpu` | `game/checkpoint_gpu/dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain` fails `readBuffer: 'outData' must not be null` at `Checkpoint.Gpu.Tests.cpp:391`. | **Known red gate** recorded since Task 11 ("checkpoint dug-solids empty-interstice leaf"). |
+| `engine.tests.app.world_lighting_settlement_gpu_validation` | `editor_mid_history_edits_do_not_reset_or_contaminate` read `reconstruction.sceneTextureForTest()`, a 4x MSAA target; Slang-RHI's debug layer rejects `readTexture` on MSAA. | **Test corrected**: the MSAA scene pointer remains an existence check; the already-compared single-sample Hable history is the committed screen-content byte evidence. GPU twin 1/1 passed (322 s); routine twin 1/1 passed (314 s). |
+| `engine.tests.app.matter_material_gpu` | `evolved_liquid_pool_has_no_interior_render_holes` asserted the retired liquid-envelope draw (Task 11 now returns `envelopes_only`). | **Adapted to the approved categorical path**: the frozen solver rows are projected into native resolved cells with the production ordered key (nearest centre, stable-ID tie, terrain precedence); the test asserts every nominated cell is painted, every empty cell is not, and a terrain cell inside the pool wins and renders red. Solver hashes/displacements/rows and the 360-particle inventory are unchanged. Leaf 1/1 passed. |
+| `engine.tests.app.matter_runtime_scene_gpu` | The test-owned graphics queue was destroyed before the PPR_DEFER, so runtime shutdown used a dangling queue (`m_liveDeviceCount`/UAF). | **Ownership order fixed in every matter-runtime fixture**: the queue is declared before the guard, and released after runtime shutdown and before RHI teardown. Entry 1/1 passed (9.66 s); the sibling resident entry also passes. |
+| `game.tests.matter_sand_gpu` | An empty restored world publishes zero metadata rows; the helper unconditionally called `readBuffer` with a null destination. | **Zero-row readback guarded** in `Checkpoint.Gpu.Tests.cpp`; the dug-sand leaf now runs its full 60 tick endpoints (480 substeps) and passes (13.82 s). |
 
-The GPU-validation matrix is therefore **29/32 after the settlement test
-correction**: one known red gate and two test-owned defects remain, both
-explained above. The routine matrix was 36/36 at the pre-fix test content; the
-changed settlement entry was rerun alone and passes 1/1 (314 s), so no routine
-evidence is invalidated. The lighting/viewer validation itself (world-lighting
-backend/projection/trace/cascade/fine/material/settlement GPU entries,
-reconstruction, picture HDR/spatial, resident particles) passes.
+Re-run evidence: the five formerly failing entries and their matter/checkpoint
+neighbors all passed in the final full 32-entry matrix, **32/32** with exit 0 in
+1680.73 s (`ctest-gpu-validation-final.log`; source identity `c433315a` plus the
+then-uncommitted follow-up files, committed as `9c3318e`, and a rebuilt binary).
+The one previous timeout,
+`game.tests.matter_pressure_gpu`, measured 591 s against a 600 s ceiling and was
+raised to 900 s with its assertions unchanged; it passed in the final matrix.
+Logs are retained under
+`.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/` and
+`/tmp/opencode/task19/logs/`.
+
+The routine matrix was 36/36 at the pre-fix content. The affected routine
+entries were rerun after the corrections: `world_lighting_codec` and
+`world_lighting_settlement` pass, and `services_window` passes all 61 leaves but
+intermittently exits on the pre-existing GTK/dbus LSan set (host-only, no PPR
+frames; the first full routine matrix passed it). The lighting/viewer validation
+itself (world-lighting backend/projection/trace/cascade/fine/material/settlement
+GPU entries, reconstruction, picture HDR/spatial, resident particles) is green.
+
 
 
 ## Execution-log audit
 
 All logs are complete stdout+stderr from the `clang-rel` binary, grouped by
 severity/category/message template with numbers/IDs normalized; peak repetition
-is per 10 s window. Ordinary and Lab runs were exited by a real window close
+is per 10 s window. Durable copies of this round's logs, Lab images and
+profiling artifacts are under
+`.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/`. Ordinary and Lab runs were exited by a real window close
 (KWin `closeWindow`), not `--exit-after`, so the automation-only auto-exit setup
 notice is absent and the shutdown path is the production one.
 
@@ -348,7 +380,9 @@ P8 `160×90 → 80×45 → 160×90`; P2 odd extents `1919×1079 → 960×540`, a
 
 ## Profiling
 
-Fresh captures were made with the Task 18 tooling on a rebuilt
+Artifacts are mirrored under
+`.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/profile/`. Fresh
+captures were made with the Task 18 tooling on a rebuilt
 `clang-rel-profile` `app.game` (`cmake --build --preset clang-rel-profile
 --target app.game -j16`, exit 0, no warnings). Captures run one at a time with
 no other GPU/test workload. Identity records `source_commit=dee01682…` and a
@@ -406,6 +440,69 @@ are CPU API timelines and do not prove GPU execution. Windows/D3D12 capture is
 unmeasured.
 
 
+## Test diagnostic output routing (Task 19 cleanup)
+
+The port added **96** `std::print`/`std::println` lines since checkpoint `49a3a7d`
+across 11 files, and the complete active-code inventory (203 occurrences) was
+audited, not only the additions. Every test-suite occurrence was converted to
+the unit-test API `_.log(std::format(...))`, which retains the text and prints it
+only when the test fails. `UnitTest::IRun` gained a narrow non-virtual
+`log(const std::string &, const std::source_location & = current())` overload:
+the formatted string is built at the call site and the defaulted location points
+at the test line (a `std::format_string` variadic overload cannot carry the
+call-site location because a non-trailing parameter pack defeats the default
+argument; the string overload keeps the intended evidence semantics without a
+macro or new framework). Fixtures and helpers that previously had no run object
+now take `UnitTest::IRun &_` (`initialize`, `qualifySampleFeature`,
+`verifyMasks`, `verifyJumps`, `renderResolvedCells`, `assertCategorical`,
+`assertDisplayed`, `observeActualDugRendering`, `exerciseDenseDigDiagnostic`,
+`qualifySpatialSamples_`, `checkActualGridSpatialSamples_`,
+`admitSpatialIntegrationFixture_`, and the ImGui `Evidence` writer). No test
+assertion or evidence value was removed; only the output channel changed.
+
+Current active-code `std::print` inventory after the conversion:
+
+| File | Lines | Classification |
+| --- | ---: | --- |
+| `game/Game.Application.cpp` | 24 | Legitimate user-facing CLI output: `--help`, worldgen preview/acceptance summaries, profiler capture summaries, export paths. The 3 added lines are `[worldgen-acceptance]` result lines. |
+| `game/colony/ColonySmoke.cpp` | 14 | Legitimate `SMOKE-*` CLI result summaries. |
+| `lib/engine/core/Core.UnitTest.cpp` | 7 | Unit-test framework retained-log/failure output. |
+| `lib/engine/core/Core.Logger.cpp` | 2 | Logger framework output. |
+| `lib/engine/tests/shared/Tests.cpp` | 2 | Test harness help/failure output. |
+| `lib/engine/tests/app/App.MatterGpu.Tests.cpp` | 6 | Artifact-file writes only (`timing.log`, `manifest.txt`, `status.csv` through `std::println(ostream&, ...)`), not stdout. |
+| `lib/engine/tests/core/Core.HAL.Tests.cpp` | 1 | Comment mentioning `std::println`, not a call. |
+
+No `std::println` remains in test diagnostics on stdout. Verification:
+
+- Normal converted run (`--run-test app/world_lighting_fine/`): 20 lines of
+  harness output, **0** `WORLD_LIGHTING_FINE` lines (the source previously
+  emitted 17 diagnostic lines unconditionally).
+- Forced-failure probe (temporary `_.log(std::format("TASK19-FORMATTED-RETAINED value={}", 7))`
+  + failing assert, reverted after capture): the failure output retained
+  `uniform_field_preserves_c0_normalization_and_zero_ac: App.WorldLighting.Fine.Tests.cpp(974): TASK19-FORMATTED-RETAINED value=7`
+  — formatted text and the test call-site line. Evidence:
+  `/tmp/opencode/task19/logs/forced-failure-formatted-overload.log`.
+- The retained-log fallback in `Core.UnitTest.cpp` now formats first and
+  appends through `operator<<` under a mutex. The libc++ 23 ostream-print growth
+  path tripped ASan's sized-delete check for long retained messages, and the
+  logger's background worker can deliver engine entries while the test thread
+  logs; both are fixed (`new-delete-type-mismatch`, 768/384 before). The codec
+  entry passes after the change.
+- Focused framework tests in `Core.TestHarness.Tests.cpp` exercise the formatted
+  and raw overloads through a recording `IRun`: formatted text, retained
+  call-site file/line, and the raw path all pass (17/17 `core/test_harness`
+  leaves). The public test evidence is also verified externally (below).
+- `services_window` (window input, ImGui routing, player service) passes all
+  61 leaves, but the process intermittently exits on the pre-existing GTK/dbus
+  LSan allocation set (18–23 allocations, no PPR frames). The first full routine
+  matrix run passed 36/36; later reruns flaked on this host residual. This is a
+  documented host-only gate, not a routing regression; closing it needs a
+  host/portal fix or an owner-approved suppression policy.
+
+Deliberate fault-test diagnostics remain deliberate: the `ExpectedFailureLogGuard`
+fixtures and deliberate rejection assertions are unchanged; profiler/exercise
+JSON/stdout contracts are untouched.
+
 ## Leak and third-party residual
 
 - LSan default exits 1 on a pre-existing GTK/dbus window/portal allocation set
@@ -421,6 +518,109 @@ unmeasured.
   embed the capture command line (including the artifact directory name); they
   are verbatim vendor exports and were not edited.
 
+## Aggregated deferred concerns, rulings and gates
+
+This section is the single disposition list for every concern found from Task 0
+through Task 19. `Fixed` means corrected in this branch with evidence; `Deferred`
+means accepted by the coordinator/owner for a named future action; `Owner gate`
+means it cannot be closed on this host or without the owner; `Won't fix`
+includes the reason. Nothing below silently drops a task report item.
+
+### Deferred/unresolved findings by task
+
+| Task / commit | Concern | Disposition | Impact / owner action |
+| --- | --- | --- | --- |
+| 1 (`49a3a7d`, `6385fca8`) | Pre-existing `gpu_grid_surface` optical leaf and `spatial_retro...` failed | **Fixed**: retired by the Task 11 categorical replacement; the adapted `gpu_grid_surface` leaf passes | None remaining |
+| 1 | `engine.tests.asset.gpu` aggregate timed out at 450 s | **Fixed** by the Task 2 shard split; full GPU matrix green | None |
+| 1/4 | Per-leaf/per-case shader/RHI lifetime; a program-family cache was proposed | **Deferred (owner decision pending, YAGNI)**: no cache introduced; measured shard cost accepted | Startup/cost only; no behavior claim |
+| 2 (`15b6609`, `2be3fc2`) | Bloom weight compounding and live EV min/max app termination | **Fixed** (unweighted box + once-weighted descent; ordered EV helper) | None |
+| 2 | `spatial_background_alignment_and_opaque_admission` coverage removed with Retro | **Deferred to Task 14 integration** (coordinator ruling); see rulings | Coverage gap until Task 14; not claimed green |
+| 2 | Single-submission cleanup path; `finalize` no-op | **Fixed** by Tasks 13/14 (A/B/C split, command tail) | None |
+| 2 | Direct-run LSan elevated counts | **Fixed diagnosis** (Task 16): policy omission, not a repository leak; policy documented | Host-only residual |
+| 3 | `--exit-after` emits a warning-level setup notice | **Accepted**: pre-existing automation notice; ordinary runs use window close instead | None to production behavior |
+| 3 | In-flight world-preparation cancellation not separately claimed | **Deferred**: covered by ordinary teardown tests only; not claimed as fixed | Owner may request a focused cancellation test |
+| 4 (backend) | Windows/D3D12 qualification (R8, atomics, sample order) | **Owner gate**: unmeasured | Windows host required |
+| 5 (codec) | README column-sum wording; hardcode one interval/CH word in a future test; redundant `isfinite` in `packInterval` | **Deferred minors** | Documentation/test-hygiene only |
+| 6 (`ef7276e3`) | Deferred staging unmap keeps a raw `rhi::IDevice *`; post-completion deferred-count assertion depends on encode-time poll; 4 MiB init upload/64 KiB word cache cost | **Deferred**: no dangling dereference today; Task 14 teardown audit did not change it | Low lifetime risk if callers keep RHI alive; cost measured, no budget violation |
+| 7 (`871c25b6`-era) | `initialize` resolves `IRhiService`; per-world shader compilation; `inspectAttempt_` fail-closed on submitted-without-finalize | **Accepted/deferred**: matches existing pass pattern; fail-closed is correct | Recompile cost on world replacement; no behavior defect |
+| 8 (`62621c92`) | Per-slot acceleration storage 3.49 MiB/world; two-arg `traceSegment` reports record 0; production tracing unwired then | **Accepted/deferred**: fence-safe slot reuse; detailed entry is the production path; Task 9/10 wired tracing | Memory cost only; no timing claim |
+| 9 (`d5f95024`) | Test robustness (optional deref/span checks); pre-fix evidence block retained | **Deferred minors** | Test clarity only |
+| 10 (`e628d018`) | False dedupe/renormalization claim in report; dead `L1OracleFrame::m_age`; redundant fine-edge assertion; unused 8 MiB L1 readback; hardcoded oracle constants | **Deferred minors**: report already corrected where contradicted; dead field remains | Test-only cleanliness; no delivered behavior |
+| 11 (`e5e073e5`, `0902f442`) | Literal spec camera `V` (sample→camera) with shipped orthographic camera | **Owner visual decision** (see rulings); no silent flip | If wrong, flip normal/camera convention (visual only) |
+| 11 | Legacy flat/contour path remains for `m_has_resolved_cells == 0` (pre-first-lighting/non-1024/diagnostic) | **Coordinator-ruled retain**: not used by rendered 1024 worlds; Task 15 documented it | Not a categorical substitute; owner may request later removal |
+| 12 (`6418d663`) | Unused `kSampleNodes`; stale extent comment; same-extent reset test not discriminating; no-floor rule proven via CPU mirror; GPU border checks interior-band only; report drift | **Deferred minors** | Test/documentation strength only |
+| 13 (`2f46ae40`) | `PreRenderContext` comment stale; report green-log citation lacks exit marker; callback aliases same type by design | **Deferred minors** | Documentation only |
+| 14 (`8c5cf6b0`, `fd03d4c6`) | Credit model split (renderer 6 submissions, app 2-frame reservation) | **Coordinator-ruled accept**; header states the real safety argument | If wrong: over/under-admission; ring/reservation depths unchanged |
+| 14 | Windows/D3D12 three-submission/sample-rate/status evidence | **Owner gate** | Windows host |
+| 15 (`c5db57be`) | Manifest bound raised to 72 KiB; sub-cell seed asymmetry (v6 has no subdivision); no interactive load; GTK/dbus LSan; stylized mirror; retained-payload docs omit allocator/task overhead | **Accepted/deferred**: bound documented; restored particle columns authoritative; load remains owner gate | Manifest variants must stay within 72 KiB; save/reload owner gate |
+| 16 (`be0a29d6`, `7e017cc4`) | UI post-slider bounds literal; display-widget layer construction unchanged; retained-picture/non-1024 overlays absent by design; no Linux click automation | **Deferred/owner gate**: controls covered by config/UI tests; overlays intentionally absent | Owner closeups/click tests needed |
+| 17 (`871c25b6`…) | `ReconstructionHistoryStamp` 88 vs 80 bytes (8 padding); `historyStamp()` precondition/grouping; `RenderLane` result comment; clearing `out_result.m_reconstruction`; unreachable telemetry canaries; dead `Step` keep/revert fields; misleading minimized-suspension reason; no saved reconstruction-test log; one stale source-identity report reference | **Deferred minors** (ledger); none gate correctness | Layout/comment/test-label cleanup; owner may request |
+| 18 (`bfc16206`…) | Fixture README per-cycle suffix wording; unconditional "two ranges per frame" docs; report trace-byte/A-B wording; final-state staging trace path; `.pct` suffix; test-local old `post.present` label | **Deferred minors** (ledger) | Documentation/format only |
+| 19 (this branch) | `prepareLightingShowcase`/`lighting_showcase` pre-existing production function used by one GPU test | **Won't fix in this port**: predates checkpoint `6aa99aac`, outside the port's YAGNI boundary, current test consumer | None |
+| 19 | `App.MatterGpu` artifact-file `std::println(ostream&, ...)` writes | **Accepted**: timing/manifest/status artifact files, not stdout | None |
+| 0 (`49a3a7d`) | Checkpoint/recovery archive and paused stash preservation | **Verified**: recovery root outside Git, stash object `8271a171…` unchanged | None |
+| 2 | Report/codemap wording drift; padding test did not dispatch the histogram (auto exposure off); no ImGui EV-helper call-site test; unused bloom `offset`/unfinished test encoders; planning input still listed the removed history placeholder | **Deferred minors**: no delivered behavior; helper and both call sites inspected | Documentation/test cleanup only |
+| 14 | Retiring-world drain has no direct assertion (reported, not propagated); Task 7 `initialize` resolves `IRhiService`; Task 6 raw `IDevice*` deferred staging; dbus LSan attribution; E41018 warnings | **Deferred**: drain exercised indirectly by world replacement; E41018 **fixed** in Task 19; dbus is host residual | Drain coverage/owner may add a focused test; no engine frame in dbus stacks |
+| 19 | Two system-libc++ `-Wreserved-module-identifier` warnings | **Owner decision** (below); no suppression added | Build gate stays unmet literally |
+
+### Coordinator / planning-owner rulings
+
+| Ruling | Cost if wrong | Current status |
+| --- | --- | --- |
+| Task 0 performed by the coordinator; work in place on `particles` (no worktree) | Cleanup commits land on the feature branch; checkpoint `49a3a7d` restores the start | Implemented; checkpoint/recovery verified |
+| DeepSeek Flash only for sublanes; compensated by briefs/diff packages/final audit | Lower review depth; missed findings | Applied; independent reviews recorded per task |
+| Active code must not mention the reference project; documentary provenance only | Naming rework if violated | Audited clean (§ YAGNI/naming) |
+| Background alignment/opaque-admission coverage re-scoped Task 12 → Task 14 | Coverage absent until Task 14; Task 19 must not claim it green | Task 14 added focused coverage; Task 19 audit accepted |
+| Credit model: renderer ledger 2 logical frames × 3 stages = 6; app 2-frame reservation bound | Stalls or over-admission | Ratified in `fd03d4c6`; unchanged |
+| Task 11 camera `V` = sample→camera (literal spec), no silent flip | Visual convention may need an owner flip | Owner visual decision pending |
+| Manifest bound 72 KiB | Pack variants outside the bound fail loading | Implemented and documented |
+| LSan policy: repository NVIDIA suppressions; direct-run GTK/dbus counts are host residual | A real PPR leak could hide in the same stack | Task 16 owner-directed diagnosis; no repository leak open |
+| Task 18 marker split around the opaque/translucent draws to preserve draw order | Visual regression if order changed | Restored in `079f94e5`; profiler evidence re-captured |
+| Display exercise exit 3 = host-incomplete minimize cases, not pass | False acceptance if treated as pass | Explicit gate in Task 17/19 |
+| Task 19 pool test adapted to categorical resolved cells with terrain precedence | Coverage diverges if the approved presentation model changes | New leaf passes; solver hashes/particles unchanged |
+| Task 19 shader E41018 numeric-failure initialization | If the failure path semantics differ, containment changes | Fixed at source; all runs clean |
+| Two libc++ warnings: no suppression/exemption; owner to accept or change toolchain | Gate stays unmet; suppression would violate owner policy | **Owner decision pending** |
+
+### Known unaddressed gates
+
+| Gate | State | Evidence / action |
+| --- | --- | --- |
+| Windows MSVC Dev/Release and D3D12 render/validation/capture | **Owner gate / unmeasured** | Linux host; all cross-backend claims explicitly pending |
+| libc++ `-Wreserved-module-identifier` (two warnings per preset) | **Blocking literal zero-warning gate** | Exact file/line/edge in "Clean builds"; bounded options listed |
+| Remaining GPU-validation failures | **None** after the gate-fix lane | `ctest-gpu-validation-final.log`: 32/32 passed, exit 0; was 28/32 before fixes |
+| Display-exercise host-incomplete minimize/restore/focus | **Owner gate**: six incomplete cases | XWayland accepts the intent but emits no iconified/focus-loss event |
+| Real decimal-comma vendor export | **Not run**: synthetic declared-locale fixture only | Fixture labelled synthetic |
+| nsys GPU-metrics sampling, multipass/replay | **Not run** | Capability recorded; no claim |
+| Profiler-overhead baseline | **Not measured** | `comparison.json` carries the overhead caveat |
+| Live `PBMPM.Tick` GPU marker | **Captured** in the live Graphics run (`missing_optional_markers=[]`) | Task 18 gate closed |
+| GPU driver version | **Unavailable in RHI `DeviceInfo`** | Recorded as unavailable; external `nvidia-smi` 620.70.06 cited where relevant |
+| Per-case lab closeups (1.25 × height) and image-level sky comparison | **Owner gate** | Overview/inspection captures only; no camera automation |
+| Interactive save/reload and mouse dig/build | **Owner gate**: no application load command | Checkpoint API/tests and `--worldgen-acceptance` only |
+| Owner visual acceptance of lab and normal gameplay | **Pending** | This report does not self-approve |
+| Host GTK/dbus LSan residual | **Third-party residual**: 18–23 allocations, no PPR frames | Isolated `services_window` rerun passed; documented policy |
+
+### Fixed in this branch (Task 19 lane)
+
+E41018 shader out-parameter warning; settlement GPU MSAA readback; stale liquid
+pool test adapted to the categorical path; matter-runtime queue lifetime (four
+fixtures); empty-world zero-row readback; complete test diagnostic routing to
+`_.log` (all active-code test occurrences, including pre-existing ones); the
+narrow `IRun` formatted retained-log overload with call-site location; retained
+log stream serialization and format-under-lock (fixing the libc++ ostream-print
+sized-delete/UAF exposure); and the `matter_pressure_gpu` deadline raised from
+600 s to 900 s after a 591 s measured run timed out with no assertion failure.
+Evidence is in the sections above and `/tmp/opencode/task19/logs/` plus the
+durable `.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/` copy.
+
+### Explicitly blocking final acceptance
+
+1. Owner visual acceptance of the Lighting Lab, normal gameplay and display
+   exercise artifacts.
+2. The literal zero-warning gate for the two libc++, dependency-only
+   `-Wreserved-module-identifier` diagnostics (owner acceptance or toolchain
+   change).
+3. Windows/D3D12 and the remaining owner/host gates listed above.
+
 ## Unrun / unavailable gates
 
 | Gate | Status |
@@ -434,24 +634,28 @@ unmeasured.
 | nsys GPU-metrics sampling, multipass/replay | Not run — capability not exercised |
 | Profiler-overhead baseline | Not measured |
 | Live-workload `PBMPM.Tick` GPU marker | **Captured in the live Graphics run** (`missing_optional_markers=[]`) |
-| GPU-validation matrix fully green | **Unmet** — one stale retired-envelope test (`matter_material_gpu`), one test-teardown device-lifetime abort (`matter_runtime_scene_gpu`), and the known checkpoint dug-sand red gate remain |
+| GPU-validation matrix fully green | **Green**: final matrix 32/32 passed (`ctest-gpu-validation-final.log`); `matter_pressure_gpu` deadline raised to 900 s after a 591 s measured run timed out with no assertion failure |
+| `services_window` host LSan | **Host residual**: all 61 leaves pass; process intermittently exits on the pre-existing GTK/dbus allocation set (no PPR frames); first full routine matrix passed |
 | Zero-warning build including vendor std-module diagnostics | **Unmet** — two system libc++ `-Wreserved-module-identifier` warnings per preset |
 | Owner visual acceptance | **Pending** |
 
 ## Verdict
 
 Spec coverage, YAGNI/naming, ordinary/Lab/display-exercise log cleanliness,
-runtime warning resolution and Lab/visual capture evidence are recorded above
-with the exact commands, exits and artifacts. Two gates remain open:
+runtime warning resolution, the complete test-diagnostic audit, the full GPU
+matrix (32/32) and Lab/visual capture evidence are recorded above with the exact
+commands, exits and artifacts. The remaining gates are:
 
-1. **Zero-warning builds** are unmet only for the two system libc++
-   std-module object-edge diagnostics per preset; project code is warning-free
-   under `-Werror`.
-2. **GPU-validation matrix** is 29/32 after the settlement test correction, with
-   the known checkpoint dug-sand gate and two explained test-owned defects still
-   failing (stale liquid-envelope assertion; test teardown device lifetime).
+1. **Zero-warning builds** — unmet only for the two system libc++ std-module
+   object-edge diagnostics per preset; project code is warning-free under
+   `-Werror`. This needs the owner's acceptance of the dependency-only warning
+   or a toolchain/libc++ change; no suppression was added.
+2. **Owner, host and platform gates** — Windows/D3D12, display-exercise
+   minimize/restore/focus (host-incomplete), real decimal-comma export, nsys GPU
+   metrics, multipass/replay, profiler-overhead baseline, per-case closeups,
+   interactive save/reload and the host GTK/dbus LSan residual.
+3. **Owner visual acceptance** of the Lab, normal gameplay and display-exercise
+   artifacts. This document does not self-approve it.
 
-The owner visual gate is open and this document does not self-approve it.
 **Owner acceptance pending; Task 19 is not complete and final delivery is not
 claimed.**
-
