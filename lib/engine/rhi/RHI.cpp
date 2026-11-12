@@ -2,6 +2,12 @@ module;
 
 #include "pP/Macros.h"
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <slang.h>
 #include <slang-com-ptr.h>
 #include <slang-rhi.h>
@@ -129,7 +135,10 @@ namespace pP {
                 Log::logRaw({category, level, loc}, trim(std::string_view(message)), {{"source", source_name}});
             }
         };
+    }
+#endif
 
+    namespace {
         [[nodiscard]] string_literal getDeviceTypeName_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
                 using enum rhi::DeviceType;
@@ -144,10 +153,7 @@ namespace pP {
             }
             std::unreachable();
         }
-    }
-#endif
 
-    namespace {
         [[nodiscard]] SlangCompileTarget toSlangCompileTarget_(const rhi::DeviceType device_type) noexcept {
             switch (device_type) {
                 using enum rhi::DeviceType;
@@ -280,6 +286,290 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // persistent shader cache
+    // ------------------------------------------------------------------
+
+    namespace {
+        /// Version-namespaced compiled-artifact store for slang-rhi entry points.
+        ///
+        /// Root: `<cwd>/.ppr-shader-cache/<format-version>/<slang-build-tag>/<device-type>/`.
+        /// An entry is the lowercase hex of the opaque slang-rhi key plus `.bin`.
+        /// The key already covers compiler, target and entry-point identity, so
+        /// there is no header, checksum or additional hash. Reset by deleting
+        /// the root directory; bump `kFormatVersion` when the layout changes.
+        class PersistentShaderCache final : public slang_rhi::IPersistentCache {
+        public:
+            // Bump when the directory layout or entry encoding changes; stale
+            // trees then stay unreachable instead of being misread.
+            static constexpr std::string_view kFormatVersion{"1"};
+            static constexpr std::size_t kMaxKeyBytes{128};
+            static constexpr std::uintmax_t kMaxEntryBytes{64u * 1024u * 1024u};
+#if defined(_WIN32)
+            // MAX_PATH counts the whole path including the terminator.
+            static constexpr std::size_t kMaxPathLength{259};
+#else
+            // PATH_MAX counts the whole path including the terminator.
+            static constexpr std::size_t kMaxPathLength{4095};
+#endif
+
+            /// Builds the cache, or returns nullptr after one info log when the
+            /// root cannot be created. A disabled cache is never installed on
+            /// the device, so no per-call failure path runs.
+            static PersistentShaderCache *create_(
+                const rhi::DeviceType device_type, slang::IGlobalSession *const global_session) {
+                std::error_code ec;
+                const std::filesystem::path working_directory = std::filesystem::current_path(ec);
+                if (ec) {
+                    logUnavailable_("working directory unavailable");
+                    return nullptr;
+                }
+
+                std::filesystem::path root = working_directory / ".ppr-shader-cache" / kFormatVersion;
+
+                if (global_session != nullptr) {
+                    if (const char *const build_tag = global_session->getBuildTagString(); build_tag != nullptr) {
+                        if (std::string sanitized = sanitizeBuildTag_(build_tag); not sanitized.empty()) {
+                            root /= std::move(sanitized);
+                        }
+                    }
+                }
+
+                root /= std::string_view{getDeviceTypeName_(device_type)};
+
+                std::filesystem::create_directories(root, ec);
+                if (ec) {
+                    logUnavailable_("cache root not creatable");
+                    return nullptr;
+                }
+
+                return new PersistentShaderCache{std::move(root)};
+            }
+
+            ~PersistentShaderCache() = default;
+
+            SLANG_NO_THROW SlangResult SLANG_MCALL queryInterface(
+                const SlangUUID &uuid, void **const out_object) override {
+                if (out_object == nullptr) {
+                    return SLANG_E_INVALID_ARG;
+                }
+
+                if (uuid != IPersistentCache::getTypeGuid()) {
+                    *out_object = nullptr;
+                    return SLANG_E_NO_INTERFACE;
+                }
+
+                *out_object = static_cast<IPersistentCache *>(this);
+                addRef();
+                return SLANG_OK;
+            }
+
+            SLANG_NO_THROW uint32_t SLANG_MCALL addRef() override {
+                return m_reference_count.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            }
+
+            SLANG_NO_THROW uint32_t SLANG_MCALL release() override {
+                const uint32_t previous = m_reference_count.fetch_sub(1u, std::memory_order_acq_rel);
+                if (previous == 1u) {
+                    delete this;
+                    return 0u;
+                }
+                return previous - 1u;
+            }
+
+            SLANG_NO_THROW SlangResult SLANG_MCALL writeCache(ISlangBlob *const key, ISlangBlob *const data) override {
+                if (not m_available.load(std::memory_order_relaxed)) {
+                    return SLANG_FAIL;
+                }
+                if (key == nullptr or data == nullptr) {
+                    return SLANG_E_INVALID_ARG;
+                }
+
+                const std::filesystem::path destination = entryPath_(key);
+                if (destination.empty()) {
+                    return SLANG_OK;
+                }
+
+                const char *const buffer = static_cast<const char *>(data->getBufferPointer());
+                const std::size_t buffer_size = data->getBufferSize();
+                if (buffer_size > 0u and buffer == nullptr) {
+                    return SLANG_E_INVALID_ARG;
+                }
+
+                // A per-process temporary keeps concurrent writers off each
+                // other; the rename below publishes the finished entry.
+                const std::filesystem::path temporary = m_root /
+                                                        std::format(
+                                                            ".{}.{}.tmp", processId_(),
+                                                            m_sequence.fetch_add(1u, std::memory_order_relaxed));
+
+                {
+                    std::ofstream stream{temporary, std::ios::binary | std::ios::trunc};
+                    if (not stream) {
+                        disable_("temporary entry not writable");
+                        return SLANG_FAIL;
+                    }
+
+                    stream.write(buffer, static_cast<std::streamsize>(buffer_size));
+                    stream.close();
+                    if (not stream) {
+                        std::error_code ignored;
+                        std::filesystem::remove(temporary, ignored);
+                        disable_("temporary entry not writable");
+                        return SLANG_FAIL;
+                    }
+                }
+
+                std::error_code ec;
+                std::filesystem::rename(temporary, destination, ec);
+                if (not ec) {
+                    return SLANG_OK;
+                }
+
+                // Windows rename refuses to replace an existing entry. That
+                // means a concurrent writer already stored an equivalent
+                // artifact, so the temporary is discarded without an error.
+                std::error_code exists_ec;
+                const bool destination_exists = std::filesystem::exists(destination, exists_ec);
+                std::error_code remove_ec;
+                std::filesystem::remove(temporary, remove_ec);
+                if (destination_exists) {
+                    return SLANG_OK;
+                }
+
+                disable_("entry rename failed");
+                return SLANG_FAIL;
+            }
+
+            SLANG_NO_THROW SlangResult SLANG_MCALL queryCache(
+                ISlangBlob *const key, ISlangBlob **const out_data) override {
+                if (out_data == nullptr) {
+                    return SLANG_E_INVALID_ARG;
+                }
+                *out_data = nullptr;
+
+                if (not m_available.load(std::memory_order_relaxed)) {
+                    return SLANG_E_NOT_FOUND;
+                }
+                if (key == nullptr) {
+                    return SLANG_E_INVALID_ARG;
+                }
+
+                const std::filesystem::path entry = entryPath_(key);
+                if (entry.empty()) {
+                    noteMiss_();
+                    return SLANG_E_NOT_FOUND;
+                }
+
+                std::expected<MappedFile, std::error_code> mapped = io::mapFile(entry);
+                if (not mapped or mapped->size() == 0u or mapped->size() > kMaxEntryBytes) {
+                    noteMiss_();
+                    return SLANG_E_NOT_FOUND;
+                }
+
+                // slang_createBlob returns one reference. The ComPtr takes that
+                // reference over so a failure cannot leak, and detach hands the
+                // caller exactly the reference it owns.
+                rhi::ComPtr<ISlangBlob> blob{
+                    Slang::INIT_ATTACH, ::slang_createBlob(mapped->span().data(), mapped->size())};
+                if (not blob) {
+                    return SLANG_E_OUT_OF_MEMORY;
+                }
+
+                *out_data = blob.detach();
+                noteHit_();
+                return SLANG_OK;
+            }
+
+        private:
+            explicit PersistentShaderCache(std::filesystem::path root) : m_root{std::move(root)} {
+            }
+
+            [[nodiscard]] std::filesystem::path entryPath_(ISlangBlob *const key) const {
+                const std::size_t key_size = key->getBufferSize();
+                if (key_size == 0u or key_size > kMaxKeyBytes) {
+                    return {};
+                }
+
+                const auto *const key_bytes = static_cast<const std::byte *>(key->getBufferPointer());
+                if (key_bytes == nullptr) {
+                    return {};
+                }
+
+                constexpr char hex_digits[] = "0123456789abcdef";
+                std::string name{};
+                name.reserve(key_size * 2u + 4u);
+                for (std::size_t index = 0u; index < key_size; ++index) {
+                    const unsigned value = std::to_integer<unsigned>(key_bytes[index]);
+                    name.push_back(hex_digits[value >> 4u]);
+                    name.push_back(hex_digits[value & 0x0fu]);
+                }
+                name += ".bin";
+
+                std::filesystem::path entry = m_root / name;
+                if (entry.native().size() > kMaxPathLength) {
+                    return {};
+                }
+                return entry;
+            }
+
+            void disable_(const char *const reason) {
+                if (m_available.exchange(false, std::memory_order_relaxed)) {
+                    logUnavailable_(reason);
+                }
+            }
+
+            static void logUnavailable_(const char *const reason) {
+                PPR_LOG_ONCE(RHI, info, "persistent shader cache disabled", {{"reason", reason}});
+            }
+
+            static void noteHit_() {
+                PPR_LOG_ONCE(RHI, info, "persistent shader cache hit");
+            }
+
+            static void noteMiss_() {
+                PPR_LOG_ONCE(RHI, info, "persistent shader cache miss");
+            }
+
+            [[nodiscard]] static bool isBuildTagCharacter_(const char character) noexcept {
+                if (character >= 'a' and character <= 'z') {
+                    return true;
+                }
+                if (character >= 'A' and character <= 'Z') {
+                    return true;
+                }
+                if (character >= '0' and character <= '9') {
+                    return true;
+                }
+                return character == '.' or character == '_' or character == '-';
+            }
+
+            [[nodiscard]] static std::string sanitizeBuildTag_(const char *const build_tag) {
+                std::string sanitized{};
+                for (const char *cursor = build_tag; cursor != nullptr and *cursor != '\0'; ++cursor) {
+                    const char character = *cursor;
+                    if (isBuildTagCharacter_(character)) {
+                        sanitized.push_back(character);
+                    }
+                }
+                return sanitized;
+            }
+
+            [[nodiscard]] static int processId_() noexcept {
+#if defined(_WIN32)
+                return ::_getpid();
+#else
+                return static_cast<int>(::getpid());
+#endif
+            }
+
+            std::filesystem::path m_root{};
+            std::atomic<u32> m_reference_count{1u};
+            std::atomic<u32> m_sequence{0u};
+            std::atomic<bool> m_available{true};
+        };
+    }
+
+    // ------------------------------------------------------------------
     // projection free functions
     // ------------------------------------------------------------------
 
@@ -301,6 +591,10 @@ namespace pP {
         class SlangRhiService final : public IRhiService {
         public:
             rhi::ComPtr<rhi::IDevice> m_device{};
+            // Compiled-artifact store shared with the device for this service
+            // lifetime. The device addRefs it; shutdown() releases it only
+            // after the device is gone.
+            rhi::ComPtr<slang_rhi::IPersistentCache> m_shader_cache{};
             // Ownership of the slang-rhi singleton. getRHI() hands us a
             // process-lifetime instance; destroyRHI() frees it. We may
             // destroy it exactly once — that single successful-initialise
@@ -362,6 +656,7 @@ namespace pP {
                 PPR_DEFER {
                     if (not initialized) {
                         device.setNull();
+                        m_shader_cache.setNull();
                         const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
                         const std::error_code cleanup_error = make_error_code(result);
                         if (cleanup_error) {
@@ -381,6 +676,13 @@ namespace pP {
                 rhi::DeviceDesc desc{};
                 desc.deviceType = device_type;
                 desc.slang.slangGlobalSession = shader_service.getGlobalSession();
+
+                if (PersistentShaderCache *const shader_cache = PersistentShaderCache::create_(
+                        device_type, desc.slang.slangGlobalSession);
+                    shader_cache != nullptr) {
+                    m_shader_cache.attach(shader_cache);
+                    desc.persistentShaderCache = m_shader_cache.get();
+                }
 
                 // TEMPORARY: attribute cold scene pipeline creation to compiler and native phases.
                 desc.enableCompilationReports = true;
@@ -485,6 +787,9 @@ namespace pP {
                 if (m_device) {
                     m_device.setNull();
                 }
+                // Order matters: the device holds its own reference, so the
+                // service reference is dropped only after the device is gone.
+                m_shader_cache.setNull();
                 if (m_instance_owned) {
                     const ::slang_rhi::Result result = ::slang_rhi::destroyRHI();
                     m_instance_owned = false;
