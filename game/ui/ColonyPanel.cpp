@@ -507,6 +507,9 @@ namespace pP::colony {
 
             ImFont *const heading_font = ui::theme::font(ui::theme::EFont::heading);
             ImGui::PushFont(heading_font, heading_font->LegacySize);
+            // Baseline-align the logo with the framed controls beside it;
+            // otherwise the taller heading face sits on the line's top edge.
+            ImGui::AlignTextToFramePadding();
             flow.place(plainWidth("PPR"));
             ImGui::TextUnformatted("PPR");
             ImGui::PopFont();
@@ -539,6 +542,7 @@ namespace pP::colony {
                 status, sizeof(status), "Time %.0fs | %llu colonists", colony.m_simulated_ms / 1000.0,
                 static_cast<unsigned long long>(colony.m_agents.size()));
             flow.place(plainWidth(status));
+            ImGui::AlignTextToFramePadding();
             ImGui::PushStyleColor(ImGuiCol_Text, ui::theme::kTextSecondary.vec4());
             ImGui::TextUnformatted(status);
             ImGui::PopStyleColor();
@@ -631,7 +635,10 @@ namespace pP::colony {
                 ImGui::EndPopup();
             }
 
-            const float height = ImGui::GetCursorPosY() + ImGui::GetStyle().WindowPadding.y;
+            // The reported height must be the drawn window height: deriving it
+            // from the cursor and padding missed the border and let the rail
+            // below overlap the band.
+            const float height = ImGui::GetWindowHeight();
             ImGui::End();
             ImGui::PopStyleColor(2);
             ImGui::PopStyleVar(4);
