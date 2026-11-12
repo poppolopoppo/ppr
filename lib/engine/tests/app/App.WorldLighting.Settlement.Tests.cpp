@@ -1211,7 +1211,6 @@ namespace pP::tests::detail::WorldLightingSettlement {
         rhi::IDevice &device = rhi->getDevice();
 
         struct Observation {
-            std::vector<std::byte> m_scene{};
             std::vector<std::byte> m_history{};
             std::vector<std::byte> m_exposure{};
             std::vector<std::byte> m_fine_ch{};
@@ -1239,7 +1238,10 @@ namespace pP::tests::detail::WorldLightingSettlement {
             PPR_TEST_ASSERT(fine_ch != nullptr);
 
             Observation observation{};
-            observation.m_scene = readEditorTexture(device, *scene);
+            // The stage-A scene colour target is RGBA16F 4x MSAA, so it has no
+            // buffer-readable form. The accepted single-sample Hable history is
+            // the committed screen-content evidence; the scene pointer above is
+            // an existence/ownership check only.
             observation.m_history = readEditorTexture(device, *history);
             observation.m_exposure = readEditorTexture(device, *exposure);
             observation.m_post_settings = post_pass.lastPreparedSettingsForTest();
@@ -1269,7 +1271,6 @@ namespace pP::tests::detail::WorldLightingSettlement {
         };
 
         const auto assert_same_committed = [&](const Observation &before, const Observation &after) {
-            PPR_TEST_ASSERT(before.m_scene == after.m_scene);
             PPR_TEST_ASSERT(before.m_history == after.m_history);
             PPR_TEST_ASSERT(before.m_exposure == after.m_exposure);
             PPR_TEST_ASSERT(before.m_fine_ch == after.m_fine_ch);

@@ -96,7 +96,15 @@ void chAccumulate(inout CHAccumulator accumulator, float3 radiance, float theta,
 // a black substitute; the caller reports its category and writes containment.
 bool chFinish(CHAccumulator accumulator, out CH result) {
     float total = accumulator.m_weight;
-    if (!(total > 0.0) || !isfinite(total)) return false;
+    if (!(total > 0.0) || !isfinite(total)) {
+        // Numeric failure: the caller reports its category and writes
+        // containment instead of publishing this value. Keep the out parameter
+        // initialized on that path so no caller can observe indeterminate data.
+        for (uint coefficient = 0u; coefficient < 9u; ++coefficient) {
+            result.m_coefficients[coefficient] = float3(0.0);
+        }
+        return false;
+    }
 
     float3 relative_mean = accumulator.m_relative / total;
     float3 mean = accumulator.m_reference + relative_mean;

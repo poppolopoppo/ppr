@@ -1766,3 +1766,42 @@ and operational acceptance. No Task 4 work has begun.
   captures (sky -1/12, manual EV0/bloom-off then defaults, cases, gameplay),
   live/frozen profiling, and explicit owner visual acceptance.
 - No final delivery claim before the owner records visual acceptance.
+
+### Task 19 evidence recorded 2026-11-12 (owner acceptance pending)
+
+- Full acceptance document:
+  `docs/superpowers/plans/2026-11-10-oni-port-acceptance.md`; artifacts
+  `.superpowers/sdd/2026-11-10-oni-port/task-19-artifacts/` (untracked) and
+  `/tmp/opencode/task19/`.
+- Clean builds at `dee01682`: `clang-dev` configure/build exit 0 (1,738 edges)
+  and `clang-rel` configure/build exit 0 (1,738 edges), zero project
+  warnings/errors under `-Werror`. **Gate unmet literally** for two
+  `/usr/share/libc++/v1/std.cppm` + `std.compat.cppm`
+  `-Wreserved-module-identifier` warnings per preset from CMake's synthesized
+  std-module object edge; no dependency exemption was added.
+- Matrix: routine `-LE gpu_validation` **36/36 passed** (1,036 s); GPU
+  validation **28/32 passed** (1,511 s). The settlement GPU twin's invalid MSAA
+  test readback was corrected (test-only) and both settlement twins rerun green
+  (322 s GPU / 314 s routine). Remaining: the known checkpoint dug-sand red gate,
+  a stale liquid-envelope render test (`matter_material_gpu`, explained as
+  retired-path coverage) and a test-teardown device-lifetime abort
+  (`matter_runtime_scene_gpu`).
+- Runtime logs: ordinary 1024, Lighting Lab acceptance and six Lab captures
+  (sky -1/12, manual/default, probes, cascade L3), display exercise and five
+  profiler runs — zero warnings/errors in normal/Lab execution; the only
+  display-exercise error is the deliberate `invalid_draft_rejected` case. The
+  pre-existing Slang E41018 warning was fixed at its source
+  (`world_lighting_ch.slang`), and the retired fluid/solid composite pipelines
+  no longer emit `WARNING-Shader-OutputNotConsumed`. No per-frame or idle
+  message flooding was found.
+- Display exercise: exit 3, 91 passed / 6 incomplete (host-unacknowledged
+  minimize/restore) / 0 failed; artifacts under `task-19-artifacts/exercise/`.
+- Lab: six engine captures at 1280×720, P3 (W/R/S/B = 1280×720/427×240/
+  214×120/428×240), plus ordinary gameplay with live resize/minimize/restore.
+  Per-case closeups, interactive pause, save/reload and visual acceptance remain
+  owner gates.
+- Profiling: fresh Systems/Graphics frozen and live captures complete; Graphics
+  8/8 A/B/C frames, 93 counters/744 samples, `missing_markers=[]`,
+  `PBMPM.Tick` present live; analyze-twice byte-identical; A/B compare
+  like-for-like.
+- **Owner visual acceptance pending; Task 19 not complete.**

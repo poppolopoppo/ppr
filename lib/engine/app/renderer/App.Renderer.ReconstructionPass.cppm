@@ -126,6 +126,8 @@ export namespace pP {
         }
         // Read-only committed textures for non-contamination evidence. The
         // caller must prove GPU completion (renderer/host wait) before reading.
+        // The scene target is 4x MSAA and has no buffer-readable form; only the
+        // single-sample history is a readback source.
         [[nodiscard]] rhi::ITexture *sceneTextureForTest() const noexcept {
             return m_history_established ? m_committed.m_scene.get() : nullptr;
         }
