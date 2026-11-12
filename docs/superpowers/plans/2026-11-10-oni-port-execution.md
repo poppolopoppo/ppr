@@ -1557,3 +1557,39 @@ and operational acceptance. No Task 4 work has begun.
 - **Known gates:** Windows/D3D12 unmeasured; no Linux desktop-automation tool for
   clicking the Display panel (config/UI tests and CLI lab captures cover the
   behavior); owner visual acceptance remains Task 19.
+
+## Task 16 — retained controls and inspection complete
+
+- Commits: `be0a29d6` (feature), `7e017cc4`, `aa251d41`, `efeca92a`
+  (review/test evidence), with ledger commits `0930e6fc`, `de1f25ce`,
+  `81a0b4c0`, `948f8e6f`.
+- Review: initial review found two Important evidence defects (tautological
+  non-contamination test; non-discriminating reader-fence test) plus minors.
+  Fix rounds produced a single real mid-history editor test, a pending-attempt
+  fence isolation test, and an observable post-edit control via
+  `lastPreparedSettingsForTest()`. Final scoped review: all findings addressed;
+  no new Critical/Important breakage.
+- Delivered: `ELightingDiagnostic`/`LightingInspectionSettings`;
+  `WorldLightingPass::renderInspection` as a read-only C-stage SRV overlay after
+  post/AgX and before native UI; probes/source/occupancy/jump/cascade views with
+  the fixed `max(RGB,0)/(1+max)` curve; inspection-only cascade level; retained
+  config/UI controls; obsolescent debug names removed; history/exposure
+  non-contamination and accepted reader-fence extension proven through the real
+  editor; retained-picture/non-1024 no-overlay behavior documented.
+- **Leak audit (owner priority):** elevated direct-run LSAN summaries were
+  caused by omitting the repository sanitizer policy, not by repository
+  allocations. With the policy, all affected groups exit 0; symbolized stacks
+  show allocation owners only in `libnvidia-glcore.so`/`libnvidia-glsi.so`
+  (Vulkan adapter enumeration, GLX/window teardown) plus 3 libdbus allocations
+  nested under the NVIDIA GLX/DBus teardown path. PPR frames are callers only.
+  The existing narrow NVIDIA suppression is unchanged; no DBus/engine/unknown/
+  broad suppression was added. No repository-origin leak remains open. Residual
+  third-party set is documented; direct windowed runs may still exit 1 from
+  those external allocations while CTest entries pass.
+- **Task 17 handoff:** provide the permanent real-window display exercise using
+  production actions/acknowledgments and isolated persistence.
+- **Deferred/owner gates:** retained-picture and non-1024 no-overlay are
+  production-enforced but not direct editor-tested; Windows/D3D12; Display panel
+  was not clicked through on Linux; owner visual acceptance remains Task 19.
+  The cold-start/test/authoring-preview `m_has_resolved_cells == 0` fallback
+  remains with a Task 19 removal decision.
