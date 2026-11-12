@@ -510,6 +510,18 @@ namespace pP::game {
             valueOption("game.exercise_output", "exercise-output", "Fresh artifact directory for --exercise-display."));
         appendOption(
             schema.m_options,
+            valueOption(
+                "game.profile_capture", "profile-capture",
+                "Bounded profiling capture (systems|graphics) of the ordinary Lighting Lab; conflicts with other commands."));
+        appendOption(
+            schema.m_options,
+            valueOption("game.profile_output", "profile-output", "Fresh artifact directory for --profile-capture."));
+        appendOption(
+            schema.m_options, valueOption(
+                                  "game.profile_workload", "profile-workload",
+                                  "Profiling workload (frozen|live); frozen pauses before the first simulation tick."));
+        appendOption(
+            schema.m_options,
             switchOption(
                 "game.worldgen_acceptance", "worldgen-acceptance",
                 "Exercise camera, seam edit, previews and two New Games; report and exit, fail if incomplete."));
@@ -787,6 +799,27 @@ namespace pP::game {
             const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
             diagnostics.add(
                 "invocation", "game.worldgen_acceptance", "Acceptance requires an authored interactive session", error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+
+        // The maintained profiling capture is a command-level selection even
+        // though its tool is a value: it owns the ordinary interactive
+        // application and conflicts with every other selector.
+        if ((settings.m_profile_capture and not settings.m_profile_output) or
+            (settings.m_profile_output and not settings.m_profile_capture)) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.profile_capture",
+                "--profile-capture=systems|graphics requires --profile-output=DIR and those selectors are mutually "
+                "exclusive",
+                error);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
+        }
+        if (settings.m_profile_capture and settings.m_command != EGameCommand::interactive) {
+            const auto error = config::make_error_code(config::EConfigErrc::cross_field_invalid);
+            diagnostics.add(
+                "invocation", "game.profile_capture", "--profile-capture conflicts with other command selectors",
+                error);
             PPR_RETURN_UNEXPECTED_ON_FAIL(GameConfig, error);
         }
 

@@ -10,6 +10,7 @@ namespace pP::game::tests {
     const UnitTest &gameConfigTests() noexcept;
     const UnitTest &gameDisplayTests() noexcept;
     const UnitTest &gameDisplayExerciseTests() noexcept;
+    const UnitTest &gameProfileCaptureTests() noexcept;
     const UnitTest &gameContentTests() noexcept;
     const UnitTest &gameWorldJobTests() noexcept;
     const UnitTest &gameSessionServiceTests() noexcept;
@@ -37,6 +38,7 @@ namespace pP::game::tests {
             gameConfigTests(),
             gameDisplayTests(),
             gameDisplayExerciseTests(),
+            gameProfileCaptureTests(),
             gameContentTests(),
             gameWorldJobTests(),
             gameSessionServiceTests(),

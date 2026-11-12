@@ -36,6 +36,7 @@ import game.colony.smoke;
 import game.config;
 import game.display;
 import game.display_exercise;
+import game.profile_capture;
 import game.ui;
 import game.ui.model;
 import game.colony.agents;
@@ -626,6 +627,28 @@ namespace demo {
         std::string m_exercise_gpu{};
         std::string m_exercise_executable_path{};
         u64 m_exercise_executable_bytes{};
+
+        // ------------------------------------------------------------------
+        // bounded profiling capture
+        // ------------------------------------------------------------------
+        std::unique_ptr<game::ProfileCapture> m_profile_capture{};
+        std::unique_ptr<game::IProfileCaptureSdk> m_profile_sdk{};
+        std::filesystem::path m_profile_output{};
+        std::optional<RenderLaneOperationTicket> m_profile_sdk_ticket{};
+        std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_requested{};
+        std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_inflight{};
+        std::optional<game::EProfileCaptureSdkOperation> m_profile_sdk_completed_operation{};
+        game::ProfileCaptureSdkStatus m_profile_sdk_status{};
+        std::error_code m_profile_sdk_result{};
+        u32 m_profile_accepted_frames{};
+        u32 m_profile_ui_only_frames{};
+        u32 m_profile_rejected_frames{};
+        double m_profile_active_seconds{};
+        double m_profile_last_active_seconds{};
+        u64 m_profile_last_scene_frame{};
+        u64 m_profile_last_screen_frame{};
+        u64 m_profile_last_tick{};
+        GridWorldIdentity m_profile_presented_world{};
         // Slice 4 selection: the stable agent key (NEVER a row index) plus
         // scratch naming the selection on the status line. The hovered key
         // is the marker under the pointer (same pick a click runs), and the
@@ -4350,6 +4373,279 @@ namespace demo {
             return game::displayExerciseExitCode(status);
         }
 
+        // ------------------------------------------------------------------
+        // bounded profiling capture host
+        // ------------------------------------------------------------------
+
+        /// Starts the maintained capture. Must run before initialize()/run():
+        /// the driver opens its fresh artifact directory and the adapter is
+        /// constructed only for this requested capture.
+        [[nodiscard]] std::error_code setProfileCapture(
+            const game::EProfileCaptureTool tool, const game::EProfileCaptureWorkload workload,
+            std::filesystem::path output) {
+            m_profile_output = std::move(output);
+            m_profile_sdk = game::createProfileCaptureSdk();
+
+            m_profile_capture = std::make_unique<game::ProfileCapture>();
+            PPR_RETURN_ERROR_ON_FAIL(
+                Demo, m_profile_capture->begin(
+                          m_profile_output, tool, workload, std::string_view{}, 0u, m_profile_sdk.get(),
+                          ITimerClock::steady().now()));
+            return {};
+        }
+
+        /// Production pause action through the ordinary driver pause, called by
+        /// the simulation admission hook before the first tick of the admitted
+        /// world. Returns true when this turn must not tick.
+        [[nodiscard]] bool pauseProfileCaptureBeforeTick_() {
+            if (not m_profile_capture or not m_driver or not m_profile_capture->freezeActive()) {
+                return false;
+            }
+
+            const bool pending = m_profile_capture->pauseBeforeFirstTickPending();
+            if (m_driver->paused()) {
+                if (pending) {
+                    m_profile_capture->notePauseApplied(m_driver->tickCount());
+                }
+                return false;
+            }
+
+            // Production pause action. A world transition can restore a
+            // retained unpaused fact, so the freeze is re-asserted until the
+            // capture completes.
+            m_driver->setPaused(true);
+            clearControlInput_();
+            if (pending) {
+                m_profile_capture->notePauseApplied(m_driver->tickCount());
+            }
+            return true;
+        }
+
+        /// One production turn: admit a pending lane-bound vendor operation,
+        /// collect a finished one, copy a value-only observation, advance the
+        /// driver and dispatch the returned typed action.
+        [[nodiscard]] std::error_code advanceProfileCapture_(const TimePoint now) {
+            if (not m_profile_capture) {
+                return {};
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(Demo, pollProfileSdkOperation_());
+            admitProfileSdkOperation_();
+
+            const game::ProfileCaptureObservation observation = buildProfileCaptureObservation_();
+            auto action = m_profile_capture->advance(observation, now);
+            PPR_RETURN_ERROR_ON_FAIL(Demo, action);
+            if (action and action->has_value()) {
+                executeProfileCaptureAction_(**action);
+            }
+            return {};
+        }
+
+        game::ProfileCaptureObservation buildProfileCaptureObservation_() {
+            game::ProfileCaptureObservation observation{};
+
+            observation.m_accepted_scene_frames = std::exchange(m_profile_accepted_frames, 0u);
+            observation.m_ui_only_frames = std::exchange(m_profile_ui_only_frames, 0u);
+            observation.m_rejected_frames = std::exchange(m_profile_rejected_frames, 0u);
+            observation.m_active_presentation_seconds = std::exchange(m_profile_active_seconds, 0.0);
+
+            observation.m_world_admitted = m_driver and m_driver_ready and not m_world_modal and m_world_published;
+            observation.m_simulation_paused = m_driver and m_driver->paused();
+            observation.m_tick = m_driver ? m_driver->tickCount() : m_profile_last_tick;
+            m_profile_last_tick = observation.m_tick;
+            observation.m_scene_frame_index = m_profile_last_scene_frame;
+            observation.m_screen_frame_index = m_profile_last_screen_frame;
+            observation.m_world_id = m_profile_presented_world.m_world_generation;
+            observation.m_publication_id = m_profile_presented_world.m_job_id;
+
+            if (const safe_ptr<Camera> camera = getMainCamera(); camera.isValid()) {
+                observation.m_camera_origin = camera->getOrigin();
+                observation.m_camera_forward = camera->getForward();
+            }
+            if (auto geometry = displayWindowGeometry()) {
+                observation.m_logical_extent = geometry->m_size;
+                observation.m_framebuffer_extent = geometry->m_framebuffer_size;
+            }
+
+            observation.m_settings = profileCaptureSettings_();
+
+            if (m_profile_sdk_completed_operation) {
+                observation.m_sdk_operation_completed = true;
+                observation.m_sdk_operation = *m_profile_sdk_completed_operation;
+                observation.m_sdk_operation_error = m_profile_sdk_result;
+                observation.m_sdk_status = m_profile_sdk_status;
+                m_profile_sdk_completed_operation.reset();
+            }
+
+            observation.m_close_requested = m_close_requested.load(std::memory_order_acquire);
+            observation.m_shutdown_error = m_input_error;
+            return observation;
+        }
+
+        Array<game::ProfileCaptureSetting> profileCaptureSettings_() const {
+            Array<game::ProfileCaptureSetting> settings{};
+            const auto add = [&settings](std::string name, std::string value) {
+                settings.push_back(game::ProfileCaptureSetting{std::move(name), std::move(value)});
+            };
+
+            add("tool", std::string{game::profileCaptureToolName(m_profile_capture->tool())});
+            add("workload", std::string{game::profileCaptureWorkloadName(m_profile_capture->workload())});
+            add("worldgen_profile", "lighting_lab");
+            add("map_size", "1024");
+            add("worldgen_seed", "42");
+            add("world_lighting", "field");
+            add("pixel.scale", std::to_string(m_ui_state.m_pixel_scale));
+            add("world_light.sky_hour", std::to_string(m_ui_state.m_world_light.m_sky_hour));
+            add("world_light.diagnostic", "off");
+            add("post.auto_exposure", m_ui_state.m_post.m_auto_exposure ? "true" : "false");
+            add("post.exposure_ev", std::format("{:.6f}", m_ui_state.m_post.m_exposure_ev));
+            add("post.adaptation_tau", std::format("{:.6f}", m_ui_state.m_post.m_adaptation_tau));
+            add("post.bloom", m_ui_state.m_post.m_bloom ? "true" : "false");
+            add("post.bloom_intensity", std::format("{:.6f}", m_ui_state.m_post.m_bloom_intensity));
+            add("post.bloom_threshold", std::format("{:.6f}", m_ui_state.m_post.m_bloom_threshold));
+            add("display.pacing", "uncapped");
+            add("display.paced_vsync", "false");
+            add("display.throttle_unfocused", "false");
+            add("display.logical_extent", "1280x720");
+            return settings;
+        }
+
+        /// Admits the driver's requested vendor operation on the render lane.
+        /// Rejection is retried on a later turn; the driver is never blocked
+        /// waiting for lane capacity.
+        void admitProfileSdkOperation_() {
+            if (not m_profile_sdk_requested or m_profile_sdk_inflight or not m_profile_sdk) {
+                return;
+            }
+
+            const game::EProfileCaptureSdkOperation operation = *m_profile_sdk_requested;
+            auto work = std::make_unique<RenderLaneOperation>([this, operation]() -> std::error_code {
+                rhi::ICommandQueue *const queue = getRenderer().graphicsQueue();
+                if (queue == nullptr) {
+                    return std::make_error_code(std::errc::not_connected);
+                }
+
+                switch (operation) {
+                    case game::EProfileCaptureSdkOperation::initialize: return m_profile_sdk->initialize();
+                    case game::EProfileCaptureSdkOperation::activate:
+                        return m_profile_sdk->activate(rhi::getNativeQueueObject(*queue));
+                    case game::EProfileCaptureSdkOperation::start_trace: return m_profile_sdk->startTrace();
+                    case game::EProfileCaptureSdkOperation::poll: {
+                        game::ProfileCaptureSdkStatus status{};
+                        const std::error_code result = m_profile_sdk->poll(status);
+                        m_profile_sdk_status = std::move(status);
+                        return result;
+                    }
+                    case game::EProfileCaptureSdkOperation::none:
+                        return std::make_error_code(std::errc::invalid_argument);
+                }
+                return {};
+            });
+
+            RenderLane *const lane = renderLane();
+            if (lane == nullptr) {
+                m_profile_sdk_requested.reset();
+                m_profile_sdk_result = std::make_error_code(std::errc::not_connected);
+                m_profile_sdk_completed_operation = operation;
+                return;
+            }
+
+            auto ticket = lane->tryBeginOperation(work);
+            if (not ticket) {
+                if (ticket.error() == std::errc::device_or_resource_busy) {
+                    return;
+                }
+
+                m_profile_sdk_requested.reset();
+                m_profile_sdk_result = ticket.error();
+                m_profile_sdk_completed_operation = operation;
+                return;
+            }
+
+            m_profile_sdk_ticket = *ticket;
+            m_profile_sdk_inflight = operation;
+            m_profile_sdk_requested.reset();
+        }
+
+        [[nodiscard]] std::error_code pollProfileSdkOperation_() {
+            if (not m_profile_sdk_ticket or not m_profile_sdk_inflight) {
+                return {};
+            }
+
+            auto completion = renderLane()->takeOperation(*m_profile_sdk_ticket);
+            if (not completion) {
+                m_profile_sdk_ticket.reset();
+                m_profile_sdk_inflight.reset();
+                return completion.error();
+            }
+            if (not *completion) {
+                return {};
+            }
+
+            m_profile_sdk_result = (**completion).m_operation_error;
+            if (not (**completion).m_ran and not m_profile_sdk_result) {
+                m_profile_sdk_result = std::make_error_code(std::errc::operation_canceled);
+            }
+            if ((**completion).m_transport_error and not m_profile_sdk_result) {
+                m_profile_sdk_result = (**completion).m_transport_error;
+            }
+
+            m_profile_sdk_completed_operation = m_profile_sdk_inflight;
+            m_profile_sdk_ticket.reset();
+            m_profile_sdk_inflight.reset();
+            return {};
+        }
+
+        void executeProfileCaptureAction_(const game::ProfileCaptureAction &action) {
+            switch (action.m_kind) {
+                case game::EProfileCaptureActionKind::pause_simulation:
+                    std::ignore = pauseProfileCaptureBeforeTick_();
+                    break;
+                case game::EProfileCaptureActionKind::sdk_operation:
+                    m_profile_sdk_requested = action.m_operation;
+                    admitProfileSdkOperation_();
+                    break;
+                case game::EProfileCaptureActionKind::quit:
+                    // Ordinary graceful application quit, the same path used by
+                    // --exit-after and the final frame capture.
+                    requestExit();
+                    break;
+            }
+        }
+
+        /// Persists the final capture evidence and maps the precise state to
+        /// the documented exit classes (0 complete, 1 failed, 3 incomplete or
+        /// unsupported). A launcher exit alone never establishes success.
+        [[nodiscard]] int finishProfileCapture(const std::error_code cleanup_error) {
+            if (not m_profile_capture) {
+                return 1;
+            }
+
+            const std::error_code result = m_profile_capture->finish(cleanup_error);
+            const game::EProfileCaptureStatus status = m_profile_capture->status();
+            std::println(
+                "[profile-capture] status={} ready={} accepted={} active_s={:.3f} report={}",
+                game::profileCaptureStatusName(status), m_profile_capture->readyWritten(),
+                m_profile_capture->acceptedFrames(), m_profile_capture->activePresentationSeconds(),
+                (m_profile_output / "final-state.json").string());
+            if (result and not m_profile_capture->reason().empty()) {
+                std::cerr << "[profile-capture] reason: " << m_profile_capture->reason() << '\n';
+            }
+            if (result and cleanup_error) {
+                std::cerr << "[profile-capture] cleanup: " << cleanup_error.message() << '\n';
+            }
+
+            switch (status) {
+                case game::EProfileCaptureStatus::complete: return 0;
+                case game::EProfileCaptureStatus::failed: return 1;
+                case game::EProfileCaptureStatus::incomplete:
+                case game::EProfileCaptureStatus::unsupported:
+                case game::EProfileCaptureStatus::pending:
+                case game::EProfileCaptureStatus::ready: return 3;
+            }
+            return 3;
+        }
+
         [[nodiscard]] colony::WorldgenPreviewSpec workshopSpec_() const {
             return {
                 std::string{m_workshop_ui.m_profile.data()}, std::string{m_workshop_ui.m_biome.data()},
@@ -5473,6 +5769,14 @@ namespace demo {
                     PPR_RETURN_ERROR_ON_FAIL(Demo, drainToolRequests_());
                 }
 
+                // Frozen profiling capture pauses through the ordinary driver
+                // action at the admission boundary, before the first tick of
+                // the published world and again after any transition restore.
+                if (pauseProfileCaptureBeforeTick_()) {
+                    m_simulation_anchor = now;
+                    return {};
+                }
+
                 if (not m_simulation_anchor or m_driver->paused()) {
                     m_simulation_anchor = now;
                 }
@@ -6348,7 +6652,43 @@ namespace demo {
             }
         }
 
+        /// Accepted fresh scene frames are A/B submitted and presented with the
+        /// active world identity; retained UI-only frames and rejected frames
+        /// never contribute to profiling readiness.
+        void settleProfileCaptureFrame_(const RenderFrameResult &result) {
+            if (not result.m_presented) {
+                ++m_profile_rejected_frames;
+                return;
+            }
+            if (result.m_error or result.m_dropped) {
+                ++m_profile_rejected_frames;
+                return;
+            }
+
+            const bool scene_submitted = result.m_stages[kRenderStageScene].m_settlement == FrameSettlement::kSubmitted;
+            const bool resolve_submitted = result.m_stages[kRenderStageResolve].m_settlement ==
+                                           FrameSettlement::kSubmitted;
+            if (not scene_submitted or not resolve_submitted or result.m_presented_grid.m_world_generation == 0u) {
+                ++m_profile_ui_only_frames;
+                return;
+            }
+
+            ++m_profile_accepted_frames;
+            const double active = time::seconds(result.m_active_elapsed);
+            if (active < m_profile_last_active_seconds) {
+                m_profile_last_active_seconds = active;
+            }
+            m_profile_active_seconds += std::max(0.0, active - m_profile_last_active_seconds);
+            m_profile_last_active_seconds = active;
+            m_profile_last_scene_frame = result.m_frame_id;
+            m_profile_last_screen_frame = result.m_frame_id;
+            m_profile_presented_world = result.m_presented_grid;
+        }
+
         void settleGameFrame_(const RenderFrameResult &result) {
+            if (m_profile_capture) {
+                settleProfileCaptureFrame_(result);
+            }
             if (m_display_exercise) {
                 settleExerciseCapture_(result);
                 if (result.m_reconstruction) {
@@ -6651,6 +6991,10 @@ namespace demo {
                     m_exercise_frame_revisions.erase(
                         m_exercise_frame_revisions.begin(), m_exercise_frame_revisions.begin() + 256);
                 }
+            }
+
+            if (m_profile_capture) {
+                PPR_RETURN_ERROR_ON_FAIL(Demo, advanceProfileCapture_(ITimerClock::steady().now()));
             }
 
             const auto observation_begin = m_observation_clock->now();
@@ -7068,8 +7412,14 @@ int runGame(const int argc, char *argv[]) try {
 
     const pP::game::EGameCommand command = base_invocation->m_game.m_value.m_command;
     const bool exercise_command = command == pP::game::EGameCommand::exercise_display;
+    const bool profile_command = base_invocation->m_game.m_value.m_profile_capture.has_value();
     std::filesystem::path overlay_path{};
-    if (exercise_command) {
+    if (profile_command) {
+        // Profiling settings are explicit and isolated from user persistence:
+        // the overlay lives inside the fresh artifact directory.
+        overlay_path = std::filesystem::path{*base_invocation->m_game.m_value.m_profile_output} /
+                       pP::game::kDisplayOverlayFileName;
+    } else if (exercise_command) {
         overlay_path = std::filesystem::path{*base_invocation->m_game.m_value.m_exercise_output} /
                        pP::game::kDisplayOverlayFileName;
     } else {
@@ -7094,6 +7444,20 @@ int runGame(const int argc, char *argv[]) try {
     const pP::game::GameSettings &settings = invocation->m_game.m_value;
     const pP::DisplaySettings &display = invocation->m_display.m_value;
     const pP::StartupSettings &startup = invocation->m_startup.m_value;
+
+    // Profiling uses a fixed windowed presentation baseline: uncapped pacing,
+    // no VSync and a 1280x720 logical window. These are capture settings, not
+    // persisted user defaults.
+    pP::DisplaySettings profile_display = display;
+    if (profile_command) {
+        profile_display.m_pacing = pP::EFramePacing::uncapped;
+        profile_display.m_paced_vsync = false;
+        profile_display.m_throttle_unfocused = false;
+        profile_display.m_window_mode = pP::EDisplayWindowMode::windowed;
+        profile_display.m_width = 1280u;
+        profile_display.m_height = 720u;
+    }
+    const pP::DisplaySettings &effective_display = profile_command ? profile_display : display;
 
     const bool worldgen_command = settings.m_command == pP::game::EGameCommand::validate_worldgen or
                                   settings.m_command == pP::game::EGameCommand::worldgen_preview;
@@ -7126,10 +7490,28 @@ int runGame(const int argc, char *argv[]) try {
         invocation->m_world_light.m_value, invocation->m_pixel.m_value, invocation->m_post.m_value);
     // The permanent exercise always runs the ordinary Lighting Lab at 1024.
     pP::game::GameSettings run_settings = settings;
-    if (exercise_command) {
+    if (exercise_command or profile_command) {
         run_settings.m_worldgen_profile = "lighting_lab";
         run_settings.m_map_size = 1024u;
         run_settings.m_worldgen_seed = 42u;
+    }
+    if (profile_command) {
+        // Explicit profiling baseline, never a new user default: default
+        // overview camera, P1, manual EV0, bloom on at defaults, sky12,
+        // diagnostics off, uncapped pacing and no VSync at 1280x720 logical.
+        app.noteLightingPostStartup(
+            pP::game::WorldLightDisplaySettings{
+                .m_sky_hour = 12, .m_diagnostic = pP::ELightingDiagnostic::off, .m_cascade = 1u},
+            pP::game::PixelDisplaySettings{.m_pixel_scale = 1u},
+            pP::game::PostDisplaySettings{
+                .m_auto_exposure = false,
+                .m_exposure_ev = 0.0f,
+                .m_adaptation_tau = 0.7f,
+                .m_ev_min = -4.0f,
+                .m_ev_max = 4.0f,
+                .m_bloom = true,
+                .m_bloom_intensity = 0.125f,
+                .m_bloom_threshold = 1.0f});
     }
     if (const auto error = app.setWorldgenSettings(run_settings, pP::ITimerClock::steady(), diagnostics)) {
         std::cerr << "[worldgen] " << error.message() << '\n' << diagnostics.format();
@@ -7144,7 +7526,7 @@ int runGame(const int argc, char *argv[]) try {
             return pP::config::kExitInvalidUsage;
         }
     }
-    app.setDisplaySettings(display);
+    app.setDisplaySettings(effective_display);
     app.setDisplayOverlayPath(overlay_path);
     // Startup picture baseline for "Back to startup": the lower-precedence
     // values the reset intent exposes with their provenance. Runtime edits
@@ -7158,6 +7540,18 @@ int runGame(const int argc, char *argv[]) try {
             return 1;
         }
     }
+    if (profile_command) {
+        const auto tool = *settings.m_profile_capture == pP::game::EGameProfileCapture::graphics
+                              ? pP::game::EProfileCaptureTool::graphics
+                              : pP::game::EProfileCaptureTool::systems;
+        const auto workload = settings.m_profile_workload == pP::game::EGameProfileWorkload::live
+                                  ? pP::game::EProfileCaptureWorkload::live
+                                  : pP::game::EProfileCaptureWorkload::frozen;
+        if (const auto error = app.setProfileCapture(tool, workload, *settings.m_profile_output)) {
+            std::cerr << "[profile-capture] could not start: " << error.message() << '\n';
+            return 1;
+        }
+    }
     // Report operational failures and preserve their exit status.
     try {
         const std::error_code run_error = app.run();
@@ -7168,6 +7562,9 @@ int runGame(const int argc, char *argv[]) try {
         }
         if (exercise_command) {
             return app.finishDisplayExercise(run_error);
+        }
+        if (profile_command) {
+            return app.finishProfileCapture(run_error);
         }
         if (not run_error and not app.acceptanceComplete()) {
             std::cerr << "[worldgen-acceptance] INCOMPLETE: shutdown preceded sequence completion\n";

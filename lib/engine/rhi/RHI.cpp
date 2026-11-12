@@ -556,7 +556,7 @@ namespace pP {
                 }
             }
 
-            static void logUnavailable_(const char *const reason) {
+            static void logUnavailable_([[maybe_unused]] const char *const reason) {
                 PPR_LOG_ONCE(RHI, info, "persistent shader cache disabled", {{"reason", reason}});
             }
 
@@ -626,6 +626,18 @@ namespace pP {
         const float fov, const float aspect, const float near_, const float far_) noexcept {
         const float x_fov = 2.0f * std::atan(std::tan(fov * 0.5f) * aspect);
         return float4x4::perspectiveD3D(x_fov, fov, near_, far_);
+    }
+
+    [[nodiscard]] void *rhi::getNativeQueueObject(ICommandQueue &queue) noexcept {
+        slang_rhi::NativeHandle handle{};
+        if (queue.getNativeHandle(&handle) != SLANG_OK) {
+            return nullptr;
+        }
+        if (handle.type != slang_rhi::NativeHandleType::VkQueue and
+            handle.type != slang_rhi::NativeHandleType::D3D12CommandQueue) {
+            return nullptr;
+        }
+        return reinterpret_cast<void *>(static_cast<std::uintptr_t>(handle.value));
     }
 
     // ------------------------------------------------------------------

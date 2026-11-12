@@ -1,0 +1,20 @@
+Computer Name	pPd
+Operating System	Linux (CachyOS)
+Processor	AMD Ryzen 9 3950X 16-Core Processor
+Device Name	NVIDIA GeForce RTX 2080
+Chip Name	TU104
+Driver Version	620.70.06
+Product Version	2026.4.0.0 (build 39228586) (public-release)
+Process File Name	/home/bek/Projects/ppr/out/build/clang-rel-profile/game/app.game
+Command Line	/home/bek/Projects/ppr/out/build/clang-rel-profile/game/app.game --exit-after=45
+APIs	Vulkan, OpenGL
+Background Shader Compiles at Trace End	N/A
+Start After	120 Frames
+Limited To	8 Frames
+V-Sync Mode	Enforced Off
+GPU Clocks	Unaltered
+Collect Screenshot	Yes
+Enable NVTX Ranges	Yes
+Metric Set	Throughput Metrics
+Real-Time Shader Profiler	Disabled
+Multi-Pass Metrics	Disabled

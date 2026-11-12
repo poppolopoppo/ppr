@@ -40,6 +40,29 @@ export namespace pP::game {
         [[nodiscard]] std::string describe() const;
     };
 
+    /// Maintained profiling capture selector. The command launches the ordinary
+    /// interactive application and records bounded evidence; it is not a
+    /// gameplay toggle and conflicts with every other command selector.
+    enum class EGameProfileCapture : u8 {
+        systems,
+        graphics,
+    };
+
+    inline constexpr config::EnumDomain<EGameProfileCapture, 2u> profile_capture_domain{{
+        config::EnumEntry<EGameProfileCapture>{EGameProfileCapture::systems, "systems"},
+        config::EnumEntry<EGameProfileCapture>{EGameProfileCapture::graphics, "graphics"},
+    }};
+
+    enum class EGameProfileWorkload : u8 {
+        frozen,
+        live,
+    };
+
+    inline constexpr config::EnumDomain<EGameProfileWorkload, 2u> profile_workload_domain{{
+        config::EnumEntry<EGameProfileWorkload>{EGameProfileWorkload::frozen, "frozen"},
+        config::EnumEntry<EGameProfileWorkload>{EGameProfileWorkload::live, "live"},
+    }};
+
     /// Game-owned invocation settings: command selection, profiling fixtures,
     /// bounded-run duration and the explicit config
     /// file path. Display pacing and RHI validation live in the engine.app
@@ -56,6 +79,9 @@ export namespace pP::game {
         std::optional<std::string> m_worldgen_output{};
         std::optional<std::string> m_worldgen_gpu_output{};
         std::optional<std::string> m_exercise_output{};
+        std::optional<std::string> m_profile_output{};
+        std::optional<EGameProfileCapture> m_profile_capture{};
+        EGameProfileWorkload m_profile_workload{EGameProfileWorkload::frozen};
         std::string m_worldgen_profile{"frontier"};
         std::string m_tool_spawn_material{"water"};
         double m_tool_radius_m{2.0}, m_tool_acceleration_m_s2{100.0};
@@ -99,6 +125,24 @@ export namespace pP::game {
                         "game.exercise_output", "Fresh artifact directory for the display exercise", "Display exercise",
                         EMutability::startup, ESource::all, false},
                     PathDomain{1024u, false}),
+                field(
+                    &GameSettings::m_profile_output,
+                    Metadata{
+                        "game.profile_output", "Fresh artifact directory for --profile-capture", "Profiling capture",
+                        EMutability::startup, ESource::all, false},
+                    PathDomain{1024u, false}),
+                field(
+                    &GameSettings::m_profile_capture,
+                    Metadata{
+                        "game.profile_capture", "Bounded profiling capture of the ordinary lab: systems or graphics",
+                        "Profiling capture", EMutability::startup, ESource::cli, false},
+                    profile_capture_domain),
+                field(
+                    &GameSettings::m_profile_workload,
+                    Metadata{
+                        "game.profile_workload", "Profiling workload: frozen pauses before the first tick",
+                        "Profiling capture", EMutability::startup, ESource::cli, false},
+                    profile_workload_domain),
                 field(
                     &GameSettings::m_worldgen_pack_set,
                     Metadata{

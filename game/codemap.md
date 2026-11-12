@@ -11,6 +11,17 @@
 - `Game.Config.cppm/.cpp` (`game.config`): typed game command/profile/exit schema, combined CLI and configuration resolution. Distinct command selectors conflict; they are not gameplay toggles. Use `--help` and declarations for the current option set.
 - `Game.Display.cppm/.cpp` (`game.display`): draft validation/provenance, persistable overlay merge/encode/atomic write, overlay load, and injected-time Keep/Revert state. Overlay precedence is base < overlay < environment < CLI. The panel produces intents; application-level generation/ack checks govern native/surface changes. See [DisplayControls](../lib/engine/app/DisplayControls.md).
 - `Game.DisplayExercise.cppm/.cpp` (`game.display_exercise`): permanent real-window display exercise. The injected-time driver emits typed panel/window intents (Apply/Keep/Revert/timeout/Reset/Save, live picture edits, minimize/restore, quit), waits for matching acknowledgements and fresh presented frames, requires exact framebuffer-derived R/S/B plus the accepted reconstruction-history reset stamp for P cases, records trial armed/kept and tested fullscreen modes, enforces the transition/load/run deadlines, and writes incremental atomic schema-1 JSON, logs and captures from a fresh isolated output directory. The host dispatches through the same intent handler as the panel and resolves an isolated overlay in the exercise output directory. See [DisplayControls](../lib/engine/app/DisplayControls.md#automated-display-exercise).
+- `Game.ProfileCapture.cppm/.cpp` (`game.profile_capture`): bounded profiling capture
+  state machine for `--profile-capture=systems|graphics --profile-output=DIR
+  --profile-workload=frozen|live`. It owns readiness (120 accepted fresh scene
+  frames and 2 s active presentation), the session-token `stop.request`
+  rendezvous, atomic `ready.json`/`final-state.json` evidence and the vendor
+  operation sequence. The application admission hook applies the production
+  pause for frozen captures before the first tick. The private
+  `Game.ProfileCapture.Nsight.cpp` adapter is the only translation unit that
+  includes the optional Nsight Graphics SDK headers; no NVIDIA type crosses the
+  module interface and normal gameplay never constructs an adapter. See
+  [profiling](../docs/profiling.md#maintained-lighting-capture-nsight-systems-and-graphics).
 - `Game.WorldgenWorkshop.cppm/.cpp` (`game.application:worldgen_workshop`): authoring session, immutable worker requests, bounded cancellation, preview/export and owned `AuthoredGameSource` preparation. Standalone Start validates the current owned snapshot through the existing WorldJob; publication commits its source for later New Game. Return restores the retained game while preserving the authoring session. See [Workspace usage](../docs/worldgen-content.md#in-game-worldgen-workshop).
 
 ## Interactive flow
@@ -83,7 +94,7 @@ See [colony/codemap.md](colony/codemap.md) for the `game.colony.*` modules. Sim 
 
 ## Build and tests
 
-`CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.display_exercise`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
+`CMakeLists.txt` registers the colony modules including `game.colony.matter`, plus `game.config`, `game.display`, `game.display_exercise`, `game.profile_capture`, `game.application` and its `:world_job`, `:worldgen_workshop`, `:session_service` partitions, and thin `main.cpp`. `app.game` links core/app/math/shader/rhi/sim publicly and physics/matter privately. `Game.SessionService.Tests.cpp` exercises the actual production inbox through a real render-lane wait pump and stale tool delivery; it is registered in `game.tests`. Every explicit executable build stages shaders, textures and meshes when present through the independent `app.game.assets` prerequisite. Asset edits, additions and missing deployment files do not require relinking; files removed from source are pruned from deployment.
 
 The game build registers `game.tests`, the split `game.tests.worldgen_preview`
 entry, the bounded `game.tests.lighting_lab` entry, three independently locked GPU lifecycle entries
@@ -94,7 +105,8 @@ heavy preview replay/crop leaves; the worldgen entry uses `PROCESSORS 4`.
 Each GPU entry has its own 180-second ceiling and unchanged explicit validated
 D3D12/4103-grid/eight-substep/K2 fixture. `game.tests` stages its shader assets
 independently. `Game.Config.Tests.cpp` covers invocation compatibility, source
-precedence and help; `Game.Display.Tests.cpp` covers drafts, persistence and
+precedence and help; `Game.ProfileCapture.Tests.cpp` covers readiness/frozen
+pause/stop-token/shutdown/sdk-sequence behavior; `Game.Display.Tests.cpp` covers drafts, persistence and
 Keep/Revert. Engine test targets never depend on these game modules.
 
 The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Independent worker admission is explicit; default WorldJob callers retain the original loading-presented gate. Cancel/failure before renderer activation admission preserves the old session; activation admission latches commit intent, and post-activation attachment/presentation failure is terminal while owners remain retained through real retirement. Only detached drivers may enter worker cleanup/capture. Normal startup loads the authored pack/profile/seed and initializes one actor. Independent render controls stage/activate owned terrain separately, and the modal remains through real presentation. No frame result or loading acknowledgment is fabricated. Integrated responsiveness remains unverified: cold command finalization occupies the sole device lane for about40s. Matter now uses retained asynchronous operations; the renderer retains its existing synchronous teardown policy. No timeout, resolution, schedule or backend workaround is adopted.

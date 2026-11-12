@@ -1,0 +1,3 @@
+FE_A.TriageA.gpu__engine_cycles_active_gr_or_ce.avg.pct_of_peak_sustained_elapsed	21,1657	94,4804	22,0658	94,4773	22,009	94,2718	21,8603	94,9182
+FE_A.TriageA.gpu__engine_cycles_active_gr_or_ce.sum	951435	949960	948537	948611	954190	941884	942436	935459
+FE_A.TriageA.gpu__engine_cycles_active_any_syncce.avg.pct_of_peak_sustained_elapsed	0,570569	2,54501	0,594881	2,53929	0,592739	2,57168	0,585781	2,5588

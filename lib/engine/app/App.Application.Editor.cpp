@@ -2269,7 +2269,7 @@ namespace pP {
             // earlier accepted stages stand and the frame is not presented.
             // This is a dropped submission stage, distinct from a frame that
             // never had a render target or an obsolete surface claim.
-            u32 dropped_stage = kRenderStageCount;
+            [[maybe_unused]] u32 dropped_stage = kRenderStageCount;
             for (u32 stage = 0u; stage < kRenderStageCount; ++stage) {
                 if (out_result.m_stages[stage].m_error == stage_failure) {
                     dropped_stage = stage;

@@ -86,6 +86,13 @@ export namespace pP::rhi {
 
     [[nodiscard]] float4x4 getPerspectiveMatrix(float fov, float aspect, float near_, float far_) noexcept;
 
+    /// Profiling/validation seam: the backend queue object behind a command
+    /// queue, or nullptr when the backend exposes none. The object is opaque to
+    /// engine code and is interpreted only by a profiling adapter; it is valid
+    /// only while the device owns the queue and must be queried on the
+    /// device-owner lane.
+    [[nodiscard]] void *getNativeQueueObject(ICommandQueue &queue) noexcept;
+
     using slang_rhi::DrawArguments;
     using slang_rhi::Format;
     using slang_rhi::FormatInfo;

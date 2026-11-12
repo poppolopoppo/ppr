@@ -138,7 +138,8 @@
       "binaryDir": "${sourceDir}/out/build/msvc-profile",
       "cacheVariables": {
         "PPR_ENABLE_PROFILING": "ON",
-        "PPR_LOGGING_LEVEL": "EMPHASIS"
+        "PPR_LOGGING_LEVEL": "EMPHASIS",
+        "PPR_NSIGHT_GRAPHICS_SDK_HINT": "$env{PPR_NSIGHT_GRAPHICS_SDK_ROOT}"
       }
     },
     {
@@ -268,7 +269,8 @@
       "inherits": "clang-rel",
       "cacheVariables": {
         "PPR_DEBUG_INFO": "ON",
-        "PPR_LOGGING_LEVEL": "EMPHASIS"
+        "PPR_LOGGING_LEVEL": "EMPHASIS",
+        "PPR_NSIGHT_GRAPHICS_SDK_HINT": "$env{PPR_NSIGHT_GRAPHICS_SDK_ROOT}"
       }
     }
   ],

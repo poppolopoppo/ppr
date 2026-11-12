@@ -24,6 +24,36 @@ The [CIE 1931 2-degree colour-matching data](CIE/README.md) pins the CC BY-SA 4.
 calibrated visible-band thermal lookup. Generated table bytes are committed under
 `assets/lighting`; builds never fetch the dataset.
 
+## NVIDIA Nsight Graphics SDK (profiling-only, optional)
+
+The maintained lighting profiler can drive an Nsight Graphics GPU Trace through
+the vendor's official SDK (Apache-2.0 headers). The SDK is **not** shipped,
+fetched or linked by default: the profiling preset accepts an explicit
+`PPR_NSIGHT_GRAPHICS_SDK_ROOT` (or the `PPR_NSIGHT_GRAPHICS_SDK_ROOT`
+environment hint), and only `game/Game.ProfileCapture.Nsight.cpp` includes it.
+Without a configured root that translation unit compiles as an explicit
+unavailable adapter, and a requested Graphics capture fails rather than
+substituting another tool.
+
+- Upstream: NVIDIA Nsight Graphics 2026.4.0.0 (build 39228586), SDK **0.9.2**
+  under `SDKs/NsightGraphicsSDK/`.
+- License: Apache License 2.0 (`SPDX-License-Identifier: Apache-2.0` in every
+  header). The installed `LICENSE.txt` is the preserved notice; it stays with
+  the tool installation and is not redistributed here (no SDK bytes are
+  committed). Verified on 2026-11-12:
+  `LICENSE.txt` 11357 bytes,
+  `8517178e5aab9335ca0c88d02efcba2f5d42bd894a5c4bedfdf8b99693110e88`;
+  `include/NGFX_GPUTrace_Vulkan.h`
+  `9e41c7afa01e7bf6599759d39562c2c92b8bef9e02d2e21eeece217c3b4704f5`;
+  `include/Impl/NGFX_Core.h`
+  `16f82f9749a1456376358e9f23e02bee8192618b9f0ae3cc09596b92d753bae1`.
+- Integration scope: `scripts/profile_lighting.py` discovers the installed SDK
+  and records its version/license; `game/Game.ProfileCapture.Nsight.cpp`
+  performs the official Vulkan activity initialization, activation on the
+  device queue obtained through `engine.rhi`'s native-object seam, trace start,
+  and nonblocking status/file-count/path polling. No NVIDIA type crosses a
+  module interface or an engine/simulation contract.
+
 Sources of dependency versions:
 
 - **vcpkg manifest** (`vcpkg.json`): `builtin-baseline`
@@ -60,6 +90,7 @@ Sources of dependency versions:
 | [FastNoiseLite](FastNoiseLite/README.md) | 1.1.1 @ `7ccfbc16…` | CPM pinned source + local patch | `engine.sim` worldgen noise |
 | [FreeType](FreeType/README.md) | 2.13.3 (port 0) | vcpkg registry port | opt-in M4 ImGui FreeType rasterizer evaluation |
 | [PB-MPM](PBMPM/README.md) | `main` @ `5a2f438` (v1.0.0) | reference source (not built) | `engine.matter` pinned Slang PB-MPM compute port |
+| NVIDIA Nsight Graphics SDK | 0.9.2 (installed with Nsight Graphics 2026.4) | optional profiling header dependency, discovered at configure time | `game.profile_capture` private adapter (`app.game`, profiling preset only) |
 
 Transitive second-order fetches (Slang-RHI's DXC, Agility SDK, NVAPI, Dawn,
 its own Vulkan-Headers copy, its own WinPixEventRuntime copy) are documented

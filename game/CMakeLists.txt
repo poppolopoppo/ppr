@@ -10,6 +10,28 @@ if(NOT PPR_GAME_SOURCE_IDENTITY)
     set(PPR_GAME_SOURCE_IDENTITY "unknown")
 endif()
 
+# Optional profiling-only Nsight Graphics SDK (Apache-2.0 headers). The
+# profiling preset forwards PPR_NSIGHT_GRAPHICS_SDK_ROOT from the caller's
+# environment; discovery is never a hard-coded installation path. When the
+# root is absent the profiler adapter compiles as an explicit unavailable
+# build: ordinary gameplay never initializes or calls a vendor SDK, and a
+# requested Graphics capture fails instead of substituting another tool.
+# Attribution and pin live in third_party/README.md.
+set(PPR_NSIGHT_GRAPHICS_SDK_ROOT "" CACHE PATH
+    "Nsight Graphics SDK root (the directory containing include/NGFX_GPUTrace_Vulkan.h)")
+# The profiling presets forward the caller's discovered installation as a hint.
+# A hint only seeds an empty cache, so a later configure without the environment
+# variable neither clears nor silently re-resolves an explicit SDK root.
+if(NOT PPR_NSIGHT_GRAPHICS_SDK_ROOT AND PPR_NSIGHT_GRAPHICS_SDK_HINT)
+    set(PPR_NSIGHT_GRAPHICS_SDK_ROOT "${PPR_NSIGHT_GRAPHICS_SDK_HINT}" CACHE PATH
+        "Nsight Graphics SDK root (the directory containing include/NGFX_GPUTrace_Vulkan.h)" FORCE)
+endif()
+set(PPR_HAS_NSIGHT_GRAPHICS_SDK OFF)
+if(PPR_NSIGHT_GRAPHICS_SDK_ROOT AND
+   EXISTS "${PPR_NSIGHT_GRAPHICS_SDK_ROOT}/include/NGFX_GPUTrace_Vulkan.h")
+    set(PPR_HAS_NSIGHT_GRAPHICS_SDK ON)
+endif()
+
 # Define the executable target
 add_executable(app.game main.cpp)
 target_compile_definitions(app.game PRIVATE PPR_GAME_SOURCE_IDENTITY="${PPR_GAME_SOURCE_IDENTITY}")
@@ -47,6 +69,7 @@ target_sources(app.game
             Game.Config.cppm
             Game.Display.cppm
             Game.DisplayExercise.cppm
+            Game.ProfileCapture.cppm
     PRIVATE
         ui/Game.UI.cpp
         ui/Game.UI.Model.cpp
@@ -93,6 +116,8 @@ target_sources(app.game
         Game.Config.cpp
         Game.Display.cpp
         Game.DisplayExercise.cpp
+        Game.ProfileCapture.cpp
+        Game.ProfileCapture.Nsight.cpp
     )
 
 setup_ppr_project(app.game
@@ -102,6 +127,14 @@ setup_ppr_project(app.game
 # Slice 4: driver-owned physics Scene + chunk colliders (explicit grant).
 # PRIVATE shape mirrors engine.tests.sim; box2d stays behind engine.physics.
 target_link_libraries(app.game PRIVATE engine.physics engine.matter)
+
+# Profiling-only SDK adapter: the private Nsight adapter is the only translation
+# unit that includes vendor headers; no vendor type crosses game-facing modules.
+target_compile_definitions(app.game PRIVATE PPR_HAS_NSIGHT_GRAPHICS_SDK=$<BOOL:${PPR_HAS_NSIGHT_GRAPHICS_SDK}>)
+if(PPR_HAS_NSIGHT_GRAPHICS_SDK)
+    target_include_directories(app.game SYSTEM PRIVATE "${PPR_NSIGHT_GRAPHICS_SDK_ROOT}/include")
+    target_link_libraries(app.game PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 # Always run on an explicit game build: data-only edits must reach deployment
 # without requiring a C++ relink, including removal of deleted source assets.
@@ -153,6 +186,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
                 Game.Config.cppm
                 Game.Display.cppm
                 Game.DisplayExercise.cppm
+                Game.ProfileCapture.cppm
                 Game.Tests.cppm
                 colony/Content.cppm
                 colony/Content.Authoring.cppm
@@ -183,6 +217,9 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
             Game.Display.cpp
             Game.DisplayExercise.cpp
             Game.DisplayExercise.Tests.cpp
+            Game.ProfileCapture.cpp
+            Game.ProfileCapture.Nsight.cpp
+            Game.ProfileCapture.Tests.cpp
             Game.WorldgenWorkshop.cpp
             Game.Tests.cpp
             Game.SessionService.cpp
@@ -247,6 +284,12 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
       INTERNAL_PUBLIC_DEPS engine.core engine.asset engine.app engine.math engine.sim engine.image engine.tests
     )
     target_link_libraries(game.tests PRIVATE engine.physics engine.matter)
+    target_compile_definitions(
+        game.tests PRIVATE PPR_HAS_NSIGHT_GRAPHICS_SDK=$<BOOL:${PPR_HAS_NSIGHT_GRAPHICS_SDK}>)
+    if(PPR_HAS_NSIGHT_GRAPHICS_SDK)
+        target_include_directories(game.tests SYSTEM PRIVATE "${PPR_NSIGHT_GRAPHICS_SDK_ROOT}/include")
+        target_link_libraries(game.tests PRIVATE ${CMAKE_DL_LIBS})
+    endif()
     add_dependencies(game.tests worldgen.assets)
     ppr_stage_assets(game.tests shaders lighting)
 

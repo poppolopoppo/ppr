@@ -188,3 +188,117 @@ only in markers, since their logging settings also differ.
 No universal event budget or duration threshold is imposed. A readable trace and
 acceptable measured cost for the workload establish useful coverage. The HAL
 no-fault test verifies callability, not trace quality or performance.
+
+## Maintained lighting capture (Nsight Systems and Graphics)
+
+`scripts/profile_lighting.py` is the maintained, bounded capture path for the
+ordinary Lighting Lab. It owns tool discovery, process supervision, artifact
+retention and offline normalization; it never requires GUI interaction and
+never changes GPU clocks.
+
+```text
+python3 scripts/profile_lighting.py discover [--json FILE] [--nsys PATH] [--ngfx PATH]
+python3 scripts/profile_lighting.py capture --tool systems|graphics --exe app.game \
+    --output FRESH_DIR [--workload frozen|live]
+python3 scripts/profile_lighting.py analyze --input CAPTURE_DIR --output ANALYSIS_DIR
+python3 scripts/profile_lighting.py compare --baseline ANALYSIS --candidate ANALYSIS --output OUT
+```
+
+`discover` reports executable paths/versions, GPU/driver/compute capability,
+the architecture-specific Graphics metric sets, the CLI capabilities it relies
+on, and installed Nsight Graphics SDKs with their license. Tool locations come
+from explicit arguments, `PPR_NSYS`/`PPR_NGFX`, `PATH`, or documented
+installation roots; no historical home-directory path is assumed.
+
+### Application contract
+
+`app.game --profile-capture=systems|graphics --profile-output=DIR
+--profile-workload=frozen|live` is a command-level selection: it conflicts with
+the display exercise and every other selector. It loads the ordinary Lighting
+Lab with the default overview camera, map1024/seed42, P1, 1280×720 logical
+window, manual EV0, bloom at its default values, sky12, diagnostics off,
+uncapped pacing and VSync off. These are explicit capture settings inside the
+fresh output directory (including its own `user-settings.toml`), not new user
+defaults and never the user's persisted picture file.
+
+`frozen` pauses through the ordinary driver pause at the world-admission hook,
+before the first simulation tick, and re-asserts that pause if a world
+transition restores a retained unpaused fact. `live` keeps normal simulation.
+Readiness needs **120 accepted fresh scene frames and 2.0 s of active
+presentation**; retained UI-only frames and rejected frames are excluded from
+both counts. Missing readiness within 180 s is an incomplete capture with
+retained logs, never a pass.
+
+`ready.json` is written atomically with the PID, world/publication identity,
+current tick, accepted lighting/screen frame indices, the actual camera and
+extents, the session token and the explicit settings list. `final-state.json`
+records the terminal status, tick/segment ranges, frozen-pause evidence, SDK
+status, finalized trace path and cleanup outcome. The supervisor writes
+`stop.request` with the published session token; a token mismatch is ignored.
+
+### Collection
+
+- **Systems**: `nsys launch --session-new=… --trace=vulkan,osrt
+  --vulkan-gpu-workload=individual`, wait for readiness, `nsys start`, collect
+  2 s, `nsys stop`, export SQLite, then the ordinary application quit. The
+  named session is owned by this capture only.
+- **Graphics**: `ngfx --activity="GPU Trace Profiler" --start-with-ngfx-sdk
+  --limit-to-frames=8 --max-duration-ms=2000 --set-gpu-clocks=unaltered
+  --auto-export …` with the discovered architecture and metric set (Turing
+  advertises `Throughput Metrics`; newer architectures advertise
+  `Top-Level Triage`). The application initializes/activates the installed SDK
+  on the device-owner lane after readiness, starts the trace, and polls status
+  and finalized trace paths without blocking the render loop.
+
+A machine-local lock (`$XDG_RUNTIME_DIR/ppr-lighting-profile.lock`) prevents
+interleaved builds, tests or captures. Bounds are 180 s readiness, 2 s
+collection, 120 s export/finalization and 480 s total; an interrupted capture
+requests graceful shutdown, terminates only the processes it owns, and retains
+partial native output.
+
+### Artifacts and analysis
+
+A capture directory holds `manifest.json`, application/profiler stdout/stderr,
+the command argv arrays, `ready.json`, `final-state.json`, the native report
+(`.nsys-rep` / `.ngfx-gputrace`), the untouched raw export (`systems.sqlite` /
+`graphics/<CLOCK_STATE>/*.xls`), `analysis.json` and `analysis.yaml`.
+`analyze` is offline and read-only; repeating it over the same export produces
+identical normalized numbers.
+
+The normalized analysis is `schema_version: 1` and independent of vendor
+formats: `identity`, `collection`, `ranges[]`, `metrics[]` and `validation`.
+CPU API-call duration is always labelled `cpu.api.*` with nanosecond units;
+GPU workload/submission windows are separate and are not claimed as per-pass
+GPU execution. Unsupported or not-collected metric families are `null` with a
+reason, never zero. Nested marker ranges carry `parent_id` and are never summed
+as independent work (interval unions are used for busy time). Vendor metric
+names, units and aggregation suffixes are retained verbatim.
+
+The pinned adapters validate the actual observed export schemas: Nsight Systems
+SQLite `EXPORT_SCHEMA_VERSION` 3.31.0 and the Nsight Graphics
+`REPRO_INFO`/`FRAME`/`GPUTRACE_FRAME`/`D3DPERF_EVENTS` tab-separated export. An
+unknown schema fails with an actionable error instead of parsing
+optimistically. Numeric parsing uses an explicitly recorded export locale
+(`point` by default); a decimal-comma export is accepted only when declared and
+an ambiguous form is rejected. Retained minimal real fixtures and their
+provenance are under `scripts/tests/fixtures/lighting-profile/`.
+
+`compare` refuses a like-for-like conclusion when source/binary identity,
+settings, camera, workload, backend, clocks or collection mode differ; it lists
+the differences and still emits a descriptive distribution comparison
+(count/min/median/max/mean) with the profiler-overhead caveat.
+
+### Known marker naming gap
+
+The capture validates the *observed* production RHI debug-group ranges. On this
+host the Lighting Lab emits `WorldLighting.Projection`, `.Visibility`, `.Jump`,
+`.Source`, `.Terminal`, `.Cascade`, `.Fine`, `.Status`, `Particles.*`,
+`scene.stage`, `scene.content`, `post.agx`, `post.present` and `ui.detached`
+(plus `ppr`). The design contract's exact names
+`WorldLighting.ResolveCells`, `WorldLighting.Cascade.L1..L5`,
+`WorldLighting.FineCH`, `Scene.Materials`, `Scene.Gas`, `Hable.Resolve`,
+`Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`, `Present.UI` and
+`PBMPM.Tick` are not all emitted, so the analysis reports them as missing and
+the overall validation is `incomplete`. Renaming/adding those pass ranges is a
+renderer change outside the profiling tooling and is tracked as an open gate,
+not hidden by an alias map.
