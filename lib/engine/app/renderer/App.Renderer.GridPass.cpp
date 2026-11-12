@@ -1943,9 +1943,11 @@ namespace pP {
         markPipelineUse_(**cached, m_tile_ring_cursor);
         rhi::ShaderCursor shader_cursor{root_object};
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        u32 availability{};
         PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false, &*m_cached_pipeline));
+            GridPass,
+            bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false, availability, &*m_cached_pipeline));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor, availability));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_world.m_cell_dummy.get(), makeFullRange(m_world.m_cell_dummy.get()))));
@@ -2112,9 +2114,11 @@ namespace pP {
         markPipelineUse_(**cached, m_tile_ring_cursor);
         rhi::ShaderCursor shader_cursor{root_object};
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor));
+        u32 availability{};
         PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false, &*m_cached_pipeline));
+            GridPass,
+            bindSurfaceBuffers_(draw_context.m_device, shader_cursor, false, availability, &*m_cached_pipeline));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor, availability));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, shader_cursor["g_visible_ids"].setBinding(
                           rhi::Binding(m_world.m_cell_dummy.get(), makeFullRange(m_world.m_cell_dummy.get()))));
@@ -3362,6 +3366,14 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::bindTerrainLightingForTest(
+        rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability) {
+        // The draw path always runs ensureSurfaceBuffers_ first; the fixture seam
+        // must own the same fallback lifetime before the no-ownership branches.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(device));
+        return bindTerrainLighting_(cursor, availability);
+    }
+
     void GridPass::notifyWorldLightingSubmitted(const FenceCompletionValue value) noexcept {
         if (m_world.m_lighting) {
             m_world.m_lighting->notifySubmitted(value);
@@ -3390,7 +3402,8 @@ namespace pP {
     }
 
     std::error_code GridPass::bindMaterialBuffers_(
-        rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table) {
+        rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table, u32 &availability) {
+        availability = 0u;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSurfaceBuffers_(device));
         const auto visuals = prepareTerrainVisuals_(device, 0u);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
@@ -3415,17 +3428,6 @@ namespace pP {
             // The world-lighting owner is the single supplier of resolved cells,
             // fine CH, source palette and thermal table.
             PPR_RETURN_ERROR_ON_FAIL(GridPass, bindWorldLighting(cursor));
-            // Base retirement (plan §3): the terrain fragment reads this attempt's
-            // committed winner grid. A stale or unavailable attempt is rejected by
-            // the binder and degrades to no retirement with the zero fallback; the
-            // frame's ownership bit is clear, so the shader never reads last
-            // attempt's winners. Real binding failures propagate.
-            const std::error_code ownership = m_world.m_lighting->bindTerrainOwnership(cursor);
-            if (ownership == std::errc::resource_unavailable_try_again) {
-                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
-            } else {
-                PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership);
-            }
         } else {
             if (m_test_resolved and m_test_fine_ch) {
                 auto *const resolved = m_test_resolved.get();
@@ -3443,11 +3445,6 @@ namespace pP {
                     GridPass, cursor["g_fine_ch"].setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
             }
 
-            // No committed particle-ownership grid exists here, so the terrain
-            // shader's ownership bit stays clear. Keep a valid binding in the
-            // root's layout; the shader never reads this fallback.
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
-
             // GridPass's admitted world owns the fallback source/thermal pair.
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, cursor["g_source_materials"].setBinding(
@@ -3456,6 +3453,12 @@ namespace pP {
                 GridPass,
                 cursor["g_thermal_lut"].setBinding(rhi::Binding(m_thermal_lut, makeFullRange(m_thermal_lut))));
         }
+
+        // Base retirement (plan §3): one authority derives the frame's ownership
+        // bit and performs the g_best_row binding, so the bit can never
+        // authorize a read of a fallback grid. A stale attempt therefore keeps
+        // the base and clears the bit instead of reading last attempt's winners.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindTerrainLighting_(cursor, availability));
 
         rhi::IBuffer *const descriptors = m_world.m_texture_inventory->m_cache->descriptorBuffer();
         PPR_RETURN_ERROR_ON_FAIL(
@@ -3497,9 +3500,52 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability) {
+        availability = 0u;
+        // Assume the fallback until the current attempt's committed grid is
+        // actually bound; the frame's ownership bit is derived from this result.
+        m_terrain_ownership_fallback_used = true;
+
+        const bool published = m_world.m_lighting and
+                               m_world.m_lighting->hasPublishedCells() and
+                               m_world.m_world_edge == WorldLightingPass::kWorldEdge;
+        const bool resolved = (m_test_resolved and m_test_fine_ch) or published;
+        if (not resolved) {
+            // No categorical publication: no ownership source either. Keep a
+            // static binding valid where the root declares the field; the
+            // shader's ownership bit stays clear.
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+            return {};
+        }
+
+        availability = kFrameHasResolvedCells;
+        if (published) {
+            bool ownership_bound = false;
+            const std::error_code ownership = m_world.m_lighting->bindTerrainOwnership(cursor, ownership_bound);
+            if (ownership == std::errc::resource_unavailable_try_again) {
+                // A stale or unavailable attempt never authorizes a read of the
+                // committed grid; keep the zero fallback and the bit clear.
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+                return {};
+            }
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership);
+
+            if (ownership_bound) {
+                availability |= kFrameHasParticleOwnership;
+                m_terrain_ownership_fallback_used = false;
+            }
+            return {};
+        }
+
+        // A fixture publication has no committed particle attempt, so no cell is
+        // particle-owned and the bit stays clear.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+        return {};
+    }
+
     std::error_code GridPass::bindSurfaceBuffers_(
-        rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table, GridCachedPipeline *const pipeline,
-        const std::optional<u32> owner_slot) {
+        rhi::IDevice &device, rhi::ShaderCursor &cursor, const bool retained_table, u32 &availability,
+        GridCachedPipeline *const pipeline, const std::optional<u32> owner_slot) {
         const u32 slot = owner_slot.value_or(m_tile_ring_cursor);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, slot < kTileRingSize ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
@@ -3514,7 +3560,7 @@ namespace pP {
                 owners.push_back(view);
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(device, cursor, retained_table));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindMaterialBuffers_(device, cursor, retained_table, availability));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u));
 
         if (pipeline) {
@@ -3730,26 +3776,6 @@ namespace pP {
         return {};
     }
 
-    // Mirror of the availability bits documented on g_grid_frame's
-    // m_has_resolved_cells in grid_tiles.slang: bit 0 is the categorical
-    // publication, bit 1 the committed particle-ownership grid that this
-    // submission's projection attempt wrote.
-    static constexpr u32 kGridFrameHasResolvedCells{1u};
-    static constexpr u32 kGridFrameHasParticleOwnership{2u};
-
-    u32 GridPass::lightingAvailability_() const noexcept {
-        const bool resolved = (m_test_resolved and m_test_fine_ch) or
-                              (m_world.m_lighting and
-                                  m_world.m_lighting->hasPublishedCells() and
-                                  m_world.m_world_edge == WorldLightingPass::kWorldEdge);
-        u32 flags = resolved ? kGridFrameHasResolvedCells : 0u;
-        if (resolved and m_world.m_lighting and m_world.m_lighting->ownershipAvailable()) {
-            flags |= kGridFrameHasParticleOwnership;
-        }
-
-        return flags;
-    }
-
     std::error_code GridPass::encodeTerrainIndirect_(
         const DrawContext &context, GridCachedPipeline &pipeline, rhi::IQueryPool *const queries, const u32 first_query,
         const u32 pass) {
@@ -3773,7 +3799,13 @@ namespace pP {
         frame.m_camera_forward_y = m_camera_view.m_forward.y;
         frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
-        frame.m_has_resolved_cells = lightingAvailability_();
+        // Bind the material set first: that call is the single authority for the
+        // frame's availability word and derives its ownership bit from the
+        // actual g_best_row binding outcome.
+        u32 availability{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, bindSurfaceBuffers_(context.m_device, cursor, true, availability, &pipeline));
+        frame.m_has_resolved_cells = availability;
         fillOpticalFrame_(frame);
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, pipeline.m_slot_frame_cursors[m_tile_ring_cursor].setData(&frame, sizeof(frame)));
@@ -3787,7 +3819,6 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_cell_materials"].setBinding(rhi::Binding(cells, makeFullRange(cells))));
         pipeline.m_slot_atlases[m_tile_ring_cursor] = cells == m_world.m_cell_atlas.get() ? cells : nullptr;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindSurfaceBuffers_(context.m_device, cursor, true, &pipeline));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, pass));
 
         rhi::RenderState raster{
@@ -3816,7 +3847,7 @@ namespace pP {
         return {};
     }
 
-    std::error_code GridPass::uploadFrameConstants_(rhi::ShaderCursor &frame_cursor) {
+    std::error_code GridPass::uploadFrameConstants_(rhi::ShaderCursor &frame_cursor, const u32 availability) {
         GridFrame frame{};
         frame.m_view_projection = m_camera_view.m_view_projection;
         frame.m_cell_size_m = m_world.m_cell_size_m;
@@ -3834,7 +3865,7 @@ namespace pP {
         frame.m_camera_forward_y = m_camera_view.m_forward.y;
         frame.m_camera_forward_z = m_camera_view.m_forward.z;
         frame.m_camera_ortho = m_camera_view.m_camera_mode == ECameraProjection::orthographic ? 1u : 0u;
-        frame.m_has_resolved_cells = lightingAvailability_();
+        frame.m_has_resolved_cells = availability;
         fillOpticalFrame_(frame);
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_cursor.setData(&frame, sizeof(GridFrame)));

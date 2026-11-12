@@ -558,8 +558,21 @@ export namespace pP {
             float m_camera_forward_y{};
             float m_camera_forward_z{};
             u32 m_camera_ortho{};
+            // Availability word for the categorical publication, mirrored by
+            // `g_grid_frame.m_has_resolved_cells` in grid_tiles.slang. Bit 0:
+            // the resolved-cell and fine-CH publication is bound. Bit 1: the
+            // committed particle-ownership grid (`g_best_row`) written by that
+            // same projection attempt is bound, so the terrain fragment may
+            // retire particle-owned cells. Bit 1 is never set without bit 0 and
+            // never while the zero fallback is bound.
             u32 m_has_resolved_cells{};
         };
+
+        // Shared two-bit availability word, mirrored by the shader's
+        // `m_has_resolved_cells` field. Bit 1 requires the same attempt's grid:
+        // it is derived from the actual `g_best_row` binding outcome.
+        static constexpr u32 kFrameHasResolvedCells{1u};
+        static constexpr u32 kFrameHasParticleOwnership{2u};
 
         static_assert(sizeof(GridFrame) == 336u);
         static_assert(alignof(GridFrame) == 16u);
@@ -734,6 +747,20 @@ export namespace pP {
         // until shutdown/device loss. Production never calls these.
         [[nodiscard]] std::error_code setLightingBuffersForTest(
             rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch);
+
+        // Tests-only: runs the same terrain ownership authority the draw path
+        // uses (bit derivation + `g_best_row` binding) and reports the
+        // availability word the terrain frame would carry. `availability` bit 1
+        // is set only when the current attempt's committed grid was actually
+        // bound; the zero fallback leaves it clear.
+        [[nodiscard]] std::error_code bindTerrainLightingForTest(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
+
+        // Tests-only: true when the last terrain ownership authority call bound
+        // the zero fallback instead of the current attempt's committed grid.
+        [[nodiscard]] bool terrainOwnershipFallbackUsedForTest() const noexcept {
+            return m_terrain_ownership_fallback_used;
+        }
 
         // Test-only ownership observations for the terrain staging lifetime.
         [[nodiscard]] rhi::IBuffer *terrainStagingForTest() const noexcept {
@@ -937,9 +964,9 @@ export namespace pP {
         std::error_code ensureVisibilityBuffers_(rhi::IDevice &device);
         std::error_code ensureSurfaceBuffers_(rhi::IDevice &device);
         [[nodiscard]] std::error_code bindMaterialBuffers_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table);
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table, u32 &availability);
         std::error_code bindSurfaceBuffers_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table,
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, bool retained_table, u32 &availability,
             GridCachedPipeline *pipeline = nullptr, std::optional<u32> owner_slot = {});
         [[nodiscard]] Expected<bool> prepareTerrainVisuals_(rhi::IDevice &device, u32 image_budget);
         [[nodiscard]] std::error_code ensureTerrainSampler_(rhi::IDevice &device);
@@ -1111,10 +1138,12 @@ export namespace pP {
         [[nodiscard]] std::error_code bindGridPass_(
             rhi::ShaderCursor &cursor, u32 pass, EGridParticleDrawClass particle_class = EGridParticleDrawClass::gas);
 
-        // Availability word mirrored by g_grid_frame.m_has_resolved_cells: bit 0
-        // is the categorical publication, bit 1 the committed particle-ownership
-        // grid bound for this submission's projection attempt.
-        [[nodiscard]] u32 lightingAvailability_() const noexcept;
+        // One authority for the terrain availability word and its g_best_row
+        // binding: bit 0 is the categorical publication, bit 1 is set only when
+        // this call actually bound the current attempt's committed grid. A stale
+        // attempt, a fixture publication or no publication binds the zero
+        // fallback and leaves bit 1 clear.
+        [[nodiscard]] std::error_code bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability);
 
         // Reclaims deferred pipelines/roots at or below `completed`.
         void reclaimCompleted_(FenceCompletionValue completed) noexcept;
@@ -1123,7 +1152,7 @@ export namespace pP {
         // stale. Records m_last_used_slot for notifyFrameSubmitted.
         [[nodiscard]] std::error_code selectSlot_(FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
 
-        [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor);
+        [[nodiscard]] std::error_code uploadFrameConstants_(rhi::ShaderCursor &frame_cursor, u32 availability);
 
         [[nodiscard]] std::error_code ensureTilePayloads_(
             rhi::IDevice &device, u32 tile_count, FenceCompletionValue completed, FenceWaitHook &wait_for_fence);
@@ -1249,6 +1278,10 @@ export namespace pP {
 
         rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
+        // Last terrain ownership authority outcome: true when it bound the zero
+        // fallback and therefore left the frame ownership bit clear. Tests-only
+        // observation.
+        bool m_terrain_ownership_fallback_used{true};
 
 
         rhi::ComPtr<rhi::IBuffer> m_contour_points{};

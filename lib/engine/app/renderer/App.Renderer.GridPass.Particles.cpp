@@ -996,19 +996,23 @@ namespace pP {
 
         auto *const root = (*pipeline)->m_slot_roots[particle_slot].get();
         rhi::ShaderCursor cursor{root};
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_((*pipeline)->m_slot_frame_cursors[particle_slot]));
+        // The full surface set the descriptions need: g_terrain_visuals,
+        // g_source_materials, g_textures/g_sampler, g_brdf_lut/g_brdf_sampler,
+        // g_resolved_cells/g_fine_ch and g_backdrop. A missing binding fails
+        // here rather than shading from a default. Binding first also derives
+        // the frame availability word from the actual terrain-ownership binding
+        // outcome for this submission.
+        u32 availability{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, bindSurfaceBuffers_(
+                          context.m_device, cursor, m_surface_retained_table, availability, *pipeline, particle_slot));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, uploadFrameConstants_((*pipeline)->m_slot_frame_cursors[particle_slot], availability));
         // Billboard directions and centers must use the same current snapshot,
         // including worlds whose background preparation returns early.
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, (*pipeline)->m_slot_frame_cursors[particle_slot]["m_inverse_view_projection"].setData(
                           &m_camera_view.m_invert_view_projection, sizeof(m_camera_view.m_invert_view_projection)));
-        // The full surface set the descriptions need: g_terrain_visuals,
-        // g_source_materials, g_textures/g_sampler, g_brdf_lut/g_brdf_sampler,
-        // g_resolved_cells/g_fine_ch and g_backdrop. A missing binding fails
-        // here rather than shading from a default.
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass,
-            bindSurfaceBuffers_(context.m_device, cursor, m_surface_retained_table, *pipeline, particle_slot));
         // The class is this draw's constant; bindSurfaceBuffers_ wrote the
         // terrain pass selector in the same buffer, so set both together.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u, draw_class));

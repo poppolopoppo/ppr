@@ -1802,8 +1802,21 @@ namespace pP::tests::detail::WorldLightingProjection {
         rhi::ShaderCursor ownership_cursor{ownership_root};
 
         // The first attempt is submitted and collected, so its scratch winner
-        // grid is no longer this submission's output. The binder rejects it.
-        PPR_TEST_ASSERT(pass->bindTerrainOwnership(ownership_cursor) == std::errc::resource_unavailable_try_again);
+        // grid is no longer this submission's output. The predicate, the derived
+        // availability word and the binder must all agree that no read is
+        // authorized, and the zero fallback is the binding that remains.
+        PPR_TEST_ASSERT(not pass->ownershipAvailableForTest());
+        bool stale_ownership_bound = true;
+        PPR_TEST_ASSERT(
+            pass->bindTerrainOwnership(ownership_cursor, stale_ownership_bound) ==
+            std::errc::resource_unavailable_try_again);
+        PPR_TEST_ASSERT(not stale_ownership_bound);
+
+        u32 stale_availability = 0xffff'ffffu;
+        PPR_TEST_ASSERT(not grid.bindTerrainLightingForTest(fixture.device(), ownership_cursor, stale_availability));
+        PPR_TEST_ASSERT((stale_availability & GridPass::kFrameHasResolvedCells) != 0u);
+        PPR_TEST_ASSERT((stale_availability & GridPass::kFrameHasParticleOwnership) == 0u);
+        PPR_TEST_ASSERT(grid.terrainOwnershipFallbackUsedForTest());
 
         const std::array<u32, 4u> ownership_cells{
             cellIndex(60u, 60u), cellIndex(40u, 40u), cellIndex(30u, 30u), cellIndex(0u, 0u)};
@@ -1829,11 +1842,22 @@ namespace pP::tests::detail::WorldLightingProjection {
 
         {
             // A current attempt: the probe dispatch follows the projection in
-            // this submission, and the binder reads this attempt's grid.
+            // this submission, and the one availability authority binds this
+            // attempt's grid and sets the ownership bit.
             auto ownership_encoder = makeEncoder(fixture);
             PreRenderContext context{fixture.device(), *ownership_encoder, 1u, {}};
             PPR_TEST_ASSERT(not grid.prepareWorldLighting(context, WorldLightingFrame{}));
-            PPR_TEST_ASSERT(not pass->bindTerrainOwnership(ownership_cursor));
+            PPR_TEST_ASSERT(pass->ownershipAvailableForTest());
+            bool ownership_bound = false;
+            PPR_TEST_ASSERT(not pass->bindTerrainOwnership(ownership_cursor, ownership_bound));
+            PPR_TEST_ASSERT(ownership_bound);
+
+            u32 availability = 0u;
+            PPR_TEST_ASSERT(not grid.bindTerrainLightingForTest(fixture.device(), ownership_cursor, availability));
+            PPR_TEST_ASSERT((availability & GridPass::kFrameHasResolvedCells) != 0u);
+            PPR_TEST_ASSERT((availability & GridPass::kFrameHasParticleOwnership) != 0u);
+            PPR_TEST_ASSERT(not grid.terrainOwnershipFallbackUsedForTest());
+
             auto *const resolved = pass->resolvedCellsForTest();
             PPR_TEST_ASSERT(
                 not make_error_code(ownership_cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved))));

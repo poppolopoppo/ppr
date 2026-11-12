@@ -39,10 +39,11 @@ struct GridFrame {
     float m_camera_forward_z;
     uint m_camera_ortho;
     // Availability bits for the categorical publication. Bit 0 is the resolved
-    // cell and fine-CH publication this terrain pass shades from; bit 1 is the
-    // committed particle-ownership grid (g_best_row) bound for this submission's
-    // projection attempt. Consumers that only need the categorical publication
-    // test the word as nonzero.
+    // cell and fine-CH publication this terrain pass shades from. Bit 1 is the
+    // committed particle-ownership grid (g_best_row) bound for that same
+    // submission's projection attempt; it is never set while the zero fallback
+    // is bound, so it alone authorizes reading the 1-Mi-cell grid. Consumers
+    // that only need the categorical publication test the word as nonzero.
     uint m_has_resolved_cells;
 };
 static const uint kGridFrameHasResolvedCells = 1u;

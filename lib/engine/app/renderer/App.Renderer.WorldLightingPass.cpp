@@ -815,7 +815,8 @@ namespace pP {
         return {};
     }
 
-    std::error_code WorldLightingPass::bindTerrainOwnership(rhi::ShaderCursor &cursor) const {
+    std::error_code WorldLightingPass::bindTerrainOwnership(rhi::ShaderCursor &cursor, bool &ownership_bound) const {
+        ownership_bound = false;
         // The terrain fragment is the only production reader; particle roots and
         // other material consumers keep the same shared module without
         // referencing the field, so they succeed without a binding.
@@ -839,6 +840,7 @@ namespace pP {
         rhi::IBuffer *const best_row = m_resources->m_scratch[1u].get();
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightingPass, ownership.setBinding(rhi::Binding(best_row, projectionRange(best_row))));
+        ownership_bound = true;
         return {};
     }
 
