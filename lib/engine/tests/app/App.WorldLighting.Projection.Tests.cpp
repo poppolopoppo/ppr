@@ -187,8 +187,10 @@ namespace pP::tests::detail::WorldLightingProjection {
 
         // Publishes exactly the committed GPU state the projection consumes:
         // stable-ID-ordered metadata, hot64/cold24 numerical rows under the
-        // published origin, and the full-domain packed terrain words.
-        void publish(Fixture &fixture, const std::span<const ParticleSpec> specs) {
+        // published origin, and the full-domain packed terrain words. `cell_metres`
+        // is the published native cell edge; the presentation row must convert the
+        // committed cell coordinates through it.
+        void publish(Fixture &fixture, const std::span<const ParticleSpec> specs, const double cell_metres = 1.0) {
             rhi::IDevice &device = fixture.device();
 
             m_rows.clear();
@@ -228,7 +230,8 @@ namespace pP::tests::detail::WorldLightingProjection {
                 cold[spec.m_source_row].m_fields[1] = std::numbers::pi_v<float>;
             }
 
-            const auto metadata = prepareGridParticleMetadata(device, m_rows, moving_count, 1.0, ++m_publication);
+            const auto metadata = prepareGridParticleMetadata(
+                device, m_rows, moving_count, cell_metres, ++m_publication);
             PPR_TEST_ASSERT(metadata.has_value());
 
             m_numerical = makeShaderBuffer(device, hot.size() * sizeof(HotRow), sizeof(HotRow), hot.data());
@@ -1308,6 +1311,16 @@ namespace pP::tests::detail::WorldLightingProjection {
     // packed particle presentation row
     // ------------------------------------------------------------------
 
+    // One authored palette entry; `rgba` is the presentation tint source and the
+    // flags carry the phase/optics class bits the packer reads at byte 76.
+    [[nodiscard]] GridTerrainVisual gridVisual(const u32 material, const u32 rgba, const u32 flags) noexcept {
+        GridTerrainVisual visual{};
+        visual.m_material_id = material;
+        visual.m_color_rgba = rgba;
+        visual.m_surface_flags = flags;
+        return visual;
+    }
+
     // Authored palette tint in the row's r/g/b byte order (low byte is alpha).
     [[nodiscard]] float3 paletteTint(const u32 rgba) noexcept {
         return float3{
@@ -1384,18 +1397,11 @@ namespace pP::tests::detail::WorldLightingProjection {
         };
         scene.publish(fixture, specs);
 
-        const auto makeVisual = [](const u32 material, const u32 rgba, const u32 flags) {
-            GridTerrainVisual visual{};
-            visual.m_material_id = material;
-            visual.m_color_rgba = rgba;
-            visual.m_surface_flags = flags;
-            return visual;
-        };
         const std::array visuals{
-            makeVisual(kOpaque, 0xff8040ffu, 0u),
-            makeVisual(kReceiveOnly, 0x204080ffu, kGridSurfaceOpticalBlend),
-            makeVisual(kEmissiveLiquid, 0x40a0c0ffu, kGridSurfaceParticleLiquid),
-            makeVisual(kOverRangeMaterial, 0xffffffffu, 0u),
+            gridVisual(kOpaque, 0xff8040ffu, 0u),
+            gridVisual(kReceiveOnly, 0x204080ffu, kGridSurfaceOpticalBlend),
+            gridVisual(kEmissiveLiquid, 0x40a0c0ffu, kGridSurfaceParticleLiquid),
+            gridVisual(kOverRangeMaterial, 0xffffffffu, 0u),
         };
 
         GridPass grid;
@@ -1519,6 +1525,99 @@ namespace pP::tests::detail::WorldLightingProjection {
                 ::pP::details::decodeHalf(rows[0u].m_motion[0u]), ::pP::details::decodeHalf(rows[0u].m_motion[1u])));
     };
 
+    PPR_UNIT_TEST (packed_presentation_row_pins_world_metres_at_the_production_cell_size) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        // 1/3 m is the production cell, and it is the case where a cell-space
+        // packer and a metres-space packer disagree: hot 3.5 cells is 0.5 native
+        // cells past the origin, so the row must hold 0.5 * cell_metres metres and
+        // a physical radius of cell_metres * sqrt(V/pi) metres. A packer that
+        // stored cells, or dropped the cell scale, would write 0.5 and 1.0.
+        // Published as the binary64 1/3 the metadata admission accepts; the pack
+        // shader receives its binary32 rounding.
+        constexpr double kCellMetresPublished = 1.0 / 3.0;
+        constexpr float kCellMetres = 1.0f / 3.0f;
+        constexpr float kMotionCells = 0.5f;
+
+        Scene scene;
+        const std::array specs{
+            ParticleSpec{
+                .m_id = 1u,
+                .m_source_row = 0u,
+                .m_material = kOpaque,
+                .m_x = 3.5f,
+                .m_y = 3.0f,
+                .m_displacement_x = kMotionCells},
+        };
+        scene.publish(fixture, specs, kCellMetresPublished);
+
+        const std::array visuals{gridVisual(kOpaque, 0xff8040ffu, 0u)};
+
+        GridPass grid;
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not grid.shutdown());
+        };
+
+        GridPass::GridStagedFrame stage{};
+        stage.m_world_edge = kEdge;
+        stage.m_cell_size_m = kCellMetres;
+        stage.m_terrain_visuals.assign(visuals.begin(), visuals.end());
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = GridTileRange{0, 0, 128, 128}, .m_chunk_id = 0u});
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+
+        auto view = scene.m_inputs.m_particles;
+        view.m_world = grid.activeWorldIdentity();
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_ortho_scale = 2048.0f;
+        Camera camera;
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{int2{0, 0}, int2{256, 256}}, ViewportLayout{}});
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera.getSnapshot()));
+
+        {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            PPR_TEST_ASSERT(not grid.prepareGpuParticles(context));
+            submit(fixture, *encoder);
+        }
+
+        const auto buffers = grid.particleBuffersForTest();
+        PPR_TEST_ASSERT(buffers[0] != nullptr and buffers[1] != nullptr and buffers[2] != nullptr);
+        std::array<ParticleGpu, specs.size()> rows{};
+        PPR_TEST_ASSERT(not make_error_code(
+            fixture.device().readBuffer(buffers[0], 0u, rows.size() * sizeof(ParticleGpu), rows.data())));
+        std::array<u32, 4u> args{};
+        PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(buffers[1], 0u, sizeof(args), args.data())));
+        PPR_TEST_ASSERT(args[1u] == 1u);
+
+        // 0.5 native cells at the 1/3 m cell edge. The shader and this expectation
+        // perform the same single binary32 multiply, so the comparison is exact.
+        const float expected_x = 0.5f * kCellMetres;
+        PPR_TEST_ASSERT(rows[0u].m_position[0u] == expected_x);
+        PPR_TEST_ASSERT(rows[0u].m_position[1u] == 0.0f);
+        // Cold volume is pi cells^2, so the physical radius is h*sqrt(pi/pi) = h
+        // metres. A cell-space radius would have stored 1.0.
+        PPR_TEST_ASSERT(std::abs(rows[0u].m_radius_m - kCellMetres) <= 1.0e-7f);
+        PPR_TEST_ASSERT(rows[0u].m_position[0u] < 0.25f and rows[0u].m_radius_m < 0.5f);
+        // The motion proxy stays in native cells per solver step: no cell scale.
+        PPR_TEST_ASSERT(motionMatches(rows[0u].m_motion[0u], kMotionCells));
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_PROJECTION presentation_row_cell_sizes metres=({:.6f},{:.6f}) radius={:.6f} "
+                "motion={:.5f} cell={:.6f}",
+                rows[0u].m_position[0u], rows[0u].m_position[1u], rows[0u].m_radius_m,
+                ::pP::details::decodeHalf(rows[0u].m_motion[0u]), kCellMetres));
+    };
+
     // ------------------------------------------------------------------
     // C-stage inspection reader fences
     // ------------------------------------------------------------------
@@ -1585,6 +1684,7 @@ namespace pP::tests {
                 detail::WorldLightingProjection::reflected_projection_records_match_the_cpu_shapes,
                 detail::WorldLightingProjection::grid_pass_owns_the_projection_and_binds_resolved_cells,
                 detail::WorldLightingProjection::packed_presentation_row_quantises_and_filters_rows,
+                detail::WorldLightingProjection::packed_presentation_row_pins_world_metres_at_the_production_cell_size,
                 detail::WorldLightingProjection::inspection_read_extends_only_the_decoded_attempt,
             });
         };

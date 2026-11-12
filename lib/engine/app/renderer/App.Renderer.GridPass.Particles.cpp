@@ -70,6 +70,7 @@ namespace pP {
         auto metadata = std::make_shared<GridParticleMetadataResource>();
         Array<u8> seen(moving_count, u8{});
         u64 prior_id{};
+        u32 unrepresentable_materials{};
         for (const auto &row: rows) {
             const u64 id = (static_cast<u64>(row.m_id_high) << 32u) | row.m_id_low;
             const bool gas = row.m_source_row == 0xffff'ffffu;
@@ -78,7 +79,11 @@ namespace pP {
             // id at or above kGridParticleMaterialLimit cannot be represented. The
             // publication is admitted unchanged (the palette still addresses 16
             // bits) and the pack shader rejects such a row instead of truncating
-            // it into a different valid material.
+            // it into a different valid material; it is counted here so the
+            // rejection is observable at the host boundary.
+            if (material >= kGridParticleMaterialLimit) {
+                ++unrepresentable_materials;
+            }
             PPR_RETURN_UNEXPECTED_ON_FAIL(
                 GridPass, id > prior_id and
                                   material > 0u and
@@ -117,6 +122,18 @@ namespace pP {
             GridPass, std::ranges::all_of(seen, [](const u8 value) { return value == 1u; })
                           ? std::error_code{}
                           : std::make_error_code(std::errc::invalid_argument));
+
+        // The pack shader is the last line of defence and writes an all-zero row
+        // for such a material, which the compaction then excludes. Report it once
+        // per publication from the host that already sees every row, so a rejected
+        // instance is observable without a GPU counter, readback or per-row spam.
+        if (unrepresentable_materials != 0u) {
+            PPR_LOG(
+                GridPass, warning,
+                "particle publication carries materials outside the 12-bit presentation domain; those rows are "
+                "rejected by the packer",
+                {{"rows", unrepresentable_materials}, {"material_limit", kGridParticleMaterialLimit}});
+        }
 
         std::ranges::sort(metadata->m_materials);
         const auto unique = std::ranges::unique(metadata->m_materials);
@@ -212,9 +229,14 @@ namespace pP {
         const double volume_unit = cell * cell * static_cast<double>(m_world.m_reference_thickness_m);
         for (u32 row = 0u; row < seeds.size(); ++row) {
             const auto &seed = *seeds[row];
-            // Admission (renderer-owned) material ids must fit the row's 12-bit
-            // field; a solver publication is checked by the pack shader instead.
-            PPR_ASSERT(seed.m_material_id < kGridParticleMaterialLimit);
+            // The presentation row carries the material in 12 bits. A seed outside
+            // that domain cannot be represented and is rejected here, before any
+            // write, instead of being truncated into a different valid material.
+            // (A solver publication is checked the same way by the pack shader.)
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, seed.m_material_id < kGridParticleMaterialLimit
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
             // Admission seed coordinates in native cells; the published hot row
             // supersedes them as soon as a solver view exists.
             hot[row].m_fields[0u] = static_cast<float>(seed.m_position_x_m / cell + 3.0);
@@ -233,6 +255,8 @@ namespace pP {
             rows[row].m_id_low = static_cast<u32>(seed.m_id);
             rows[row].m_id_high = static_cast<u32>(seed.m_id >> 32u);
             rows[row].m_source_row = row;
+            // Lossless: the 12-bit domain was admitted above, so the u16 parameter
+            // of the canonical cell codec cannot truncate.
             const auto packed = lighting::packCell(static_cast<u16>(seed.m_material_id), seed.m_temperature_k);
             PPR_RETURN_ERROR_ON_FAIL(GridPass, packed);
             rows[row].m_material_temperature = *packed;
