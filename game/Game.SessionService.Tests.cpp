@@ -10,6 +10,7 @@ import game.colony.agents;
 import game.colony.buildings;
 import game.colony.driver;
 import game.colony.matter;
+import game.colony.metric;
 import game.colony.panel;
 import game.colony.pathfinding;
 import game.colony.tools;
@@ -806,6 +807,55 @@ namespace pP::game::tests::detail {
         return found;
     }
 
+    /// Authored world plus one liquid particle seeded in a vacuum tile near the
+    /// spawn. The restored driver owns that snapshot as its CPU matter inventory.
+    struct ParticleSeed {
+        std::optional<colony::PreparedWorld> m_world{};
+        sim::MatterParticleSnapshot m_particles{};
+        sim::GlobalCellPos m_tile{};
+        sim::GlobalCellPos m_cell{};
+    };
+
+    [[nodiscard]] std::error_code prepareParticleWorld(
+        const colony::test_fixture::AuthoredFixture &authored, ParticleSeed &seed) {
+        auto world = authored.prepare(17u, 31u);
+        PPR_RETURN_ERROR_ON_FAIL(SessionWaitFixture, world);
+
+        const auto &start = world->generated().m_start;
+        const auto tile = findVacuumFootprint(
+            world->grid(), static_cast<float>(start.m_spawn_x_m), static_cast<float>(start.m_spawn_y_m), 3u);
+        PPR_RETURN_ERROR_ON_FAIL(
+            SessionWaitFixture,
+            tile.has_value() ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+
+        const auto *const water = world->catalog().findMaterial("water");
+        PPR_RETURN_ERROR_ON_FAIL(
+            SessionWaitFixture,
+            water != nullptr ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+
+        seed.m_tile = tile->m_min;
+        seed.m_cell = {tile->m_min.m_x + 1u, tile->m_min.m_y + 1u};
+        const double x_m = (static_cast<double>(seed.m_cell.m_x) + 0.5) * colony::kFineCellMetres;
+        const double y_m = (static_cast<double>(seed.m_cell.m_y) + 0.5) * colony::kFineCellMetres;
+        Array<sim::MatterParticle> rows;
+        rows.push_back(
+            {.m_id = 1u,
+                .m_x_m = x_m,
+                .m_y_m = y_m,
+                .m_volume_m3 = 0.1,
+                .m_mass_kg = 0.1,
+                .m_temperature_k = 293.0,
+                .m_bulk_density_kg_m3 = 1.0,
+                .m_material = water->m_numeric_id,
+                .m_phase = sim::EGenerationMatter::liquid});
+
+        seed.m_particles.m_next_id = 2u;
+        seed.m_particles.m_chunks.push_back(
+            {sim::chunkOf(seed.m_cell), std::make_shared<const Array<sim::MatterParticle>>(std::move(rows))});
+        seed.m_world = std::move(*world);
+        return {};
+    }
+
     PPR_UNIT_TEST (permanently_rejected_build_order_is_not_retained) {
         colony::test_fixture::AuthoredFixture authored;
         colony::ColonyDriver driver;
@@ -1007,6 +1057,66 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(driver.errandCount() == errands);
     };
 
+    PPR_UNIT_TEST (build_orders_reject_a_footprint_that_covers_a_particle) {
+        colony::test_fixture::AuthoredFixture authored{true};
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+
+        ParticleSeed seed;
+        PPR_TEST_ASSERT(not prepareParticleWorld(authored, seed));
+        PPR_TEST_ASSERT(seed.m_world.has_value());
+
+        constexpr colony::ColonyDriverDesc desc{
+            .m_seed = 17u,
+            .m_tick_hz = 60u,
+            .m_agent_count = 1u,
+            .m_world_generation = 31u,
+            .m_world_edge = sim::kWorldEdge};
+        sim::Registry registry;
+        PPR_TEST_ASSERT(not colony::registerColonyComponents(registry));
+        const auto snapshot = sim::captureFull(seed.m_world->grid(), registry, desc.m_seed);
+        PPR_TEST_ASSERT(snapshot.has_value());
+
+        auto matter = colony::makeMatterState(
+            seed.m_particles, colony::kFineCellMetres, colony::kReferenceThicknessMetres, colony::kMatterGravityY,
+            desc.m_world_generation, seed.m_world->grid().edge());
+        PPR_TEST_ASSERT(matter.has_value());
+        matter->m_identity.m_terrain_revision = 1u;
+
+        PPR_TEST_ASSERT(not driver.initRestored(
+            desc, std::move(*seed.m_world), *snapshot, seed.m_particles, std::move(*matter), 0u, false, std::nullopt));
+        const u64 world = driver.worldGeneration();
+        const auto errands = driver.errandCount();
+
+        // The particle's native cell lies in the lamp footprint: a permanent,
+        // non-busy rejection that records nothing and never defers a terrain
+        // edit on a later frame.
+        const SessionBuildOrder lamp_order{
+            world, {.m_min = seed.m_cell, .m_width = 1u, .m_height = 1u}, colony::EColonyTool::build_lamp};
+        const auto lamp = applySessionBuildOrder(driver, lamp_order, world);
+        PPR_TEST_ASSERT(not lamp and lamp.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
+        PPR_TEST_ASSERT(not driver.takeEditRejection());
+
+        // Repeating the order keeps the same one-shot verdict instead of
+        // becoming a retryable busy.
+        const auto repeated = applySessionBuildOrder(driver, lamp_order, world);
+        PPR_TEST_ASSERT(not repeated and repeated.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
+        PPR_TEST_ASSERT(not driver.takeEditRejection());
+
+        // Walls share the clearance rule.
+        const SessionBuildOrder wall_order{
+            world, {.m_min = seed.m_tile, .m_width = 3u, .m_height = 3u, .m_element = driver.boundaryMaterial()},
+            colony::EColonyTool::build_wall};
+        const auto wall = applySessionBuildOrder(driver, wall_order, world);
+        PPR_TEST_ASSERT(not wall and wall.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
+        PPR_TEST_ASSERT(not driver.takeEditRejection());
+    };
+
     PPR_UNIT_TEST (stuck_transient_busy_is_dropped_after_budget) {
         colony::test_fixture::AuthoredFixture authored;
         colony::ColonyDriver driver;
@@ -1142,6 +1252,10 @@ namespace pP::game::tests {
             detail::particle_orders_keep_owned_parameters_through_delivery_and_retry,
             detail::permanently_rejected_build_order_is_not_retained,
             detail::valid_build_order_still_places_once,
+            detail::lamp_build_order_resolves_the_authored_material_and_progresses,
+            detail::occupied_lamp_placement_is_a_permanent_rejection,
+            detail::lamp_without_authored_content_is_a_non_retryable_rejection,
+            detail::build_orders_reject_a_footprint_that_covers_a_particle,
             detail::stuck_transient_busy_is_dropped_after_budget,
             detail::transient_busy_still_applies_when_the_destination_clears,
         });

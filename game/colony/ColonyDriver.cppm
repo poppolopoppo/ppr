@@ -336,6 +336,10 @@ export namespace pP::colony {
 
         [[nodiscard]] std::error_code applyDig(const PendingDig &pending);
 
+        /// Rejects a build footprint whose cells hold a live matter particle.
+        /// Uses the CPU inventory's native-cell bins only; no GPU readback.
+        [[nodiscard]] std::error_code validateMatterClearance(const Footprint &print) const;
+
         [[nodiscard]] std::error_code wakeBodiesNearEdit(std::span<const sim::ChunkPos> touched) noexcept;
 
         void fanOutEditChunks(std::span<const sim::ChunkPos> touched);

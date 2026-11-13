@@ -183,7 +183,10 @@ transfers once before retiring the detached old CPU owner; actual resident
 presentation separately releases readiness while retaining the presentation header. Generated-session
 tools resolve catalog terrain IDs: dig/demolition preserve protected material;
 construction validates complete globally aligned metre tiles, live actor overlap
-and pending reservations before recording progressive work.
+and pending reservations before recording progressive work. Build orders also
+reject a footprint whose native cells already hold live matter particles, so a
+wall or lamp over matter is a one-shot permanent rejection instead of a
+per-frame terrain-edit deferral.
 
 Presentation captures the validated profile's wall material as the protected
 outside-world sample ID. The driver exposes this numeric value alongside the

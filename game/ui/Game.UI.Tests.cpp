@@ -566,6 +566,17 @@ namespace pP::game::tests::detail::presentation {
         PPR_TEST_ASSERT(lamp.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::build_lamp));
         PPR_TEST_ASSERT(not frame().m_intent);
 
+        // The Build button owns the menu entry: it stays highlighted while the
+        // lamp is active and pressing it reopens the menu instead of toggling
+        // the lamp off.
+        state.m_tool = colony::EColonyTool::build_lamp;
+        std::ignore = frame();
+        const auto build_again = click(itemCenter(rail, rail->GetID("###tool2")));
+        PPR_TEST_ASSERT(
+            build_again.m_intent and build_again.m_intent->m_kind == colony::EColonyIntent::open_build_menu);
+        state.m_tool = colony::EColonyTool::none;
+        std::ignore = frame();
+
         // The showcase switch returns the same typed intent in both committed
         // states. Pending and ordinary-world presentations cannot invoke it.
         view.m_service_door_available = true;
@@ -594,11 +605,10 @@ namespace pP::game::tests::detail::presentation {
     // simulation brush controls
     // ------------------------------------------------------------------
 
-    // 640x480 is the supported no-scroll minimum for nine tools. A 320-high
-    // viewport is below that contract: the rail may overflow its content area,
-    // so that extent is deliberately not part of this guarantee.
-    PPR_UNIT_TEST (all_nine_tools_are_reachable_without_scroll_at_supported_heights) {
-        for (const ImVec2 extent: {ImVec2{1280.0f, 720.0f}, ImVec2{640.0f, 480.0f}}) {
+    // The rail is the eight fixed tools; the lamp is reachable only through
+    // the Build menu, so it must not add a ninth rail row.
+    PPR_UNIT_TEST (all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights) {
+        for (const ImVec2 extent: {ImVec2{1280.0f, 720.0f}, ImVec2{640.0f, 480.0f}, ImVec2{480.0f, 320.0f}}) {
             ImGuiContext *const context = ImGui::CreateContext();
             PPR_DEFER {
                 ImGui::DestroyContext(context);
@@ -621,12 +631,11 @@ namespace pP::game::tests::detail::presentation {
             // ImGui clears current baked-font state at frame completion.
             constexpr std::array tools{
                 colony::EColonyTool::inspect, colony::EColonyTool::dig, colony::EColonyTool::build_wall,
-                colony::EColonyTool::build_lamp, colony::EColonyTool::demolish, colony::EColonyTool::push,
-                colony::EColonyTool::pull, colony::EColonyTool::spawn, colony::EColonyTool::destroy};
+                colony::EColonyTool::demolish, colony::EColonyTool::push, colony::EColonyTool::pull,
+                colony::EColonyTool::spawn, colony::EColonyTool::destroy};
             constexpr std::array glyphs{
-                pP::ui::icons::kInspect, pP::ui::icons::kDig, pP::ui::icons::kCubes, pP::ui::icons::kCubes,
-                pP::ui::icons::kDemolish, pP::ui::icons::kPush, pP::ui::icons::kPull, pP::ui::icons::kSpawn,
-                pP::ui::icons::kDestroy};
+                pP::ui::icons::kInspect, pP::ui::icons::kDig, pP::ui::icons::kCubes, pP::ui::icons::kDemolish,
+                pP::ui::icons::kPush, pP::ui::icons::kPull, pP::ui::icons::kSpawn, pP::ui::icons::kDestroy};
             std::array<ImVec4, glyphs.size()> glyph_uvs{};
             const auto frame = [&]() {
                 ImGui::NewFrame();
@@ -653,6 +662,12 @@ namespace pP::game::tests::detail::presentation {
             const float edge = rail->ContentSize.x;
             PPR_TEST_ASSERT(edge > 0.0f and rail->Pos.y + rail->Size.y <= extent.y);
             PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f and rail->Scroll.y == 0.0f);
+
+            // Exactly eight rows: a hidden lamp button would add one button
+            // plus one item gap to the content height.
+            const float expected_content = edge * static_cast<float>(tools.size()) +
+                                           ImGui::GetStyle().ItemSpacing.y * static_cast<float>(tools.size() - 1u);
+            PPR_TEST_ASSERT(std::abs(rail->ContentSize.y - expected_content) <= 1.0f);
 
             Array<ImVec2> glyph_vertices;
             for (const ImDrawVert &vertex: rail->DrawList->VtxBuffer) {
@@ -1692,7 +1707,7 @@ namespace pP::game::tests {
             detail::presentation::colony_and_performance_visibility_are_independent,
             detail::presentation::inspector_is_a_passive_pointer_readout_only_in_inspect_mode,
             detail::presentation::native_menu_click_opens_utilities_and_display_emits_one_intent,
-            detail::presentation::all_nine_tools_are_reachable_without_scroll_at_supported_heights,
+            detail::presentation::all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights,
             detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
             detail::presentation::workspace_map_size_selects_each_extent_clamps_crop_and_disables_during_owned_work,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,

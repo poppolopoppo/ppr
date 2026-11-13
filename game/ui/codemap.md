@@ -58,11 +58,11 @@ Font Awesome `?` affordance. It draws on the icon-merged body face and carries
 its explanation in the hover tooltip. Panels use it for control documentation;
 data, status, error, section-header and field-label text remain visible.
 
-The tool rail shows all nine square tool buttons without scrolling at normal
-and short viewports down to 640×480, the supported no-scroll minimum. Shorter
-viewports are below that documented minimum, so the rail may clip its bottom
-tools; selecting tools or expanding their context leaves the rail geometry
-unchanged.
+The tool rail shows all eight tool buttons without scrolling at normal and
+short viewports, down to the supported no-scroll minimum of 480×320. The Build
+button opens the build menu (Wall, Lamp, Demolish); the lamp tool is selected
+there and never gets its own rail button. Selecting tools or expanding their
+context leaves the rail geometry unchanged.
 
 The Workshop preview settings include a 1024/2048/4096 Map size combo, defaulting
 to the startup selection (1024 normally). The labels mark 2048/4096 as

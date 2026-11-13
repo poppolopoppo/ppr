@@ -1146,7 +1146,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(driver.matterState()->m_next_id == committed_id + 3u);
     };
 
-    PPR_UNIT_TEST (coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry) {
+    PPR_UNIT_TEST (particle_occupied_wall_order_is_rejected_then_succeeds_after_evolution) {
         Fixture fixture;
         auto checkpoint = editedCheckpoint(*fixture.m_catalog);
         // Explicit admitted carried motion takes this isolated particle below
@@ -1183,21 +1183,29 @@ namespace pP::game::tests::detail::checkpoint {
         driver.requireEditPublication();
         const auto original = *driver.matterState();
 
-        const auto errand = driver.buildWall(wall);
-        PPR_TEST_ASSERT(errand.has_value());
+        const auto rejected = driver.buildWall(wall);
+        PPR_TEST_ASSERT(not rejected);
+        PPR_TEST_ASSERT(rejected.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == 0u);
+        PPR_TEST_ASSERT(not driver.takeEditRejection());
+        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == 0u);
 
+        // Physics is independent of the rejected order, so the carried motion
+        // still takes the particle below the proposed footprint.
         owner.step();
         PPR_TEST_ASSERT(driver.physicsPending() and not driver.editPending());
-        PPR_TEST_ASSERT(driver.takeEditRejection() == std::errc::device_or_resource_busy);
         PPR_TEST_ASSERT(not driver.takeEditRejection());
         PPR_TEST_ASSERT(driver.matterState()->m_identity == original.m_identity);
         PPR_TEST_ASSERT(driver.matterState()->m_next_id == original.m_next_id);
-        PPR_TEST_ASSERT(driver.registry().get<BuildErrand>(*errand)->m_progress == 0u);
-        PPR_TEST_ASSERT(driver.grid().getCell({130u, 40u})->m_element == 0u);
 
         owner.completeTick();
         PPR_TEST_ASSERT(driver.tickCount() == checkpoint.m_tick + 1u);
         PPR_TEST_ASSERT(driver.matterState()->m_records[0u].m_y_m < 38.0 * original.m_cell_metres);
+
+        // The refreshed CPU inventory no longer overlaps the footprint, so the
+        // same order is accepted on a later tick instead of deferring forever.
+        const auto errand = driver.buildWall(wall);
+        PPR_TEST_ASSERT(errand.has_value());
 
         owner.step();
         for (u32 attempt = 0u; attempt < 32u and driver.tickCount() != checkpoint.m_tick + 2u; ++attempt) {
@@ -3350,7 +3358,7 @@ namespace pP::game::tests {
             detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
             detail::checkpoint::terrain_position_rejection_freezes_matter_until_a_committed_mutation,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
-            detail::checkpoint::coverage_deferral_keeps_cohort_then_evolution_allows_a_later_tick_retry,
+            detail::checkpoint::particle_occupied_wall_order_is_rejected_then_succeeds_after_evolution,
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,
             detail::checkpoint::dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain,
             detail::checkpoint::frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks,

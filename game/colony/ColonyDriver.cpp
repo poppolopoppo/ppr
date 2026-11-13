@@ -764,6 +764,46 @@ namespace pP::colony {
     // construction tools
     // ------------------------------------------------------------------
 
+    std::error_code ColonyDriver::validateMatterClearance(const Footprint &print) const {
+        const sim::MatterParticleState &particles = m_colony.particles();
+        if (particles.count() == 0u) {
+            return {};
+        }
+
+        // Predicate: a particle blocks the footprint when its native cell,
+        // floor(centre / cell size), lies in [m_min, m_min + extent). The
+        // inventory bins each particle under that same native cell, so the
+        // overlapping chunks are sufficient and no GPU readback is needed.
+        // Sub-cell contour overlap stays the terrain edit's responsibility.
+        const double cell_metres = 1.0 / static_cast<double>(cellsPerMetre());
+        const u32 far_x = print.m_min.m_x + print.m_width - 1u;
+        const u32 far_y = print.m_min.m_y + print.m_height - 1u;
+        const sim::ChunkPos first = sim::chunkOf(print.m_min);
+        const sim::ChunkPos last = sim::chunkOf({far_x, far_y});
+        for (u32 y = first.m_y; y <= last.m_y; ++y) {
+            for (u32 x = first.m_x; x <= last.m_x; ++x) {
+                for (const sim::MatterParticle &particle: particles.chunk({x, y})) {
+                    if (not std::isfinite(particle.m_x_m) or not std::isfinite(particle.m_y_m)) {
+                        continue;
+                    }
+
+                    const i64 px = static_cast<i64>(std::floor(particle.m_x_m / cell_metres));
+                    const i64 py = static_cast<i64>(std::floor(particle.m_y_m / cell_metres));
+                    if (px >= static_cast<i64>(print.m_min.m_x) and
+                        px <= static_cast<i64>(far_x) and
+                        py >= static_cast<i64>(print.m_min.m_y) and
+                        py <= static_cast<i64>(far_y)) {
+                        // Matter residency does not clear by waiting: the
+                        // terrain edit would defer every tick, so reject once
+                        // on the host's permanent (non-busy) class.
+                        PPR_RETURN_ERROR_ON_FAIL(ColonyPreparation, std::errc::file_exists);
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
     Expected<sim::Entity> ColonyDriver::buildWall(const Footprint &print) {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
@@ -779,6 +819,8 @@ namespace pP::colony {
         } else {
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateFootprint(resolved, nullptr, grid().edge()));
         }
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateMatterClearance(resolved));
 
         const auto entity = recordErrand(m_registry, resolved);
         if (not entity) {
@@ -808,6 +850,8 @@ namespace pP::colony {
         resolved.m_solid = true;
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             ColonyPreparation, validatePlacement(m_colony.grid(), m_registry, resolved, prepared->catalog()));
+
+        PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyPreparation, validateMatterClearance(resolved));
 
         const auto entity = recordErrand(m_registry, resolved);
         if (not entity) {
