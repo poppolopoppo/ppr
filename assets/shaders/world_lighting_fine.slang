@@ -107,23 +107,12 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
     float2 box_max = fine_center + kFineConnectorHalfExtent;
 
     // The probe corner is shared by four native cells, which are the probe's
-    // own surface. The near trace traverses that 2x2 block instead of
-    // terminating on it, so a wall sources rho*incident rather than its own
-    // outgoing radiance. The coarse and cascade traces keep the ordinary rule.
+    // own surface. An occupied cell of that block is an opaque black
+    // self-occluder in the near trace, so the probe sees its room light but no
+    // radiance can cross the wall. Vacuum cells in the block stay transparent.
+    // The coarse and cascade traces keep the ordinary rule.
     int2 own_block_min = int2(fine_center) - 1;
     int2 own_block_max = int2(fine_center);
-
-    // A block that reaches the world edge has the map exit, not another cell,
-    // beyond it. Excluding it would replace the terminal boundary with a
-    // missing direction and make a uniform field non-uniform at the domain
-    // edge, so only an interior block is excluded and the outermost probe ring
-    // keeps the ordinary first-hit rule.
-    int trace_edge = int(kTraceEdge);
-    if (own_block_min.x < 1 || own_block_min.y < 1 || own_block_max.x >= trace_edge - 1 ||
-        own_block_max.y >= trace_edge - 1) {
-        own_block_min = int2(-1, -1);
-        own_block_max = int2(-1, -1);
-    }
 
     CHAccumulator accumulator = chAccumulator();
     for (uint tap = 0u; tap < 4u; ++tap) {

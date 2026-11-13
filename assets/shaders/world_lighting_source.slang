@@ -41,9 +41,30 @@ static const float kY0 = 0.39894228040143267794;
 // Q16 fill quantum, mirrored from world_lighting_projection.slang.
 static const float kFillQuantum = 65536.0;
 
+// True when the fine probe's own 2x2 native block is entirely occupied. Such a
+// probe is an interior solid sample: its field carries solid material's own
+// bounce (and, across a thin wall, the opposite side's), not incident radiance
+// for a cell that faces an open room.
+bool probeBlockOccupied(int2 probe) {
+    int2 base = probe * 2;
+    for (uint offset = 0u; offset < 4u; ++offset) {
+        int2 cell = base + int2(int(offset % 2u), int(offset / 2u));
+        uint index = uint(cell.y) * g_source_frame.m_edge + uint(cell.x);
+        uint resolved = g_resolved_cells[index];
+        uint material = resolved & 0xffffu;
+        TerrainVisual visual = g_visuals[material];
+        if (!resolvedCellOccupied(resolved, visual)) return false;
+    }
+
+    return true;
+}
+
 // Bilinear DC sample at the native cell centre. Fine probe centres sit at
 // (probe+0.5)*2 native cells, so the fine coordinate is (cell+0.5)/2-0.5.
 // Clamped edge indices keep their ordinary bilinear weight, whose sum is one.
+// A corner tap whose own 2x2 block is entirely occupied is an interior probe,
+// so it is dropped and the surviving weights are renormalised. No surviving tap
+// means zero incident light rather than the solid's own outgoing radiance.
 float3 priorAngularMean(uint2 cell) {
     float2 fine = (float2(cell) + 0.5) * 0.5 - 0.5;
     int2 base = int2(floor(fine));
@@ -51,6 +72,7 @@ float3 priorAngularMean(uint2 cell) {
     int2 last = int2(int(g_source_frame.m_fine_edge) - 1);
 
     float3 result = float3(0.0);
+    float surviving_weight = 0.0;
     for (uint tap = 0u; tap < 4u; ++tap) {
         int2 offset = int2(int(tap % 2u), int(tap / 2u));
         float weight = (offset.x == 0 ? 1.0 - fraction.x : fraction.x) *
@@ -58,11 +80,15 @@ float3 priorAngularMean(uint2 cell) {
         if (weight <= 0.0) continue;
 
         int2 index = clamp(base + offset, int2(0), last);
+        if (probeBlockOccupied(index)) continue;
+
         PackedCH record = g_prior_ch[index.y * int(g_source_frame.m_fine_edge) + index.x];
         result += unpackRGB9E5(record.m_dc) * weight;
+        surviving_weight += weight;
     }
 
-    return result * kY0;
+    if (surviving_weight <= 0.0) return float3(0.0);
+    return result * (kY0 / surviving_weight);
 }
 
 // ------------------------------------------------------------------

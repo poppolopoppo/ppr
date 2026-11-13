@@ -89,28 +89,28 @@ int traceAdvanceAxis(float start, float delta, int cell, float next) {
 }
 
 // ------------------------------------------------------------------
-// probe self-exclusion
+// probe self-occlusion
 // ------------------------------------------------------------------
 
-// The fine near segment starts on a probe corner shared by four native cells.
-// Those cells are the probe's own surface, so their outgoing radiance is not
-// incident radiance and must not enter that probe's fit. The fine caller marks
-// that 2x2 block as traversable; every hit outside it keeps the ordinary
-// occupied-cell rule. The generic and coarse traces pass the disabled (-1, -1)
-// bounds, which address no cell because a traced cell is always inside
-// [0, kTraceEdge). Excluding one cell instead would remove only a quarter of
-// the corner's self term and leave the other three cells feeding the same
-// local fixed point, so the block is the coherent unit.
-bool traceSelfExcluded(int2 cell, int2 excluded_min, int2 excluded_max) {
-    return cell.x >= excluded_min.x && cell.x <= excluded_max.x && cell.y >= excluded_min.y &&
-           cell.y <= excluded_max.y;
+// True when the native cell belongs to the probe's own/neighbour 2x2 block.
+// The fine near segment starts on the probe corner shared by those four cells,
+// so an occupied block cell is the probe's own surface. It is an opaque black
+// self-occluder: the near trace terminates on it with zero radiance and zero
+// transmittance, which also suppresses the far interval. Vacuum cells in the
+// block never match the occupancy test and stay transparent, and the rule is
+// direction-symmetric with no "starting cell" and no DDA tie-breaking. The
+// generic and coarse callers pass the disabled (-1, -1) bounds, which address
+// no cell because a traced cell is always inside [0, kTraceEdge).
+bool traceInOwnBlock(int2 cell, int2 own_block_min, int2 own_block_max) {
+    return cell.x >= own_block_min.x && cell.x <= own_block_max.x && cell.y >= own_block_min.y &&
+           cell.y <= own_block_max.y;
 }
 
 // ------------------------------------------------------------------
 // finite segment traversal
 // ------------------------------------------------------------------
 SegmentHit traceSegmentDetailed(
-    float2 start, float2 end, uint invocation, uint status_record, int2 excluded_min, int2 excluded_max) {
+    float2 start, float2 end, uint invocation, uint status_record, int2 own_block_min, int2 own_block_max) {
     if (!all(isfinite(start)) || !all(isfinite(end))) return traceFailure(invocation, status_record);
 
     float2 delta = end - start;
@@ -157,20 +157,25 @@ SegmentHit traceSegmentDetailed(
 
         uint jump = g_jump[cell];
         if (jump == 0u || occupied) {
-            if (!traceSelfExcluded(cell, excluded_min, excluded_max)) {
-                // Decoded current source with zero transmittance, independent of
-                // source brightness (a black source still stops the path).
-                SegmentHit hit;
-                hit.m_interval.m_radiance = unpackRGB9E5(g_cell_source[cell_index]);
-                hit.m_interval.m_transmittance = 0.0;
-                hit.m_cell = cell_index;
-                return hit;
+            if (occupied && traceInOwnBlock(cell, own_block_min, own_block_max)) {
+                // The probe's own surface is an opaque self-occluder. The black
+                // terminal interval closes both the current cell's outgoing
+                // radiance and, through zero transmittance, the far interval,
+                // so no light can cross the wall it belongs to.
+                SegmentHit occluder;
+                occluder.m_interval.m_radiance = float3(0.0, 0.0, 0.0);
+                occluder.m_interval.m_transmittance = 0.0;
+                occluder.m_cell = cell_index;
+                return occluder;
             }
 
-            // The excluded block is transparent to its own probe. Traversal
-            // continues past it one face at a time, so it cannot skip a face of
-            // the surface it just crossed.
-            jump = 0u;
+            // Decoded current source with zero transmittance, independent of
+            // source brightness (a black source still stops the path).
+            SegmentHit hit;
+            hit.m_interval.m_radiance = unpackRGB9E5(g_cell_source[cell_index]);
+            hit.m_interval.m_transmittance = 0.0;
+            hit.m_cell = cell_index;
+            return hit;
         }
 
         // Next face parameters are rebuilt from the original ray. A positive
@@ -239,7 +244,7 @@ SegmentHit traceSegmentDetailed(
 }
 
 // The ordinary segment: generic, coarse and diagnostic callers keep the plain
-// first-hit rule with no excluded native-cell block.
+// first-hit rule with no own-block self-occlusion.
 SegmentHit traceSegmentDetailed(float2 start, float2 end, uint invocation, uint status_record) {
     return traceSegmentDetailed(start, end, invocation, status_record, int2(-1, -1), int2(-1, -1));
 }
