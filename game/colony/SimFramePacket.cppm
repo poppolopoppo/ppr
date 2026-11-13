@@ -47,6 +47,28 @@ export namespace pP::colony {
         [[nodiscard]] std::shared_ptr<const GridSurfaceProfile> captureSurface(const ColonyDriver &driver);
     };
 
+    // ------------------------------------------------------------------
+    // publication state classification
+    // ------------------------------------------------------------------
+
+    /// Classify one frame's particle publication before anything is captured.
+    /// `has_view` is true when the driver still exposes a committed view,
+    /// `view_current` is that view's liveness, and `matter_attached` is whether
+    /// the driver owns a native matter source.
+    ///
+    /// `nullopt` is the one fatal case: matter is attached and no view exists at
+    /// all. That is a broken source, not a transient, and stays
+    /// `state_not_recoverable`. A view that exists but is not current is `held`:
+    /// it must carry no buffers, and the renderer keeps presenting the last pack.
+    [[nodiscard]] constexpr std::optional<EParticlePresentation> classifyParticlePresentation(
+        const bool has_view, const bool view_current, const bool matter_attached) noexcept {
+        if (has_view) {
+            return view_current ? EParticlePresentation::current : EParticlePresentation::held;
+        }
+
+        return matter_attached ? std::nullopt : std::optional{EParticlePresentation::seeds};
+    }
+
     struct SimFramePacket {
         float m_cell_size_m{1.0f};
         u32 m_world_edge{sim::kWorldEdge};
@@ -63,6 +85,10 @@ export namespace pP::colony {
         std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};
+        // Publication state of this frame's particle payload (plan §3). `held`
+        // carries neither a view nor a CPU batch: no layer below can read a
+        // superseded solver epoch, and the renderer presents its own last pack.
+        EParticlePresentation m_particle_presentation{EParticlePresentation::seeds};
         u64 m_frame_id{};
 
         // World epoch + committed tick at capture time. m_seed identifies

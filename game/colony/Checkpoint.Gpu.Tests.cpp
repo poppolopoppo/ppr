@@ -1968,6 +1968,46 @@ namespace pP::game::tests::detail::checkpoint {
                 DrawSubmission submission{"actual dug solid frozen source", draw};
                 submission.m_viewport = viewport;
                 submission.m_scissor = scissor;
+
+                // A hold before the renderer ever packed presents no particles and
+                // errors nowhere (plan §3): attach published a view that the next
+                // tick superseded before this frame drew, so there are no retained
+                // rows and the particle entries simply draw nothing.
+                if (not seed_reference) {
+                    auto first_frame = *stage.m_gpu_particles;
+                    first_frame.m_live_epoch = std::make_shared<std::atomic<u64>>(first_frame.m_device_epoch + 1u);
+                    PPR_TEST_ASSERT(not first_frame.current());
+                    PPR_TEST_ASSERT(not grid.applyGpuParticleView(first_frame));
+                    PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+
+                    const auto prepare_never_packed = [&](const PreRenderContext &context) -> std::error_code {
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            CheckpointTests, grid.prepareBackgroundInputs(context, snapshot, viewport, scissor));
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            CheckpointTests, grid.prepareBackground(context, snapshot, viewport, scissor));
+                        return grid.prepareGpuParticles(context);
+                    };
+
+                    PPR_TEST_ASSERT(not renderer.renderToTexture(
+                        *target.get(), {submission}, {}, PreRenderCallback{prepare_never_packed}));
+                    const auto held_submission = renderer.lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(held_submission);
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(held_submission));
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
+                    PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == 0u);
+                    PPR_TEST_ASSERT(grid.particleBuffersForTest() == std::array<rhi::IBuffer *, 3u>{});
+                    _.log(
+                        std::format(
+                            "ACTUAL-DUG-FIRST-HOLD tick={} source={} held_attempts={} packs={}", tick, source_name,
+                            grid.particleHoldAttemptsForTest(), grid.particlePackEncodesForTest()));
+
+                    // The first real publication ends the hold and packs.
+                    PPR_TEST_ASSERT(not grid.applyGpuParticleView(*stage.m_gpu_particles));
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                }
+
                 PPR_TEST_ASSERT(
                     not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
                 const auto submitted = renderer.lastSubmittedFenceValue();
@@ -1975,6 +2015,69 @@ namespace pP::game::tests::detail::checkpoint {
                 PPR_TEST_ASSERT(not renderer.waitForFenceValue(submitted));
                 PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
                 observe("rendered");
+
+                // Publication liveness (plan §3, Task 5). A dig publishes the
+                // next tick between capture and presentation; the committed view
+                // then keeps its allocation but its contents become the next
+                // tick's working pair. This is the recorded trace: present the
+                // same frame with that superseded view and prove the renderer
+                // holds the retained pack - it draws the last packed rows and
+                // stable IDs, encodes no pack and reads no solver buffer.
+                if (not seed_reference) {
+                    const auto retained_buffers = grid.particleBuffersForTest();
+                    const auto retained_epoch = grid.particlePackedEpochForTest();
+                    const auto retained_packs = grid.particlePackEncodesForTest();
+                    const auto before_hold_draws = grid.observations().m_draw_commands;
+
+                    auto superseded = *stage.m_gpu_particles;
+                    superseded.m_live_epoch = std::make_shared<std::atomic<u64>>(superseded.m_device_epoch + 1u);
+                    PPR_TEST_ASSERT(not superseded.current());
+                    PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent(superseded));
+                    PPR_TEST_ASSERT(not grid.applyGpuParticleView(superseded));
+                    PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                    PPR_TEST_ASSERT(
+                        not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                    const auto held_submission = renderer.lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(held_submission);
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(held_submission));
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+
+                    const auto held = grid.observations();
+                    PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
+                    PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+                    PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == retained_packs);
+                    PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == retained_epoch);
+                    PPR_TEST_ASSERT(grid.particleBuffersForTest() == retained_buffers);
+                    PPR_TEST_ASSERT(held.m_draw_commands > before_hold_draws);
+                    _.log(
+                        std::format(
+                            "ACTUAL-DUG-HELD tick={} source={} held_attempts={} retained_packs={} retained_epoch={} draws={} dispatches={}",
+                            tick, source_name, grid.particleHoldAttemptsForTest(), retained_packs, retained_epoch,
+                            held.m_draw_commands, held.m_dispatch_commands));
+
+                    // The next current publication re-packs from the new epoch and
+                    // resets the hold counter. A fresh live epoch is what a real
+                    // `publishTick` produces: the committed rows must be packed
+                    // again for the new publication identity.
+                    auto recovered = *stage.m_gpu_particles;
+                    recovered.m_device_epoch = superseded.m_device_epoch + 2u;
+                    recovered.m_publication = superseded.m_publication + 1u;
+                    recovered.m_live_epoch = std::make_shared<std::atomic<u64>>(recovered.m_device_epoch);
+                    PPR_TEST_ASSERT(recovered.current());
+                    PPR_TEST_ASSERT(not grid.applyGpuParticleView(recovered));
+                    PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+                    PPR_TEST_ASSERT(
+                        not renderer.renderToTexture(*target.get(), {submission}, {}, PreRenderCallback{prepare}));
+                    const auto recovered_submission = renderer.lastSubmittedFenceValue();
+                    grid.notifyFrameSubmitted(recovered_submission);
+                    PPR_TEST_ASSERT(not renderer.waitForFenceValue(recovered_submission));
+                    PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                    PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 0u);
+                    PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+                    PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == retained_packs + 1u);
+                    observe("recovered");
+                }
 
                 shader::ComPtr<ISlangBlob> pixels;
                 rhi::SubresourceLayout layout{};
@@ -3025,6 +3128,84 @@ namespace pP::game::tests::detail::checkpoint {
 
         passed = true;
     };
+
+    // ------------------------------------------------------------------
+    // publication state, transport and storage layout
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (held_publication_carries_no_buffers_and_keeps_the_rest_of_the_payload) {
+        // The three-state contract as capturePresentation_ applies it (plan §3,
+        // Task 5): a live view is current, a superseded view is held, no view
+        // with attached matter is the one fatal case, and no view without matter
+        // is the pre-runtime seed path.
+        PPR_TEST_ASSERT(classifyParticlePresentation(true, true, true) == EParticlePresentation::current);
+        PPR_TEST_ASSERT(classifyParticlePresentation(true, false, true) == EParticlePresentation::held);
+        PPR_TEST_ASSERT(classifyParticlePresentation(true, false, false) == EParticlePresentation::held);
+        PPR_TEST_ASSERT(not classifyParticlePresentation(false, false, true).has_value());
+        PPR_TEST_ASSERT(classifyParticlePresentation(false, false, false) == EParticlePresentation::seeds);
+
+        // A held packet keeps every other payload intact and carries no particle
+        // buffer at all, so no layer below can read a superseded epoch.
+        SimFramePacket held{};
+        held.m_cell_size_m = 1.0f;
+        held.m_world_edge = sim::kWorldEdge;
+        held.m_world_generation = 3u;
+        held.m_tick = 9u;
+        held.m_dig_total = 7u;
+        held.m_particle_presentation = EParticlePresentation::held;
+        held.m_present_chunks.push_back(sim::ChunkPos{1u, 2u});
+        held.m_present_revisions.push_back(11u);
+        held.m_resident_chunks.push_back(sim::ChunkPos{1u, 2u});
+        SimChunkCells cells{};
+        cells.m_pos = sim::ChunkPos{1u, 2u};
+        cells.m_cells.assign(sim::kCellsPerChunk, sim::Cell{});
+        held.m_chunk_cells.push_back(std::move(cells));
+
+        GridStagedFrame stage{};
+        PPR_TEST_ASSERT(not buildGridStagedFrame(held, stage));
+        PPR_TEST_ASSERT(stage.m_particle_presentation == EParticlePresentation::held);
+        PPR_TEST_ASSERT(not stage.m_gpu_particles and stage.m_particle_batches.empty());
+        PPR_TEST_ASSERT(stage.m_ack_seed == 3u and stage.m_ack_chunk_ids.size() == 1u);
+        PPR_TEST_ASSERT(stage.m_ack_chunk_ids.front() == sim::chunkIndexOf(sim::ChunkPos{1u, 2u}));
+        PPR_TEST_ASSERT(stage.m_ack_revisions.size() == 1u and stage.m_ack_revisions.front() == 11u);
+        PPR_TEST_ASSERT(stage.m_tiles.size() == 1u and stage.m_uploads.size() == 1u);
+
+        // A held packet that still carried a view is a producer defect: it fails
+        // closed instead of handing the buffer to a draw.
+        SimFramePacket inconsistent = held;
+        inconsistent.m_gpu_particles = GridParticleGpuView{};
+        GridStagedFrame rejected{};
+        PPR_TEST_ASSERT(buildGridStagedFrame(inconsistent, rejected) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(rejected.m_particle_presentation == EParticlePresentation::seeds);
+
+        // A current packet without its view is the same class of defect.
+        SimFramePacket missing_view = held;
+        missing_view.m_particle_presentation = EParticlePresentation::current;
+        PPR_TEST_ASSERT(buildGridStagedFrame(missing_view, rejected) == std::errc::invalid_argument);
+    };
+
+    PPR_UNIT_TEST (publication_hold_does_not_change_solver_or_presentation_storage) {
+        // Task 5 is a liveness change. No solver, packet or checkpoint layout
+        // moves with it (plan §6): GpuParticle stays the 88-byte semantic row,
+        // the hot/cold rows keep their strides, metadata stays 32 bytes and the
+        // checkpoint wire row is still 22 raw words of one GpuParticle.
+        static_assert(sizeof(matter::GpuParticle) == 88u);
+        static_assert(sizeof(matter::GpuParticle) == 22u * sizeof(u32));
+        static_assert(sizeof(matter::ParticleWrite) == 64u);
+        static_assert(sizeof(matter::ParticleReadonly) == 24u);
+        static_assert(sizeof(GridParticleMetadataRow) == 32u);
+        static_assert(
+            kGridParticleNumericalStride == sizeof(matter::ParticleWrite) and
+            kGridParticleReadonlyStride == sizeof(matter::ParticleReadonly));
+
+        // The presentation row stays the 24-byte packed layout of Task 1.
+        static_assert(sizeof(ParticleGpu) == 24u and alignof(ParticleGpu) == 8u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
+    };
 }
 
 namespace pP::game::tests {
@@ -3045,6 +3226,8 @@ namespace pP::game::tests {
             detail::checkpoint::actual_dug_solids_long_settle_diagnostic,
             detail::checkpoint::actual_dug_solids_short_compression_diagnostic,
             detail::checkpoint::render_frozen_actual_dug_solids_reference,
+            detail::checkpoint::held_publication_carries_no_buffers_and_keeps_the_rest_of_the_payload,
+            detail::checkpoint::publication_hold_does_not_change_solver_or_presentation_storage,
         });
     };
 

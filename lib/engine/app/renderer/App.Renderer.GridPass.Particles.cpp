@@ -516,13 +516,69 @@ namespace pP {
     }
 
     bool GridPass::gpuParticleFrameCurrent(const std::optional<GridParticleGpuView> &view) const noexcept {
-        const auto *const selected = view                      ? &*view
-                                     : m_world.m_gpu_particles ? &m_world.m_gpu_particles->m_view
-                                                               : nullptr;
-        return selected == nullptr or (selected->current() and
-                                          selected->m_world.m_job_id == m_world.m_job_id and
-                                          selected->m_world.m_world_generation == m_world.m_world_generation and
-                                          selected->m_world.m_content_fingerprint == m_world.m_content_fingerprint);
+        // A frame that offers no view carries CPU admission seeds or a hold.
+        // Neither reads solver storage, so neither rejects the frame; a hold is
+        // the renderer's own retained presentation (plan §3).
+        if (not view) {
+            return true;
+        }
+
+        return view->m_world.m_job_id == m_world.m_job_id and
+               view->m_world.m_world_generation == m_world.m_world_generation and
+               view->m_world.m_content_fingerprint == m_world.m_content_fingerprint;
+    }
+
+    bool GridPass::retainedGpuParticleCurrent_() const noexcept {
+        if (not m_world.m_gpu_particles) {
+            return false;
+        }
+
+        const auto &view = m_world.m_gpu_particles->m_view;
+        return view.current() and
+               view.m_world.m_job_id == m_world.m_job_id and
+               view.m_world.m_world_generation == m_world.m_world_generation and
+               view.m_world.m_content_fingerprint == m_world.m_content_fingerprint;
+    }
+
+    std::error_code GridPass::holdGpuParticles_() {
+        ++m_world.m_particle_hold_attempts;
+        m_world.m_particle_presentation = EParticlePresentation::held;
+
+        // Only a completed pack may be presented. Before the first pack there is
+        // nothing to retain, so a never-packed hold presents no particles: the
+        // degenerate case after attach, not an error.
+        if (m_world.m_gpu_particles) {
+            auto &particles = *m_world.m_gpu_particles;
+            particles.m_prepared = particles.m_packed_owner != nullptr;
+
+            // The retained slot is read by this submission, so fence it with the
+            // hold frame's value: a later scatter must wait for that read before
+            // it rewrites the ids or arguments. A capture-only census of the
+            // superseded epoch is withdrawn rather than read back torn.
+            particles.m_slot_encoded = particles.m_prepared;
+            auto &slot = particles.m_slots[particles.m_selected_slot];
+            if (slot.m_census) {
+                slot.m_census->m_encoded = false;
+                slot.m_census->m_submission = kFenceValueNone;
+            }
+
+            if (m_world.m_particle_hold_attempts == 1u) {
+                const auto &view = particles.m_view;
+                PPR_LOG(
+                    GridPass, info, "particle publication is not current; presenting the last packed rows",
+                    {
+                        {"device_epoch", view.m_device_epoch},
+                        {"live_epoch", view.m_live_epoch ? view.m_live_epoch->load(std::memory_order_acquire) : u64{}},
+                        {"packed", particles.m_packed_owner != nullptr},
+                        {"packed_epoch", particles.m_packed_epoch},
+                    });
+            }
+        } else if (m_world.m_particle_hold_attempts == 1u) {
+            PPR_LOG(
+                GridPass, info, "particle publication is not current; no rows are retained yet", {{"packed", false}});
+        }
+
+        return {};
     }
 
     std::error_code GridPass::applyGpuParticleView(const GridParticleGpuView &view) {
@@ -530,9 +586,27 @@ namespace pP {
             GridPass, m_particle_prepare_programs[0u].m_program != nullptr
                           ? std::error_code{}
                           : std::make_error_code(std::errc::not_supported));
+
+        // A view from another world is a defect, not a transient: it cannot be
+        // presented as this world's rows even when its own epoch is live.
         PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, gpuParticleFrameCurrent(view) and
-                              view.m_metadata and
+            GridPass,
+            gpuParticleFrameCurrent(view) ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
+        // Liveness (finding D10): the renderer decides for itself whether the
+        // committed rows are still its own. `publishTick` swaps the pairs in
+        // place and bumps the live epoch, so installing a not-current view would
+        // pack a torn buffer. It is the same hold the packet reports, so the two
+        // layers cannot disagree about liveness (finding D11). The frame's held
+        // preparation counts and logs it once in prepareGpuParticles, which owns
+        // the per-frame decision.
+        if (not view.current()) {
+            m_world.m_particle_presentation = EParticlePresentation::held;
+            return {};
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, view.m_metadata and
                               view.m_numerical and
                               view.m_readonly and
                               view.m_layout == kGridParticleNumericalLayout and
@@ -575,6 +649,7 @@ namespace pP {
         }
 
         m_world.m_gpu_particles->m_view = view;
+        m_world.m_particle_presentation = EParticlePresentation::current;
         return {};
     }
 
@@ -637,7 +712,11 @@ namespace pP {
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, admitParticleSeeds_(context.m_device));
         if (not m_world.m_gpu_particles) {
-            return {};
+            // No committed view has ever been installed. A held stage still
+            // presents no particles and is counted; a seed-only world keeps its
+            // CPU admission path. Neither is an error.
+            return m_world.m_particle_presentation == EParticlePresentation::held ? holdGpuParticles_()
+                                                                                  : std::error_code{};
         }
 
         const hal::ProfileScope scope{"App.Grid.Particles.PrepareGpu"};
@@ -647,14 +726,39 @@ namespace pP {
         };
 
         reclaimCompleted_(context.m_completed_fence_value);
+
+        // Publication liveness (plan §3, findings D10-D12): a committed view is
+        // alive but no longer owned once `publishTick` swaps the committed pair
+        // and bumps the live epoch. That is a hold, not a failure: encode no
+        // pack, read no solver buffer, and keep drawing the renderer's own last
+        // packed rows and stable IDs. A retryable state must never stop the loop.
+        if (not retainedGpuParticleCurrent_()) {
+            return holdGpuParticles_();
+        }
+
+        // A current publication ends the hold: this frame re-packs from the new
+        // epoch and resumes. The exit is one log for the whole hold, not one per
+        // frame, and there is no timeout (expiry is a publication or a world
+        // event).
+        if (m_world.m_particle_hold_attempts != 0u) {
+            PPR_LOG(
+                GridPass, info, "particle publication is current again; resuming the packed presentation",
+                {
+                    {"held_attempts", m_world.m_particle_hold_attempts},
+                    {"device_epoch", m_world.m_gpu_particles->m_view.m_device_epoch},
+                });
+            m_world.m_particle_hold_attempts = 0u;
+        }
+
+        // The retained publication is live: this frame packs and draws it.
+        m_world.m_particle_presentation = EParticlePresentation::current;
+
         // Resident terrain already selected its slot in this encoder. Leave its
         // prepared IDs/args current; seed/reference callers select here instead.
         if (not m_visibility_prepared) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, selectSlot_(context.m_completed_fence_value, context.m_wait_for_fence));
         }
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, gpuParticleFrameCurrent({}) ? std::error_code{}
-                                                  : std::make_error_code(std::errc::resource_unavailable_try_again));
+
         const u32 count = m_world.m_gpu_particles->m_view.m_metadata->m_count;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureGpuParticleStorage_(context.m_device, count));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSurfaceBuffers_(context.m_device));
@@ -899,6 +1003,7 @@ namespace pP {
             context.m_encoder.setBufferState(view.m_readonly, rhi::ResourceState::ShaderResource);
             context.m_encoder.setBufferState(m_world.m_terrain_palette, rhi::ResourceState::ShaderResource);
             PPR_RETURN_ERROR_ON_FAIL(GridPass, encode(0u));
+            ++m_particle_pack_encodes;
 
             storage.m_pending_owner = view.m_live_epoch;
             storage.m_pending_epoch = view.m_device_epoch;
@@ -1068,10 +1173,16 @@ namespace pP {
         // One preparation feeds every particle class of this frame. `update()`
         // reset it, so all three class draws share the ids and indirect
         // arguments that preparation produced: no second compaction and no
-        // extra buffer.
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
-                                                          : std::make_error_code(std::errc::operation_not_permitted));
+        // extra buffer. A held publication that has never packed retains no
+        // rows, so it presents no particles; any other unprepared draw is a
+        // caller that skipped preparation.
+        if (not m_world.m_gpu_particles->m_prepared) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, m_world.m_particle_presentation == EParticlePresentation::held
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::operation_not_permitted));
+            return {};
+        }
 
         // The particle interval opens at the first class draw...
         if (m_particle_timing_queries) {
@@ -1096,9 +1207,15 @@ namespace pP {
             context.m_pass.popDebugGroup();
         };
 
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, m_world.m_gpu_particles->m_prepared ? std::error_code{}
-                                                          : std::make_error_code(std::errc::operation_not_permitted));
+        // Same preparation and the same held-publication rule as the solid and
+        // liquid classes: nothing retained presents no particles.
+        if (not m_world.m_gpu_particles->m_prepared) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, m_world.m_particle_presentation == EParticlePresentation::held
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::operation_not_permitted));
+            return {};
+        }
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::gas));
         // ...and closes after the last class draw, so the pair spans the three

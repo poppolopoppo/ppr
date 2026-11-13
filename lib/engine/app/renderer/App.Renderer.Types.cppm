@@ -86,6 +86,18 @@ export namespace pP {
         u32 m_stride{kGridParticleNumericalStride};
         u32 m_readonly_stride{kGridParticleReadonlyStride};
 
+        // Liveness is not ownership (finding D11). These ComPtrs keep the
+        // *allocation* alive, but the solver's `publishTick` swaps the committed
+        // and working buffer pairs in place and bumps the shared live epoch, so a
+        // handed-out view keeps the memory while its contents become the next
+        // tick's working buffer. Only this predicate says which one a reader has.
+        //
+        // Contract: solver particle rows are read only while `current()` is true.
+        // A not-current view is a publication hold, not an error (finding D10):
+        // the packet drops the view and the renderer presents its own retained
+        // packed rows. Presenting those rows is not a stale read - those bytes
+        // belong to the renderer. Reading the solver buffers of a superseded
+        // epoch is a torn read and is forbidden.
         [[nodiscard]] bool current() const noexcept {
             return m_numerical and
                    m_readonly and

@@ -5681,8 +5681,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             {
                 // A final joint publication can revoke the pass's cached E
-                // before a terrain frame carries E+1. Workshop must supply that
-                // final strong lease while scene and detached UI keep presenting.
+                // before a terrain frame carries E+1. The frame then holds: it
+                // presents the renderer's retained packed rows and never
+                // acknowledges the revoked lease, so the workshop's final strong
+                // lease is still what a later current frame installs.
                 auto &grid = test_app.getGridPass();
 
                 const auto live = std::make_shared<std::atomic<u64>>(1u);
@@ -5759,15 +5761,23 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 const auto final = viewAt(2u);
                 live->store(2u, std::memory_order_release);
                 PPR_TEST_ASSERT(not previous.current() and final.current());
-                PPR_TEST_ASSERT(not grid.gpuParticleFrameCurrent({}));
+                PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent({}));
+
+                // Publication hold (plan §3, Task 5): a superseded view is not a
+                // reason to drop the frame. The frame presents the renderer's own
+                // retained packed rows and still never acknowledges the revoked
+                // lease - `activeParticlePresentation()` stays empty until the
+                // current publication is installed.
                 draw_retained(std::nullopt);
-                PPR_TEST_ASSERT(test_app.m_last_dropped and not test_app.m_last_presented);
-                PPR_TEST_ASSERT(test_app.m_last_submission == kFenceValueNone and test_app.m_last_ui_version == 0u);
-                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == accepted);
+                PPR_TEST_ASSERT(test_app.m_last_presented and not test_app.m_last_dropped);
+                PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+                const auto held_submission = renderer.lastSubmittedFenceValue();
+                PPR_TEST_ASSERT(held_submission > accepted);
 
                 draw_retained(previous);
-                PPR_TEST_ASSERT(test_app.m_last_dropped and not test_app.m_last_presented);
-                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == accepted);
+                PPR_TEST_ASSERT(test_app.m_last_presented and not test_app.m_last_dropped);
+                PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() > held_submission);
 
                 draw_retained(final);
                 PPR_TEST_ASSERT(test_app.m_last_presented and not test_app.m_last_dropped);

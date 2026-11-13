@@ -741,6 +741,11 @@ namespace pP {
         }
 
         stageParticles_(stage);
+        // The packet's publication state travels with the stage so the pass can
+        // report it and so a `held` draw knows a missing preparation is the hold,
+        // not a caller error. Liveness itself is re-derived in
+        // prepareGpuParticles, never trusted from this field (finding D10).
+        m_world.m_particle_presentation = stage.m_particle_presentation;
         return default_value_v;
     }
 
@@ -2696,6 +2701,7 @@ namespace pP {
         m_world.m_surface_profile.reset();
         m_particle_uploads = 0u;
         m_particle_uploaded_bytes = 0u;
+        m_particle_pack_encodes = 0u;
         m_candidate_world.reset();
         m_retiring_world.reset();
         m_world.m_submitted_tiles.clear();
@@ -3288,7 +3294,13 @@ namespace pP {
             GridPass, lightingInputsAvailable() ? std::error_code{} : std::make_error_code(std::errc::not_connected));
 
         lighting::WorldLightingInputs result{};
-        result.m_particles = m_world.m_gpu_particles ? m_world.m_gpu_particles->m_view : GridParticleGpuView{};
+        // A hold (or a superseded publication) must not become a lighting
+        // failure. A not-current view is withdrawn before this boundary so the
+        // projection runs with no particle candidates and never reads a
+        // superseded epoch; the alternative is the old
+        // `resource_unavailable_try_again` that stopped the loop (D10/D12).
+        const bool particles_current = m_world.m_gpu_particles and m_world.m_gpu_particles->m_view.current();
+        result.m_particles = particles_current ? m_world.m_gpu_particles->m_view : GridParticleGpuView{};
         result.m_identity = activeParticlePresentation().value_or(GridParticlePresentationIdentity{});
         result.m_terrain = m_world.m_terrain_cells;
         result.m_visible_materials = m_world.m_terrain_palette;

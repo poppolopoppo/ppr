@@ -210,22 +210,26 @@ namespace pP::colony {
             ParticlePresentationCache temporary;
             auto &cache = particle_cache ? *particle_cache : temporary;
             packet.m_gpu_particles = driver.particleView();
-            if (not packet.m_gpu_particles) {
+            const auto presentation = classifyParticlePresentation(
+                packet.m_gpu_particles.has_value(), packet.m_gpu_particles and packet.m_gpu_particles->current(),
+                driver.matterAttached());
+            // Matter attached with no view at all is the only hard failure here:
+            // a broken source, not the transient a dig publishes (finding D12).
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation,
+                presentation ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+            packet.m_particle_presentation = *presentation;
+            if (*presentation == EParticlePresentation::held) {
+                // A committed view whose live epoch moved on is alive but not
+                // owned, so the packet drops it (finding D11). No buffers travel
+                // in this state and the renderer presents its retained pack.
+                packet.m_gpu_particles.reset();
+            } else if (*presentation == EParticlePresentation::seeds) {
                 // Only a pre-runtime CPU owner may provide initial admission
                 // seeds. An attached source must never become a CPU fallback.
-                PPR_RETURN_ERROR_ON_FAIL(
-                    SimPresentation, not driver.matterAttached()
-                                         ? std::error_code{}
-                                         : std::make_error_code(std::errc::state_not_recoverable));
-
                 auto particles = cache.capture(driver);
                 PPR_RETURN_ERROR_ON_FAIL(SimPresentation, particles);
                 packet.m_particle_batches = std::move(*particles);
-            } else {
-                PPR_RETURN_ERROR_ON_FAIL(
-                    SimPresentation, packet.m_gpu_particles->current()
-                                         ? std::error_code{}
-                                         : std::make_error_code(std::errc::resource_unavailable_try_again));
             }
 
             packet.m_surface_profile = cache.captureSurface(driver);
@@ -237,6 +241,18 @@ namespace pP::colony {
                 SimPresentation, (packet.m_cell_size_m == 1.0f or packet.m_cell_size_m == 1.0f / 3.0f)
                                      ? std::error_code{}
                                      : std::make_error_code(std::errc::invalid_argument));
+
+            // Publication-state invariants (plan §3): `held` carries no payload at
+            // all and `current` always carries its view. Anything else could only
+            // hand a superseded epoch to a layer below (finding D11).
+            const bool payload_matches_state =
+                (packet.m_particle_presentation != EParticlePresentation::held or
+                    (not packet.m_gpu_particles and packet.m_particle_batches.empty())) and
+                (packet.m_particle_presentation != EParticlePresentation::current or packet.m_gpu_particles);
+            PPR_RETURN_ERROR_ON_FAIL(
+                SimPresentation,
+                payload_matches_state ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+
             if (not packet.m_has_catalog) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     SimPresentation, packet.m_terrain_visuals.empty() and
@@ -647,6 +663,7 @@ namespace pP::colony {
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
+        stage.m_particle_presentation = presentation.m_particle_presentation;
 
 
         return stage;
@@ -680,6 +697,7 @@ namespace pP::colony {
         // domain; Driver retains the old lease until joint commit, and the first
         // committed frame binds the real new view through submitSessionGridStage_.
         stage->m_gpu_particles.reset();
+        stage->m_particle_presentation = EParticlePresentation::seeds;
         return std::move(*stage);
     }
 
@@ -719,6 +737,7 @@ namespace pP::colony {
         stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
+        stage.m_particle_presentation = presentation.m_particle_presentation;
 
         if (m_frame or m_next_chunk == m_chunk_count) {
             stage.m_tiles = m_visible;
@@ -779,6 +798,7 @@ namespace pP::colony {
         stage.m_surface_profile = packet.m_surface_profile;
         stage.m_particle_batches = packet.m_particle_batches;
         stage.m_gpu_particles = packet.m_gpu_particles;
+        stage.m_particle_presentation = packet.m_particle_presentation;
 
         // Owned payload only: no driver ack, no translator contact, and no
         // pass mutation happen on the client. The pass-side contact runs

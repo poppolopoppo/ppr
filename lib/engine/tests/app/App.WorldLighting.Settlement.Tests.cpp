@@ -475,15 +475,76 @@ namespace pP::tests::detail::WorldLightingSettlement {
         view.m_terrain_revision = 1u;
         view.m_joint_tick = 1u;
         view.m_origin = 3.0;
+
+        // The metadata is the publication's own immutable snapshot, so the pass
+        // can validate the material domain before it packs anything.
+        GridParticleMetadataRow row{};
+        row.m_id_low = 1u;
+        row.m_source_row = 0u;
+        row.m_material_temperature = 1u;
+        row.m_radius = 0.5f;
+        const auto metadata = prepareGridParticleMetadata(fixture.device(), {&row, 1u}, 1u, 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+        view.m_metadata = *metadata;
+
         PPR_TEST_ASSERT(view.current());
+        PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent(view));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+        PPR_TEST_ASSERT(grid.activeParticlePresentation().has_value());
+
+        // A live publication is what transport consumes: the resolved-cell
+        // projection nominates its candidates from this same view.
+        const auto live_inputs = grid.lightingInputs();
+        PPR_TEST_ASSERT(live_inputs.has_value());
+        PPR_TEST_ASSERT(live_inputs->m_particles.m_numerical and live_inputs->m_particles.m_metadata);
+        PPR_TEST_ASSERT(
+            live_inputs->m_identity ==
+            GridParticlePresentationIdentity{
+                view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick});
+
+        // The publisher released a newer epoch after this view was captured: the
+        // view is alive but no longer owned. A frame that offers no view may
+        // still proceed - it carries CPU seeds or a hold, and neither reads
+        // solver storage - while the pass keeps its own retained pack.
+        live->store(2u, std::memory_order_release);
+        PPR_TEST_ASSERT(not view.current());
         PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent(view));
         PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent(std::nullopt));
 
-        // The publisher released a newer epoch after this view was captured:
-        // the un-encoded view is rejected rather than rebound to the new bytes.
-        live->store(2u, std::memory_order_release);
-        PPR_TEST_ASSERT(not view.current());
-        PPR_TEST_ASSERT(not grid.gpuParticleFrameCurrent(view));
+        // A view from another world is a defect, not a transient.
+        GridParticleGpuView foreign = view;
+        foreign.m_world.m_world_generation += 1u;
+        PPR_TEST_ASSERT(not grid.gpuParticleFrameCurrent(foreign));
+        PPR_TEST_ASSERT(grid.applyGpuParticleView(foreign) == std::errc::invalid_argument);
+
+        // Liveness is the renderer's decision too (finding D10): the not-current
+        // view is the same hold skip, never `invalid_argument`, and installing it
+        // is refused so nothing can pack from the superseded epoch.
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+
+        // The hold withdraws the transport-stage input instead of failing: the
+        // projection runs with no particle candidates and never reads the
+        // superseded epoch (the old path returned `resource_unavailable_try_again`
+        // and stopped the loop).
+        const auto held_inputs = grid.lightingInputs();
+        PPR_TEST_ASSERT(held_inputs.has_value());
+        PPR_TEST_ASSERT(
+            not held_inputs->m_particles.m_numerical and
+            not held_inputs->m_particles.m_readonly and
+            not held_inputs->m_particles.m_metadata);
+        PPR_TEST_ASSERT(held_inputs->m_identity == GridParticlePresentationIdentity{});
+
+        // The next current publication installs and resumes.
+        view.m_device_epoch = 2u;
+        view.m_publication = 2u;
+        view.m_live_epoch = std::make_shared<std::atomic<u64>>(2u);
+        PPR_TEST_ASSERT(view.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+        PPR_TEST_ASSERT(grid.activeParticlePresentation().has_value());
     };
 
     // ------------------------------------------------------------------
@@ -1491,7 +1552,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         torn_down = true;
     };
 
-    PPR_UNIT_TEST (editor_stale_publication_epoch_drops_and_leaves_payload_pending) {
+    PPR_UNIT_TEST (editor_stale_publication_epoch_holds_without_a_stale_read) {
         SettlementEditorApp test_app{std::span<const char *const>{}};
         PPR_TEST_ASSERT(not test_app.boot());
         bool torn_down = false;
@@ -1541,7 +1602,8 @@ namespace pP::tests::detail::WorldLightingSettlement {
         test_app.submitGridStage(std::move(staged));
 
         // The publisher released a newer epoch after this packet was captured
-        // but before the owner lane encodes it: the un-encoded view is rejected
+        // but before the owner lane encodes it. Task 5 makes that a hold, not a
+        // drop: the frame is valid, it carries no superseded buffer to a draw,
         // and the payload stays pending for a fresh coherent packet.
         live->store(2u, std::memory_order_release);
         const FenceCompletionValue before = renderer.lastSubmittedFenceValue();
@@ -1549,21 +1611,40 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_TEST_ASSERT(not test_app.draw());
         PPR_TEST_ASSERT(test_app.m_last_result.has_value());
         const RenderFrameResult stale = *test_app.m_last_result;
-        PPR_TEST_ASSERT(stale.m_dropped);
+
+        // Hold, not drop: no error, no ambiguous submit, no quarantined
+        // admission, and every stage is a definite acceptance. The retained
+        // content presents; only the particle publication is held.
+        PPR_TEST_ASSERT(not stale.m_dropped);
         PPR_TEST_ASSERT(not stale.m_error);
-        PPR_TEST_ASSERT(not stale.m_presented);
         PPR_TEST_ASSERT(not stale.m_submit_possibly_executed);
-        PPR_TEST_ASSERT(stale.m_submit_value == kFenceValueNone);
+        PPR_TEST_ASSERT(stale.m_presented);
+        PPR_TEST_ASSERT(stale.m_stages[kRenderStageScene].m_settlement == FrameSettlement::kSubmitted);
+        PPR_TEST_ASSERT(stale.m_stages[kRenderStageResolve].m_settlement == FrameSettlement::kSubmitted);
+        PPR_TEST_ASSERT(stale.m_stages[kRenderStagePresent].m_settlement == FrameSettlement::kSubmitted);
+        PPR_TEST_ASSERT(stale.m_submit_value != kFenceValueNone);
+        PPR_TEST_ASSERT(stale.m_submit_value == stageValue(stale, kRenderStagePresent));
+        PPR_TEST_ASSERT(stale.m_submit_value > before);
+        PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == stale.m_submit_value);
         PPR_TEST_ASSERT(not stale.m_grid_staging_applied);
-        for (const RenderStageResult &stage: stale.m_stages) {
-            PPR_TEST_ASSERT(stage.m_settlement == FrameSettlement::kRejected);
-            PPR_TEST_ASSERT(stage.m_submission == kFenceValueNone);
-        }
-        // No backend work and no consumption ack: the client can restage.
-        PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == before);
+
+        // No particle backend work and no stale read: the superseded view is
+        // never installed, the pass holds with nothing retained, it encodes no
+        // pack, and it owns no particle buffer for a draw to read.
+        GridPass &grid = test_app.getGridPass();
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == 0u);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == std::array<rhi::IBuffer *, 3u>{});
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+
+        // The consumption ack rides the non-applied slot: the payload stays
+        // pending for a fresh coherent packet.
         PPR_TEST_ASSERT(stale.m_grid_ack_seed == 7u);
         PPR_TEST_ASSERT(stale.m_grid_ack_chunk_ids.size() == 1u and stale.m_grid_ack_chunk_ids[0] == 3u);
         PPR_TEST_ASSERT(stale.m_grid_ack_revisions.size() == 1u and stale.m_grid_ack_revisions[0] == 11u);
+
+        // A held publication never quarantines the editor.
         PPR_TEST_ASSERT(renderer.checkFrameAdmission() == std::error_code{});
 
         // The view's buffers are device children: release them before the
@@ -1777,7 +1858,7 @@ namespace pP::tests {
                 detail::WorldLightingSettlement::accepted_resolve_commits_history_and_exposure_exactly_once,
                 detail::WorldLightingSettlement::editor_ambiguous_scene_stops_before_resolve_and_present,
                 detail::WorldLightingSettlement::editor_ambiguous_present_keeps_scene_and_resolve_values,
-                detail::WorldLightingSettlement::editor_stale_publication_epoch_drops_and_leaves_payload_pending,
+                detail::WorldLightingSettlement::editor_stale_publication_epoch_holds_without_a_stale_read,
                 detail::WorldLightingSettlement::editor_armed_resolve_failure_is_discarded_when_the_scene_is_rejected,
                 detail::WorldLightingSettlement::editor_review_focus_keeps_old_screen_role_until_accepted_resolve,
             });

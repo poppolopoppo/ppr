@@ -224,6 +224,28 @@ export namespace pP {
         "the rejected 0.5-cell half-extent square (2.507 r) would clip; keep it rejected");
 
     // ------------------------------------------------------------------
+    // particle publication state
+    // ------------------------------------------------------------------
+
+    // Three-state contract of one frame's particle publication (plan §3, Task
+    // 5). It is shared by the packet, the staged frame and this pass so the
+    // layers cannot disagree about who owns liveness:
+    //   seeds   - no committed view and no attached matter: the pre-runtime CPU
+    //             admission path; carries CPU batches and no GPU view.
+    //   current - a committed view exists and `GridParticleGpuView::current()`
+    //             is true: pack from the solver rows and draw.
+    //   held    - matter is attached and a committed view exists, but its live
+    //             epoch has moved on: the packet carries no view and no buffer at
+    //             all, and the renderer presents its own retained packed rows.
+    // Matter attached with *no* view is not a state: it is a broken source and
+    // stays `state_not_recoverable` at capture.
+    enum class EParticlePresentation : u8 {
+        seeds,
+        current,
+        held
+    };
+
+    // ------------------------------------------------------------------
     // per-instance particle descriptions
     // ------------------------------------------------------------------
     // Draw class of one instanced particle draw. It is a per-draw depth/blend
@@ -619,6 +641,12 @@ export namespace pP {
 
         // A host selects this view only after joint CPU/GPU commit. Old packets
         // are rejected on the owner lane before any upload/encoding touches it.
+        //
+        // "Current" is the frame's right to proceed, not the view's liveness: no
+        // offered view means the frame carries seeds or a hold, neither of which
+        // reads solver storage, so neither rejects the frame. An offered view
+        // must belong to this world; `applyGpuParticleView` maps a not-current
+        // view to the hold skip instead of failing (findings D10-D12).
         [[nodiscard]] bool gpuParticleFrameCurrent(const std::optional<GridParticleGpuView> &view) const noexcept;
         [[nodiscard]] std::optional<GridParticlePresentationIdentity> activeParticlePresentation() const noexcept;
         [[nodiscard]] std::error_code applyGpuParticleView(const GridParticleGpuView &view);
@@ -782,6 +810,25 @@ export namespace pP {
             const auto &particles = *m_world.m_gpu_particles;
             const auto &slot = particles.m_slots[particles.m_selected_slot];
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
+        }
+
+        // Test-only publication observations: the state the last applied stage
+        // carried, the consecutive held preparations since the last current
+        // publication, and the source epoch of the last completed pack.
+        [[nodiscard]] EParticlePresentation particlePresentationForTest() const noexcept {
+            return m_world.m_particle_presentation;
+        }
+        [[nodiscard]] u64 particleHoldAttemptsForTest() const noexcept {
+            return m_world.m_particle_hold_attempts;
+        }
+        [[nodiscard]] u64 particlePackedEpochForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_epoch : std::numeric_limits<u64>::max();
+        }
+
+        // Pack dispatches encoded so far. A held preparation encodes none, so a
+        // hold can never be confused with a re-pack by another lane's counters.
+        [[nodiscard]] u64 particlePackEncodesForTest() const noexcept {
+            return m_particle_pack_encodes;
         }
 
         // Test-only: the cached pipeline of one particle draw class, or nullptr
@@ -1065,6 +1112,12 @@ export namespace pP {
         void stageParticles_(const GridStagedFrame &stage);
         void markPipelineUse_(GridCachedPipeline &pipeline, u32 slot) noexcept;
         [[nodiscard]] std::error_code admitParticleSeeds_(rhi::IDevice &device);
+        // Liveness of the retained committed view and the world it belongs to.
+        [[nodiscard]] bool retainedGpuParticleCurrent_() const noexcept;
+        // The held preparation: no pack, no solver buffer read, and the retained
+        // packed rows and stable IDs stay drawable. Counted and logged once per
+        // hold entry; a never-packed hold presents no particles.
+        [[nodiscard]] std::error_code holdGpuParticles_();
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
@@ -1419,6 +1472,13 @@ export namespace pP {
             std::unique_ptr<GpuParticleStorage> m_gpu_particles{};
             std::shared_ptr<std::atomic<u64>> m_initial_particle_epoch{};
             u64 m_particle_seed_version{};
+            // Publication state the last applied stage reported (plan §3). It is
+            // world-scoped so a world swap cannot inherit another world's hold.
+            EParticlePresentation m_particle_presentation{EParticlePresentation::seeds};
+            // Consecutive held preparations since the last current publication.
+            // Entry and exit are logged once each, and there is no timeout: the
+            // hold expires at a publication, a world event or matter detach.
+            u64 m_particle_hold_attempts{};
             bool m_particle_seeds_dirty{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
@@ -1521,6 +1581,10 @@ export namespace pP {
 
         u64 m_particle_uploads{};
         u64 m_particle_uploaded_bytes{};
+        // Pack dispatches encoded (one per frame whose source epoch, device epoch
+        // or metadata version differs from the last completed pack). A held
+        // preparation encodes none and must leave this unchanged.
+        u64 m_particle_pack_encodes{};
         // Distinct published materials the palette does not carry; those rows
         // discard at shading time (identity guard D9). Counted once per pack.
         u64 m_particle_description_rejections{};
@@ -1572,6 +1636,9 @@ export namespace pP {
         float m_reference_thickness_m{1.0f};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};
+        // Publication state this stage carries (plan §3). `held` never carries a
+        // view or a CPU batch: the renderer keeps presenting its own last pack.
+        EParticlePresentation m_particle_presentation{EParticlePresentation::seeds};
         Array<GridTileSubmission> m_tiles{};
         Array<GridStagedUpload> m_uploads{};
         EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
