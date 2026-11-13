@@ -1281,9 +1281,9 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     //
     // The quad is the un-stretched support scaled by the same k, so it encloses
     // the stretched shape: that shape's support in any direction is at most
-    // k R = 2.400 r, inside the unchanged 2.45 r cull margin, and the fragment
-    // applies the same bound to the minor axis, which stays at R. With stretch
-    // == 1 every factor here is exactly the previous expression.
+    // k R = 3.000 r, inside the 3.0625 r cull margin, and the fragment applies
+    // the same bound to the minor axis, which stays at R. With stretch == 1
+    // every factor here is exactly the previous expression.
     float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
         : particle.m_radius_m*(kParticleSupportScale*stretch);
     float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;

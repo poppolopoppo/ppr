@@ -34,7 +34,7 @@ struct ParticleNativeCell { uint x,y,status; };
 // One constant set, read by the prepare cull and the draw geometry so the two
 // sides cannot drift: r is the packed physical radius h*sqrt(V/pi), R = 2.0 r is
 // the support radius both phases share (the P1 decision), and the cull margin is
-// 2.45 r so the optional 1.2x stretch (2.400 r) still fits.
+// 3.0625 r so the retained 1.5x flow stretch (3.000 r) still fits.
 //
 // Edge: one C1 radial falloff for both phases, from the normalised radius
 // rho = |p - centre| / R: a = 1 for rho <= 2/3, a = smoothstep(1, 2/3, rho) for
@@ -47,27 +47,30 @@ struct ParticleNativeCell { uint x,y,status; };
 // therefore a = R/1.3106 = 1.5260 r (0.4305 cell at r = 0.2821 cell) and
 // c = 0.25 a (0.1076 cell). Liquid: a disk of radius R, support exactly R.
 //
-// Every shape's support must stay at or below the 2.45 r margin, including the
-// optional 1.2x stretch: max(S, 1.2 S) = 2.400 r <= 2.45 r. Rejected variants,
-// kept so they cannot return unnoticed: a rounded square of half-extent a = R
-// has support 2.621 r, the unrounded square of half-extent a = R has 2.828 r and
-// the earlier 0.5-cell half-extent square has 2.507 r; all exceed the margin and
-// would clip at the frustum edge.
+// Every shape's support must stay at or below the 3.0625 r margin, including the
+// retained 1.5x flow stretch: max(S, 1.5 S) = 3.000 r <= 3.0625 r (2.08%
+// headroom). Rejected variants, kept so they cannot return unnoticed: a rounded
+// square of half-extent a = R has support 2.621 r, the unrounded square of
+// half-extent a = R has 2.828 r and the earlier 0.5-cell half-extent square has
+// 2.507 r. All three are larger than the adopted 2.0 r support, so they remain
+// rejected as appearance (a bigger silhouette and more fill); the raised margin
+// no longer makes them cull-infeasible, so they are recorded rather than gated.
 //
 // Retained flow cue (Task 4, appearance only): the drawn shape is stretched
 // along the published per-step motion, major axis only, by
 // k = 1 + (kParticleStretchCap - 1) * saturate(|motion| / kParticleMotionReference).
-// The major semi-axis is therefore at most 1.2 R = 2.400 r, inside the unchanged
+// The major semi-axis is therefore at most 1.5 R = 3.000 r, inside the 3.0625 r
 // cull margin, and the minor semi-axis stays the un-stretched support R = 2.0 r.
 // The reference magnitude is a fixed, illustrative curve shape in native cells
-// per solver step, not a physical speed: the row's motion is per-step and this
-// path introduces no dt. Since k >= 1 the stretched shape contains the
-// un-stretched one, so the seeded interior of plan §5.2 stays saturated and the
-// cross-flow (diagonal) support never shrinks.
+// per solver step (0.06, so ordinary flow saturates the cap), not a physical
+// speed: the row's motion is per-step and this path introduces no dt. Since
+// k >= 1 the stretched shape contains the un-stretched one, so the seeded
+// interior of plan §5.2 stays saturated and the cross-flow (diagonal) support
+// never shrinks.
 static const float kParticleSupportScale = 2.0;
-static const float kParticleCullRadiusScale = 2.45;
-static const float kParticleStretchCap = 1.2;
-static const float kParticleMotionReference = 0.10;
+static const float kParticleCullRadiusScale = 3.0625;
+static const float kParticleStretchCap = 1.5;
+static const float kParticleMotionReference = 0.06;
 static const float kParticleRoundedSquareSupport = 1.3106;
 static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kParticleRoundedSquareSupport;
 static const float kParticleSolidCornerFraction = 0.25;

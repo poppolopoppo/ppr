@@ -149,11 +149,16 @@ export namespace pP {
     // One constant set, mirrored by grid_particle_native.slang (the prepare cull
     // and the draw geometry read it there). r is the packed physical radius
     // h*sqrt(V/pi); R = 2.0 r is the support radius both phases share (the P1
-    // decision); the cull margin in the prepare `visible()` test is 2.45 r, which
-    // also covers the optional 1.2x stretch at 2.400 r.
+    // decision); the cull margin in the prepare `visible()` test is 3.0625 r,
+    // which also covers the retained 1.5x flow stretch at 3.000 r.
     inline constexpr float kGridParticleSupportScale{2.0f};
-    inline constexpr float kGridParticleCullRadiusScale{2.45f};
-    inline constexpr float kGridParticleStretchCap{1.2f};
+    inline constexpr float kGridParticleCullRadiusScale{3.0625f};
+    inline constexpr float kGridParticleStretchCap{1.5f};
+    // Magnitude reference of the retained flow cue, in native cells per solver
+    // step. Fixed and illustrative, not a physical speed: the cue reads the row's
+    // per-step motion and introduces no dt. 0.06 makes ordinary flow saturate the
+    // cap.
+    inline constexpr float kGridParticleMotionReference{0.06f};
 
     // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
     // 1 for rho <= 2/3, smoothstep(1, 2/3, rho) for 2/3 < rho < 1 and 0 beyond.
@@ -192,16 +197,18 @@ export namespace pP {
         return clamped * clamped * (3.0f - 2.0f * clamped);
     }
 
-    // Every shape's support must stay inside the 2.45 r cull margin, including the
-    // optional stretch, and the rounded square must be inscribed exactly in the
-    // disk's support circle. A future shape that outgrows the bound fails here
+    // Every shape's support must stay inside the 3.0625 r cull margin, including
+    // the retained stretch, and the rounded square must be inscribed exactly in
+    // the disk's support circle. A future shape that outgrows the bound fails here
     // instead of clipping silently at the frustum edge:
-    //   max(support, kStretchCap * support) = 2.400 r <= 2.45 r (2.08% headroom).
+    //   max(support, kStretchCap * support) = 3.000 r <= 3.0625 r (2.08% headroom).
     //
     // Rejected variants, recorded so they cannot return unnoticed: a rounded
     // square with half-extent a = R has support 2.621 r, the unrounded square with
-    // a = R has 2.828 r and the earlier 0.5-cell half-extent square has 2.507 r;
-    // all exceed the margin and would clip.
+    // a = R has 2.828 r and the earlier 0.5-cell half-extent square has 2.507 r.
+    // All three are larger than the adopted 2.0 r support, so they remain rejected
+    // as appearance (a bigger silhouette and more fill); the raised margin no
+    // longer makes them cull-infeasible, so they are recorded rather than gated.
     static_assert(
         gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) <=
             kGridParticleSupportScale + 1.0e-4f,
@@ -210,18 +217,18 @@ export namespace pP {
         gridParticleRoundedSquareSupport(kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale) *
                 kGridParticleStretchCap <=
             kGridParticleCullRadiusScale,
-        "the stretched support must fit the 2.45 r cull margin");
+        "the stretched support must fit the 3.0625 r cull margin");
     static_assert(
         gridParticleRoundedSquareSupport(
             kGridParticleSupportScale, kGridParticleSolidCornerFraction *kGridParticleSupportScale) >
-            kGridParticleCullRadiusScale,
-        "the rejected rounded a = R variant (2.621 r) would clip; keep it rejected");
+            kGridParticleSupportScale,
+        "the rejected rounded a = R variant (2.621 r) is larger than the adopted support; keep it rejected");
     static_assert(
-        1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale,
-        "the rejected unrounded a = R variant (2.828 r) would clip; keep it rejected");
+        1.41421356237309505f * kGridParticleSupportScale > kGridParticleSupportScale,
+        "the rejected unrounded a = R variant (2.828 r) is larger than the adopted support; keep it rejected");
     static_assert(
-        2.5066f > kGridParticleCullRadiusScale,
-        "the rejected 0.5-cell half-extent square (2.507 r) would clip; keep it rejected");
+        2.5066f > kGridParticleSupportScale,
+        "the rejected 0.5-cell half-extent square (2.507 r) is larger than the adopted support; keep it rejected");
 
     // ------------------------------------------------------------------
     // particle publication state

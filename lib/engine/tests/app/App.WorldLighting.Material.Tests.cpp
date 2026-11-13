@@ -3630,19 +3630,20 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_shapes_share_one_support_bound) {
         // Arithmetic probe for the revised (P1) geometry: 2.0x support, the C1
-        // falloff, the 2.45 r_m cull margin that also covers the 1.2x stretch,
-        // and the saturated seeded interior. The same constants are mirrored in
-        // grid_particle_native.slang for the draw geometry and the prepare cull.
+        // falloff, the 3.0625 r_m cull margin that also covers the retained 1.5x
+        // flow stretch, and the saturated seeded interior. The same constants are
+        // mirrored in grid_particle_native.slang for the draw geometry and the
+        // prepare cull.
         constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
         const float rounded_support = gridParticleRoundedSquareSupport(
             kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale);
 
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
-        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 2.45f);
-        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.2f);
+        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 3.0625f);
+        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.5f);
         PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
         PPR_TEST_ASSERT(std::abs(rounded_support - kGridParticleSupportScale) <= 1.0e-4f);
-        // max(support, kStretchCap * support) = 2.400 r <= 2.45 r.
+        // max(support, kStretchCap * support) = 3.000 r <= 3.0625 r.
         PPR_TEST_ASSERT(rounded_support * kGridParticleStretchCap <= kGridParticleCullRadiusScale);
         // Cell units at the reference radius: a = 0.4305 cell, c = 0.1076 cell.
         PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidHalfExtentScale) * r_cell - 0.4305) <= 5.0e-4);
@@ -3677,16 +3678,19 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(union_coverage(rho_diagonal, 2u) >= 0.98);
         PPR_TEST_ASSERT(union_coverage(rho_diagonal, 4u) >= 0.99);
 
-        // Rejected variants would clip at the frustum edge: the rounded square of
-        // half-extent a = R (keeping the 0.25 a corner fraction) needs 2.621x the
-        // physical radius, the unrounded square of a = R needs 2.828x and the
-        // earlier 0.5-cell half-extent square needs 2.507x.
+        // Rejected variants, kept recorded: the rounded square of half-extent
+        // a = R (keeping the 0.25 a corner fraction) needs 2.621x the physical
+        // radius, the unrounded square of a = R needs 2.828x and the earlier
+        // 0.5-cell half-extent square needs 2.507x. All three exceed the adopted
+        // 2.0 r support, so they remain rejected as appearance (a bigger
+        // silhouette and more fill); the raised 3.0625 r margin no longer makes
+        // them cull-infeasible, which is why they are compared to the support.
         PPR_TEST_ASSERT(
             gridParticleRoundedSquareSupport(
                 kGridParticleSupportScale, kGridParticleSolidCornerFraction * kGridParticleSupportScale) >
-            kGridParticleCullRadiusScale);
-        PPR_TEST_ASSERT(1.41421356237309505f * kGridParticleSupportScale > kGridParticleCullRadiusScale);
-        PPR_TEST_ASSERT(1.41421356237309505f * 0.5f / float(r_cell) > kGridParticleCullRadiusScale);
+            kGridParticleSupportScale);
+        PPR_TEST_ASSERT(1.41421356237309505f * kGridParticleSupportScale > kGridParticleSupportScale);
+        PPR_TEST_ASSERT(1.41421356237309505f * 0.5f / float(r_cell) > kGridParticleSupportScale);
 
         _.log(
             std::format(
@@ -3702,15 +3706,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // ------------------------------------------------------------------
     // optional flow cue: direction and magnitude mapping
     // ------------------------------------------------------------------
-    // Mirrors grid_tiles.slang `particleVertex`/`particleFlowLocal` and the
-    // kParticleMotionReference constant in grid_particle_native.slang. Those two
-    // files hold the only production copies; this twin exists so the mapping, the
-    // anisotropic metric and the support bound are asserted without a screenshot.
-    // The row's own motion sanitising (finite components, each clamped to +-64
-    // cells/step) is asserted on the packed GPU row by
+    // Mirrors grid_tiles.slang `particleVertex`/`particleFlowLocal`; the bounded
+    // constants are the CPU twin's kGridParticleStretchCap/kGridParticleMotionReference
+    // (App.Renderer.GridPass.cppm) and the shader's kParticleStretchCap/
+    // kParticleMotionReference (grid_particle_native.slang). This mirror exists so
+    // the mapping, the anisotropic metric and the support bound are asserted
+    // without a screenshot. The row's own motion sanitising (finite components,
+    // each clamped to +-64 cells/step) is asserted on the packed GPU row by
     // presentation_motion_half_round_trips_and_clamps and the projection entry,
     // and is not repeated here.
-    inline constexpr float kGridParticleMotionReference{0.10f};
 
     struct FlowPoint {
         double x{};
@@ -3742,7 +3746,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     // The inverse metric: where a point of the un-stretched shape lands after the
     // stretch. The largest such reach is the half-extent the billboard and the
-    // unchanged cull margin have to cover.
+    // cull margin have to cover.
     [[nodiscard]] constexpr FlowPoint gridParticleFlowWorld(
         const FlowPoint base, const FlowPoint flow, const float stretch) noexcept {
         if (not (stretch > 1.0f))
@@ -3768,8 +3772,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_flow_cue_stretches_the_major_axis_only) {
         // Appearance probe for the retained flow cue: the drawn shape stretches
-        // along the published row motion by at most k = 1.2, the minor semi-axis
-        // stays the sealed support R, and the unchanged cull margin covers both.
+        // along the published row motion by at most k = 1.5, the minor semi-axis
+        // stays the sealed support R, and the 3.0625 r cull margin covers both.
         const float support = kGridParticleSupportScale;
         const float cap = kGridParticleStretchCap;
 
@@ -3788,13 +3792,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
             previous = stretch;
         }
 
-        // Support: the major semi-axis is k R = 2.400 r and the minor semi-axis is
-        // R = 2.000 r, so max(major, minor) stays inside the unchanged 2.45 r cull
-        // margin that the prepare `visible()` test applies. Zero motion (k = 1)
-        // keeps the un-stretched support.
+        // Support: the major semi-axis is k R = 3.000 r and the minor semi-axis is
+        // R = 2.000 r, so max(major, minor) stays inside the 3.0625 r cull margin
+        // that the prepare `visible()` test applies. Zero motion (k = 1) keeps the
+        // un-stretched support.
         const float major = support * cap;
         const float minor = support;
-        PPR_TEST_ASSERT(std::abs(major - 2.4f) <= 1.0e-6f and minor == 2.0f);
+        PPR_TEST_ASSERT(std::abs(major - 3.0f) <= 1.0e-6f and minor == 2.0f);
         PPR_TEST_ASSERT((std::max) (major, minor) <= kGridParticleCullRadiusScale);
         PPR_TEST_ASSERT(gridParticleFlowStretch(0.0f) * support == support);
 
@@ -3855,12 +3859,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(first.x == second.x and first.y == second.y);
         PPR_TEST_ASSERT(first.x != sample_local.x or first.y != sample_local.y);
 
-        // No invariant moved: the shared support, cull, falloff and silhouette
-        // thresholds are the ones the sealing proof, the phase shapes, the
-        // occlusion decision and the material/transport contracts already use.
+        // No invariant moved beyond the bounded constant change: the shared
+        // support, the raised cull, the cap and the falloff/silhouette thresholds
+        // are the ones the sealing proof, the phase shapes, the occlusion decision
+        // and the material/transport contracts use.
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
-        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 2.45f);
-        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.2f);
+        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 3.0625f);
+        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.5f);
+        PPR_TEST_ASSERT(kGridParticleMotionReference == 0.06f);
         PPR_TEST_ASSERT(kGridParticleFalloffInnerFraction == 2.0f / 3.0f);
         PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
 
