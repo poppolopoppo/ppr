@@ -537,6 +537,17 @@ namespace pP::tests::detail::WorldLightingSettlement {
             not held_inputs->m_particles.m_metadata);
         PPR_TEST_ASSERT(held_inputs->m_identity == GridParticlePresentationIdentity{});
 
+        // A presentation-cache invalidation between preparation and the next
+        // frame must not disturb the hold: the same skip applies, nothing is
+        // installed, no pack is encoded and no particle storage appears.
+        grid.clearCache();
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == 0u);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == std::array<rhi::IBuffer *, 3u>{});
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+
         // The next current publication installs and resumes.
         view.m_device_epoch = 2u;
         view.m_publication = 2u;
@@ -1552,7 +1563,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         torn_down = true;
     };
 
-    PPR_UNIT_TEST (editor_stale_publication_epoch_holds_without_a_stale_read) {
+    PPR_UNIT_TEST (editor_stale_publication_epoch_is_admitted_as_a_hold_before_encode) {
         SettlementEditorApp test_app{std::span<const char *const>{}};
         PPR_TEST_ASSERT(not test_app.boot());
         bool torn_down = false;
@@ -1652,6 +1663,72 @@ namespace pP::tests::detail::WorldLightingSettlement {
         view = GridParticleGpuView{};
         live.reset();
         rhi.reset();
+        PPR_TEST_ASSERT(not test_app.teardown());
+        torn_down = true;
+    };
+
+    PPR_UNIT_TEST (editor_world_activation_expires_a_held_publication) {
+        SettlementEditorApp test_app{std::span<const char *const>{}};
+        PPR_TEST_ASSERT(not test_app.boot());
+        bool torn_down = false;
+        PPR_DEFER {
+            if (not torn_down) {
+                std::ignore = test_app.teardown();
+            }
+        };
+
+        constexpr auto frame_delta = std::chrono::milliseconds{16};
+        GridPass &grid = test_app.getGridPass();
+
+        // Enter the hold without any retained rows: the publication exists but
+        // its epoch moved on, so the pass installs nothing and holds.
+        auto live = std::make_shared<std::atomic<u64>>(1u);
+        GridParticleGpuView superseded{};
+        superseded.m_live_epoch = live;
+        superseded.m_device_epoch = 2u;
+        superseded.m_world = grid.activeWorldIdentity();
+        PPR_TEST_ASSERT(not superseded.current());
+        PPR_TEST_ASSERT(grid.gpuParticleFrameCurrent(superseded));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(superseded));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+
+        // One retained frame counts the held preparation; nothing is packed. The
+        // renderer's presentation cache is invalidated mid-frame (between update
+        // and the particle preparation) to prove the hold does not depend on it.
+        retainEditorTerrain(test_app);
+        PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+        grid.clearCache();
+        PPR_TEST_ASSERT(not test_app.draw());
+        PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+        PPR_TEST_ASSERT(not test_app.m_last_result->m_error and not test_app.m_last_result->m_dropped);
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == 0u);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == std::array<rhi::IBuffer *, 3u>{});
+
+        // A world event expires the hold: the presentation state, the retained
+        // storage and the hold counter are world-scoped, so the activated world
+        // starts from `seeds` with nothing retained and no error.
+        replaceEditorWorld(test_app);
+        PPR_TEST_ASSERT(grid.activeWorldIdentity().m_job_id == 1u);
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::seeds);
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 0u);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == std::array<rhi::IBuffer *, 3u>{});
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+
+        // The next frame draws no particles and does not re-enter the hold. The
+        // retained stage skips terrain re-staging, which would otherwise have to
+        // match the newly activated world's catalog fingerprint.
+        retainEditorTerrain(test_app);
+        PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+        PPR_TEST_ASSERT(not test_app.draw());
+        PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+        PPR_TEST_ASSERT(not test_app.m_last_result->m_error and not test_app.m_last_result->m_dropped);
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 0u);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == 0u);
+
+        live.reset();
         PPR_TEST_ASSERT(not test_app.teardown());
         torn_down = true;
     };
@@ -1858,7 +1935,8 @@ namespace pP::tests {
                 detail::WorldLightingSettlement::accepted_resolve_commits_history_and_exposure_exactly_once,
                 detail::WorldLightingSettlement::editor_ambiguous_scene_stops_before_resolve_and_present,
                 detail::WorldLightingSettlement::editor_ambiguous_present_keeps_scene_and_resolve_values,
-                detail::WorldLightingSettlement::editor_stale_publication_epoch_holds_without_a_stale_read,
+                detail::WorldLightingSettlement::editor_stale_publication_epoch_is_admitted_as_a_hold_before_encode,
+                detail::WorldLightingSettlement::editor_world_activation_expires_a_held_publication,
                 detail::WorldLightingSettlement::editor_armed_resolve_failure_is_discarded_when_the_scene_is_rejected,
                 detail::WorldLightingSettlement::editor_review_focus_keeps_old_screen_role_until_accepted_resolve,
             });

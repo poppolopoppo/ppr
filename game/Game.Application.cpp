@@ -1161,7 +1161,14 @@ namespace demo {
             const bool returning = m_workshop_finish_pending and
                                    m_world_transition.m_returning and
                                    m_world_transition.m_phase == game::ESessionWorldPhase::awaiting_presentation;
-            if (m_driver and
+            // A held packet carries no particle payload (plan §3). Overlaying the
+            // driver's or the workshop's lease here would put a superseded view
+            // back into a stage that declares `held`, so the state and the payload
+            // would disagree and a later layer could trust the wrong one
+            // (finding D11). Both overlays are skipped for `held`.
+            const bool particle_held = stage.m_particle_presentation == EParticlePresentation::held;
+            if (not particle_held and
+                m_driver and
                 (not m_workshop_open or m_workshop_game_phase == WorkshopGamePhase::generating or returning)) {
                 if ((m_world_published and m_candidate_activated) or m_world_view.m_id == 0u) {
                     m_driver->bindParticlePresentation(
@@ -1173,12 +1180,14 @@ namespace demo {
                 }
             }
 
-            if (auto retained = game::selectWorkshopRetainedParticles(
-                    m_workshop_game_particles, m_workshop_game_facts.m_world, stage.m_retain_content, m_workshop_open,
-                    m_workshop_displayed, m_workshop_finish_pending, activationPending_())) {
-                // The last numerical publication may precede its first terrain
-                // frame. Freeze that exact committed lease, not the pass's older cache.
-                stage.m_gpu_particles = std::move(retained);
+            if (not particle_held) {
+                if (auto retained = game::selectWorkshopRetainedParticles(
+                        m_workshop_game_particles, m_workshop_game_facts.m_world, stage.m_retain_content,
+                        m_workshop_open, m_workshop_displayed, m_workshop_finish_pending, activationPending_())) {
+                    // The last numerical publication may precede its first terrain
+                    // frame. Freeze that exact committed lease, not the pass's older cache.
+                    stage.m_gpu_particles = std::move(retained);
+                }
             }
 
             super_t::submitGridStage(std::move(stage));

@@ -372,6 +372,26 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game gpu_validation
     )
 
+    # Task 5 publication liveness: the device-free contract leaves, and the dug
+    # render fixture that produces the held-row evidence (retained rows drawn, no
+    # re-pack, no solver buffer read). Both are otherwise unselected because the
+    # aggregate `game.tests` entry excludes `game/checkpoint_gpu`.
+    ppr_add_test_entry(TARGET game.tests
+        NAME publication_hold_cpu
+        FILTER "game/checkpoint_gpu/held_publication_carries_no_buffers_and_keeps_the_rest_of_the_payload,game/checkpoint_gpu/publication_hold_does_not_change_solver_or_presentation_storage"
+        LOOPS
+        TIMEOUT 120
+        LABELS unit game cpu
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_publication_gpu
+        FILTER "game/checkpoint_gpu/actual_dug_solids_render_falling_and_late_pile_without_close_contact_holes"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 450
+        LABELS unit game gpu_validation
+    )
+
     ppr_add_test_entry(TARGET game.tests
         NAME matter_sand_gpu
         FILTER "game/checkpoint_gpu/dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain"

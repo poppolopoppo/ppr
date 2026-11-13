@@ -146,6 +146,9 @@ string(JOIN "," ppr_asset_gpu_misc_filter
     "asset/render/gates/pre_render_preparation_orders_and_rejects_submission"
     "asset/render/draws"
     "asset/render/quarantine"
+    # The editor scene flow is recursed from the quarantine group; name it
+    # explicitly so its selection (and its hold/lease coverage) is auditable.
+    "asset/render/quarantine/editor_scene_flow"
 )
 
 ppr_add_test_entry(TARGET engine.tests.asset

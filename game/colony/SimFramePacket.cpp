@@ -697,6 +697,8 @@ namespace pP::colony {
         // domain; Driver retains the old lease until joint commit, and the first
         // committed frame binds the real new view through submitSessionGridStage_.
         stage->m_gpu_particles.reset();
+        // `seeds` is the candidate's own truthful state (no committed view), not a
+        // hold: it must never freeze the active world's retained rows.
         stage->m_particle_presentation = EParticlePresentation::seeds;
         return std::move(*stage);
     }

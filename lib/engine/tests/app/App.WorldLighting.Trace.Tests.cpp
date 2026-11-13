@@ -223,10 +223,13 @@ namespace pP::tests::detail::WorldLightingTrace {
     };
 
     // Encodes one projection + acceleration attempt into its own submission.
-    // The caller owns acceptance (notifySubmitted) and settlement.
+    // The caller owns acceptance (notifySubmitted) and settlement. `particles`
+    // is the optional committed publication transport consumes; a null pointer
+    // is the "no particle publication" attempt.
     [[nodiscard]] AccelerationAttempt encodeAcceleration(
         Fixture &fixture, WorldLightingPass &pass, const rhi::ComPtr<rhi::IBuffer> &palette, const CategoricalMap &map,
-        const FenceCompletionValue completed = kFenceValueNone, const bool wait = true) {
+        const FenceCompletionValue completed = kFenceValueNone, const bool wait = true,
+        const GridParticleGpuView *const particles = nullptr) {
         const auto terrain = uploadTerrain(fixture, map);
 
         // The same attempt also prepares the cached source; its palette and
@@ -244,6 +247,9 @@ namespace pP::tests::detail::WorldLightingTrace {
         inputs.m_source_materials = source_materials;
         inputs.m_thermal_lut = thermal_lut;
         inputs.m_material_count = kMaterialCount;
+        if (particles != nullptr) {
+            inputs.m_particles = *particles;
+        }
 
         AccelerationAttempt attempt{};
         auto encoder = makeEncoder(fixture);
@@ -1507,6 +1513,145 @@ namespace pP::tests::detail::WorldLightingTrace {
         _.log(std::format("WORLD_LIGHTING_TRACE receive_only_passed=true negative_boundary=510 overflow_index=3"));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
+
+    // ------------------------------------------------------------------
+    // transport invariance across matched accepted frames
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] std::vector<u32> readBufferWords(Fixture &fixture, rhi::IBuffer *const buffer) {
+        PPR_TEST_ASSERT(buffer != nullptr);
+        PPR_TEST_ASSERT(buffer->getDesc().elementSize != 0u and buffer->getDesc().size % sizeof(u32) == 0u);
+
+        std::vector<u32> words(static_cast<std::size_t>(buffer->getDesc().size / sizeof(u32)));
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().readBuffer(buffer, 0u, buffer->getDesc().size, words.data())));
+        return words;
+    }
+
+    PPR_UNIT_TEST (matched_accepted_frames_preserve_transport_words_with_a_live_particle_publication) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto palette_values = makePalette();
+        const auto palette = uploadPalette(fixture, palette_values);
+
+        // The publication parks both candidates in cells the categorical map
+        // already resolves as opaque terrain. Transport precedence makes them
+        // unobservable, so a live publication and a cleared one must resolve
+        // bit-identical words: anything else would mean the presentation input
+        // leaked into transport (plan §7, Task 5).
+        CategoricalMap map;
+        map.occupy(500u, 500u, kOpaque);
+        map.occupy(501u, 500u, kOpaque);
+        map.occupy(600u, 400u, kReceiveOnly);
+
+        std::array<GridParticleMetadataRow, 2u> rows{};
+        for (u32 row = 0u; row < rows.size(); ++row) {
+            rows[row].m_id_low = row + 1u;
+            rows[row].m_source_row = row;
+            rows[row].m_material_temperature = *lighting::packCell(kOpaque, 400.0);
+            rows[row].m_radius = 0.5f;
+        }
+
+        const auto metadata = prepareGridParticleMetadata(fixture.device(), rows, 2u, 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+
+        std::array<std::array<float, 16u>, 2u> hot{};
+        hot[0u][0u] = 3.0f + 500.5f;
+        hot[0u][1u] = 3.0f + 500.5f;
+        hot[0u][15u] = 1.0f;
+        hot[1u][0u] = 3.0f + 501.5f;
+        hot[1u][1u] = 3.0f + 500.5f;
+        hot[1u][15u] = 1.0f;
+        std::array<std::array<float, 6u>, 2u> cold{};
+        for (auto &row: cold) {
+            row[1u] = std::numbers::pi_v<float> * 0.25f;
+        }
+
+        auto live_epoch = std::make_shared<std::atomic<u64>>(1u);
+        GridParticleGpuView publication{};
+        publication.m_numerical = makeShaderBuffer(fixture.device(), sizeof(hot), sizeof(hot[0u]), hot.data());
+        publication.m_readonly = makeShaderBuffer(fixture.device(), sizeof(cold), sizeof(cold[0u]), cold.data());
+        publication.m_metadata = *metadata;
+        publication.m_live_epoch = live_epoch;
+        publication.m_device_epoch = 1u;
+        publication.m_publication = 1u;
+        publication.m_terrain_revision = 1u;
+        publication.m_joint_tick = 1u;
+        publication.m_origin = 3.0;
+        PPR_TEST_ASSERT(publication.current());
+
+        // Resolved cells (the winner's committed value), the Q16 fill word (the
+        // best-row ownership reduction), the acceleration masks and jump table,
+        // the cached source and the coarse cascade intervals.
+        struct TransportWords {
+            std::vector<u32> m_resolved{};
+            std::vector<u32> m_fill{};
+            std::vector<u32> m_visibility{};
+            std::vector<u8> m_jumps{};
+            std::vector<u32> m_source{};
+            std::vector<u32> m_cascades{};
+        };
+
+        const auto run = [&](WorldLightingPass &pass, const GridParticleGpuView *const particles) -> TransportWords {
+            // Three matched accepted frames: the projection, the schedule and
+            // the cascade update advance exactly once per accepted frame, so
+            // both replays must settle the same third-frame words.
+            for (u32 frame = 1u; frame <= 3u; ++frame) {
+                const auto attempt = encodeAcceleration(fixture, pass, palette, map, kFenceValueNone, true, particles);
+                PPR_TEST_ASSERT(not attempt.m_prepare);
+                PPR_TEST_ASSERT(not attempt.m_finalize);
+                pass.notifySubmitted(frame);
+                PPR_TEST_ASSERT(not pass.collectCompleted(frame));
+                PPR_TEST_ASSERT(pass.acceptedFrameForTest() == frame);
+
+                if (frame != 3u) {
+                    continue;
+                }
+
+                TransportWords words{};
+                words.m_resolved = readBufferWords(fixture, pass.resolvedCellsForTest());
+                words.m_fill = readBufferWords(fixture, pass.fillCellsForTest());
+                words.m_visibility = readVisibilityRecords(fixture, attempt.m_snapshot.m_visibility);
+                words.m_jumps = readJumpTable(fixture, attempt.m_snapshot.m_jump);
+                words.m_source = readBufferWords(fixture, pass.sourceCellsForTest());
+                words.m_cascades = readBufferWords(fixture, pass.cascadeIntervalsForTest());
+                return words;
+            }
+
+            return {};
+        };
+
+        WorldLightingPass with_particles;
+        PPR_TEST_ASSERT(not with_particles.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        const TransportWords live = run(with_particles, &publication);
+        PPR_TEST_ASSERT(not with_particles.shutdown());
+
+        WorldLightingPass without_particles;
+        PPR_TEST_ASSERT(not without_particles.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        const TransportWords cleared = run(without_particles, nullptr);
+        PPR_TEST_ASSERT(not without_particles.shutdown());
+
+        PPR_TEST_ASSERT(not live.m_resolved.empty() and live.m_resolved == cleared.m_resolved);
+        PPR_TEST_ASSERT(live.m_fill == cleared.m_fill);
+        PPR_TEST_ASSERT(live.m_visibility == cleared.m_visibility);
+        PPR_TEST_ASSERT(live.m_jumps == cleared.m_jumps);
+        PPR_TEST_ASSERT(live.m_source == cleared.m_source);
+        PPR_TEST_ASSERT(live.m_cascades == cleared.m_cascades);
+        // The shadowed candidates wrote no ownership and no fill: the live
+        // publication was read but rejected by terrain precedence.
+        PPR_TEST_ASSERT(live.m_fill[cellIndex(500u, 500u)] == 0u);
+        PPR_TEST_ASSERT(live.m_fill[cellIndex(501u, 500u)] == 0u);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_TRACE transport_invariance resolved_words={} fill_words={} visibility_words={} jump_bytes={} source_words={} cascade_words={} publication=live-vs-cleared",
+                live.m_resolved.size(), live.m_fill.size(), live.m_visibility.size(), live.m_jumps.size(),
+                live.m_source.size(), live.m_cascades.size()));
+    };
 }
 
 namespace pP::tests {
@@ -1525,6 +1670,8 @@ namespace pP::tests {
                 detail::WorldLightingTrace::nonfinite_trace_reports_numeric_failure,
                 detail::WorldLightingTrace::fill_scaled_cell_source_survives_the_tracer_unchanged,
                 detail::WorldLightingTrace::receive_only_path_negative_boundary_and_overflow_status,
+                detail::WorldLightingTrace::
+                    matched_accepted_frames_preserve_transport_words_with_a_live_particle_publication,
             });
         };
         return group;
