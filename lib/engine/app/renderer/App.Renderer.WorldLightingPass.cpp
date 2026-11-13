@@ -517,6 +517,10 @@ namespace pP {
                                    : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, ensureResources_(context.m_device));
 
+        // A real attempt supersedes any held presentation: the projection runs
+        // from this frame's publication and replaces the retained outputs.
+        m_resources->m_held = false;
+
         // The injected active presentation time must not move backwards. The
         // accepted submission commits the new baseline; a discarded attempt
         // leaves it untouched so its elapsed active time belongs to the next
@@ -662,6 +666,29 @@ namespace pP {
         attempt.m_accepted_frame = ++m_resources->m_accepted_attempts;
         m_resources->m_accepted_active_elapsed = attempt.m_active_elapsed;
         m_resources->m_armed = false;
+        m_resources->m_held = false;
+
+        // Retain the overlay inputs of the accepted attempt: collection clears the
+        // slot, but a held publication must keep the inspection overlay decodable
+        // from the last accepted attempt. Both are strong references to existing
+        // world resources, never a new buffer.
+        m_resources->m_held_jump = attempt.m_jump;
+        m_resources->m_held_visible_materials = attempt.m_inputs.m_visible_materials;
+    }
+
+    bool WorldLightingPass::holdAcceptedAttempt() noexcept {
+        if (not m_resources or
+            m_resources->m_accepted_attempts == 0u or
+            m_resources->m_armed or
+            not m_resources->m_held_jump or
+            not m_resources->m_held_visible_materials) {
+            // Nothing accepted to serve, or an attempt is mid-flight: the caller
+            // must run the normal prepare instead of fabricating a publication.
+            return false;
+        }
+
+        m_resources->m_held = true;
+        return true;
     }
 
     void WorldLightingPass::notifyReadSubmitted(const FenceCompletionValue value) noexcept {
@@ -832,7 +859,9 @@ namespace pP {
         // The terrain draw follows the projection in the same submission, so the
         // committed winner grid belongs to this attempt. A retained scratch grid
         // after a discarded or superseded attempt would retire cells from winners
-        // that do not match the resolved cells the terrain draws; reject it.
+        // that do not match the resolved cells the terrain draws; reject it. A
+        // held publication is the one exception: it serves the last *accepted*
+        // attempt's resolved cells and winners as a matching pair.
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLightingPass,
             ownershipAvailable() ? std::error_code{} : std::make_error_code(std::errc::resource_unavailable_try_again));
@@ -856,6 +885,12 @@ namespace pP {
             not m_resources->m_cascades or
             not m_resources->m_inspection.m_program) {
             return false;
+        }
+
+        // A held publication decodes the last accepted attempt's retained overlay
+        // inputs; its status slot was already collected.
+        if (m_resources->m_held) {
+            return m_resources->m_held_jump and m_resources->m_held_visible_materials;
         }
 
         const auto &attempt = m_resources->m_status[m_resources->m_attempt_slot];
@@ -932,12 +967,16 @@ namespace pP {
         rhi::ShaderCursor constants;
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_inspect"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+        // A held publication draws from the retained accepted attempt.
+        rhi::IBuffer *const visuals = resources.m_held ? resources.m_held_visible_materials.get()
+                                                       : attempt.m_inputs.m_visible_materials.get();
+        rhi::ITexture *const jump = resources.m_held ? resources.m_held_jump.get() : attempt.m_jump.get();
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved_cells", resources.m_resolved));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", attempt.m_inputs.m_visible_materials));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", visuals));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_fine_ch", resources.m_fine_ch));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_source", resources.m_source));
         PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cascades", resources.m_cascades));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(jump)));
 
         context.m_pass.pushDebugGroup("WorldLighting.Inspect", {});
         PPR_DEFER {
@@ -990,17 +1029,19 @@ namespace pP {
                                    ? std::error_code{}
                                    : std::make_error_code(std::errc::not_connected));
 
-        // The overlay decodes the attempt this frame actually submitted. A
+        // The overlay decodes the attempt this frame actually submitted, or the
+        // last accepted attempt retained for a held publication. A
         // never-submitted or already-collected attempt has no matching world
         // state to stamp, so the caller's view is not fabricated.
         const auto &attempt = m_resources->m_status[m_resources->m_attempt_slot];
+        const bool available = m_resources->m_held
+                                   ? (m_resources->m_held_jump and m_resources->m_held_visible_materials)
+                                   : (attempt.m_pending and
+                                         attempt.m_submission != kFenceValueNone and
+                                         attempt.m_jump and
+                                         attempt.m_inputs.m_visible_materials);
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, attempt.m_pending and
-                                       attempt.m_submission != kFenceValueNone and
-                                       attempt.m_jump and
-                                       attempt.m_inputs.m_visible_materials
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLightingPass, available ? std::error_code{} : std::make_error_code(std::errc::not_connected));
 
         const RenderPipelineSignature &signature = context.m_render_pipeline_key;
         PPR_RETURN_ERROR_ON_FAIL(

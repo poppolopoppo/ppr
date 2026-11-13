@@ -386,6 +386,29 @@ namespace pP::tests::detail::WorldLightingSettlement {
         }
     };
 
+    [[nodiscard]] rhi::ComPtr<rhi::IBuffer> makeLightingTestBuffer(
+        rhi::IDevice &device, const u64 bytes, const u32 stride, const void *const initial = nullptr) {
+        rhi::BufferDesc description{};
+        description.size = std::max<u64>(bytes, stride);
+        description.elementSize = stride;
+        description.memoryType = rhi::MemoryType::DeviceLocal;
+        description.usage = rhi::BufferUsage::ShaderResource;
+        description.defaultState = rhi::ResourceState::ShaderResource;
+        rhi::ComPtr<rhi::IBuffer> buffer;
+        PPR_TEST_ASSERT(not make_error_code(device.createBuffer(description, initial, buffer.writeRef())));
+        return buffer;
+    }
+
+    [[nodiscard]] std::vector<u32> readLightingWords(Fixture &fixture, rhi::IBuffer *const buffer) {
+        PPR_TEST_ASSERT(buffer != nullptr);
+        PPR_TEST_ASSERT(buffer->getDesc().size % sizeof(u32) == 0u);
+
+        std::vector<u32> words(static_cast<std::size_t>(buffer->getDesc().size / sizeof(u32)));
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().readBuffer(buffer, 0u, buffer->getDesc().size, words.data())));
+        return words;
+    }
+
     PPR_UNIT_TEST (accepted_scene_commits_lighting_once_and_discard_commits_nothing) {
         Fixture fixture;
         PPR_DEFER {
@@ -433,6 +456,176 @@ namespace pP::tests::detail::WorldLightingSettlement {
         grid.notifyWorldLightingSubmitted(2u);
         PPR_TEST_ASSERT(not grid.collectWorldLightingCompleted(2u));
         PPR_TEST_ASSERT(lighting->acceptedFrameForTest() == 2u);
+    };
+
+    // A held particle publication must hold the lighting publication too: no new
+    // projection/source/fill/ownership attempt is started, the last accepted
+    // outputs stay bound for the scene and the inspection overlay, and the next
+    // current publication runs normally.
+    PPR_UNIT_TEST (held_publication_keeps_the_last_accepted_lighting_attempt) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not grid.shutdown());
+        };
+
+        // Terrain: material 1 everywhere in chunk 0 except one vacuum cell, plus
+        // an emissive material so a particle's cell publishes a non-zero source
+        // and an update is observable in the source readback.
+        GridTerrainVisual terrain_visual{};
+        terrain_visual.m_material_id = 1u;
+        terrain_visual.m_color_rgba = 0xffff'ffffu;
+        GridTerrainVisual emissive_visual{};
+        emissive_visual.m_material_id = 4u;
+        emissive_visual.m_color_rgba = 0xffff'ffffu;
+        emissive_visual.m_emissive_rgb[0] = 1.0f;
+        emissive_visual.m_emissive_rgb[1] = 1.0f;
+        emissive_visual.m_emissive_rgb[2] = 1.0f;
+        emissive_visual.m_emissive_strength = 5.0f;
+
+        constexpr u32 kParticleCell = 100u;
+        constexpr u32 kOtherParticleCell = 200u;
+        GridPass::GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals.push_back(terrain_visual);
+        stage.m_terrain_visuals.push_back(emissive_visual);
+        stage.m_tiles.push_back(
+            GridTileSubmission{
+                .m_dirty_mask = 1u,
+                .m_tile_range = GridTileRange{0, 0, 128, 128},
+                .m_chunk_id = 0u,
+            });
+        GridPass::GridStagedUpload upload{};
+        upload.m_chunk_id = 0u;
+        upload.m_payload.m_rect[0] = 0.0f;
+        upload.m_payload.m_rect[1] = 0.0f;
+        upload.m_payload.m_rect[2] = 128.0f;
+        upload.m_payload.m_rect[3] = 128.0f;
+        const auto terrain_word = *lighting::packCell(1u, 300.0);
+        upload.m_cell_materials.assign(GridPass::kCellsPerChunk, 1u);
+        upload.m_cell_words.assign(GridPass::kCellsPerChunk, terrain_word);
+        constexpr u32 kChunkEdge = 128u;
+        const u32 vacuum = kParticleCell * kChunkEdge + kParticleCell;
+        upload.m_cell_materials[vacuum] = 0u;
+        upload.m_cell_words[vacuum] = 0u;
+        stage.m_uploads.push_back(std::move(upload));
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        const auto prepared_cells = grid.tryPrepareCellUploads(fixture.device(), kFenceValueNone);
+        PPR_TEST_ASSERT(prepared_cells.has_value() and *prepared_cells);
+        PPR_TEST_ASSERT(grid.lightingInputsAvailable());
+
+        const auto cellIndex = [](const u32 x, const u32 y) {
+            return static_cast<std::size_t>(y) * WorldLightingPass::kWorldEdge + x;
+        };
+
+        // One committed particle in the vacuum cell, carrying the emissive
+        // material: the projection nominates it and the source there is non-zero.
+        GridParticleMetadataRow row{};
+        row.m_id_low = 1u;
+        row.m_source_row = 0u;
+        row.m_material_temperature = *lighting::packCell(4u, 0.0);
+        row.m_radius = 0.5f;
+        // A real fill word keeps the Q16 ownership reduction observable; zero
+        // means "unavailable" for legacy presentation-only rows.
+        row.m_physical_fill_bits = std::bit_cast<u32>(0.25f);
+        const auto metadata = prepareGridParticleMetadata(fixture.device(), {&row, 1u}, 1u, 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+
+        std::array<float, 16u> hot{};
+        hot[0u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
+        hot[1u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
+        hot[15u] = 1.0f;
+        std::array<float, 6u> cold{};
+        cold[1u] = std::numbers::pi_v<float> * 0.25f;
+
+        auto live = std::make_shared<std::atomic<u64>>(1u);
+        GridParticleGpuView view{};
+        view.m_numerical = makeLightingTestBuffer(fixture.device(), sizeof(hot), sizeof(hot[0u]), hot.data());
+        view.m_readonly = makeLightingTestBuffer(fixture.device(), sizeof(cold), sizeof(cold[0u]), cold.data());
+        view.m_metadata = *metadata;
+        view.m_live_epoch = live;
+        view.m_world = grid.activeWorldIdentity();
+        view.m_device_epoch = 1u;
+        view.m_publication = 1u;
+        view.m_terrain_revision = 1u;
+        view.m_joint_tick = 1u;
+        view.m_origin = 3.0;
+        PPR_TEST_ASSERT(view.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        const auto encodeAttempt = [&](const FenceCompletionValue fence) -> std::error_code {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            PPR_RETURN_ERROR_ON_FAIL(Settlement, grid.prepareWorldLighting(context, WorldLightingFrame{}));
+            PPR_RETURN_ERROR_ON_FAIL(Settlement, grid.finalizeWorldLighting(context));
+            submit(fixture, *encoder);
+            grid.notifyWorldLightingSubmitted(fence);
+            return grid.collectWorldLightingCompleted(fence);
+        };
+
+        // Attempt 1 accepted with the live publication.
+        PPR_TEST_ASSERT(not encodeAttempt(1u));
+        WorldLightingPass *const pass = grid.activeWorldLightingForTest();
+        PPR_TEST_ASSERT(pass != nullptr);
+        PPR_TEST_ASSERT(pass->acceptedFrameForTest() == 1u);
+        PPR_TEST_ASSERT(not pass->heldAttempt());
+
+        const auto resolved_before = readLightingWords(fixture, pass->resolvedCellsForTest());
+        const auto fill_before = readLightingWords(fixture, pass->fillCellsForTest());
+        const auto source_before = readLightingWords(fixture, pass->sourceCellsForTest());
+        const auto cascades_before = readLightingWords(fixture, pass->cascadeIntervalsForTest());
+        const auto fine_ch_before = readLightingWords(fixture, pass->fineCHForTest());
+        PPR_TEST_ASSERT(source_before[cellIndex(kParticleCell, kParticleCell)] != 0u);
+        PPR_TEST_ASSERT(fill_before[cellIndex(kParticleCell, kParticleCell)] != 0u);
+
+        // The publisher released a newer epoch: this frame is held, so it must not
+        // start an attempt. The last accepted outputs stay bound and stable.
+        live->store(2u, std::memory_order_release);
+        PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+        {
+            auto encoder = makeEncoder(fixture);
+            PreRenderContext context{fixture.device(), *encoder, kFenceValueNone, {}};
+            PPR_TEST_ASSERT(not grid.prepareWorldLighting(context, WorldLightingFrame{}));
+            PPR_TEST_ASSERT(pass->heldAttempt());
+            PPR_TEST_ASSERT(pass->acceptedFrameForTest() == 1u);
+            PPR_TEST_ASSERT(pass->ownershipAvailableForTest());
+            PPR_TEST_ASSERT(pass->inspectionAvailable());
+            PPR_TEST_ASSERT(not grid.finalizeWorldLighting(context));
+        }
+        // Identical to the last accepted attempt: no zeroed source, no stale CH.
+        PPR_TEST_ASSERT(readLightingWords(fixture, pass->resolvedCellsForTest()) == resolved_before);
+        PPR_TEST_ASSERT(readLightingWords(fixture, pass->fillCellsForTest()) == fill_before);
+        PPR_TEST_ASSERT(readLightingWords(fixture, pass->sourceCellsForTest()) == source_before);
+        PPR_TEST_ASSERT(readLightingWords(fixture, pass->cascadeIntervalsForTest()) == cascades_before);
+        PPR_TEST_ASSERT(readLightingWords(fixture, pass->fineCHForTest()) == fine_ch_before);
+        PPR_TEST_ASSERT(pass->acceptedFrameForTest() == 1u);
+
+        // The next current publication runs the lighting again and updates the
+        // source: the particle moves out of the vacuum cell.
+        std::array<float, 16u> moved{};
+        moved[0u] = 3.0f + static_cast<float>(kOtherParticleCell) + 0.5f;
+        moved[1u] = 3.0f + static_cast<float>(kOtherParticleCell) + 0.5f;
+        moved[15u] = 1.0f;
+        GridParticleGpuView next = view;
+        next.m_numerical = makeLightingTestBuffer(fixture.device(), sizeof(moved), sizeof(moved[0u]), moved.data());
+        next.m_device_epoch = 2u;
+        PPR_TEST_ASSERT(next.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(next));
+        PPR_TEST_ASSERT(not encodeAttempt(2u));
+        PPR_TEST_ASSERT(not pass->heldAttempt());
+        PPR_TEST_ASSERT(pass->acceptedFrameForTest() == 2u);
+
+        const auto source_after = readLightingWords(fixture, pass->sourceCellsForTest());
+        PPR_TEST_ASSERT(source_after != source_before);
+        PPR_TEST_ASSERT(source_after[cellIndex(kParticleCell, kParticleCell)] == 0u);
+        PPR_TEST_ASSERT(source_after[cellIndex(kOtherParticleCell, kOtherParticleCell)] != 0u);
     };
 
     PPR_UNIT_TEST (stale_publication_epoch_is_rejected_before_encode) {
@@ -1225,6 +1418,61 @@ namespace pP::tests::detail::WorldLightingSettlement {
         PPR_TEST_ASSERT(stamp.m_submission == inspected.m_stages[kRenderStagePresent].m_submission);
         PPR_TEST_ASSERT(stamp.m_submission > inspected.m_stages[kRenderStageScene].m_submission);
 
+        // The publication views are device children: keep them in a scope that
+        // ends before the editor's RHI shutdown proves there are no live devices.
+        {
+            // A held particle publication keeps the last accepted lighting attempt:
+            // the projection is not restarted from the superseded view, the source
+            // stays stable, and the inspection overlay remains available and still
+            // stamps this frame.
+            safe_ptr<IRhiService> rhi = test_app.getServices().get<IRhiService>();
+            PPR_TEST_ASSERT(rhi.isValid());
+            rhi::IDevice &device = rhi->getDevice();
+            GridPass &grid = test_app.getGridPass();
+            const GridWorldIdentity world = grid.activeWorldIdentity();
+            auto live = std::make_shared<std::atomic<u64>>(1u);
+            GridParticleMetadataRow row{};
+            row.m_id_low = 1u;
+            row.m_source_row = 0u;
+            row.m_material_temperature = 1u;
+            row.m_radius = 0.5f;
+            const auto metadata = prepareGridParticleMetadata(device, {&row, 1u}, 1u, 1.0, 1u);
+            PPR_TEST_ASSERT(metadata.has_value());
+            std::array<float, 16u> hot{};
+            hot[0u] = hot[1u] = 3.0f + 40.5f;
+            hot[15u] = 1.0f;
+            std::array<float, 6u> cold{};
+            cold[1u] = std::numbers::pi_v<float> * 0.25f;
+            GridParticleGpuView published{};
+            published.m_numerical = makeLightingTestBuffer(device, sizeof(hot), sizeof(hot[0u]), hot.data());
+            published.m_readonly = makeLightingTestBuffer(device, sizeof(cold), sizeof(cold[0u]), cold.data());
+            published.m_metadata = *metadata;
+            published.m_live_epoch = live;
+            published.m_world = world;
+            published.m_device_epoch = 1u;
+            published.m_publication = 1u;
+            published.m_terrain_revision = 1u;
+            published.m_joint_tick = 1u;
+            published.m_origin = 3.0;
+            PPR_TEST_ASSERT(published.current());
+            PPR_TEST_ASSERT(not grid.applyGpuParticleView(published));
+            WorldLightingPass *const lighting = grid.activeWorldLightingForTest();
+            PPR_TEST_ASSERT(lighting != nullptr);
+            const u64 accepted_before = lighting->acceptedFrameForTest();
+
+            // The publisher released a newer epoch before this frame: held, not a new
+            // lighting attempt.
+            live->store(2u, std::memory_order_release);
+            retainEditorTerrain(test_app);
+            PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+            PPR_TEST_ASSERT(not test_app.draw());
+            PPR_TEST_ASSERT(test_app.m_last_result.has_value());
+            PPR_TEST_ASSERT(not test_app.m_last_result->m_error and test_app.m_last_result->m_presented);
+            PPR_TEST_ASSERT(test_app.m_last_result->m_inspection.has_value());
+            PPR_TEST_ASSERT(lighting->heldAttempt());
+            PPR_TEST_ASSERT(lighting->acceptedFrameForTest() == accepted_before);
+        }
+
         // Off still presents the ordinary picture and posts no inspection
         // stamp; the overlay is an added reader, never a presentation mode.
         GridPass::GridStagedFrame retained{};
@@ -1925,6 +2173,7 @@ namespace pP::tests {
                 detail::WorldLightingSettlement::capacity_busy_later_stage_keeps_the_earlier_accepted_value,
                 detail::WorldLightingSettlement::ambiguous_submit_quarantines_and_stops_admission,
                 detail::WorldLightingSettlement::accepted_scene_commits_lighting_once_and_discard_commits_nothing,
+                detail::WorldLightingSettlement::held_publication_keeps_the_last_accepted_lighting_attempt,
                 detail::WorldLightingSettlement::stale_publication_epoch_is_rejected_before_encode,
                 detail::WorldLightingSettlement::rejected_resolve_preserves_exposure_and_retained_picture,
                 detail::WorldLightingSettlement::editor_scene_survives_a_rejected_resolve_and_settles_its_fence,

@@ -201,13 +201,15 @@ export namespace pP {
         [[nodiscard]] std::error_code bindTerrainOwnership(rhi::ShaderCursor &cursor, bool &ownership_bound) const;
 
         // True when this submission's armed projection attempt owns the scratch
-        // winner grid, so terrain may retire particle-owned cells from it.
+        // winner grid, so terrain may retire particle-owned cells from it. A held
+        // publication serves the last accepted attempt's scratch instead: no new
+        // attempt runs, and the retained renderer-owned winners stay valid.
         [[nodiscard]] bool ownershipAvailable() const noexcept {
             return m_resources and
                    m_resources->m_scratch[1u] and
                    m_resources->m_resolved and
-                   m_resources->m_armed and
-                   m_resources->m_status[m_resources->m_attempt_slot].m_pending;
+                   (m_resources->m_held or
+                       (m_resources->m_armed and m_resources->m_status[m_resources->m_attempt_slot].m_pending));
         }
 
         // Read-only C-stage inspection overlay. Draws the retained view selected
@@ -229,18 +231,42 @@ export namespace pP {
 
         // True when this attempt's fine CH reconstruction is armed for readers
         // in the current submission. Background receivers use it to decide
-        // whether to sample the field or keep the authored unlit fallback.
+        // whether to sample the field or keep the authored unlit fallback. A held
+        // publication keeps the last accepted field scorable.
         [[nodiscard]] bool currentFineCHAvailable() const noexcept {
             return m_resources and
                    m_resources->m_fine_ch and
-                   m_resources->m_armed and
-                   m_resources->m_status[m_resources->m_attempt_slot].m_pending;
+                   (m_resources->m_held or
+                       (m_resources->m_armed and m_resources->m_status[m_resources->m_attempt_slot].m_pending));
         }
 
         // True when the current attempt actually submitted the published data
         // an inspection overlay would decode. A world whose stage A did not arm
-        // lighting this frame has no matching state to stamp.
+        // lighting this frame has no matching state to stamp. A held publication
+        // keeps the last accepted attempt's overlay inputs available.
         [[nodiscard]] bool inspectionAvailable() const noexcept;
+
+        // Serves the last accepted attempt's outputs (resolved cells, fill,
+        // best_row/ownership, source, cascades and fine CH) for this submission
+        // without starting a projection/source/cascade attempt. A held particle
+        // publication uses this so transport stays stable instead of alternating
+        // between zero-particle and particle frames. Reads no solver row: every
+        // resource is renderer-owned and was accepted earlier. Returns false when
+        // nothing has been accepted yet (no retained output to serve).
+        [[nodiscard]] bool holdAcceptedAttempt() noexcept;
+
+        // True while this submission serves the held last-accepted attempt.
+        [[nodiscard]] bool heldAttempt() const noexcept {
+            return m_resources and m_resources->m_held;
+        }
+
+        // Per-frame reset: the hold lasts exactly one submission and must not
+        // leak into a frame that prepares or skips lighting entirely.
+        void clearHeldAttempt() noexcept {
+            if (m_resources) {
+                m_resources->m_held = false;
+            }
+        }
 
         // Encodes the stage-end copy of this attempt's status records into its
         // completion-fenced readback storage. Called in the same submission
@@ -395,6 +421,15 @@ export namespace pP {
             u32 m_status_cursor{};
             u32 m_attempt_slot{};
             bool m_armed{};
+            // This submission serves the last accepted attempt instead of running
+            // a new one (a held particle publication). Cleared by the next
+            // prepare and by the per-frame reset.
+            bool m_held{};
+            // Overlay inputs of the last accepted attempt, retained because
+            // collection clears the attempt slot. Both are references to
+            // already-created world resources; no buffer is added.
+            rhi::ComPtr<rhi::ITexture> m_held_jump{};
+            rhi::ComPtr<rhi::IBuffer> m_held_visible_materials{};
         };
 
         [[nodiscard]] std::error_code ensureResources_(rhi::IDevice &device);

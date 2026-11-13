@@ -430,6 +430,11 @@ namespace pP {
         if (m_world.m_gpu_particles) {
             m_world.m_gpu_particles->m_prepared = false;
         }
+        // The held lighting publication lasts exactly one submission: the scene
+        // prepare re-establishes it when the frame is still held.
+        if (m_world.m_lighting) {
+            m_world.m_lighting->clearHeldAttempt();
+        }
 
         for (auto *const pipeline: cachedPipelines_()) {
             if (*pipeline) {
@@ -3328,6 +3333,20 @@ namespace pP {
         }
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->initialize(*m_shader_service, m_content_dir));
+
+        // A held particle publication must hold the lighting publication too. The
+        // projection would otherwise be re-run from a superseded view with zero
+        // particle candidates, alternating the source, fill, best_row/ownership
+        // and CH between zero and full every other frame (the Lighting Lab source
+        // diagnostic flickers). Serving the last accepted attempt keeps transport
+        // stable and reads no solver row: every output is renderer-owned and was
+        // accepted earlier. Transport resumes on the next current publication.
+        if (m_world.m_gpu_particles and
+            not retainedGpuParticleCurrent_() and
+            m_world.m_lighting->holdAcceptedAttempt()) {
+            return {};
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->prepare(context, *inputs, frame));
         return {};
     }
