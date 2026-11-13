@@ -162,9 +162,10 @@ export namespace pP {
 
     // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
     // 1 for rho <= 2/3, smoothstep(1, 2/3, rho) for 2/3 < rho < 1 and 0 beyond.
-    // The alpha = 0.5 contour is rho = 5/6. Every seeded-lattice point sits inside
-    // R_in, so a packed interior is saturated and the falloff only shapes the free
-    // surface and detached droplets.
+    // Its resting alpha = 0.5 contour is rho = 5/6; the optional tangent cue moves
+    // that contour per angle inside [2/3, 1] and touches neither join. Every
+    // seeded-lattice point sits inside R_in, so a packed interior is saturated and
+    // the falloff only shapes the free surface and detached droplets.
     inline constexpr float kGridParticleFalloffInnerFraction{2.0f / 3.0f};
     inline constexpr float kGridParticleDiscardThreshold{0.5f};
 
@@ -181,6 +182,12 @@ export namespace pP {
     // A gradient magnitude at or below this is "no surface": a zero test for the
     // one-bit ownership mask, not a smoothing knob.
     inline constexpr float kGridParticleTangentGradientEpsilon{1.0e-4f};
+    // Round-off closure of the tangent contour's two joins, relative to R. |local|
+    // is a rounded length, so a sample constructed exactly at the support radius can
+    // arrive a few ulps inside it and the warp would return a denormal alpha there
+    // instead of 0. This is a numerical closure, not a shape or strength knob: about
+    // eight binary32 ulps at rho = 1 (1.2e-7) and 1e-6 R, i.e. 0.002 px at span64.
+    inline constexpr float kGridParticleTangentJoinClosure{1.0e-6f};
 
     // Solid: a rounded square inscribed in the R circle. It is the Minkowski sum
     // of a square of half-extent a-c and a disk of radius c, so its support is
@@ -254,6 +261,14 @@ export namespace pP {
     static_assert(
         kGridParticleTangentContourScale * (1.0f + 0.5f * kGridParticleTangentContourBias) <= 1.0f,
         "the tangent contour's major radius must stay inside the support radius R");
+    // The join closure must exceed the binary32 ulp at rho = 1 (so a sample built
+    // exactly at R is closed) and stay invisible (well under a thousandth of R).
+    static_assert(
+        kGridParticleTangentJoinClosure > 4.0f * 1.1920929e-7f,
+        "the tangent join closure must exceed the binary32 ulp at the support radius");
+    static_assert(
+        kGridParticleTangentJoinClosure < 1.0e-3f,
+        "the tangent join closure must stay far below any visible radius change");
 
     // ------------------------------------------------------------------
     // particle publication state

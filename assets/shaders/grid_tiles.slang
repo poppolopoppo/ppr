@@ -1557,7 +1557,9 @@ float particleSolidDistance(float2 local) {
 // C1 radial falloff of the presentation support, shared by both phases. With
 // rho = |local| / R it is 1 inside R_in = (2/3) R, falls as smoothstep(1, 2/3,
 // rho) to 0 at R and is 0 beyond. t is written increasing so this is the ordinary
-// smoothstep polynomial, and both joins have zero slope.
+// smoothstep polynomial, and both joins have zero slope. Its resting alpha = 0.5
+// contour is rho = 5/6; the optional tangent cue below moves that contour per
+// angle inside [2/3, 1] without touching either join.
 float particleFalloff(float2 local) {
     float rho=length(local)/kParticleSupportScale;
     float t=saturate((1.0-rho)/(1.0-kParticleFalloffInnerFraction));
@@ -1584,15 +1586,23 @@ float2 particleFlowLocal(float2 local,float2 flow,float stretch) {
 // tangent, so the silhouette is longer along the surface and shorter across it.
 // The warp is a Mobius map of the band coordinate with fixed endpoints and a
 // 0.5 crossing at k(theta), and the same C1 smoothstep polynomial is evaluated on
-// it, so both joins keep zero slope, the plateau keeps alpha = 1 exactly and the
-// support keeps alpha = 0 exactly. No support or cull change can result.
+// it, so both joins keep zero slope. The plateau and the support are returned
+// explicitly, so the function is total on its own domain: alpha is exactly 1 for
+// rho <= 2/3 (including |local| == 0) and exactly 0 at and beyond R, and no
+// support or cull change can result. Both joins are closed by
+// kParticleTangentJoinClosure, because |local| is rounded: a sample constructed
+// exactly at the support radius can arrive a few ulps inside it, and the warp
+// would then return a denormal alpha instead of 0.
 float particleTangentFalloff(float2 local,float2 tangent) {
     float length_local=length(local);
-    float2 direction=local/max(length_local,1.0e-12);
+    float rho=length_local/kParticleSupportScale;
+    if (rho<=kParticleFalloffInnerFraction+kParticleTangentJoinClosure) return 1.0;
+    if (rho>=1.0-kParticleTangentJoinClosure) return 0.0;
+
+    float2 direction=local/length_local;
     float cosine=dot(direction,tangent);
     float contour=kParticleTangentContourScale*(1.0+kParticleTangentContourBias*(cosine*cosine-0.5));
 
-    float rho=length_local/kParticleSupportScale;
     float u=(rho-kParticleFalloffInnerFraction)/(1.0-kParticleFalloffInnerFraction);
     float u_contour=(contour-kParticleFalloffInnerFraction)/(1.0-kParticleFalloffInnerFraction);
     float warp=2.0-1.0/u_contour;
@@ -1657,8 +1667,9 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     if (falloff>0.0 && falloff<1.0 && dot(input.surface_tangent,input.surface_tangent)>0.5)
         falloff=particleTangentFalloff(local,input.surface_tangent);
     // A blended class shapes its edge with alpha; a non-blending class cannot,
-    // so its silhouette is the alpha = 0.5 contour (the R_s circle, plan §3).
-    // Solids also carry their rounded-square mask.
+    // so its silhouette is where alpha = 0.5: the R_s circle at rho = 5/6 when
+    // the tangent cue is absent, and the angular contour k(theta) when it is
+    // present (plan §3). Solids also carry their rounded-square mask.
     bool inside_solid_shape=liquid || particleSolidDistance(local)<=0.0;
     if (!inside_solid_shape || falloff<=(blend_class ? 0.0 : kParticleDiscardThreshold)) discard;
 

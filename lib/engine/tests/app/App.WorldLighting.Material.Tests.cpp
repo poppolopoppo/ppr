@@ -3792,44 +3792,48 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // tangent frame here is the world-plane frame, which is the quad frame for the
     // top-down fixture; the shader projects the same gradient with right/up.
 
-    // Bilinear reconstruction of a one-bit-per-cell field at a continuous cell
-    // position (cell x occupies [x, x+1)), the shader's ownership read.
-    template<typename Field>
-    [[nodiscard]] double gridParticleBilinearField(const Field &field, const FlowPoint cell_position) noexcept {
-        const FlowPoint p{cell_position.x - 0.5, cell_position.y - 0.5};
-        const int base_x = static_cast<int>(std::floor(p.x));
-        const int base_y = static_cast<int>(std::floor(p.y));
-        const double fraction_x = p.x - double(base_x);
-        const double fraction_y = p.y - double(base_y);
-
-        return field(base_x, base_y) * (1.0 - fraction_x) * (1.0 - fraction_y) +
-               field(base_x + 1, base_y) * fraction_x * (1.0 - fraction_y) +
-               field(base_x, base_y + 1) * (1.0 - fraction_x) * fraction_y +
-               field(base_x + 1, base_y + 1) * fraction_x * fraction_y;
-    }
-
-    // 3x3 stencil of bilinear samples, Sobel-differenced. Returns false when the
-    // field is flat around the centre: the dense interior, the empty exterior and
-    // an isolated particle then have no surface direction at all.
+    // Separable 3x3 Sobel of the bilinearly reconstructed field: the exact weight
+    // sequence grid_tiles.slang particleSurfaceTangent ships (the Sobel difference
+    // on one axis, the 1-2-1 smoothing on the other, over one 4x4 cell window).
+    // Returns false when the field is flat around the centre: the dense interior,
+    // the empty exterior and an isolated particle then have no surface direction.
+    // `gradient_magnitude`, when requested, reports the pre-normalisation length.
     template<typename Field>
     [[nodiscard]] bool gridParticleSurfaceTangent(
-        const Field &field, const FlowPoint centre, FlowPoint &tangent) noexcept {
-        constexpr std::array<double, 3u> difference{-1.0, 0.0, 1.0};
-        constexpr std::array<double, 3u> smooth{1.0, 2.0, 1.0};
+        const Field &field, const FlowPoint centre, FlowPoint &tangent,
+        double *const gradient_magnitude = nullptr) noexcept {
+        const FlowPoint p{centre.x - 0.5, centre.y - 0.5};
+        const int base_x = static_cast<int>(std::floor(p.x));
+        const int base_y = static_cast<int>(std::floor(p.y));
+        const double bx0 = 1.0 - (p.x - double(base_x));
+        const double bx1 = p.x - double(base_x);
+        const double by0 = 1.0 - (p.y - double(base_y));
+        const double by1 = p.y - double(base_y);
+        const std::array<double, 4u> difference_x{-bx0, -bx1, bx0, bx1};
+        const std::array<double, 4u> smooth_x{bx0, 2.0 * bx0 + bx1, bx0 + 2.0 * bx1, bx1};
+        const std::array<double, 4u> difference_y{-by0, -by1, by0, by1};
+        const std::array<double, 4u> smooth_y{by0, 2.0 * by0 + by1, by0 + 2.0 * by1, by1};
 
         double gradient_x = 0.0;
         double gradient_y = 0.0;
-        for (u32 row = 0u; row < 3u; ++row) {
-            for (u32 column = 0u; column < 3u; ++column) {
-                const double value = gridParticleBilinearField(
-                    field, FlowPoint{centre.x + difference[column], centre.y + difference[row]});
-                gradient_x += difference[column] * smooth[row] * value;
-                gradient_y += smooth[column] * difference[row] * value;
+        for (u32 row = 0u; row < 4u; ++row) {
+            double window_difference = 0.0;
+            double window_smooth = 0.0;
+            for (u32 column = 0u; column < 4u; ++column) {
+                const double value = field(base_x - 1 + static_cast<int>(column), base_y - 1 + static_cast<int>(row));
+                window_difference += value * difference_x[column];
+                window_smooth += value * smooth_x[column];
             }
+
+            gradient_x += smooth_y[row] * window_difference;
+            gradient_y += difference_y[row] * window_smooth;
         }
 
         const double squared = gradient_x * gradient_x + gradient_y * gradient_y;
         const double epsilon = double(kGridParticleTangentGradientEpsilon);
+        if (gradient_magnitude != nullptr)
+            *gradient_magnitude = std::sqrt(squared);
+
         if (squared <= epsilon * epsilon)
             return false;
 
@@ -3846,14 +3850,23 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     // Mirror of grid_tiles.slang particleTangentFalloff: the resting C1 smoothstep
     // evaluated on a Mobius-warped band coordinate whose 0.5 crossing is k(theta).
+    // The plateau and the support are returned explicitly, exactly as the shader
+    // does, so the mirror is total on the same domain.
     [[nodiscard]] double gridParticleTangentFalloff(const FlowPoint local, const FlowPoint tangent) noexcept {
+        const double rho = gridParticleRho(local);
+        const double inner = double(kGridParticleFalloffInnerFraction);
+        const double closure = double(kGridParticleTangentJoinClosure);
+        if (rho <= inner + closure)
+            return 1.0;
+        if (rho >= 1.0 - closure)
+            return 0.0;
+
         const double length = gridParticleLength(local);
         const double direction_x = local.x / length;
         const double direction_y = local.y / length;
         const double cosine = direction_x * tangent.x + direction_y * tangent.y;
         const double contour = double(gridParticleTangentContour(static_cast<float>(cosine * cosine)));
-        const double inner = double(kGridParticleFalloffInnerFraction);
-        const double u = (gridParticleRho(local) - inner) / (1.0 - inner);
+        const double u = (rho - inner) / (1.0 - inner);
         const double u_contour = (contour - inner) / (1.0 - inner);
         const double warp = 2.0 - 1.0 / u_contour;
         const double w = u * (1.0 - warp) / (1.0 - warp * u);
@@ -4042,15 +4055,19 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(
             std::abs(double(gridParticleTangentContour(1.0f)) / double(gridParticleTangentContour(0.0f)) - 1.3529412) <=
             1.0e-4);
-        // The support and cull constants are the retained ones.
+        // The support and cull constants are the retained ones, and the join
+        // closure is a round-off hair rather than a shape knob.
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
         PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 3.0625f);
+        PPR_TEST_ASSERT(kGridParticleTangentJoinClosure > 0.0f and kGridParticleTangentJoinClosure < 1.0e-3f);
+
+        // The angular edge is a constant of the constants, not of the orientation.
+        const double major = double(gridParticleTangentContour(1.0f));
+        const double minor = double(gridParticleTangentContour(0.0f));
 
         for (u32 index = 0u; index < kDirections; ++index) {
             const FlowPoint tangent = gridParticleDirection(2.0 * kPi * double(index) / double(kDirections));
             const FlowPoint normal{-tangent.y, tangent.x};
-            const double major = double(gridParticleTangentContour(1.0f));
-            const double minor = double(gridParticleTangentContour(0.0f));
 
             // The 0.5 contour sits exactly at k(theta) along the tangent and across
             // it, so the silhouette is the angular edge and nothing else.
@@ -4059,13 +4076,18 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(std::abs(gridParticleTangentFalloff(major_point, tangent) - 0.5) <= 1.0e-9);
             PPR_TEST_ASSERT(std::abs(gridParticleTangentFalloff(minor_point, tangent) - 0.5) <= 1.0e-9);
 
-            // Painted radius: zero at the support radius in every direction and
-            // positive just inside it, so nothing is drawn beyond R.
+            // Painted radius: exactly zero at the support radius in every direction
+            // and positive just inside it, so nothing is drawn beyond R. The endpoint
+            // is the contour function's own contract, not only the fragment's
+            // short-circuit, so it is asserted directly for this real tangent. The
+            // sampled point's rounded length can land a few ulps inside R, which is
+            // what the join closure covers.
             for (u32 sample = 0u; sample < kDirections; ++sample) {
                 const FlowPoint direction = gridParticleDirection(2.0 * kPi * double(sample) / double(kDirections));
                 const FlowPoint at_support{support * direction.x, support * direction.y};
                 const FlowPoint just_inside{0.999 * support * direction.x, 0.999 * support * direction.y};
 
+                PPR_TEST_ASSERT(gridParticleTangentFalloff(at_support, tangent) == 0.0);
                 PPR_TEST_ASSERT(gridParticleShadedFalloff(at_support, tangent, true) == 0.0f);
                 PPR_TEST_ASSERT(gridParticleShadedFalloff(just_inside, tangent, true) > 0.0f);
             }
@@ -4141,9 +4163,28 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(tangent.x - 1.0) <= 1.0e-12 and tangent.y == 0.0);
 
         // A diagonal surface gives a diagonal tangent, not an axis-snapped one.
-        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_lower_left, centre, tangent));
+        double centre_gradient = 0.0;
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_lower_left, centre, tangent, &centre_gradient));
         PPR_TEST_ASSERT(std::abs(tangent.x + 0.7071067811865476) <= 1.0e-9);
         PPR_TEST_ASSERT(std::abs(tangent.y - 0.7071067811865476) <= 1.0e-9);
+
+        // The shipped weights are the separable bilinear-Sobel sequence, pinned at a
+        // sub-cell centre: at p = (4.2, 4.7) the same field's gradient is exactly
+        // 3.5638181771802, while the cell-centre value is 4.242640687119285. A
+        // cell-snapped stencil produces the latter at every offset, so pinning both
+        // literals holds the separable fraction weighting in place; the values come
+        // from the independent nine-bilinear-sample Sobel of the same field.
+        const FlowPoint offset_centre{4.7, 5.2};
+        FlowPoint offset_tangent{};
+        double offset_gradient = 0.0;
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_lower_left, offset_centre, offset_tangent, &offset_gradient));
+        PPR_TEST_ASSERT(std::abs(centre_gradient - 4.242640687119285) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(offset_gradient - 3.563818177180200) <= 1.0e-12);
+        PPR_TEST_ASSERT(offset_gradient < centre_gradient);
+        // Not axis-snapped, and it still follows the same surface at the offset.
+        PPR_TEST_ASSERT(std::abs(offset_tangent.x + 0.7071067811865476) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(offset_tangent.y - 0.7071067811865476) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(offset_tangent.x - tangent.x) <= 1.0e-12);
 
         // The painted silhouette follows that tangent: at the same radius the
         // alpha is larger along the tangent than across it, and rotating the
@@ -4159,6 +4200,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(
             gridParticleShadedFalloff(across, below_tangent, true) >
             gridParticleShadedFalloff(along, below_tangent, true));
+
+        // The contour function is total on its own domain: the exact centre (where
+        // |local| == 0) is the plateau and the support is the endpoint, so a future
+        // reuse cannot evaluate the warp outside the band. The support is closed by
+        // the join-closure hair because |local| is a rounded length.
+        PPR_TEST_ASSERT(kGridParticleTangentJoinClosure > 0.0f and kGridParticleTangentJoinClosure < 1.0e-3f);
+        PPR_TEST_ASSERT(gridParticleTangentFalloff(FlowPoint{0.0, 0.0}, left_tangent) == 1.0);
+        PPR_TEST_ASSERT(gridParticleTangentFalloff(FlowPoint{support, 0.0}, left_tangent) == 0.0);
+        PPR_TEST_ASSERT(gridParticleTangentFalloff(FlowPoint{1.5 * support, 0.0}, left_tangent) == 0.0);
 
         // Flat fields have no surface: the dense interior, the empty exterior and
         // an isolated particle keep today's falloff byte for byte, and the
@@ -4190,8 +4240,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::bit_cast<u32>(gridParticleShadedFalloff(sample, left_tangent, true)) != resting_sample);
 
         // Deterministic: the same field and centre produce the same tangent bit
-        // for bit. The stencil is a fixed +/-1/+/-2 weighted sum over 0/1 taps, so
-        // the sums are exact and no evaluation order can change them.
+        // for bit. The stencil weights are fixed by the centre, so the sums have a
+        // fixed evaluation order, and at a cell centre they reduce to the exact
+        // +/-1/+/-2 integer taps over the 0/1 field.
         FlowPoint first_tangent{};
         FlowPoint second_tangent{};
         PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_lower_left, centre, first_tangent));
@@ -4203,8 +4254,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL particle_tangent_field left=({:.4f},{:.4f}) diagonal=({:.4f},{:.4f}) "
-                "half_plane_gradient=4",
-                left_tangent.x, left_tangent.y, first_tangent.x, first_tangent.y));
+                "offset=({:.4f},{:.4f}) centre_gradient={:.4f} offset_gradient={:.4f}",
+                left_tangent.x, left_tangent.y, first_tangent.x, first_tangent.y, offset_tangent.x, offset_tangent.y,
+                centre_gradient, offset_gradient));
     };
 }
 

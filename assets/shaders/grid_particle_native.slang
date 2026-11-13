@@ -38,7 +38,8 @@ struct ParticleNativeCell { uint x,y,status; };
 //
 // Edge: one C1 radial falloff for both phases, from the normalised radius
 // rho = |p - centre| / R: a = 1 for rho <= 2/3, a = smoothstep(1, 2/3, rho) for
-// 2/3 < rho < 1 and a = 0 beyond. The alpha = 0.5 contour is rho = 5/6. The
+// 2/3 < rho < 1 and a = 0 beyond. The resting alpha = 0.5 contour is rho = 5/6;
+// the optional tangent cue moves that contour per angle inside [2/3, 1] only. The
 // seeded interior is saturated because every lattice point sits inside R_in.
 //
 // Solid: a rounded square inscribed in the same R circle. It is the Minkowski
@@ -83,6 +84,14 @@ static const float kParticleMotionReference = 0.06;
 // the 3.0625 r cull cannot be exceeded. Fixed source values, no tuning knob.
 static const float kParticleTangentContourScale = 5.0/6.0;
 static const float kParticleTangentContourBias = 0.30;
+// Round-off closure of the two contour joins, relative to R. |local| is a rounded
+// length, so a sample constructed exactly at the support radius can arrive a few
+// ulps inside it; without this hair the warp would return a denormal alpha there
+// instead of exactly 0. Closing it keeps the support boundary exactly alpha = 0
+// and the plateau exactly alpha = 1 for every tangent. It is a numerical closure,
+// not a shape or strength knob: eight binary32 ulps at rho = 1 (1.2e-7) and about
+// 1e-6 R, i.e. 0.002 px at span64, far below anything visible.
+static const float kParticleTangentJoinClosure = 1.0e-6;
 // A gradient magnitude at or below this is "no surface": a zero test for the
 // one-bit ownership mask, not a smoothing knob.
 static const float kParticleTangentGradientEpsilon = 1.0e-4;
