@@ -470,6 +470,17 @@ namespace pP::tests::detail::WorldLightingCodec {
             white_mean->m_diffuse ==
                 encode(static_cast<double>(tint.x), static_cast<double>(tint.y), static_cast<double>(tint.z)));
 
+        // The Lab's red wall reaches the palette as its authored linear tint:
+        // lab_white is an all-255 texture, so its filtered mean is exactly one.
+        const auto red_wall = makeSourceMaterial(
+            float3{zero_v}, 0.0, float3{0.7f, 0.05f, 0.05f}, float3{1.0f, 1.0f, 1.0f}, 0.0f);
+        PPR_TEST_ASSERT(red_wall.has_value());
+        const float3 red_diffuse = unpackRGB9E5(red_wall->m_diffuse);
+        PPR_TEST_ASSERT(std::abs(red_diffuse.x - 0.7f) <= 2.0e-3f);
+        PPR_TEST_ASSERT(std::abs(red_diffuse.y - 0.05f) <= 2.0e-3f);
+        PPR_TEST_ASSERT(std::abs(red_diffuse.z - 0.05f) <= 2.0e-3f);
+        PPR_TEST_ASSERT(red_diffuse.y < red_diffuse.x * 0.1f and red_diffuse.z < red_diffuse.x * 0.1f);
+
         const auto zero_tint = makeSourceMaterial(float3{zero_v}, 0.0, float3{zero_v}, mean, 0.0f);
         PPR_TEST_ASSERT(zero_tint.has_value() and zero_tint->m_diffuse == 0u);
 

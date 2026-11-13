@@ -58,6 +58,18 @@ namespace pP::colony {
         constexpr CellRect coloredLRedWall{800u, 818u, 110u, 2u};
         constexpr CellRect coloredLGreenWall{908u, 820u, 2u, 100u};
 
+        // Enclosed Cornell proof room: a two-cell shell, a colored inner-wall
+        // pair, a ceiling emitter band and two blocks. The camera views the x-y
+        // slice, so the enclosure is already a cutaway; the closed boundary is
+        // what makes multi-bounce transport observable.
+        constexpr CellRect cornellShell{800u, 20u, 64u, 64u};
+        constexpr CellRect cornellInterior{802u, 22u, 60u, 60u};
+        constexpr CellRect cornellRedWall{800u, 22u, 2u, 60u};
+        constexpr CellRect cornellGreenWall{862u, 22u, 2u, 60u};
+        constexpr CellRect cornellCeilingEmitter{816u, 82u, 32u, 2u};
+        constexpr CellRect cornellFloorBlock{820u, 22u, 8u, 8u};
+        constexpr CellRect cornellFloatingBlock{838u, 48u, 6u, 6u};
+
         constexpr CellRect matchedDoors[]{
             {32u, 512u, 208u, 176u},
             {272u, 512u, 208u, 176u},
@@ -320,6 +332,8 @@ namespace pP::colony {
                 grid,
                 {coloredLShellRoom.m_x, coloredLShellRoom.m_y, coloredLShellRoom.m_width, coloredLShellRoom.m_height},
                 materials.m_wall->m_numeric_id, kNormalTemperatureK));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation, fillRect(grid, cornellShell, materials.m_wall->m_numeric_id, kNormalTemperatureK));
 
         // ------------------------------------------------------------------
         // carve
@@ -333,6 +347,7 @@ namespace pP::colony {
         }
         PPR_RETURN_ERROR_ON_FAIL(WorldPreparation, clearRect(grid, coloredLHorizontalCorridor));
         PPR_RETURN_ERROR_ON_FAIL(WorldPreparation, clearRect(grid, coloredLVerticalCorridor));
+        PPR_RETURN_ERROR_ON_FAIL(WorldPreparation, clearRect(grid, cornellInterior));
 
         // ------------------------------------------------------------------
         // divider
@@ -353,6 +368,10 @@ namespace pP::colony {
             WorldPreparation, fillRect(grid, coloredLRedWall, materials.m_red->m_numeric_id, kNormalTemperatureK));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldPreparation, fillRect(grid, coloredLGreenWall, materials.m_green->m_numeric_id, kNormalTemperatureK));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation, fillRect(grid, cornellRedWall, materials.m_red->m_numeric_id, kNormalTemperatureK));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation, fillRect(grid, cornellGreenWall, materials.m_green->m_numeric_id, kNormalTemperatureK));
 
         // ------------------------------------------------------------------
         // aperture
@@ -392,6 +411,18 @@ namespace pP::colony {
             WorldPreparation, fillRect(grid, chunkSeamSource, materials.m_emitter->m_numeric_id, kNormalTemperatureK));
         PPR_RETURN_ERROR_ON_FAIL(
             WorldPreparation, fillRect(grid, thermalSlab, materials.m_wall->m_numeric_id, kNormalTemperatureK));
+
+        // Cornell proof room: a ceiling emitter band over half the width and
+        // two white blocks, one standing on the floor and one floating, which
+        // cast the soft floor shadow and split the colored walls' reflection.
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation,
+            fillRect(grid, cornellCeilingEmitter, materials.m_emitter->m_numeric_id, kNormalTemperatureK));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation, fillRect(grid, cornellFloorBlock, materials.m_wall->m_numeric_id, kNormalTemperatureK));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldPreparation,
+            fillRect(grid, cornellFloatingBlock, materials.m_wall->m_numeric_id, kNormalTemperatureK));
 
         constexpr std::array<float, kHotMetalTemperatureCount> hot_temperatures{
             300.0f, 1500.0f, 3000.0f, 6500.0f, 10000.0f};

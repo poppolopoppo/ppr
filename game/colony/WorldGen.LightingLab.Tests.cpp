@@ -313,6 +313,79 @@ namespace pP::game::tests::detail::lighting_lab {
     };
 
     // ------------------------------------------------------------------
+    // Cornell proof room
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (cornell_proof_room_is_a_closed_shell_with_a_vacuum_interior) {
+        auto prepared = prepareLab();
+        PPR_TEST_ASSERT(prepared.has_value());
+        const auto &world = *prepared;
+
+        const u16 wall = materialId(world, "lab_wall");
+        const u16 red = materialId(world, "lab_red");
+        const u16 green = materialId(world, "lab_green");
+        const u16 emitter = materialId(world, "lab_emitter");
+
+        // Outer shell corners and both colored inner walls.
+        expectCell(world, 800u, 20u, wall, 300.0f);
+        expectCell(world, 863u, 20u, wall, 300.0f);
+        expectCell(world, 800u, 83u, wall, 300.0f);
+        expectCell(world, 863u, 83u, wall, 300.0f);
+        expectCell(world, 800u, 22u, red, 300.0f);
+        expectCell(world, 801u, 81u, red, 300.0f);
+        expectCell(world, 862u, 22u, green, 300.0f);
+        expectCell(world, 863u, 81u, green, 300.0f);
+
+        // White floor and ceiling outside the emitter band.
+        expectCell(world, 802u, 20u, wall, 300.0f);
+        expectCell(world, 861u, 21u, wall, 300.0f);
+        expectCell(world, 802u, 82u, wall, 300.0f);
+        expectCell(world, 861u, 83u, wall, 300.0f);
+
+        // The ceiling emitter band covers x 816..847 on both ceiling rows.
+        expectCell(world, 816u, 82u, emitter, 300.0f);
+        expectCell(world, 847u, 82u, emitter, 300.0f);
+        expectCell(world, 816u, 83u, emitter, 300.0f);
+        expectCell(world, 847u, 83u, emitter, 300.0f);
+        expectCell(world, 815u, 82u, wall, 300.0f);
+        expectCell(world, 848u, 83u, wall, 300.0f);
+
+        // The floor block and the floating cube.
+        expectCell(world, 820u, 22u, wall, 300.0f);
+        expectCell(world, 827u, 29u, wall, 300.0f);
+        expectCell(world, 838u, 48u, wall, 300.0f);
+        expectCell(world, 843u, 53u, wall, 300.0f);
+        expectVacuum(world, 828u, 29u);
+        expectVacuum(world, 844u, 53u);
+
+        // The interior stays vacuum around and between the blocks.
+        expectVacuum(world, 802u, 22u);
+        expectVacuum(world, 861u, 81u);
+        expectVacuum(world, 810u, 70u);
+        expectVacuum(world, 830u, 40u);
+
+        // The two-cell shell ring is a closed solid set of lab materials: no
+        // vacuum and no particle-owned cell can leak the enclosure.
+        u32 ring_cells = 0u;
+        for (u32 y = 20u; y < 84u; ++y) {
+            for (u32 x = 800u; x < 864u; ++x) {
+                const bool ring = x < 802u or x >= 862u or y < 22u or y >= 82u;
+                if (not ring) {
+                    continue;
+                }
+
+                const u16 material = cellAt(world, x, y).m_element;
+                PPR_TEST_ASSERT(material == wall or material == red or material == green or material == emitter);
+                ++ring_cells;
+            }
+        }
+        PPR_TEST_ASSERT(ring_cells == 64u * 64u - 60u * 60u);
+
+        _.log(
+            std::format("LIGHTING_LAB cornell shell=64x64 interior=60x60 ring_cells={} emitter_band=32x2", ring_cells));
+    };
+
+    // ------------------------------------------------------------------
     // particle seeds
     // ------------------------------------------------------------------
 
@@ -639,6 +712,7 @@ namespace pP::game::tests {
     const UnitTest lighting_lab = UnitTest::Named("lighting_lab") / [](UnitTest::IRun &_) -> void {
         _.recurse(
             {detail::lighting_lab::recipe_rooms_apertures_swatches_and_material_values_are_exact,
+                detail::lighting_lab::cornell_proof_room_is_a_closed_shell_with_a_vacuum_interior,
                 detail::lighting_lab::basins_and_gas_seed_exact_particle_columns,
                 detail::lighting_lab::grid_matter_and_start_are_deterministic_across_seeds,
                 detail::lighting_lab::checkpoint_roundtrip_preserves_dug_rebuilt_and_evolved_state,

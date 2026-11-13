@@ -106,6 +106,25 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
     float2 box_min = fine_center - kFineConnectorHalfExtent;
     float2 box_max = fine_center + kFineConnectorHalfExtent;
 
+    // The probe corner is shared by four native cells, which are the probe's
+    // own surface. The near trace traverses that 2x2 block instead of
+    // terminating on it, so a wall sources rho*incident rather than its own
+    // outgoing radiance. The coarse and cascade traces keep the ordinary rule.
+    int2 own_block_min = int2(fine_center) - 1;
+    int2 own_block_max = int2(fine_center);
+
+    // A block that reaches the world edge has the map exit, not another cell,
+    // beyond it. Excluding it would replace the terminal boundary with a
+    // missing direction and make a uniform field non-uniform at the domain
+    // edge, so only an interior block is excluded and the outermost probe ring
+    // keeps the ordinary first-hit rule.
+    int trace_edge = int(kTraceEdge);
+    if (own_block_min.x < 1 || own_block_min.y < 1 || own_block_max.x >= trace_edge - 1 ||
+        own_block_max.y >= trace_edge - 1) {
+        own_block_min = int2(-1, -1);
+        own_block_max = int2(-1, -1);
+    }
+
     CHAccumulator accumulator = chAccumulator();
     for (uint tap = 0u; tap < 4u; ++tap) {
         int2 offset = offsets[tap];
@@ -140,11 +159,13 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
             float2 basis = connector_length == 0.0 ? direction : connector / connector_length;
 
             // Near segment against the current resolved occupancy and cached
-            // source. The far interval is the L1 probe's retained transport for
-            // this direction; a never-initialized interval is (0,0) and cannot
+            // source. The probe's own/neighbour block never terminates it. The
+            // far interval is the L1 probe's retained transport for this
+            // direction; a never-initialized interval is (0,0) and cannot
             // suppress a current near hit.
-            SegmentHit near_hit =
-                traceSegmentDetailed(fine_center + basis * kFineOriginOffset, exit_point, invocation, g_fine.m_status_record);
+            SegmentHit near_hit = traceSegmentDetailed(
+                fine_center + basis * kFineOriginOffset, exit_point, invocation, g_fine.m_status_record,
+                own_block_min, own_block_max);
 
             Interval far_interval;
             far_interval.m_radiance = float3(0.0);

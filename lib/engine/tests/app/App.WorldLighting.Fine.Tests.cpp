@@ -266,9 +266,10 @@ namespace pP::tests::detail::WorldLightingFine {
     // ------------------------------------------------------------------
 
     // Four metallic materials with a known emission per quadrant around the
-    // chosen fine centre. The whole map stays occupied so every near connector
-    // hits its starting cell (Tnear=0) and the angular distribution comes only
-    // from the connector basis, not from cascade far intervals.
+    // chosen fine centre. The whole map stays occupied, and the colored cells
+    // form the twelve-cell ring just outside the probe's own 2x2 block: the
+    // near trace traverses that block and terminates on the ring, so the
+    // angular distribution still comes only from the connector basis.
     [[nodiscard]] std::array<lighting::SourceMaterial, kMaterialCount> makeQuadrantSources() {
         std::array<lighting::SourceMaterial, kMaterialCount> sources{};
         const auto store = [&](const u32 material, const float3 emission) {
@@ -286,26 +287,40 @@ namespace pP::tests::detail::WorldLightingFine {
     }
 
     struct QuadrantFixture {
-        // Fine probe (100,100) has centre (201,201), the shared corner of these
-        // four native cells.
+        // Fine probe (100,100) has centre (201,201), the shared corner of its
+        // own 2x2 block. The colored quadrants occupy the ring around that
+        // block, assigned by the side of the corner the cell centre falls on,
+        // which reproduces the block's directional partition exactly.
         CategoricalMap m_map;
         std::array<lighting::SourceMaterial, kMaterialCount> m_sources;
         std::vector<u32> m_source_words;
         std::vector<u8> m_occupancy;
 
         QuadrantFixture() {
-            m_map.fill(kBack);
-            m_map.occupy(200u, 200u, kRed);
-            m_map.occupy(201u, 200u, kGreen);
-            m_map.occupy(200u, 201u, kBlue);
-            m_map.occupy(201u, 201u, kYellow);
+            constexpr u32 kCornerX = 201u;
+            constexpr u32 kCornerY = 201u;
 
+            m_map.fill(kBack);
             m_sources = makeQuadrantSources();
             m_source_words.assign(kCells, 0u);
-            m_source_words[cellIndex(200u, 200u)] = m_sources[kRed].m_emission;
-            m_source_words[cellIndex(201u, 200u)] = m_sources[kGreen].m_emission;
-            m_source_words[cellIndex(200u, 201u)] = m_sources[kBlue].m_emission;
-            m_source_words[cellIndex(201u, 201u)] = m_sources[kYellow].m_emission;
+            for (u32 y = kCornerY - 2u; y <= kCornerY + 1u; ++y) {
+                for (u32 x = kCornerX - 2u; x <= kCornerX + 1u; ++x) {
+                    const bool own_block = x >= kCornerX - 1u and
+                                           x <= kCornerX and
+                                           y >= kCornerY - 1u and
+                                           y <= kCornerY;
+                    if (own_block) {
+                        continue;
+                    }
+
+                    const bool east = static_cast<float>(x) + 0.5f > static_cast<float>(kCornerX);
+                    const bool north = static_cast<float>(y) + 0.5f > static_cast<float>(kCornerY);
+                    const u32 material = east ? (north ? kYellow : kGreen) : (north ? kBlue : kRed);
+                    m_map.occupy(x, y, material);
+                    m_source_words[cellIndex(x, y)] = m_sources[material].m_emission;
+                }
+            }
+
             m_occupancy.assign(kCells, 1u);
         }
     };
@@ -580,7 +595,31 @@ namespace pP::tests::detail::WorldLightingFine {
             (static_cast<float>(probe_x) + 0.5f) * 2.0f, (static_cast<float>(probe_y) + 0.5f) * 2.0f};
         const float2 box_min{fine_center.x - 4.0f, fine_center.y - 4.0f};
         const float2 box_max{fine_center.x + 4.0f, fine_center.y + 4.0f};
-        const std::span<const u8> occupancy{inputs.m_occupancy.data(), inputs.m_occupancy.size()};
+
+        // The fine near trace traverses the probe's own 2x2 corner block: those
+        // four cells are the probe's own surface and never terminate the near
+        // segment. Clearing them in a copy of the resolved occupancy is the
+        // equivalent input for the shared native-cell DDA. A block that reaches
+        // the world edge keeps the ordinary first-hit rule, exactly as the
+        // shader's domain-edge guard does, so the oracle only clears an
+        // interior block.
+        std::vector<u8> near_occupancy = inputs.m_occupancy;
+        const u32 corner_x = probe_x * 2u + 1u;
+        const u32 corner_y = probe_y * 2u + 1u;
+
+        // The shader disables the exclusion when either block edge meets the
+        // world edge; the oracle clears the four cells only for an interior block.
+        const bool x_interior = corner_x >= 3u and corner_x + 1u < inputs.m_edge;
+        const bool y_interior = corner_y >= 3u and corner_y + 1u < inputs.m_edge;
+        if (x_interior and y_interior) {
+            for (u32 y = corner_y - 1u; y <= corner_y; ++y) {
+                for (u32 x = corner_x - 1u; x <= corner_x; ++x) {
+                    near_occupancy[static_cast<std::size_t>(y) * inputs.m_edge + x] = 0u;
+                }
+            }
+        }
+
+        const std::span<const u8> occupancy{near_occupancy.data(), near_occupancy.size()};
         const auto taps = fineTaps(probe_x, probe_y);
         constexpr double direction_weight = 2.0 * std::numbers::pi / 16.0;
 
@@ -1000,6 +1039,10 @@ namespace pP::tests::detail::WorldLightingFine {
 
         runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
 
+        // The list includes the outermost ring and the far corner. A probe whose
+        // own/neighbour block reaches the world edge keeps the ordinary
+        // first-hit rule (see the self-exclusion section), so the uniform field
+        // stays C0-only at the domain edge as well as in the interior.
         for (const std::array<u32, 2u> probe:
             {std::array<u32, 2u>{256u, 256u}, std::array<u32, 2u>{0u, 0u}, std::array<u32, 2u>{0u, 300u},
                 std::array<u32, 2u>{300u, 0u}, std::array<u32, 2u>{511u, 511u}}) {
@@ -1302,12 +1345,13 @@ namespace pP::tests::detail::WorldLightingFine {
         const auto visuals = makePalette();
         const float3 emission = rgb(4.0f, 2.0f, 1.0f);
 
-        // A rectangular emitter covers the chosen fine probe. On the very first
-        // accepted frame every L1 interval is still zero/never-initialized, so
-        // this result can only come from the near connector tracing the current
-        // cached source.
+        // A rectangular emitter covers the chosen fine probe and the ring
+        // outside the probe's own 2x2 block, which the near trace traverses.
+        // On the very first accepted frame every L1 interval is still
+        // zero/never-initialized, so this result can only come from the near
+        // connector tracing the current cached source.
         CategoricalMap map;
-        map.fillRect(200u, 200u, 219u, 219u, kMetal);
+        map.fillRect(196u, 196u, 219u, 219u, kMetal);
         FineInputs inputs{visuals, map};
         inputs.uploadCommon(fixture);
         inputs.setSources(fixture, uniformSources(emission));
@@ -1716,6 +1760,192 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
+    // ------------------------------------------------------------------
+    // probe self-exclusion
+    // ------------------------------------------------------------------
+
+    // A solid 10x10 metal region with a distinct 2x2 block on its corner. The
+    // probe at (100,100) sits on the shared corner of those four cells, so the
+    // near trace traverses them and terminates on the surrounding metal ring.
+    [[nodiscard]] CategoricalMap ownBlockMap(const u32 block_material) {
+        CategoricalMap map;
+        map.fillRect(196u, 196u, 205u, 205u, kMetal);
+        map.fillRect(200u, 200u, 201u, 201u, block_material);
+        return map;
+    }
+
+    [[nodiscard]] std::array<lighting::SourceMaterial, kMaterialCount> twoRegionSources(
+        const float3 room_emission, const u32 block_material, const float3 block_emission, const float block_metallic,
+        const float3 block_tint) {
+        std::array<lighting::SourceMaterial, kMaterialCount> sources{};
+        const auto room = lighting::makeSourceMaterial(
+            room_emission, 1.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 1.0);
+        const auto block = lighting::makeSourceMaterial(
+            block_emission, 1.0, block_tint, rgb(1.0f, 1.0f, 1.0f), block_metallic);
+        PPR_TEST_ASSERT(room.has_value() and block.has_value());
+        for (auto &source: sources) {
+            source = *room;
+        }
+
+        sources[block_material] = *block;
+        return sources;
+    }
+
+    PPR_UNIT_TEST (near_trace_skips_the_probe_own_2x2_block) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto visuals = makePalette();
+        const float3 room_emission = rgb(0.0f, 0.0f, 2.0f);
+        const float3 own_emission = rgb(4.0f, 0.0f, 0.0f);
+
+        // Both regions are solid metal, so the first hit's source word is the
+        // only thing a near ray can report: the block's own outgoing radiance
+        // or the room ring around it.
+        CategoricalMap map = ownBlockMap(kRed);
+        FineInputs inputs{visuals, map};
+        inputs.uploadCommon(fixture);
+        inputs.setSources(fixture, twoRegionSources(room_emission, kRed, own_emission, 1.0f, rgb(1.0f, 1.0f, 1.0f)));
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
+        const float3 excluded = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
+        PPR_TEST_ASSERT(closeRGB9E5(excluded, room_emission));
+        PPR_TEST_ASSERT(not closeRGB9E5(excluded, own_emission));
+
+        // The same probe with a vacant 2x2 block: the ordinary hit rule already
+        // traverses vacuum, so self-exclusion changes nothing there.
+        CategoricalMap vacant_map = map;
+        for (u32 y = 200u; y <= 201u; ++y) {
+            for (u32 x = 200u; x <= 201u; ++x) {
+                vacant_map.m_words[cellIndex(x, y)] = 0u;
+            }
+        }
+
+        FineInputs vacant_inputs{visuals, vacant_map};
+        vacant_inputs.uploadCommon(fixture);
+        vacant_inputs.setSources(
+            fixture, twoRegionSources(room_emission, kRed, own_emission, 1.0f, rgb(1.0f, 1.0f, 1.0f)));
+        runFrame(fixture, pass, vacant_inputs.inputs(), 1u, 20.0, -1, 2u);
+        const float3 ordinary = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
+        PPR_TEST_ASSERT(closeRGB9E5(ordinary, room_emission));
+        PPR_TEST_ASSERT(closeRGB9E5(ordinary, excluded));
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE self_exclusion own_block=skipped room_term=kept vacant_block=ordinary_hit"));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (own_block_at_the_world_edge_keeps_the_ordinary_hit) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto visuals = makePalette();
+        const float3 room_emission = rgb(0.0f, 0.0f, 2.0f);
+        const float3 own_emission = rgb(4.0f, 0.0f, 0.0f);
+
+        // Probe (0,0) sits on the world corner and its 2x2 block reaches the map
+        // exit in both axes. Excluding that block would leave the terminal
+        // boundary, not another cell, beyond the own surface, so the ordinary
+        // first-hit rule is kept and the block's own source is returned.
+        CategoricalMap edge_map;
+        edge_map.fillRect(0u, 0u, 5u, 5u, kMetal);
+        edge_map.fillRect(0u, 0u, 1u, 1u, kRed);
+
+        FineInputs edge_inputs{visuals, edge_map};
+        edge_inputs.uploadCommon(fixture);
+        edge_inputs.setSources(
+            fixture, twoRegionSources(room_emission, kRed, own_emission, 1.0f, rgb(1.0f, 1.0f, 1.0f)));
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        runFrame(fixture, pass, edge_inputs.inputs(), 0u, 0.0, -1, 1u);
+        const float3 edge = fineAngularMean(readFineRecord(fixture, pass, 0u, 0u));
+        PPR_TEST_ASSERT(closeRGB9E5(edge, own_emission));
+        PPR_TEST_ASSERT(not closeRGB9E5(edge, room_emission));
+
+        // The interior counterpart excludes its block and tracks the room.
+        CategoricalMap interior_map = ownBlockMap(kRed);
+        FineInputs interior_inputs{visuals, interior_map};
+        interior_inputs.uploadCommon(fixture);
+        interior_inputs.setSources(
+            fixture, twoRegionSources(room_emission, kRed, own_emission, 1.0f, rgb(1.0f, 1.0f, 1.0f)));
+        runFrame(fixture, pass, interior_inputs.inputs(), 1u, 20.0, -1, 2u);
+        const float3 interior = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
+        PPR_TEST_ASSERT(closeRGB9E5(interior, room_emission));
+        PPR_TEST_ASSERT(not closeRGB9E5(interior, own_emission));
+
+        _.log("WORLD_LIGHTING_FINE self_exclusion domain_edge=ordinary_hit interior_block=skipped");
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    PPR_UNIT_TEST (own_block_diffuse_source_tracks_the_room_without_a_fixed_point) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto visuals = makePalette();
+        const float3 room_emission = rgb(1.0f, 1.0f, 1.0f);
+        const float3 red_tint = rgb(0.7f, 0.05f, 0.05f);
+
+        // The probe's own block is a red diffuse wall with no emission: its
+        // source must be rho * incident and must not feed its own field.
+        CategoricalMap map = ownBlockMap(kDiffuse);
+        FineInputs inputs{visuals, map};
+        inputs.uploadCommon(fixture);
+        const auto wall_sources = twoRegionSources(room_emission, kDiffuse, rgb(0.0f, 0.0f, 0.0f), 0.0f, red_tint);
+        inputs.setSources(fixture, wall_sources);
+
+        const float3 diffuse = lighting::unpackRGB9E5(wall_sources[kDiffuse].m_diffuse);
+        PPR_TEST_ASSERT(diffuse.x > 10.0f * diffuse.y and diffuse.x > 10.0f * diffuse.z);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const auto wallSource = [&]() {
+            return lighting::unpackRGB9E5(
+                readWords(fixture, pass.sourceCellsForTest(), static_cast<u64>(cellIndex(200u, 200u)) * 4u, 4u)[0u]);
+        };
+
+        runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
+        PPR_TEST_ASSERT(closeRGB9E5(fineAngularMean(readFineRecord(fixture, pass, 100u, 100u)), room_emission));
+
+        for (u32 frame = 1u; frame <= 3u; ++frame) {
+            runFrame(fixture, pass, inputs.inputs(), frame, 0.5 * static_cast<double>(frame), -1, frame + 1u);
+
+            // The probe never sees its own block: every frame keeps the room's
+            // uniform radiance, not a red self-sustaining field.
+            const float3 field = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
+            PPR_TEST_ASSERT(closeRGB9E5(field, room_emission));
+
+            // The wall's source is driven by the incident room term and stays
+            // inside rho * L_room; there is no self term to inflate.
+            const float3 source = wallSource();
+            PPR_TEST_ASSERT(source.x > 10.0f * source.y and source.x > 10.0f * source.z);
+            PPR_TEST_ASSERT(source.x <= diffuse.x * room_emission.x + 2.0e-3f);
+            PPR_TEST_ASSERT(source.y <= diffuse.y * room_emission.y + 2.0e-3f);
+            PPR_TEST_ASSERT(source.z <= diffuse.z * room_emission.z + 2.0e-3f);
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE self_exclusion converge field=room diffuse=({}, {}, {}) bound=rho*room", diffuse.x,
+                diffuse.y, diffuse.z));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
     PPR_UNIT_TEST (fine_range_failure_reports_status_and_containment) {
         Fixture fixture;
         PPR_DEFER {
@@ -1914,6 +2144,9 @@ namespace pP::tests {
                 detail::WorldLightingFine::retained_l1_direction_identity_uses_the_probe_trace_frame,
                 detail::WorldLightingFine::fine_writes_all_bytes_and_reads_only_its_own_prior,
                 detail::WorldLightingFine::source_reads_precede_fine_writes_across_successive_frames,
+                detail::WorldLightingFine::near_trace_skips_the_probe_own_2x2_block,
+                detail::WorldLightingFine::own_block_at_the_world_edge_keeps_the_ordinary_hit,
+                detail::WorldLightingFine::own_block_diffuse_source_tracks_the_room_without_a_fixed_point,
                 detail::WorldLightingFine::fine_range_failure_reports_status_and_containment,
                 detail::WorldLightingFine::angular_mean_helper_matches_bilinear_oracle,
                 detail::WorldLightingFine::reflected_fine_bindings_match_the_cpu_shapes,
