@@ -839,31 +839,56 @@ namespace pP {
 
     std::error_code WorldLightingPass::bindTerrainOwnership(rhi::ShaderCursor &cursor, bool &ownership_bound) const {
         ownership_bound = false;
-        // The terrain fragment is the only production reader; particle roots and
-        // other material consumers keep the same shared module without
-        // referencing the field, so they succeed without a binding.
+        // Two per-native-cell grids travel together from this one authority: the
+        // committed winner grid (base retirement and particle occlusion) and the
+        // Q16 physical-fill accumulation (the particle draw's Task 11 tangent
+        // cue). Both are written by the same projection attempt - the key
+        // reduction accumulates the fill and the row reduction nominates the
+        // winner inside one ordered, barrier-separated sequence on the same
+        // attempt's scratch - so binding them from one gate keeps them a matching
+        // pair. A program that references neither field (material and inspection
+        // roots share this module without reading either) succeeds without a
+        // binding; each root binds the fields it actually declares, so a terrain
+        // root that reads only the winner grid keeps its ownership bit.
         const rhi::ShaderCursor ownership = cursor["g_best_row"];
-        if (not ownership.isValid()) {
+        const rhi::ShaderCursor fill = cursor["g_cell_fill"];
+        const bool best_row_declared = ownership.isValid();
+        const bool fill_declared = fill.isValid();
+        if (not best_row_declared and not fill_declared) {
             return {};
         }
 
+        const bool grids_available = m_resources and
+                                     m_resources->m_scratch[1u] and
+                                     m_resources->m_resolved and
+                                     (not fill_declared or m_resources->m_scratch[2u]);
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLighting, m_resources and m_resources->m_scratch[1u] and m_resources->m_resolved
-                               ? std::error_code{}
-                               : std::make_error_code(std::errc::not_connected));
-        // The terrain draw follows the projection in the same submission, so the
-        // committed winner grid belongs to this attempt. A retained scratch grid
-        // after a discarded or superseded attempt would retire cells from winners
-        // that do not match the resolved cells the terrain draws; reject it. A
-        // held publication is the one exception: it serves the last *accepted*
-        // attempt's resolved cells and winners as a matching pair.
+            WorldLighting, grids_available ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+        // The draw follows the projection in the same submission, so the
+        // committed grids belong to this attempt. A retained scratch grid after a
+        // discarded or superseded attempt would retire cells from winners that do
+        // not match the resolved cells the terrain draws, and would give the
+        // tangent a fill from a different attempt; reject both. A held
+        // publication is the one exception: it serves the last *accepted*
+        // attempt's resolved cells, winners and fill as a matching set.
         PPR_RETURN_ERROR_ON_FAIL(
             WorldLighting,
             ownershipAvailable() ? std::error_code{} : std::make_error_code(std::errc::resource_unavailable_try_again));
 
-        rhi::IBuffer *const best_row = m_resources->m_scratch[1u].get();
-        PPR_RETURN_ERROR_ON_FAIL(
-            WorldLighting, ownership.setBinding(rhi::Binding(best_row, projectionRange(best_row))));
+        if (best_row_declared) {
+            rhi::IBuffer *const best_row = m_resources->m_scratch[1u].get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLighting, ownership.setBinding(rhi::Binding(best_row, projectionRange(best_row))));
+        }
+        if (fill_declared) {
+            rhi::IBuffer *const cell_fill = m_resources->m_scratch[2u].get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                WorldLighting, fill.setBinding(rhi::Binding(cell_fill, projectionRange(cell_fill))));
+        }
+
+        // True only when every field the root declares was actually bound, so the
+        // frame's ownership bit can never authorize a read of a fallback or a
+        // partially bound grid.
         ownership_bound = true;
         return {};
     }

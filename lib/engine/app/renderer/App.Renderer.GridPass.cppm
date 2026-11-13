@@ -155,9 +155,12 @@ export namespace pP {
     inline constexpr float kGridParticleCullRadiusScale{3.0625f};
     inline constexpr float kGridParticleStretchCap{1.5f};
     // Magnitude reference of the retained flow cue, in native cells per solver
-    // step. Fixed and illustrative, not a physical speed: the cue reads the row's
-    // per-step motion and introduces no dt. 0.06 makes ordinary flow saturate the
-    // cap.
+    // step. Fixed and illustrative, not a physical speed: the cue reads a per-cell
+    // motion and introduces no dt. 0.06 makes ordinary flow saturate the cap. The
+    // cue's input is the bilinearly sampled per-cell winner-motion field
+    // (grid_tiles.slang particleFlowMotion), not one row's own displacement, so a
+    // neighbour's stretch changes continuously in position (Task 4 continuity fix);
+    // this twin carries only the mapping.
     inline constexpr float kGridParticleMotionReference{0.06f};
 
     // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
@@ -172,15 +175,30 @@ export namespace pP {
     // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
     // alpha = 0.5 contour radius, in rho units, is
     // k(theta) = k0 * (1 + b*(cos^2(theta) - 1/2)) measured from the surface
-    // tangent read from the committed ownership mask. k0 = 5/6 is the resting 0.5
-    // contour, and b = 0.30 keeps k inside [0.708, 0.958] - both ends inside
-    // [2/3, 1] - so only the band is reshaped: plateau, support radius R, interior
-    // coverage, the diagonal seam and the 3.0625 r cull are untouched for any
-    // orientation. Fixed source values; no tuning UI and no second strength knob.
+    // tangent read from the committed per-cell Q16 fill field. k0 = 5/6 is the
+    // resting 0.5 contour. b = 0.3999 is the strongest four-decimal bias whose
+    // endpoints stay strictly inside the legal band in binary32 - k_max =
+    // 0.999958277 along the tangent and k_min = 0.666708350 across it, a
+    // 1.49984 : 1 aspect (1.49971 : 1 after the defensive clamp). b = 0.40 is
+    // degenerate rather than merely stronger: 0.83333331f * 0.80000001f rounds to
+    // exactly float32(2/3), so k_min would sit ON the plateau while the shader's
+    // warp divides by (contour - 2/3). k_min > 2/3 is the *finite-band*
+    // requirement; k_max <= 1 is the *support* requirement. Both ends inside
+    // [2/3, 1] means only the band is reshaped: plateau, support radius R,
+    // interior coverage, the diagonal seam and the 3.0625 r cull are untouched
+    // for any orientation. Fixed source values; no tuning UI and no second
+    // strength knob.
     inline constexpr float kGridParticleTangentContourScale{5.0f / 6.0f};
-    inline constexpr float kGridParticleTangentContourBias{0.30f};
+    inline constexpr float kGridParticleTangentContourBias{0.3999f};
+    // Defensive clamp of the contour radius, in rho units: one 1e-4 hair above
+    // the plateau and the support exactly. With b = 0.3999 it is nearly inert -
+    // it bites only within about 0.76 degrees of the normal direction, raising
+    // k_min from 0.666708 to 0.666767 - and it removes any possibility of a zero
+    // band offset or of a contour at the support for any legal b.
+    inline constexpr float kGridParticleTangentContourMinimum{kGridParticleFalloffInnerFraction + 1.0e-4f};
     // A gradient magnitude at or below this is "no surface": a zero test for the
-    // one-bit ownership mask, not a smoothing knob.
+    // fill field's gradient, not a smoothing knob. One fill quantum (0.25 cell of
+    // volume) across the stencil is ~1.06, far above it; a flat field is exactly 0.
     inline constexpr float kGridParticleTangentGradientEpsilon{1.0e-4f};
     // Round-off closure of the tangent contour's two joins, relative to R. |local|
     // is a rounded length, so a sample constructed exactly at the support radius can
@@ -252,15 +270,25 @@ export namespace pP {
         "the rejected 0.5-cell half-extent square (2.507 r) is larger than the adopted support; keep it rejected");
 
     // The tangent contour never leaves the legal band: its minor radius cannot cut
-    // into the plateau and its major radius cannot exceed the support circle, so it
-    // can only reshape the band between them.
+    // into the plateau (and cannot reach it either - the shader's warp divides by
+    // the band offset, so equality is a zero denominator and a NaN alpha) and its
+    // major radius cannot exceed the support circle. The shader carries the same
+    // pair as statement-scope static_asserts in particleTangentFalloff.
     static_assert(
-        kGridParticleTangentContourScale * (1.0f - 0.5f * kGridParticleTangentContourBias) >=
+        kGridParticleTangentContourScale * (1.0f - 0.5f * kGridParticleTangentContourBias) >
             kGridParticleFalloffInnerFraction,
-        "the tangent contour's minor radius must not cut the plateau");
+        "the tangent contour's minor radius must stay strictly above the plateau: the warp divides by the"
+        " band offset");
     static_assert(
         kGridParticleTangentContourScale * (1.0f + 0.5f * kGridParticleTangentContourBias) <= 1.0f,
         "the tangent contour's major radius must stay inside the support radius R");
+    // The defensive clamp sits inside the same band, so it can only raise the
+    // minor endpoint and can never move the major one.
+    static_assert(
+        kGridParticleTangentContourMinimum > kGridParticleFalloffInnerFraction and
+            kGridParticleTangentContourMinimum <= kGridParticleTangentContourScale and
+            kGridParticleTangentContourScale * (1.0f + 0.5f * kGridParticleTangentContourBias) <= 1.0f,
+        "the defensive contour clamp must stay inside the legal band");
     // The join closure must exceed the binary32 ulp at rho = 1 (so a sample built
     // exactly at R is closed) and stay invisible (well under a thousandth of R).
     static_assert(
@@ -630,16 +658,17 @@ export namespace pP {
             // Availability word for the categorical publication, mirrored by
             // `g_grid_frame.m_has_resolved_cells` in grid_tiles.slang. Bit 0:
             // the resolved-cell and fine-CH publication is bound. Bit 1: the
-            // committed particle-ownership grid (`g_best_row`) written by that
-            // same projection attempt is bound, so the terrain fragment may
-            // retire particle-owned cells. Bit 1 is never set without bit 0 and
-            // never while the zero fallback is bound.
+            // committed per-cell grids (`g_best_row` and, for the particle
+            // tangent cue, `g_cell_fill`) written by that same projection attempt
+            // are bound, so the terrain fragment may retire particle-owned cells
+            // and the particle draw may read the fill. Bit 1 is never set without
+            // bit 0 and never while the zero fallback is bound.
             u32 m_has_resolved_cells{};
         };
 
         // Shared two-bit availability word, mirrored by the shader's
-        // `m_has_resolved_cells` field. Bit 1 requires the same attempt's grid:
-        // it is derived from the actual `g_best_row` binding outcome.
+        // `m_has_resolved_cells` field. Bit 1 requires the same attempt's grids:
+        // it is derived from the actual committed-grid binding outcome.
         static constexpr u32 kFrameHasResolvedCells{1u};
         static constexpr u32 kFrameHasParticleOwnership{2u};
 
@@ -1208,9 +1237,9 @@ export namespace pP {
         // material roots always declare. Idempotent; owns the creation so a
         // background-only path cannot reach a null buffer.
         [[nodiscard]] std::error_code ensureLightingFallback_(rhi::IDevice &device);
-        // Keeps a static g_best_row binding valid on roots that declare it when
-        // no current projection attempt owns the committed winner grid. The
-        // shader's ownership bit is clear in that case, so it is never read.
+        // Keeps static g_best_row/g_cell_fill bindings valid on roots that declare
+        // them when no current projection attempt owns the committed grids. The
+        // shader's ownership bit is clear in that case, so they are never read.
         [[nodiscard]] std::error_code bindOwnershipFallback_(rhi::ShaderCursor &cursor) const;
         // Background frame tail: captured camera position, forward and
         // orthographic flag, plus the shared optical frame fields.
@@ -1239,11 +1268,12 @@ export namespace pP {
         [[nodiscard]] std::error_code bindGridPass_(
             rhi::ShaderCursor &cursor, u32 pass, EGridParticleDrawClass particle_class = EGridParticleDrawClass::gas);
 
-        // One authority for the terrain availability word and its g_best_row
-        // binding: bit 0 is the categorical publication, bit 1 is set only when
-        // this call actually bound the current attempt's committed grid. A stale
+        // One authority for the terrain availability word and the committed
+        // ownership grids: bit 0 is the categorical publication, bit 1 is set only
+        // when this call actually bound every committed grid the root declares
+        // (the winner grid, and the Q16 fill for the particle tangent cue). A stale
         // attempt, a fixture publication or no publication binds the zero
-        // fallback and leaves bit 1 clear.
+        // fallbacks and leaves bit 1 clear.
         [[nodiscard]] std::error_code bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability);
 
         // Reclaims deferred pipelines/roots at or below `completed`.

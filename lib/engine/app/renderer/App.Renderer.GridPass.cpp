@@ -3023,9 +3023,12 @@ namespace pP {
             return {};
         }
 
-        // Zero-valued resolved-cell/CH fallback. The shader never reads it while
-        // m_has_resolved_cells is clear; it keeps every static binding valid for
-        // worlds whose lighting owner has not published an attempt yet.
+        // Zero-valued resolved-cell/CH and committed-grid fallback. The shader
+        // never reads it while m_has_resolved_cells is clear; it keeps every
+        // static binding valid for worlds whose lighting owner has not published
+        // an attempt yet. One u32-element buffer serves the resolved cells, the
+        // fine CH, the winner grid and the Q16 fill: the fill's element stride is
+        // the same u32, and nothing indexes any of them while the gate is clear.
         rhi::BufferDesc fallback{};
         fallback.size = sizeof(u32) * 16u;
         fallback.elementSize = sizeof(u32);
@@ -3516,18 +3519,28 @@ namespace pP {
     }
 
     std::error_code GridPass::bindOwnershipFallback_(rhi::ShaderCursor &cursor) const {
-        // Roots that do not declare the committed ownership grid (particle and
-        // material programs) need no binding.
+        // Roots that do not declare the committed ownership grids (material and
+        // inspection programs) need no binding.
         const rhi::ShaderCursor ownership = cursor["g_best_row"];
-        if (not ownership.isValid()) {
+        const rhi::ShaderCursor fill = cursor["g_cell_fill"];
+        if (not ownership.isValid() and not fill.isValid()) {
             return {};
         }
 
-        // The shader gates its read on the frame's ownership bit, so this zero
-        // fallback is never read: it only keeps the root's static binding valid
-        // when no current projection attempt owns the committed winner grid.
+        // The shader gates both reads on the frame's ownership bit, so these zero
+        // fallback bindings are never read: they only keep the root's static
+        // bindings valid when no current projection attempt owns the committed
+        // grids. One buffer serves both fields: the same 16-word zero upload that
+        // already backs the resolved-cell/CH/winner fallbacks, with the same u32
+        // element stride, which is sufficient because nothing indexes it while the
+        // bit is clear.
         auto *const fallback = m_lighting_fallback.get();
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership.setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+        if (ownership.isValid()) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership.setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+        }
+        if (fill.isValid()) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, fill.setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+        }
         return {};
     }
 

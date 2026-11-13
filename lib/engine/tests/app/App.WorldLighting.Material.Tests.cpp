@@ -3239,19 +3239,25 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == switch_fields[index].second);
         }
 
-        // The contour cues add no binding: the tangent reads the ownership mask
-        // already bound for occlusion, and no per-instance field was added (the
-        // row stayed 24 B). A future tangent buffer would have to be named here.
+        // The contour cues add no new binding of their own: the flow cue samples
+        // the winner motion through g_particles (already bound) and g_best_row,
+        // and the tangent reads the Q16 fill grid both bound by the single
+        // ownership authority. No per-instance field was added (the row stayed
+        // 24 B), so a future tangent buffer would have to be named here.
         u32 best_row_bindings = 0u;
+        u32 cell_fill_bindings = 0u;
         for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
             const std::string_view name{layout->getParameterByIndex(index)->getName()};
             if (name == "g_best_row")
                 ++best_row_bindings;
+            if (name == "g_cell_fill")
+                ++cell_fill_bindings;
 
             PPR_TEST_ASSERT(name.find("tangent") == std::string_view::npos);
         }
 
         PPR_TEST_ASSERT(best_row_bindings >= 1u);
+        PPR_TEST_ASSERT(cell_fill_bindings >= 1u);
 
         _.log(
             std::format(
@@ -3785,12 +3791,105 @@ namespace pP::tests::detail::WorldLightingMaterial {
     }
 
     // ------------------------------------------------------------------
+    // per-cell winner-motion sampler mirror (Task 4 continuity fix)
+    // ------------------------------------------------------------------
+    // Mirrors grid_tiles.slang particleCellMotion/particleFlowMotion. A field
+    // answers one lattice value and whether that cell has a committed winner; the
+    // sample is the four dual-lattice bilinear weights renormalised over the taps
+    // that have a winner, with the entry's own row motion as the fallback when no
+    // tap does. Out-of-range is empty, so a synthetic field must bound itself the
+    // way the shader's kResolvedEdge guard does.
+    template<typename Field>
+    [[nodiscard]] FlowPoint gridParticleFlowMotion(
+        const Field &field, const FlowPoint cell_position, const FlowPoint row_motion) noexcept {
+        const FlowPoint p{cell_position.x - 0.5, cell_position.y - 0.5};
+        const int base_x = static_cast<int>(std::floor(p.x));
+        const int base_y = static_cast<int>(std::floor(p.y));
+        const double fraction_x = p.x - double(base_x);
+        const double fraction_y = p.y - double(base_y);
+        const std::array<FlowPoint, 4u> taps{{{0.0, 0.0}, {1.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}}};
+        const std::array<double, 4u> weights{
+            (1.0 - fraction_x) * (1.0 - fraction_y), fraction_x * (1.0 - fraction_y), (1.0 - fraction_x) * fraction_y,
+            fraction_x * fraction_y};
+
+        FlowPoint sum{};
+        double weight = 0.0;
+        bool present = false;
+        for (u32 tap = 0u; tap < taps.size(); ++tap) {
+            FlowPoint value{};
+            if (not field(base_x + static_cast<int>(taps[tap].x), base_y + static_cast<int>(taps[tap].y), value))
+                continue;
+
+            sum.x += weights[tap] * value.x;
+            sum.y += weights[tap] * value.y;
+            weight += weights[tap];
+            present = true;
+        }
+
+        if (not present or not (weight > 0.0))
+            return row_motion;
+
+        return {sum.x / weight, sum.y / weight};
+    }
+
+    // The negative control the continuity probes are measured against: the same
+    // dual-lattice window, but a box filter - the window's base cell is held for the
+    // whole sub-cell window instead of being interpolated. It is piecewise constant
+    // with a step at every window edge, cell_position = k + 0.5, which is the cell
+    // centre the field is published at and therefore where the old per-cell cue
+    // stepped. The probes assert that it violates their bounds while the shipped
+    // sampler satisfies them, so a bound both pass would be no evidence about the
+    // interpolation. Absence keeps the bilinear sampler's own fallback: the entry's
+    // row motion.
+    template<typename Field>
+    [[nodiscard]] FlowPoint gridParticleFlowMotionBox(
+        const Field &field, const FlowPoint cell_position, const FlowPoint row_motion) noexcept {
+        const FlowPoint p{cell_position.x - 0.5, cell_position.y - 0.5};
+        FlowPoint value{};
+        if (field(static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), value))
+            return value;
+
+        return row_motion;
+    }
+
+    // Worst stretch and direction step of one sampler over a sweep of neighbouring
+    // sample pairs. Both continuity sweeps and their box control use it, so the
+    // bound is applied to the sampler under test rather than to one hard-coded
+    // interpolation.
+    struct ContinuityProbe {
+        double m_stretch{};
+        double m_angle{};
+    };
+
+    // The cue's two outputs from one sampled motion: the elongation from the
+    // sampled magnitude and the unit flow direction in the (world = quad) frame.
+    [[nodiscard]] float gridParticleSampleStretch(const FlowPoint motion) noexcept {
+        return gridParticleFlowStretch(static_cast<float>(gridParticleLength(motion)));
+    }
+
+    [[nodiscard]] double gridParticleFlowAngle(const FlowPoint motion) noexcept {
+        return std::atan2(motion.y, motion.x);
+    }
+
+    // Smallest rotation between two directions, in radians.
+    [[nodiscard]] double gridParticleAngleDifference(const double left, const double right) noexcept {
+        double difference = std::fmod(left - right + kPi, 2.0 * kPi);
+        if (difference < 0.0)
+            difference += 2.0 * kPi;
+
+        return std::abs(difference - kPi);
+    }
+
+    // ------------------------------------------------------------------
     // tangent-aligned contour mirror (Task 11 increment 1)
     // ------------------------------------------------------------------
     // Mirrors grid_tiles.slang particleSurfaceTangent/particleTangentFalloff and
     // the fixed constants in grid_particle_native.slang (CPU twin above). The
     // tangent frame here is the world-plane frame, which is the quad frame for the
-    // top-down fixture; the shader projects the same gradient with right/up.
+    // top-down fixture; the shader projects the same gradient with right/up. The
+    // sampled field is the committed per-cell Q16 fill, so a field function here
+    // returns cell volume (1.0 = one full cell) and a boundary ramps through the
+    // 0.25 quanta instead of switching one bit.
 
     // Separable 3x3 Sobel of the bilinearly reconstructed field: the exact weight
     // sequence grid_tiles.slang particleSurfaceTangent ships (the Sobel difference
@@ -3843,9 +3942,19 @@ namespace pP::tests::detail::WorldLightingMaterial {
         return true;
     }
 
-    // Angular contour radius k(theta) in rho units.
-    [[nodiscard]] constexpr float gridParticleTangentContour(const float cos_squared) noexcept {
+    // Angular contour radius k(theta) in rho units, exactly as the shader ships
+    // it: the raw expression clamped to the band's defensive limits. The clamp is
+    // inert for b = 0.3999 except within about 0.76 degrees of the normal
+    // direction, so `gridParticleTangentContourUnclamped` below is what the
+    // endpoint assertions compare against.
+    [[nodiscard]] constexpr float gridParticleTangentContourUnclamped(const float cos_squared) noexcept {
         return kGridParticleTangentContourScale * (1.0f + kGridParticleTangentContourBias * (cos_squared - 0.5f));
+    }
+
+    [[nodiscard]] constexpr float gridParticleTangentContour(const float cos_squared) noexcept {
+        const float raw = gridParticleTangentContourUnclamped(cos_squared);
+        return raw < kGridParticleTangentContourMinimum ? kGridParticleTangentContourMinimum
+                                                        : (raw > 1.0f ? 1.0f : raw);
     }
 
     // Mirror of grid_tiles.slang particleTangentFalloff: the resting C1 smoothstep
@@ -4027,10 +4136,454 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(increment > 0.0f);
         PPR_TEST_ASSERT(increment <= (kGridParticleStretchCap - 1.0f) / 63.0f);
 
+        // The sampled field is zero-motion clean at both ends: a field whose
+        // winners all carry zero motion samples to exactly (0,0), not to a
+        // denormal, so the fragment takes the k == 1 path bit for bit; and the
+        // per-row clamp (-64..64 cells/step, so at most sqrt(2)*64 on the
+        // diagonal of the bilinear average) still saturates the same cap.
+        const auto flat_zero = [](const int, const int, FlowPoint &motion) {
+            motion = {0.0, 0.0};
+            return true;
+        };
+        const auto empty = [](const int, const int, FlowPoint &motion) {
+            motion = {};
+            return false;
+        };
+        const FlowPoint zero_sample = gridParticleFlowMotion(flat_zero, FlowPoint{4.3, 5.7}, FlowPoint{0.25, -0.5});
+        PPR_TEST_ASSERT(zero_sample.x == 0.0 and zero_sample.y == 0.0);
+        PPR_TEST_ASSERT(std::bit_cast<u32>(gridParticleSampleStretch(zero_sample)) == std::bit_cast<u32>(1.0f));
+        PPR_TEST_ASSERT(gridParticleFlowLocal(FlowPoint{0.37, -1.21}, FlowPoint{1.0, 0.0}, 1.0f).x == 0.37);
+        PPR_TEST_ASSERT(gridParticleFlowStretch(std::sqrt(2.0f) * 64.0f) == kGridParticleStretchCap);
+        // An entirely empty field falls back to the row's own motion exactly.
+        const FlowPoint fallback = gridParticleFlowMotion(empty, FlowPoint{4.3, 5.7}, FlowPoint{0.0, 0.0});
+        PPR_TEST_ASSERT(fallback.x == 0.0 and fallback.y == 0.0);
+        const FlowPoint fallback_moving = gridParticleFlowMotion(empty, FlowPoint{4.3, 5.7}, FlowPoint{0.021, -0.004});
+        PPR_TEST_ASSERT(
+            std::bit_cast<u64>(fallback_moving.x) == std::bit_cast<u64>(0.021) and
+            std::bit_cast<u64>(fallback_moving.y) == std::bit_cast<u64>(-0.004));
+
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL particle_flow_zero extent={:.6f} unchanged={:.6f} increment={:.6f}", extent,
                 radius * kGridParticleSupportScale, increment));
+    };
+
+    PPR_UNIT_TEST (particle_flow_cue_samples_a_per_cell_motion_field) {
+        // Continuity probe for the Task 4 fix: the cue no longer reads one row's own
+        // published motion but a per-cell winner-motion field sampled bilinearly at
+        // the particle centre, so the stretch and the flow direction are C0 in
+        // position - the owner's report was that the cue "abruptly changes when moving
+        // from one cell to another". The probe is split by coordinate: the sampler's
+        // four taps change at the cell centres (k + 0.5), which is where the bilinear
+        // window shifts and where the old per-cell cue stepped, while an integer
+        // boundary is where a winner swap or a fill update lands, which is a bounded
+        // field update rather than a window shift.
+        //
+        // Synthetic field: a gentle linear shear, about 0.05 cell/step in magnitude
+        // with a 0.003 cell/step-per-cell gradient, so the cue stays well inside its
+        // saturating ratio and the asserted bounds measure the sampler, not the cap.
+        // Out-of-range is empty, exactly like the shader's kResolvedEdge guard.
+        const auto field = [](const int x, const int y, FlowPoint &motion) {
+            if (x < 0 or y < 0 or x >= 64 or y >= 64)
+                return false;
+
+            motion = {
+                0.040 + 0.003 * double(x - 4) - 0.001 * double(y - 4),
+                0.030 + 0.002 * double(y - 4) + 0.001 * double(x - 4)};
+            return true;
+        };
+        const FlowPoint row_motion{0.0, 0.0};
+        constexpr double kStep = 0.01;
+        constexpr double kContinuityBound = 1.0e-3;
+
+        // The two samplers under test read the same field: the shipped bilinear
+        // reconstruction and the box control that holds the window's base cell. A
+        // bound only one of them meets bounds the interpolation, not the field.
+        const auto bilinear = [&](const FlowPoint position) {
+            return gridParticleFlowMotion(field, position, row_motion);
+        };
+        const auto box = [&](const FlowPoint position) {
+            return gridParticleFlowMotionBox(field, position, row_motion);
+        };
+        const auto measure = [](const auto &sampler, const std::span<const std::pair<FlowPoint, FlowPoint>> pairs) {
+            ContinuityProbe probe{};
+            for (const auto &[here, there]: pairs) {
+                const FlowPoint first = sampler(here);
+                const FlowPoint second = sampler(there);
+                probe.m_stretch = (std::max) (probe.m_stretch,
+                    std::abs(double(gridParticleSampleStretch(second)) - double(gridParticleSampleStretch(first))));
+                probe.m_angle = (std::max) (probe.m_angle,
+                    gridParticleAngleDifference(gridParticleFlowAngle(second), gridParticleFlowAngle(first)));
+            }
+
+            return probe;
+        };
+
+        // Sub-cell sweep, fixed field: 0.01-cell pairs over every offset of four
+        // windows, so the sweep contains the pair that steps over a window edge into
+        // the next one.
+        std::vector<std::pair<FlowPoint, FlowPoint>> subcell_pairs;
+        for (u32 window = 0u; window < 4u; ++window) {
+            for (u32 offset = 0u; offset < 100u; ++offset) {
+                const double x = 2.5 + double(window) + double(offset) * kStep;
+                const double y = 2.5 + double(window) + double(offset) * kStep;
+                subcell_pairs.emplace_back(FlowPoint{x, y}, FlowPoint{x + kStep, y});
+                subcell_pairs.emplace_back(FlowPoint{x, y}, FlowPoint{x, y + kStep});
+            }
+        }
+
+        // Sampler-boundary sweep, fixed field: the pair straddling a window edge at
+        // cell_position = k + 0.5 +/- 0.005. The four taps change there - the field is
+        // published at the cell centres, not at the integer corners - and that is
+        // where the per-cell cue stepped. The entering tap's weight vanishes exactly
+        // at the edge, so the bilinear sample is C0 there.
+        std::vector<std::pair<FlowPoint, FlowPoint>> boundary_pairs;
+        for (int edge = 2; edge <= 7; ++edge) {
+            for (u32 offset = 0u; offset <= 40u; ++offset) {
+                const double position = 2.0 + 0.1 * double(offset);
+                const double centre = double(edge) + 0.5;
+                boundary_pairs.emplace_back(FlowPoint{centre - 0.005, position}, FlowPoint{centre + 0.005, position});
+                boundary_pairs.emplace_back(FlowPoint{position, centre - 0.005}, FlowPoint{position, centre + 0.005});
+            }
+        }
+
+        // Integer-coordinate sweep, fixed field: base = floor(cell_position - 0.5) is
+        // unmoved across an integer, so neither sampler steps there and this sweep
+        // cannot discriminate - both are asserted continuous on it. It is kept as the
+        // field-change case: a winner swap or a fill update is what moves the sample
+        // at an integer, and the update probe below pins that step to the tap weight.
+        std::vector<std::pair<FlowPoint, FlowPoint>> integer_pairs;
+        for (int edge = 2; edge <= 7; ++edge) {
+            for (u32 offset = 0u; offset <= 40u; ++offset) {
+                const double position = 2.0 + 0.1 * double(offset);
+                const double corner = double(edge);
+                integer_pairs.emplace_back(FlowPoint{corner - 0.005, position}, FlowPoint{corner + 0.005, position});
+                integer_pairs.emplace_back(FlowPoint{position, corner - 0.005}, FlowPoint{position, corner + 0.005});
+            }
+        }
+
+        const ContinuityProbe subcell = measure(bilinear, subcell_pairs);
+        const ContinuityProbe boundary = measure(bilinear, boundary_pairs);
+        const ContinuityProbe integer = measure(bilinear, integer_pairs);
+        const ContinuityProbe box_subcell = measure(box, subcell_pairs);
+        const ContinuityProbe box_boundary = measure(box, boundary_pairs);
+        const ContinuityProbe box_integer = measure(box, integer_pairs);
+
+        // The shipped sampler passes both continuity sweeps. Measured on this grid:
+        // 2.5e-4 of stretch and 5.1e-4 rad of direction on the sub-cell sweep,
+        // 2.6e-4 and 5.3e-4 across the window edge, i.e. an order of magnitude inside
+        // the bound.
+        PPR_TEST_ASSERT(subcell.m_stretch <= kContinuityBound);
+        PPR_TEST_ASSERT(subcell.m_angle <= kContinuityBound);
+        PPR_TEST_ASSERT(boundary.m_stretch <= kContinuityBound);
+        PPR_TEST_ASSERT(boundary.m_angle <= kContinuityBound);
+
+        // The box control fails them, which is what makes them evidence: its step at a
+        // window edge is the whole difference between two cells (this field's 0.003
+        // cell/step-per-cell gradient), so it cannot pass the sub-cell sweep (which
+        // contains the crossing pair) or the boundary sweep. A centre-nearest box
+        // would step at integer coordinates instead; that is why the window hold, whose
+        // steps land where the four taps change, is the control for these bounds.
+        PPR_TEST_ASSERT(box_subcell.m_stretch > kContinuityBound);
+        PPR_TEST_ASSERT(box_subcell.m_angle > kContinuityBound);
+        PPR_TEST_ASSERT(box_boundary.m_stretch > kContinuityBound);
+        PPR_TEST_ASSERT(box_boundary.m_angle > kContinuityBound);
+
+        // The integer sweep is where the box is as continuous as the shipped sampler:
+        // an earlier revision straddled integers, so a box and the bilinear sampler
+        // both passed it and the probe proved nothing about the sampler boundary.
+        PPR_TEST_ASSERT(integer.m_stretch <= kContinuityBound);
+        PPR_TEST_ASSERT(integer.m_angle <= kContinuityBound);
+        PPR_TEST_ASSERT(box_integer.m_stretch <= kContinuityBound);
+        PPR_TEST_ASSERT(box_integer.m_angle <= kContinuityBound);
+
+        // Field-update bound: changing one lattice cell's motion changes the sample
+        // by exactly that tap's bilinear weight times the delta - not by a fudged
+        // constant. At p = (4.7, 4.3) the base cell is (4, 3) with fraction
+        // (0.2, 0.8), so cell (4, 4) is the (0, 1) tap with weight (1-fx)*fy = 0.64.
+        const auto shifted = [&](const int x, const int y, FlowPoint &motion) {
+            if (not field(x, y, motion))
+                return false;
+
+            if (x == 4 and y == 4)
+                motion = {motion.x + 0.002, motion.y + 0.005};
+            return true;
+        };
+        const FlowPoint update_point{4.7, 4.3};
+        const FlowPoint before_update = gridParticleFlowMotion(field, update_point, row_motion);
+        const FlowPoint after_update = gridParticleFlowMotion(shifted, update_point, row_motion);
+        const double tap_weight = (1.0 - 0.2) * 0.8;
+        PPR_TEST_ASSERT(std::abs(after_update.x - before_update.x - tap_weight * 0.002) <= 1.0e-6);
+        PPR_TEST_ASSERT(std::abs(after_update.y - before_update.y - tap_weight * 0.005) <= 1.0e-6);
+        // The documented bound: the step is that one lattice value's contribution,
+        // so the stretch moves by at most the saturating slope times it. This delta
+        // measures 0.02460, inside the plan's 0.05 figure; at a lattice point the
+        // same tap has weight 1 and the bound is the full delta instead.
+        const double update_stretch = std::abs(
+            double(gridParticleSampleStretch(after_update)) - double(gridParticleSampleStretch(before_update)));
+        PPR_TEST_ASSERT(std::abs(update_stretch - 0.024603) <= 1.0e-5);
+        PPR_TEST_ASSERT(update_stretch <= 0.05);
+
+        // The same change across an integer coordinate, which is the case the integer
+        // sweep above is kept for: base = floor(cell_position - 0.5) is unmoved across
+        // x = 4, so the step there is the field change alone, weighted by the updating
+        // tap at each side - 0.2475 below the integer, 0.2525 above.
+        for (const double x: {4.0 - 0.005, 4.0 + 0.005}) {
+            const double fraction = (x - 0.5) - std::floor(x - 0.5);
+            const double weight_at = fraction * 0.5;
+            const FlowPoint before = gridParticleFlowMotion(field, FlowPoint{x, 4.0}, row_motion);
+            const FlowPoint after = gridParticleFlowMotion(shifted, FlowPoint{x, 4.0}, row_motion);
+            PPR_TEST_ASSERT(std::abs(after.x - before.x - weight_at * 0.002) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(after.y - before.y - weight_at * 0.005) <= 1.0e-12);
+        }
+
+        // A winner swap is the other half of the field update: the value changes by
+        // the whole difference, still weighted by the same tap. Asserted at the tap's
+        // full weight, which is the dual-lattice point cell_position = integer + 0.5:
+        // there the sample is exactly that one lattice value, so swapping it for zero
+        // motion moves the sample by the whole value.
+        const auto swapped = [&](const int x, const int y, FlowPoint &motion) {
+            if (not field(x, y, motion))
+                return false;
+
+            if (x == 4 and y == 4)
+                motion = {0.0, 0.0};
+            return true;
+        };
+        const FlowPoint lattice_point{4.5, 4.5};
+        const FlowPoint before_swap = gridParticleFlowMotion(field, lattice_point, row_motion);
+        const FlowPoint after_swap = gridParticleFlowMotion(swapped, lattice_point, row_motion);
+        PPR_TEST_ASSERT(after_swap.x == 0.0 and after_swap.y == 0.0);
+        // The sample there is exactly the lattice value the field carries, so the
+        // swap moves it by exactly (0.040, 0.030) - the full-word winner-swap bound.
+        PPR_TEST_ASSERT(std::abs(before_swap.x - after_swap.x - 0.040) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(before_swap.y - after_swap.y - 0.030) <= 1.0e-12);
+
+        // Deterministic and order-independent: the same field, position and row
+        // motion always produce the same sample bit for bit.
+        const FlowPoint first = gridParticleFlowMotion(field, FlowPoint{4.37, 5.61}, row_motion);
+        const FlowPoint second = gridParticleFlowMotion(field, FlowPoint{4.37, 5.61}, row_motion);
+        PPR_TEST_ASSERT(
+            std::bit_cast<u64>(first.x) == std::bit_cast<u64>(second.x) and
+            std::bit_cast<u64>(first.y) == std::bit_cast<u64>(second.y));
+        // ... and the field really is filtered rather than dropped: the sample differs
+        // from the row's own published motion wherever the neighbours do.
+        PPR_TEST_ASSERT(first.x != row_motion.x or first.y != row_motion.y);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_flow_sampler subcell_stretch={:.6f} subcell_angle={:.6f} "
+                "cross_stretch={:.6f} cross_angle={:.6f} update_stretch={:.6f} tap_weight={:.2f} "
+                "box_subcell={:.6f} box_cross={:.6f} box_integer={:.6f}",
+                subcell.m_stretch, subcell.m_angle, boundary.m_stretch, boundary.m_angle, update_stretch, tap_weight,
+                box_subcell.m_stretch, box_boundary.m_stretch, box_integer.m_stretch));
+    };
+
+    // ------------------------------------------------------------------
+    // free-surface renormalisation: partial tap sets
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_flow_cue_renormalises_partial_taps) {
+        // particleFlowMotion divides by the sum of the weights that are present, and
+        // that branch is what the free surface depends on: a particle centre inside a
+        // cell with one, two or three committed neighbours samples the winners that
+        // exist rather than an average diluted to a quarter or a half by the empty
+        // cells. The probes pin that arithmetic exactly, show the divisor is
+        // weight-invariant for a uniform field, and bound the step when a non-uniform
+        // neighbour disappears.
+        constexpr FlowPoint kSample{4.7, 4.3}; // base (4, 3), fraction (0.2, 0.8)
+        const std::array<std::array<int, 2u>, 4u> cells{{{4, 3}, {5, 3}, {4, 4}, {5, 4}}};
+        const std::array<FlowPoint, 4u> values{{{0.040, 0.030}, {0.050, 0.040}, {0.030, 0.020}, {0.060, 0.050}}};
+
+        // The premise the arithmetic below rests on: all four taps have a non-zero
+        // weight at this sample, so every subset of them is a distinct partial set.
+        const FlowPoint p{kSample.x - 0.5, kSample.y - 0.5};
+        const double base_x = std::floor(p.x);
+        const double base_y = std::floor(p.y);
+        const double fraction_x = p.x - base_x;
+        const double fraction_y = p.y - base_y;
+        const std::array<double, 4u> weights{
+            (1.0 - fraction_x) * (1.0 - fraction_y), fraction_x * (1.0 - fraction_y), (1.0 - fraction_x) * fraction_y,
+            fraction_x * fraction_y};
+        PPR_TEST_ASSERT(base_x == 4.0 and base_y == 3.0);
+        PPR_TEST_ASSERT(std::abs(weights[0] - 0.16) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(weights[1] - 0.04) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(weights[2] - 0.64) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(weights[3] - 0.16) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(weights[0] + weights[1] + weights[2] + weights[3] - 1.0) <= 1.0e-12);
+
+        // A field that commits exactly the taps in `mask`, each with its own motion.
+        // Every other cell is empty, which is the free surface the shader's guard
+        // rejects.
+        const auto masked = [&cells, &values](const u32 mask) {
+            return [&cells, &values, mask](const int x, const int y, FlowPoint &motion) {
+                for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                    if ((mask & (1u << tap)) == 0u or cells[tap][0] != x or cells[tap][1] != y)
+                        continue;
+
+                    motion = values[tap];
+                    return true;
+                }
+
+                return false;
+            };
+        };
+
+        // Every non-empty subset renormalises by the sum of its own weights, so the
+        // sample is exactly the weighted mean of the taps that exist. The masks cover
+        // the four single taps, the six pairs and the four triples: 1, 2 and 3 present
+        // taps at the same sample.
+        u32 partial_configurations = 0u;
+        for (u32 mask = 1u; mask < 0x0fu; ++mask) {
+            double sum_x = 0.0;
+            double sum_y = 0.0;
+            double weight = 0.0;
+            for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                if ((mask & (1u << tap)) == 0u)
+                    continue;
+
+                sum_x += weights[tap] * values[tap].x;
+                sum_y += weights[tap] * values[tap].y;
+                weight += weights[tap];
+            }
+
+            const FlowPoint sample = gridParticleFlowMotion(masked(mask), kSample, FlowPoint{0.0, 0.0});
+            PPR_TEST_ASSERT(std::abs(sample.x - sum_x / weight) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - sum_y / weight) <= 1.0e-12);
+            ++partial_configurations;
+        }
+        PPR_TEST_ASSERT(partial_configurations == 14u);
+
+        // A single present tap is returned at its full magnitude, not at the 0.16 or
+        // 0.04 the tap's weight would give a fixed-weight average: the divisor is that
+        // tap's own weight. This is the one-neighbour free surface.
+        for (u32 tap = 0u; tap < cells.size(); ++tap) {
+            const FlowPoint sample = gridParticleFlowMotion(masked(1u << tap), kSample, FlowPoint{0.0, 0.0});
+            PPR_TEST_ASSERT(std::abs(sample.x - values[tap].x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - values[tap].y) <= 1.0e-12);
+        }
+
+        // Weight-invariance for a uniform field: with every present winner carrying the
+        // same motion, a tap turning absent does not move the sample, because the
+        // divisor shrinks by exactly that tap's weight. A uniform interior therefore
+        // does not fade as its free-surface boundary loses taps.
+        constexpr FlowPoint kUniform{0.041, -0.027};
+        const auto uniform_field = [&cells, kUniform](const u32 mask) {
+            return [&cells, kUniform, mask](const int x, const int y, FlowPoint &motion) {
+                for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                    if ((mask & (1u << tap)) == 0u or cells[tap][0] != x or cells[tap][1] != y)
+                        continue;
+
+                    motion = kUniform;
+                    return true;
+                }
+
+                return false;
+            };
+        };
+        for (u32 mask = 1u; mask < 0x0fu; ++mask) {
+            const FlowPoint sample = gridParticleFlowMotion(uniform_field(mask), kSample, FlowPoint{0.0, 0.0});
+            PPR_TEST_ASSERT(std::abs(sample.x - kUniform.x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - kUniform.y) <= 1.0e-12);
+        }
+
+        // A present tap that carries zero motion is not an absent tap: it divides into
+        // the sum and contributes nothing, so it weakens the sample by its own weight.
+        // On the largest tap (w = 0.64) the four-tap sample is exactly 0.36 of the
+        // uniform motion, and dropping that tap restores all of it - the bounded step
+        // below, instantiated at a zero value. The one uniform field where removing a
+        // zero-motion tap is a no-op is the all-zero one, which every present subset
+        // returns as exactly (0,0): no denormal and no 0/0 from the divisor.
+        const auto zero_tap_field = [&cells, kUniform](const u32 mask) {
+            return [&cells, kUniform, mask](const int x, const int y, FlowPoint &motion) {
+                for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                    if ((mask & (1u << tap)) == 0u or cells[tap][0] != x or cells[tap][1] != y)
+                        continue;
+
+                    motion = tap == 2u ? FlowPoint{} : kUniform;
+                    return true;
+                }
+
+                return false;
+            };
+        };
+        const FlowPoint with_zero = gridParticleFlowMotion(zero_tap_field(0x0fu), kSample, FlowPoint{0.0, 0.0});
+        const FlowPoint without_zero = gridParticleFlowMotion(zero_tap_field(0x0bu), kSample, FlowPoint{0.0, 0.0});
+        PPR_TEST_ASSERT(std::abs(with_zero.x - (1.0 - weights[2]) * kUniform.x) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(with_zero.y - (1.0 - weights[2]) * kUniform.y) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(without_zero.x - kUniform.x) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(without_zero.y - kUniform.y) <= 1.0e-12);
+
+        const auto flat_zero_field = [&cells](const u32 mask) {
+            return [&cells, mask](const int x, const int y, FlowPoint &motion) {
+                for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                    if ((mask & (1u << tap)) == 0u or cells[tap][0] != x or cells[tap][1] != y)
+                        continue;
+
+                    motion = {};
+                    return true;
+                }
+
+                return false;
+            };
+        };
+        for (u32 mask = 1u; mask < 0x0fu; ++mask) {
+            const FlowPoint sample = gridParticleFlowMotion(flat_zero_field(mask), kSample, FlowPoint{0.0, 0.0});
+            PPR_TEST_ASSERT(sample.x == 0.0 and sample.y == 0.0);
+        }
+
+        // A non-uniform neighbour disappearing is the bounded step: removing the tap's
+        // value from a mean whose divisor also drops by its weight moves the sample by
+        //   w / (W - w) * |value - mean_with_all_taps|
+        // i.e. the removed tap's weight relative to the surviving weight sum, times how
+        // far its value is from the present mean. With all four present (W = 1) that
+        // normalised weight is w / (1 - w): 1.7778 for the 0.64 tap, 0.1905 for the
+        // 0.16 taps and 0.0417 for the 0.04 tap. Asserted exactly, not as a fudge.
+        const FlowPoint full = gridParticleFlowMotion(masked(0x0fu), kSample, FlowPoint{0.0, 0.0});
+        const std::array<double, 4u> normalised_weights{
+            weights[0] / (1.0 - weights[0]), weights[1] / (1.0 - weights[1]), weights[2] / (1.0 - weights[2]),
+            weights[3] / (1.0 - weights[3])};
+        PPR_TEST_ASSERT(std::abs(normalised_weights[0] - 0.19047619) <= 1.0e-8);
+        PPR_TEST_ASSERT(std::abs(normalised_weights[1] - 0.04166667) <= 1.0e-8);
+        PPR_TEST_ASSERT(std::abs(normalised_weights[2] - 1.77777778) <= 1.0e-8);
+        PPR_TEST_ASSERT(std::abs(normalised_weights[3] - 0.19047619) <= 1.0e-8);
+
+        double largest_step = 0.0;
+        for (u32 removed = 0u; removed < cells.size(); ++removed) {
+            const FlowPoint partial = gridParticleFlowMotion(
+                masked(0x0fu & ~(1u << removed)), kSample, FlowPoint{0.0, 0.0});
+            const FlowPoint step{partial.x - full.x, partial.y - full.y};
+            PPR_TEST_ASSERT(std::abs(step.x - normalised_weights[removed] * (full.x - values[removed].x)) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(step.y - normalised_weights[removed] * (full.y - values[removed].y)) <= 1.0e-12);
+            largest_step = (std::max) (largest_step, gridParticleLength(step));
+        }
+        // Measured on this probe: the worst step is the 0.64 tap's 0.0181 cell/step,
+        // which is the bound a free surface can move the cue by per disappearing
+        // neighbour here.
+        PPR_TEST_ASSERT(largest_step <= 0.02);
+
+        // The visible step that bound buys, on the same largest tap: the stretch map is
+        // (cap - 1) / reference per cell/step, so the stretch moves by at most that
+        // slope times the sample step. Measured here: 0.0181 cell/step and 0.116 of
+        // stretch, and the same tap at full weight is the winner-swap case above.
+        const FlowPoint largest_partial = gridParticleFlowMotion(masked(0x0bu), kSample, FlowPoint{0.0, 0.0});
+        const FlowPoint largest_difference{full.x - values[2].x, full.y - values[2].y};
+        const double largest_shrink = gridParticleLength(largest_difference) * normalised_weights[2];
+        const double largest_stretch = std::abs(
+            double(gridParticleSampleStretch(largest_partial)) - double(gridParticleSampleStretch(full)));
+        PPR_TEST_ASSERT(
+            std::abs(gridParticleLength({largest_partial.x - full.x, largest_partial.y - full.y}) - largest_shrink) <=
+            1.0e-12);
+        PPR_TEST_ASSERT(
+            largest_stretch <=
+            double(kGridParticleStretchCap - 1.0f) / double(kGridParticleMotionReference) * largest_shrink + 1.0e-6);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_flow_taps partial={} weights=({:.2f},{:.2f},{:.2f},{:.2f}) "
+                "full=({:.4f},{:.4f}) largest_step={:.6f} largest_stretch={:.6f} zero_tap={:.4f}",
+                partial_configurations, weights[0], weights[1], weights[2], weights[3], full.x, full.y, largest_step,
+                largest_stretch, with_zero.x));
     };
 
     PPR_UNIT_TEST (particle_tangent_contour_stays_inside_the_support) {
@@ -4043,18 +4596,51 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const double support = double(kGridParticleSupportScale);
         const double inner = double(kGridParticleFalloffInnerFraction);
 
-        // The angular edge and its legal band: k0 = 5/6 is the resting 0.5 contour,
-        // and b = 0.30 keeps k inside [0.708, 0.958], i.e. inside [2/3, 1].
-        PPR_TEST_ASSERT(kGridParticleTangentContourScale == 5.0f / 6.0f);
-        PPR_TEST_ASSERT(kGridParticleTangentContourBias == 0.30f);
-        PPR_TEST_ASSERT(std::abs(gridParticleTangentContour(0.0f) - 0.7083333f) <= 1.0e-6f);
-        PPR_TEST_ASSERT(std::abs(gridParticleTangentContour(1.0f) - 0.9583333f) <= 1.0e-6f);
-        PPR_TEST_ASSERT(double(gridParticleTangentContour(0.0f)) >= inner);
-        PPR_TEST_ASSERT(double(gridParticleTangentContour(1.0f)) <= 1.0);
-        // At span64 that is the documented 1.35:1 silhouette aspect.
+        // The angular edge and its legal band. k0 = 5/6 is the resting 0.5
+        // contour; b = 0.3999 is the strongest four-decimal bias whose endpoints
+        // stay strictly inside [2/3, 1] in binary32. The ending guard is the one
+        // the shader's static_assert and the CPU twin's static_assert encode:
+        // k_min > 2/3 (the falloff warp divides by that band offset) and
+        // k_max <= 1 (the contour cannot pass the support radius).
+        const float contour_scale = kGridParticleTangentContourScale;
+        const float contour_bias = kGridParticleTangentContourBias;
+        const float contour_maximum = contour_scale * (1.0f + 0.5f * contour_bias);
+        const float contour_minimum = contour_scale * (1.0f - 0.5f * contour_bias);
+        const float plateau = static_cast<float>(2.0 / 3.0);
+        PPR_TEST_ASSERT(contour_scale == 5.0f / 6.0f);
+        PPR_TEST_ASSERT(contour_bias == 0.3999f);
+        PPR_TEST_ASSERT(contour_minimum > plateau);
+        PPR_TEST_ASSERT(contour_maximum <= 1.0f);
+        // The endpoints the plan's arithmetic pins, in float32: 0.666708350 and
+        // 0.999958277. b = 0.40 would make contour_minimum == plateau exactly,
+        // which is the degenerate case the constants avoid.
+        PPR_TEST_ASSERT(std::abs(contour_minimum - 0.66670835f) <= 1.0e-7f);
+        PPR_TEST_ASSERT(std::abs(contour_maximum - 0.99995828f) <= 1.0e-7f);
+        PPR_TEST_ASSERT(contour_minimum - plateau >= 4.0e-5f);
+
+        // Shipped (clamped) contour: the defensive clamp raises only the minor
+        // endpoint, from 0.666708 to 0.666767, and does not move the major one.
+        PPR_TEST_ASSERT(kGridParticleTangentContourMinimum == kGridParticleFalloffInnerFraction + 1.0e-4f);
+        PPR_TEST_ASSERT(gridParticleTangentContour(0.0f) == kGridParticleTangentContourMinimum);
+        PPR_TEST_ASSERT(gridParticleTangentContour(1.0f) == contour_maximum);
+        PPR_TEST_ASSERT(std::abs(double(gridParticleTangentContour(0.0f)) - 0.66676670) <= 1.0e-7);
+        PPR_TEST_ASSERT(std::abs(double(gridParticleTangentContour(1.0f)) - 0.99995828) <= 1.0e-7);
+        // It bites only within about 0.76 degrees of the normal direction: the
+        // clamp threshold solves k0*(1 + b*(cos^2 - 1/2)) == minimum.
+        const double contour_step = double(kGridParticleTangentContourMinimum) - double(contour_minimum);
+        const double clamp_cosine_squared = contour_step / (double(contour_scale) * double(contour_bias));
+        const double clamp_angle_from_normal = std::asin(std::sqrt(clamp_cosine_squared));
+        PPR_TEST_ASSERT(clamp_cosine_squared > 0.0);
+        PPR_TEST_ASSERT(clamp_angle_from_normal <= 1.0 * kPi / 180.0);
+        // ... and the angle is the plan's recorded 0.758 degrees.
+        PPR_TEST_ASSERT(std::abs(clamp_angle_from_normal * 180.0 / kPi - 0.758) <= 0.01);
+
+        // At span64 that is the documented 1.4997 : 1 silhouette aspect (1.49984
+        // before the clamp).
         PPR_TEST_ASSERT(
-            std::abs(double(gridParticleTangentContour(1.0f)) / double(gridParticleTangentContour(0.0f)) - 1.3529412) <=
+            std::abs(double(gridParticleTangentContour(1.0f)) / double(gridParticleTangentContour(0.0f)) - 1.49971) <=
             1.0e-4);
+        PPR_TEST_ASSERT(std::abs(double(contour_maximum) / double(contour_minimum) - 1.49984) <= 1.0e-4);
         // The support and cull constants are the retained ones, and the join
         // closure is a round-off hair rather than a shape knob.
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
@@ -4128,17 +4714,20 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 kGridParticleCullRadiusScale));
     };
 
-    PPR_UNIT_TEST (particle_tangent_follows_the_ownership_field) {
-        // The tangent comes from the committed particle-ownership mask: one bit per
-        // native cell, read on a 3x3 stencil. A surface gives an outward normal
-        // (minus the field gradient) and a tangent perpendicular to it; a flat
-        // field gives none, which is what keeps the accepted P1 visuals byte-exact
-        // wherever the data says "no surface".
+    PPR_UNIT_TEST (particle_tangent_follows_the_fill_field) {
+        // The tangent comes from the committed per-cell Q16 fill field, read on a
+        // 3x3 stencil: the four levels a boundary carries (0.25 / 0.5 / 0.75 /
+        // 1.0) instead of one bit. A surface gives an outward normal (minus the
+        // field gradient) and a tangent perpendicular to it; a flat field gives
+        // none, which is what keeps the accepted P1 visuals byte-exact wherever
+        // the data says "no surface".
         const FlowPoint centre{4.5, 5.5}; // a cell centre, so the bilinear weights collapse
         const double support = double(kGridParticleSupportScale);
 
-        // Half-planes of owned cells. The mask rises into the body, so the outward
-        // normal points away from it.
+        // Half-planes of owned cells at full fill. The fill rises into the body, so
+        // the outward normal points away from it. A full/empty step is also the
+        // field the mask-era probes used, so the pinned gradient literals below
+        // still hold their meaning while the fractional-level probes follow.
         const auto body_left = [](const int x, const int) { return x <= 4 ? 1.0 : 0.0; };
         const auto body_right = [](const int x, const int) { return x >= 5 ? 1.0 : 0.0; };
         const auto body_below = [](const int, const int y) { return y <= 5 ? 1.0 : 0.0; };
@@ -4146,7 +4735,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const auto body_lower_left = [](const int x, const int y) { return x + y <= 9 ? 1.0 : 0.0; };
 
         FlowPoint tangent{};
-        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_left, centre, tangent));
+        double left_gradient = 0.0;
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_left, centre, tangent, &left_gradient));
         PPR_TEST_ASSERT(std::abs(tangent.x) <= 1.0e-12 and std::abs(tangent.y - 1.0) <= 1.0e-12);
         PPR_TEST_ASSERT(std::abs(gridParticleLength(tangent) - 1.0) <= 1.0e-12);
 
@@ -4186,6 +4776,99 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(offset_tangent.y - 0.7071067811865476) <= 1.0e-12);
         PPR_TEST_ASSERT(std::abs(offset_tangent.x - tangent.x) <= 1.0e-12);
 
+        // The field is the fill, so fractional levels give the same direction with a
+        // proportionally smaller gradient: a 0.75/0.25 diagonal is exactly half the
+        // full-fill one, and a one-quantum 0.25 step is a quarter of it. This is the
+        // reason the fill replaced the mask: one Q16 quantum is 16384 of the word's
+        // 65536 units, a quarter of full scale (0.25 cell-volume), not a whole bit.
+        const auto fill_lower_left = [](const int x, const int y) { return x + y <= 9 ? 0.75 : 0.25; };
+        const auto quarter_step_left = [](const int x, const int) { return x <= 4 ? 0.25 : 0.0; };
+        FlowPoint fill_tangent{};
+        double fill_gradient = 0.0;
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(fill_lower_left, centre, fill_tangent, &fill_gradient));
+        PPR_TEST_ASSERT(std::abs(fill_gradient - 0.5 * centre_gradient) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(fill_tangent.x - tangent.x) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(fill_tangent.y - tangent.y) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(gridParticleLength(fill_tangent) - 1.0) <= 1.0e-12);
+
+        FlowPoint quantum_tangent{};
+        double quantum_gradient = 0.0;
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(quarter_step_left, centre, quantum_tangent, &quantum_gradient));
+        // A vertical step scales linearly with its amplitude, so the quarter step is
+        // a quarter of the full-fill vertical gradient -- not of the diagonal one,
+        // whose stencil differs.
+        PPR_TEST_ASSERT(std::abs(quantum_gradient - 0.25 * left_gradient) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(quantum_tangent.y - 1.0) <= 1.0e-12);
+
+        // A 0.25 -> 1.0 fill ramp across three cells gives one constant, unit-length
+        // tangent along the whole ramp, which is the probe the plan asks for. The
+        // sample stays inside the linear stretch of the ramp so the 4x4 window never
+        // touches its ends; because the field is linear in x the Sobel gradient is
+        // exactly 2.0 there whatever the sub-cell offset.
+        const auto fill_ramp = [](const int x, const int) { return 0.25 * double(x - 2); };
+        FlowPoint ramp_reference{};
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(fill_ramp, FlowPoint{3.5, 5.3}, ramp_reference));
+        for (u32 index = 0u; index <= 40u; ++index) {
+            const FlowPoint sample{3.5 + 0.07 * double(index), 4.2 + 0.06 * double(index % 7u)};
+            FlowPoint ramp_tangent{};
+            double ramp_gradient = 0.0;
+            PPR_TEST_ASSERT(gridParticleSurfaceTangent(fill_ramp, sample, ramp_tangent, &ramp_gradient));
+
+            PPR_TEST_ASSERT(std::abs(ramp_gradient - 2.0) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(ramp_tangent.x - ramp_reference.x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(ramp_tangent.y - ramp_reference.y) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(gridParticleLength(ramp_tangent) - 1.0) <= 1.0e-12);
+        }
+        PPR_TEST_ASSERT(std::abs(ramp_reference.x) <= 1.0e-12 and std::abs(ramp_reference.y + 1.0) <= 1.0e-12);
+
+        // Field-update bound: moving one native cell's fill changes the tangent, and
+        // this is the honest, measured size of that step. The probe raises one cell
+        // of the ramp by one particle volume (0.25) - the fill quantum - over a 0.02
+        // cell grid; the worst sample is the cell centre (4.5, 4.5) at 0.24498 rad
+        // (14.0 degrees). The binary mask's single-bit flip on the same probe is
+        // 0.76617 rad, 3.1x larger, which is why the fill field replaces it.
+        // What the eye sees is the contour step, not the rotation: dk =
+        // k0*b*|sin(dtheta)|, i.e. 0.08083 here against 0.23107 for the mask.
+        const auto ramp_flipped = [](const int x, const int y) {
+            return x == 4 and y == 5 ? 0.75 : 0.25 * double(x - 2);
+        };
+        const auto mask_step = [](const int x, const int) { return x >= 4 ? 1.0 : 0.0; };
+        const auto mask_flipped = [](const int x, const int y) {
+            return x == 4 and y == 5 ? 0.0 : (x >= 4 ? 1.0 : 0.0);
+        };
+        const auto worst_rotation = [](const auto &reference, const auto &perturbed) {
+            double worst = 0.0;
+            for (u32 row = 0u; row <= 300u; ++row) {
+                for (u32 column = 0u; column <= 300u; ++column) {
+                    const FlowPoint sample{2.0 + 0.02 * double(column), 2.0 + 0.02 * double(row)};
+                    FlowPoint before{};
+                    FlowPoint after{};
+                    if (not gridParticleSurfaceTangent(reference, sample, before) or
+                        not gridParticleSurfaceTangent(perturbed, sample, after))
+                        continue;
+
+                    worst = (std::max) (worst,
+                        gridParticleAngleDifference(gridParticleFlowAngle(after), gridParticleFlowAngle(before)));
+                }
+            }
+            return worst;
+        };
+        const double fill_rotation = worst_rotation(fill_ramp, ramp_flipped);
+        const double mask_rotation = worst_rotation(mask_step, mask_flipped);
+        const double contour_bias_product = double(kGridParticleTangentContourScale) *
+                                            double(kGridParticleTangentContourBias);
+        const double fill_contour_step = contour_bias_product * std::abs(std::sin(fill_rotation));
+        const double mask_contour_step = contour_bias_product * std::abs(std::sin(mask_rotation));
+        PPR_TEST_ASSERT(std::abs(fill_rotation - 0.24498) <= 1.0e-4);
+        PPR_TEST_ASSERT(std::abs(mask_rotation - 0.76617) <= 1.0e-4);
+        PPR_TEST_ASSERT(fill_contour_step <= 0.081);
+        PPR_TEST_ASSERT(mask_contour_step >= 2.5 * fill_contour_step);
+        // The tangent stays unit length under the update, so the bounded step is a
+        // rotation of the same silhouette rather than a change of its shape family.
+        FlowPoint after_flip{};
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(ramp_flipped, FlowPoint{4.5, 4.5}, after_flip));
+        PPR_TEST_ASSERT(std::abs(gridParticleLength(after_flip) - 1.0) <= 1.0e-12);
+
         // The painted silhouette follows that tangent: at the same radius the
         // alpha is larger along the tangent than across it, and rotating the
         // surface rotates the long axis.
@@ -4210,11 +4893,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(gridParticleTangentFalloff(FlowPoint{support, 0.0}, left_tangent) == 0.0);
         PPR_TEST_ASSERT(gridParticleTangentFalloff(FlowPoint{1.5 * support, 0.0}, left_tangent) == 0.0);
 
-        // Flat fields have no surface: the dense interior, the empty exterior and
-        // an isolated particle keep today's falloff byte for byte, and the
-        // fragment's zero-tangent path is a no-op.
+        // Flat fields have no surface: the dense interior (at any fill level), the
+        // empty exterior and an isolated particle keep today's falloff byte for
+        // byte, and the fragment's zero-tangent path is a no-op.
         const auto flat_empty = [](const int, const int) { return 0.0; };
         const auto flat_full = [](const int, const int) { return 1.0; };
+        const auto flat_quarter = [](const int, const int) { return 0.25; };
         const auto isolated = [](const int x, const int y) { return x == 4 and y == 5 ? 1.0 : 0.0; };
         const auto expect_no_tangent = [&](const auto &field) {
             FlowPoint none{};
@@ -4231,6 +4915,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         };
         expect_no_tangent(flat_empty);
         expect_no_tangent(flat_full);
+        expect_no_tangent(flat_quarter);
         expect_no_tangent(isolated);
 
         // The no-op assertions above cannot pass vacuously: a real tangent does
@@ -4254,9 +4939,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL particle_tangent_field left=({:.4f},{:.4f}) diagonal=({:.4f},{:.4f}) "
-                "offset=({:.4f},{:.4f}) centre_gradient={:.4f} offset_gradient={:.4f}",
+                "offset=({:.4f},{:.4f}) centre_gradient={:.4f} offset_gradient={:.4f} fill_gradient={:.4f} "
+                "quantum_gradient={:.4f} ramp=({:.4f},{:.4f}) fill_rotation={:.5f} mask_rotation={:.5f} "
+                "fill_contour_step={:.5f} mask_contour_step={:.5f}",
                 left_tangent.x, left_tangent.y, first_tangent.x, first_tangent.y, offset_tangent.x, offset_tangent.y,
-                centre_gradient, offset_gradient));
+                centre_gradient, offset_gradient, fill_gradient, quantum_gradient, ramp_reference.x, ramp_reference.y,
+                fill_rotation, mask_rotation, fill_contour_step, mask_contour_step));
     };
 }
 
@@ -4297,8 +4985,10 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_shapes_share_one_support_bound,
                 detail::WorldLightingMaterial::particle_flow_cue_stretches_the_major_axis_only,
                 detail::WorldLightingMaterial::particle_flow_cue_is_the_identity_at_zero_motion,
+                detail::WorldLightingMaterial::particle_flow_cue_samples_a_per_cell_motion_field,
+                detail::WorldLightingMaterial::particle_flow_cue_renormalises_partial_taps,
                 detail::WorldLightingMaterial::particle_tangent_contour_stays_inside_the_support,
-                detail::WorldLightingMaterial::particle_tangent_follows_the_ownership_field,
+                detail::WorldLightingMaterial::particle_tangent_follows_the_fill_field,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,
