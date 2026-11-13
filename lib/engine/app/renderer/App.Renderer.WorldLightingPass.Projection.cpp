@@ -83,50 +83,50 @@ namespace pP {
             auto &root = *resources.m_roots[entry][resources.m_attempt_slot];
             rhi::ShaderCursor cursor{&root};
             rhi::ShaderCursor constants;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_projection"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_projection"].getDereferenced(constants));
 
             ProjectionFrame frame = values;
             frame.m_status_record = entry;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&frame, sizeof(frame)));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, constants.setData(&frame, sizeof(frame)));
 
             const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, projectionBufferRange(buffer))));
+                    WorldLighting, cursor[name].setBinding(rhi::Binding(buffer, projectionBufferRange(buffer))));
                 return {};
             };
 
             if (entry == 0u) {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_key", resources.m_scratch[0u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_row", resources.m_scratch[1u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_fill", resources.m_scratch[2u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_best_key", resources.m_scratch[0u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_best_row", resources.m_scratch[1u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_cell_fill", resources.m_scratch[2u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_numeric_status", attempt.m_status));
             } else if (entry == 3u) {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_terrain", inputs.m_terrain));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_terrain", inputs.m_terrain));
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, bind(
-                                           "g_metadata", published ? particles.m_metadata->m_rows.get()
-                                                                   : resources.m_empty_metadata.get()));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_row", resources.m_scratch[1u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved", resources.m_resolved));
+                    WorldLighting, bind(
+                                       "g_metadata", published ? particles.m_metadata->m_rows.get()
+                                                               : resources.m_empty_metadata.get()));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_best_row", resources.m_scratch[1u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_resolved", resources.m_resolved));
             } else {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_metadata", particles.m_metadata->m_rows));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numerical", particles.m_numerical));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", inputs.m_visible_materials));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_terrain", inputs.m_terrain));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_key", resources.m_scratch[0u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_metadata", particles.m_metadata->m_rows));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_numerical", particles.m_numerical));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_visuals", inputs.m_visible_materials));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_terrain", inputs.m_terrain));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_best_key", resources.m_scratch[0u]));
                 if (entry == 1u) {
                     // The key reduction owns the per-cell fill accumulation; the
                     // row reduction only refines the winning row.
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_fill", resources.m_scratch[2u]));
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
+                    PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_cell_fill", resources.m_scratch[2u]));
+                    PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_numeric_status", attempt.m_status));
                 } else {
-                    PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_best_row", resources.m_scratch[1u]));
+                    PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_best_row", resources.m_scratch[1u]));
                 }
             }
 
             auto *const pass = encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+                WorldLighting, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
             {
                 PPR_DEFER {
                     pass->end();
@@ -144,14 +144,14 @@ namespace pP {
         // twice and overwrite every resolved cell. The resolve runs even for a
         // zero-particle world.
         constexpr u32 cell_groups = WorldLightingPass::kCellCount / 256u;
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(0u, cell_groups));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(0u, cell_groups));
         if (count != 0u) {
             const u32 particle_groups = (count + 255u) / 256u;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(1u, particle_groups));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(2u, particle_groups));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(1u, particle_groups));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(2u, particle_groups));
         }
 
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(3u, cell_groups));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(3u, cell_groups));
         return {};
     }
 }

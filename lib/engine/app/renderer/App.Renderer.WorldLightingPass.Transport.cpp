@@ -89,7 +89,7 @@ namespace pP {
             desc.usage = static_cast<rhi::BufferUsage>(usage);
             desc.defaultState = rhi::ResourceState::UnorderedAccess;
             desc.label = label;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, device.createBuffer(desc, initial, result.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, device.createBuffer(desc, initial, result.writeRef()));
             return {};
         }
 
@@ -111,7 +111,7 @@ namespace pP {
                 static_cast<u32>(rhi::TextureUsage::CopySource));
             desc.defaultState = rhi::ResourceState::UnorderedAccess;
             desc.label = label;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, device.createTexture(desc, &initial, result.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, device.createTexture(desc, &initial, result.writeRef()));
             return {};
         }
     }
@@ -122,13 +122,13 @@ namespace pP {
 
     std::error_code WorldLightingPass::ensureTransportResources_(rhi::IDevice &device) {
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, m_resources ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+            WorldLighting, m_resources ? std::error_code{} : std::make_error_code(std::errc::not_connected));
 
         auto &resources = *m_resources;
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, resources.m_transport_programs[0u].m_program
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLighting, resources.m_transport_programs[0u].m_program
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_connected));
 
         // Initial contents are deliberately invalid: every record is rewritten
         // each frame, so a missed write can never masquerade as a valid empty
@@ -138,7 +138,7 @@ namespace pP {
             if (not attempt.m_visibility) {
                 const std::vector<u8> mask_poison(kVisibilityBufferBytes, 0xffu);
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass,
+                    WorldLighting,
                     transportStorageBuffer(
                         device, kVisibilityBufferBytes, static_cast<u32>(sizeof(lighting::VisibilityRecord)),
                         mask_poison.data(), attempt.m_visibility, "world-lighting visibility masks"));
@@ -146,7 +146,7 @@ namespace pP {
 
             if (not attempt.m_jump) {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, transportJumpTexture(device, attempt.m_jump, "world-lighting jump table"));
+                    WorldLighting, transportJumpTexture(device, attempt.m_jump, "world-lighting jump table"));
             }
 
             for (u32 entry = 0u; entry < kTransportEntryCount; ++entry) {
@@ -155,9 +155,9 @@ namespace pP {
                 }
 
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, device.createRootShaderObject(
-                                           resources.m_transport_programs[entry].m_program,
-                                           resources.m_transport_roots[entry][slot].writeRef()));
+                    WorldLighting, device.createRootShaderObject(
+                                       resources.m_transport_programs[entry].m_program,
+                                       resources.m_transport_roots[entry][slot].writeRef()));
             }
         }
 
@@ -174,9 +174,9 @@ namespace pP {
         rhi::ICommandEncoder &encoder = context.m_encoder;
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, attempt.m_visibility and attempt.m_jump and resources.m_resolved
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLighting, attempt.m_visibility and attempt.m_jump and resources.m_resolved
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_connected));
 
         // The projection wrote every resolved cell immediately before this
         // sequence; the transition orders those writes before the visibility
@@ -191,20 +191,20 @@ namespace pP {
 
             const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
+                    WorldLighting, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
                 return {};
             };
 
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved_cells", resources.m_resolved));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", attempt.m_inputs.m_visible_materials));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visibility", attempt.m_visibility));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_resolved_cells", resources.m_resolved));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_visuals", attempt.m_inputs.m_visible_materials));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_visibility", attempt.m_visibility));
             if (entry == 1u) {
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
             }
 
             auto *const pass = encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+                WorldLighting, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
             {
                 PPR_DEFER {
                     pass->end();
@@ -224,7 +224,7 @@ namespace pP {
             PPR_DEFER {
                 encoder.popDebugGroup();
             };
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(0u, kWorldEdge / 32u, kWorldEdge / 32u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(0u, kWorldEdge / 32u, kWorldEdge / 32u));
         }
 
         // Visibility write -> jump read dependency. The jump dispatch reads at
@@ -235,7 +235,7 @@ namespace pP {
             PPR_DEFER {
                 encoder.popDebugGroup();
             };
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(1u, kWorldEdge / 16u, kWorldEdge / 16u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(1u, kWorldEdge / 16u, kWorldEdge / 16u));
         }
 
         // Jump write -> trace read dependency. Coarse/fine tracing binds both
@@ -253,13 +253,13 @@ namespace pP {
 
     std::error_code WorldLightingPass::ensureCascadeResources_(rhi::IDevice &device) {
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, m_resources ? std::error_code{} : std::make_error_code(std::errc::not_connected));
+            WorldLighting, m_resources ? std::error_code{} : std::make_error_code(std::errc::not_connected));
 
         auto &resources = *m_resources;
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, resources.m_cascade_programs[0u].m_program and resources.m_fine_programs[0u].m_program
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLighting, resources.m_cascade_programs[0u].m_program and resources.m_fine_programs[0u].m_program
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_connected));
 
         // Creation-time zero contents are the approved cold start: an unvisited
         // interval has zero radiance and zero transmittance, never vacuum, and
@@ -267,25 +267,25 @@ namespace pP {
         if (not resources.m_cascades) {
             const std::vector<u8> zero(kCascadeBufferBytes, 0u);
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, transportStorageBuffer(
-                                       device, kCascadeBufferBytes, static_cast<u32>(sizeof(lighting::PackedInterval)),
-                                       zero.data(), resources.m_cascades, "world-lighting coarse cascade intervals"));
+                WorldLighting, transportStorageBuffer(
+                                   device, kCascadeBufferBytes, static_cast<u32>(sizeof(lighting::PackedInterval)),
+                                   zero.data(), resources.m_cascades, "world-lighting coarse cascade intervals"));
         }
 
         if (not resources.m_source) {
             const std::vector<u8> zero(kSourceCellBytes, 0u);
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, transportStorageBuffer(
-                                       device, kSourceCellBytes, static_cast<u32>(sizeof(u32)), zero.data(),
-                                       resources.m_source, "world-lighting cached source"));
+                WorldLighting, transportStorageBuffer(
+                                   device, kSourceCellBytes, static_cast<u32>(sizeof(u32)), zero.data(),
+                                   resources.m_source, "world-lighting cached source"));
         }
 
         if (not resources.m_fine_ch) {
             const std::vector<u8> zero(kFineCHBytes, 0u);
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, transportStorageBuffer(
-                                       device, kFineCHBytes, static_cast<u32>(sizeof(lighting::PackedCH)), zero.data(),
-                                       resources.m_fine_ch, "world-lighting fine CH field", true));
+                WorldLighting, transportStorageBuffer(
+                                   device, kFineCHBytes, static_cast<u32>(sizeof(lighting::PackedCH)), zero.data(),
+                                   resources.m_fine_ch, "world-lighting fine CH field", true));
         }
 
         for (u32 slot = 0u; slot < kStatusRingSize; ++slot) {
@@ -295,9 +295,9 @@ namespace pP {
                 }
 
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, device.createRootShaderObject(
-                                           resources.m_cascade_programs[entry].m_program,
-                                           resources.m_cascade_roots[entry][slot].writeRef()));
+                    WorldLighting, device.createRootShaderObject(
+                                       resources.m_cascade_programs[entry].m_program,
+                                       resources.m_cascade_roots[entry][slot].writeRef()));
             }
 
             for (u32 entry = 0u; entry < kFineEntryCount; ++entry) {
@@ -306,7 +306,7 @@ namespace pP {
                 }
 
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass,
+                    WorldLighting,
                     device.createRootShaderObject(
                         resources.m_fine_programs[entry].m_program, resources.m_fine_roots[entry][slot].writeRef()));
             }
@@ -327,13 +327,13 @@ namespace pP {
         rhi::ICommandEncoder &encoder = context.m_encoder;
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, resources.m_cascades and
-                                       resources.m_source and
-                                       resources.m_fine_ch and
-                                       inputs.m_source_materials and
-                                       inputs.m_thermal_lut
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLighting, resources.m_cascades and
+                                   resources.m_source and
+                                   resources.m_fine_ch and
+                                   inputs.m_source_materials and
+                                   inputs.m_thermal_lut
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_connected));
 
         // The source stage reads the field's pre-update DC. The owner's single
         // in-place field is the production prior; a known DC field may still be
@@ -343,10 +343,10 @@ namespace pP {
         rhi::IBuffer *const prior_ch = inputs.m_prior_ch ? inputs.m_prior_ch.get() : resources.m_fine_ch.get();
         if (inputs.m_prior_ch) {
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, prior_ch->getDesc().size == kFineCHBytes and
-                                           prior_ch->getDesc().elementSize == sizeof(lighting::PackedCH)
-                                       ? std::error_code{}
-                                       : std::make_error_code(std::errc::invalid_argument));
+                WorldLighting, prior_ch->getDesc().size == kFineCHBytes and
+                                       prior_ch->getDesc().elementSize == sizeof(lighting::PackedCH)
+                                   ? std::error_code{}
+                                   : std::make_error_code(std::errc::invalid_argument));
         }
 
         const u64 accepted = resources.m_accepted_attempts;
@@ -374,36 +374,35 @@ namespace pP {
 
             const auto bind_buffer = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
+                    WorldLighting, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
                 return {};
             };
 
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_resolved_cells", resources.m_resolved));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_visuals", inputs.m_visible_materials));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cell_source", resources.m_source));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_numeric_status", attempt.m_status));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_resolved_cells", resources.m_resolved));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_visuals", inputs.m_visible_materials));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_cell_source", resources.m_source));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_numeric_status", attempt.m_status));
 
             rhi::ShaderCursor constants;
             if (entry == 0u) {
-                PPR_RETURN_ERROR_ON_FAIL(
-                    WorldLightingPass, bind_buffer("g_source_materials", inputs.m_source_materials));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_thermal_lut", inputs.m_thermal_lut));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_prior_ch", prior_ch));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_source_materials", inputs.m_source_materials));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_thermal_lut", inputs.m_thermal_lut));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_prior_ch", prior_ch));
                 // Fill-weighted transport source: the cell's own winner rank and
                 // the Q16 fill the projection accumulated for it. Both are
                 // read-only here and neither changes the winner selection.
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cell_fill", resources.m_scratch[2u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_best_row", resources.m_scratch[1u]));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_source_frame"].getDereferenced(constants));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_cell_fill", resources.m_scratch[2u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_best_row", resources.m_scratch[1u]));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_source_frame"].getDereferenced(constants));
 
                 const SourceStageFrame values{.m_status_record = kNumericStageSource};
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, constants.setData(&values, sizeof(values)));
                 return {};
             }
 
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind_buffer("g_cascades", resources.m_cascades));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_cascade"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind_buffer("g_cascades", resources.m_cascades));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_cascade"].getDereferenced(constants));
 
             CascadeStageFrame values{};
             values.m_level = level;
@@ -411,14 +410,14 @@ namespace pP {
             values.m_frame_high = frame_high;
             values.m_sky_hour = frame.m_sky_hour;
             values.m_status_record = entry == 1u ? kNumericStageTerminal : kNumericStageCascade;
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, constants.setData(&values, sizeof(values)));
             return {};
         };
 
         const auto dispatch = [&](const u32 entry, const u32 groups) -> std::error_code {
             auto *const pass = encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+                WorldLighting, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
             {
                 PPR_DEFER {
                     pass->end();
@@ -441,8 +440,8 @@ namespace pP {
             PPR_DEFER {
                 encoder.popDebugGroup();
             };
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(0u, 0u));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(0u, source_groups));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind(0u, 0u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(0u, source_groups));
         }
 
         // Source write -> trace read dependency before any cascade dispatch.
@@ -458,8 +457,8 @@ namespace pP {
             PPR_DEFER {
                 encoder.popDebugGroup();
             };
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(1u, 0u));
-            PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(1u, cascade_groups));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind(1u, 0u));
+            PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(1u, cascade_groups));
         }
 
         // Terminal write -> L4 parent read dependency, then one dependency per
@@ -480,8 +479,8 @@ namespace pP {
                 PPR_DEFER {
                     encoder.popDebugGroup();
                 };
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind(2u, level));
-                PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, dispatch(2u, cascade_groups));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind(2u, level));
+                PPR_RETURN_ERROR_ON_FAIL(WorldLighting, dispatch(2u, cascade_groups));
             }
         }
 
@@ -501,14 +500,14 @@ namespace pP {
         rhi::ICommandEncoder &encoder = context.m_encoder;
 
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, resources.m_fine_programs[0u].m_program and
-                                       resources.m_fine_roots[0u][resources.m_attempt_slot] and
-                                       resources.m_fine_ch and
-                                       resources.m_cascades and
-                                       resources.m_source and
-                                       attempt.m_jump
-                                   ? std::error_code{}
-                                   : std::make_error_code(std::errc::not_connected));
+            WorldLighting, resources.m_fine_programs[0u].m_program and
+                                   resources.m_fine_roots[0u][resources.m_attempt_slot] and
+                                   resources.m_fine_ch and
+                                   resources.m_cascades and
+                                   resources.m_source and
+                                   attempt.m_jump
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::not_connected));
 
         const u64 accepted = resources.m_accepted_attempts;
         const bool first_field = accepted == 0u;
@@ -539,25 +538,25 @@ namespace pP {
         rhi::ShaderCursor cursor{&root};
         const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
             PPR_RETURN_ERROR_ON_FAIL(
-                WorldLightingPass, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
+                WorldLighting, cursor[name].setBinding(rhi::Binding(buffer, transportRange(buffer))));
             return {};
         };
 
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_resolved_cells", resources.m_resolved));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_visuals", attempt.m_inputs.m_visible_materials));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cell_source", resources.m_source));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_cascades", resources.m_cascades));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_fine_ch", resources.m_fine_ch));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, bind("g_numeric_status", attempt.m_status));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_resolved_cells", resources.m_resolved));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_visuals", attempt.m_inputs.m_visible_materials));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_cell_source", resources.m_source));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_cascades", resources.m_cascades));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_fine_ch", resources.m_fine_ch));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, bind("g_numeric_status", attempt.m_status));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_jump"].setBinding(rhi::Binding(attempt.m_jump)));
 
         rhi::ShaderCursor constants;
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, cursor["g_fine"].getDereferenced(constants));
-        PPR_RETURN_ERROR_ON_FAIL(WorldLightingPass, constants.setData(&values, sizeof(values)));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, cursor["g_fine"].getDereferenced(constants));
+        PPR_RETURN_ERROR_ON_FAIL(WorldLighting, constants.setData(&values, sizeof(values)));
 
         auto *const pass = encoder.beginComputePass();
         PPR_RETURN_ERROR_ON_FAIL(
-            WorldLightingPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            WorldLighting, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
         {
             PPR_DEFER {
                 pass->end();

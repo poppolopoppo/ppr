@@ -14,7 +14,7 @@ import engine.shader;
 import std;
 
 export namespace pP {
-    PPR_DECLARE_LOG_CATEGORY(WorldLightingPass)
+    PPR_DECLARE_LOG_CATEGORY(WorldLighting)
 
     // ------------------------------------------------------------------
     // owned world-lighting owner values

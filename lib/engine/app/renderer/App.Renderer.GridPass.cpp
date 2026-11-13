@@ -1798,10 +1798,10 @@ namespace pP {
                 // to keep the old world alive.
                 if (retiring.m_lighting) {
                     if (const std::error_code status = retiring.m_lighting->collectCompleted(completed)) {
-                        PPR_LOG_WARNING_ON_FAIL(WorldLightingPass, status);
+                        PPR_LOG_WARNING_ON_FAIL(WorldLighting, status);
                     }
                     if (const std::error_code status = retiring.m_lighting->shutdown()) {
-                        PPR_LOG_WARNING_ON_FAIL(WorldLightingPass, status);
+                        PPR_LOG_WARNING_ON_FAIL(WorldLighting, status);
                     }
                     retiring.m_lighting.reset();
                 }
