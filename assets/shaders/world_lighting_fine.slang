@@ -148,10 +148,11 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
             float2 basis = connector_length == 0.0 ? direction : connector / connector_length;
 
             // Near segment against the current resolved occupancy and cached
-            // source. The probe's own/neighbour block never terminates it. The
-            // far interval is the L1 probe's retained transport for this
-            // direction; a never-initialized interval is (0,0) and cannot
-            // suppress a current near hit.
+            // source. An occupied cell of the probe's own/neighbour block is a
+            // terminal black self-occluder with zero transmittance, so it also
+            // suppresses the far interval. The far interval is the L1 probe's
+            // retained transport for this direction; a never-initialized
+            // interval is (0,0) and cannot suppress a current near hit.
             SegmentHit near_hit = traceSegmentDetailed(
                 fine_center + basis * kFineOriginOffset, exit_point, invocation, g_fine.m_status_record,
                 own_block_min, own_block_max);

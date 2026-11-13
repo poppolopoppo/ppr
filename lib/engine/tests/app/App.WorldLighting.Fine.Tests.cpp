@@ -1819,7 +1819,7 @@ namespace pP::tests::detail::WorldLightingFine {
     };
 
     // ------------------------------------------------------------------
-    // probe self-exclusion
+    // probe self-occlusion
     // ------------------------------------------------------------------
 
     // A solid 10x10 metal region with a distinct 2x2 block on its corner. The
@@ -1950,6 +1950,24 @@ namespace pP::tests::detail::WorldLightingFine {
         return map;
     }
 
+    PPR_UNIT_TEST (oracle_blackens_occupied_own_block_hits) {
+        // CPU-only coverage of the oracle's own-block mapping: a fully occupied
+        // 2x2 block maps every near hit to the black interval even though the
+        // surrounding source words are bright, so the fitted field is zero.
+        const auto source_word = lighting::packRGB9E5(rgb(4.0f, 2.0f, 1.0f));
+        PPR_TEST_ASSERT(source_word.has_value());
+        std::vector<u8> occupancy(kCells, 1u);
+        std::vector<u32> source_words(kCells, *source_word);
+        const FineOracleInputs inputs{occupancy, source_words, nullptr, kEdge};
+
+        const auto expected = fineConnectorOracle(100u, 100u, 0u, inputs);
+        for (const float3 &coefficient: expected) {
+            PPR_TEST_ASSERT(coefficient.x == 0.0f and coefficient.y == 0.0f and coefficient.z == 0.0f);
+        }
+
+        _.log("WORLD_LIGHTING_FINE oracle own_block=occupied_black");
+    };
+
     PPR_UNIT_TEST (two_cell_wall_keeps_the_shadow_side_dark) {
         Fixture fixture;
         PPR_DEFER {
@@ -2025,7 +2043,7 @@ namespace pP::tests::detail::WorldLightingFine {
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
-    PPR_UNIT_TEST (one_cell_wall_blocks_the_opposite_room) {
+    PPR_UNIT_TEST (one_cell_wall_is_intentionally_thin_and_bounded) {
         Fixture fixture;
         PPR_DEFER {
             fixture.shutdown();
@@ -2034,32 +2052,36 @@ namespace pP::tests::detail::WorldLightingFine {
 
         const auto visuals = makePalette();
         const float3 lit = rgb(2.0f, 2.0f, 0.0f);
-        const float3 opposite = rgb(0.0f, 0.0f, 4.0f);
+        const float3 red_tint = rgb(0.7f, 0.05f, 0.05f);
 
-        // One opaque black metal wall row (full width, so nothing passes around
-        // its ends) between a yellow lit emitter above and a sealed dark room
-        // below with a blue emitter inside it. The wall and the room shell have
-        // zero source, so any colour from the far side can only arrive by a ray
-        // crossing the one-cell wall; no coarse ambient can enter the room.
+        // A single reflective wall row cannot be one-sided with the corner
+        // lattice: the wall cell keeps all four source taps, because each face
+        // probe's block holds one wall row plus one room row rather than an
+        // entirely occupied block. The wall therefore carries a bounded
+        // cross-side residual through its own source. The shadow room is sealed
+        // and has no emitter, so whatever its face receives is the wall's own
+        // reflected light, never a ray that crossed the wall.
         CategoricalMap map;
-        map.fillRect(0u, 200u, 1023u, 200u, kRed);
+        map.fillRect(0u, 200u, 1023u, 200u, kDiffuse);
         map.fillRect(190u, 203u, 210u, 204u, kMetal);
-        map.fillRect(199u, 197u, 201u, 197u, kBlue);
-        map.fillRect(197u, 194u, 198u, 199u, kGreen);
-        map.fillRect(202u, 194u, 203u, 199u, kGreen);
-        map.fillRect(197u, 194u, 203u, 195u, kGreen);
+        map.fillRect(197u, 196u, 198u, 199u, kGreen);
+        map.fillRect(202u, 196u, 203u, 199u, kGreen);
+        map.fillRect(197u, 196u, 203u, 197u, kGreen);
 
         std::array<lighting::SourceMaterial, kMaterialCount> sources{};
-        const auto store = [&](const u32 material, const float3 emission) {
-            const auto record = lighting::makeSourceMaterial(
-                emission, 1.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 1.0);
-            PPR_TEST_ASSERT(record.has_value());
-            sources[material] = *record;
-        };
-        store(kMetal, lit);
-        store(kBlue, opposite);
-        store(kRed, rgb(0.0f, 0.0f, 0.0f));
-        store(kGreen, rgb(0.0f, 0.0f, 0.0f));
+        const auto emissive = lighting::makeSourceMaterial(lit, 1.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 1.0);
+        const auto wall_record = lighting::makeSourceMaterial(
+            rgb(0.0f, 0.0f, 0.0f), 0.0, red_tint, rgb(1.0f, 1.0f, 1.0f), 0.0);
+        const auto black_shell = lighting::makeSourceMaterial(
+            rgb(0.0f, 0.0f, 0.0f), 0.0, rgb(1.0f, 1.0f, 1.0f), rgb(1.0f, 1.0f, 1.0f), 1.0);
+        PPR_TEST_ASSERT(emissive.has_value() and wall_record.has_value() and black_shell.has_value());
+        for (auto &source: sources) {
+            source = *black_shell;
+        }
+
+        sources[kMetal] = *emissive;
+        sources[kDiffuse] = *wall_record;
+        const float3 diffuse = lighting::unpackRGB9E5(sources[kDiffuse].m_diffuse);
 
         FineInputs inputs{visuals, map};
         inputs.uploadCommon(fixture);
@@ -2067,23 +2089,47 @@ namespace pP::tests::detail::WorldLightingFine {
 
         WorldLightingPass pass;
         PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+        const auto sourceAt = [&](const u32 x, const u32 y) {
+            return lighting::unpackRGB9E5(
+                readWords(fixture, pass.sourceCellsForTest(), static_cast<u64>(cellIndex(x, y)) * 4u, 4u)[0u]);
+        };
+
         runFrame(fixture, pass, inputs.inputs(), 0u, 0.0, -1, 1u);
 
-        // The lit-side face probe sees its own room and no blue: its downward
-        // rays terminate on the single wall cell instead of crossing it.
-        const float3 lit_side = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
-        PPR_TEST_ASSERT(lit_side.x > 0.0f);
-        PPR_TEST_ASSERT(lit_side.z <= 1.0e-4f);
+        // The lit face is driven by its own room. At this cold frame the wall
+        // cell's source is still zero, so the sealed shadow room is exactly
+        // black: no ray crosses the single wall cell.
+        const float3 lit_face = fineAngularMean(readFineRecord(fixture, pass, 100u, 100u));
+        PPR_TEST_ASSERT(lit_face.x > 0.0f and lit_face.y > 0.0f);
+        const auto dark_cold = readFineRecord(fixture, pass, 100u, 99u);
+        for (const u32 word: dark_cold.m_words) {
+            PPR_TEST_ASSERT(word == 0u);
+        }
 
-        // The opposite face probe sees its own blue room and no yellow.
-        const float3 dark_side = fineAngularMean(readFineRecord(fixture, pass, 100u, 99u));
-        PPR_TEST_ASSERT(dark_side.z > 0.0f);
-        PPR_TEST_ASSERT(dark_side.x <= 1.0e-4f);
+        runFrame(fixture, pass, inputs.inputs(), 1u, 0.5, -1, 2u);
+
+        // The reflective wall cell is driven by the lit room and is red-tinted.
+        const float3 wall_source = sourceAt(200u, 200u);
+        PPR_TEST_ASSERT(wall_source.x > 0.0f);
+        PPR_TEST_ASSERT(wall_source.x > 5.0f * wall_source.y and wall_source.x > 5.0f * wall_source.z);
+        PPR_TEST_ASSERT(wall_source.x <= diffuse.x * lit.x + 2.0e-3f);
+
+        // The shadow face now receives the wall's own source: a bounded,
+        // intentional thin-wall residual, not zero and not a crossing ray. It
+        // cannot exceed the wall source, and the wall subtends at most the
+        // upper hemisphere from that face probe.
+        const float3 dark_face = fineAngularMean(readFineRecord(fixture, pass, 100u, 99u));
+        PPR_TEST_ASSERT(dark_face.x > 0.0f);
+        PPR_TEST_ASSERT(dark_face.x <= wall_source.x + 2.0e-3f);
+        PPR_TEST_ASSERT(dark_face.x <= 0.75f * wall_source.x + 2.0e-3f);
+        PPR_TEST_ASSERT(dark_face.x > 5.0f * dark_face.y and dark_face.x > 5.0f * dark_face.z);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_FINE wall one_cell lit_side=({}, {}, {}) dark_side=({}, {}, {}) cross=none", lit_side.x,
-                lit_side.y, lit_side.z, dark_side.x, dark_side.y, dark_side.z));
+                "WORLD_LIGHTING_FINE wall one_cell lit_face=({}, {}, {}) wall_source=({}, {}, {}) "
+                "shadow=({}, {}, {}) residual=bounded",
+                lit_face.x, lit_face.y, lit_face.z, wall_source.x, wall_source.y, wall_source.z, dark_face.x,
+                dark_face.y, dark_face.z));
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 
@@ -2374,8 +2420,9 @@ namespace pP::tests {
                 detail::WorldLightingFine::source_reads_precede_fine_writes_across_successive_frames,
                 detail::WorldLightingFine::occupied_own_block_is_an_opaque_black_occluder,
                 detail::WorldLightingFine::world_edge_solid_probe_is_black,
+                detail::WorldLightingFine::oracle_blackens_occupied_own_block_hits,
                 detail::WorldLightingFine::two_cell_wall_keeps_the_shadow_side_dark,
-                detail::WorldLightingFine::one_cell_wall_blocks_the_opposite_room,
+                detail::WorldLightingFine::one_cell_wall_is_intentionally_thin_and_bounded,
                 detail::WorldLightingFine::mid_wall_probe_is_black_with_no_far_leak,
                 detail::WorldLightingFine::occupied_cell_drops_interior_taps_and_has_zero_incident,
                 detail::WorldLightingFine::fine_range_failure_reports_status_and_containment,
