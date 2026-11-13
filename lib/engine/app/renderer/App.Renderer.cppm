@@ -326,6 +326,15 @@ export namespace pP {
             rhi::ComPtr<rhi::ITexture> m_depth_texture{};
             rhi::ComPtr<rhi::ITextureView> m_depth_view{};
             int2 m_extent{zero_v};
+            // Last extent an acquired image actually materialized. A configure
+            // takes the requested size, but the backend shapes the swapchain
+            // to the live window instead, so this is the only record-side
+            // evidence that the swapchain and m_extent disagree. Every
+            // configure reseeds it to the requested size; an acquired-drift
+            // frame overwrites it with the observed one, which forces the next
+            // frame's reconfigure even when the requested size repeats.
+            // Two sibling int2 members: 4-byte alignment, no new padding.
+            int2 m_observed_extent{zero_v};
             std::array<SurfaceSignatureCache, 2u> m_signatures{};
             // Generational lifetime: bumped on create/resize/unconfigure so
             // a packet built for an older shape is rejected before

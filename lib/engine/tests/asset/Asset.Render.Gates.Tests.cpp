@@ -5881,6 +5881,78 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 PPR_TEST_ASSERT(
                     renderer.lastSurfaceGpuFrameTiming() and
                     renderer.lastSurfaceGpuFrameTiming()->m_submission == retained_surface_timing->m_submission);
+
+                // ------------------------------------------------------------------
+                // materialized-extent drift (interactive resize transient)
+                // ------------------------------------------------------------------
+                // A configure carries the requested extent, but only the backend
+                // owns the swapchain size: the Vulkan surface materializes the
+                // live window instead. Claiming the recorded size after that
+                // request is the drag-resize race — the acquired image disagrees
+                // with the packet, and the frame must drop, never fail.
+                const SurfaceGeneration presented_generation = renderer.surfaceGenerationFor(window->m_handle);
+                PPR_TEST_ASSERT(presented_generation != kSurfaceGenerationNone);
+                const auto drifted = renderer.reconfigureWindowSurface(
+                    window->m_handle, presented_generation, SurfaceSettings{.m_extent = int2{1, 1}});
+                PPR_TEST_ASSERT(drifted.has_value());
+                PPR_TEST_ASSERT(drifted->m_extent.x == 1 and drifted->m_extent.y == 1);
+
+                const SurfaceWindowSnapshot requested_snapshot{
+                    .m_handle = window->m_handle,
+                    .m_native = window->m_native,
+                    .m_display = window->m_display,
+                    .m_framebuffer_size = int2{1, 1},
+                    .m_title = window->m_title};
+                const auto before_drift = renderer.lastSubmittedFenceValue();
+#if !defined(_WIN32)
+                bool drift_presented = true;
+                PPR_TEST_ASSERT(
+                    renderer.renderAndPresent(
+                        requested_snapshot, passes, {window->m_handle, drifted->m_generation}, &drift_presented) ==
+                    std::errc::resource_unavailable_try_again);
+                PPR_TEST_ASSERT(not drift_presented);
+                PPR_TEST_ASSERT(renderer.lastSubmitSettlement() == FrameSettlement::kRejected);
+                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() == before_drift);
+#else
+                // D3D12 honors an explicit resize target, so the drift cannot be
+                // produced here; the pass-level case owns the predicate itself.
+                PPR_TEST_ASSERT(not renderer.renderAndPresent(requested_snapshot, passes, {}));
+                PPR_TEST_ASSERT(renderer.lastSubmittedFenceValue() > before_drift);
+#endif
+
+                // The next frame reconfigures to the window's live extent and
+                // presents there: recovery needs no retry inside the renderer.
+                presented = false;
+                acquired = false;
+                PPR_TEST_ASSERT(not renderer.renderAndPresent(snapshot, passes, {}, &presented, &readback, &acquired));
+                PPR_TEST_ASSERT(presented and acquired and readback);
+                PPR_TEST_ASSERT(
+                    readback->m_extent.x == window->m_framebuffer_size.x and
+                    readback->m_extent.y == window->m_framebuffer_size.y);
+
+                // The Editor owns the retry through its stage-rejection drop; the
+                // next tick/draw presents the same surface with no error.
+                PPR_TEST_ASSERT(not renderer.waitOnHost());
+                PPR_TEST_ASSERT(not renderer.retireCompletedFrames());
+                {
+                    const auto ui = test_app.getServices().get<IUIService>();
+                    PPR_TEST_ASSERT(ui.isValid());
+                    ImGui::SetCurrentContext(static_cast<ImGuiContext *>(ui->getContext()));
+                    PPR_DEFER {
+                        ImGui::SetCurrentContext(nullptr);
+                    };
+
+                    PPR_TEST_ASSERT(not test_app.tick(frame_delta));
+                    GridStagedFrame converged_frame{};
+                    converged_frame.m_retain_content = true;
+                    test_app.submitGridStage(std::move(converged_frame));
+
+                    const auto before_editor_frame = renderer.lastSubmittedFenceValue();
+                    draw_capture_frame();
+                    PPR_TEST_ASSERT(test_app.m_last_presented and not test_app.m_last_dropped);
+                    PPR_TEST_ASSERT(not test_app.m_last_render_error);
+                    PPR_TEST_ASSERT(test_app.m_last_submission > before_editor_frame);
+                }
             }
 
             PPR_TEST_ASSERT(test_app.m_capture_attempts == 2u and test_app.m_capture == second_capture);

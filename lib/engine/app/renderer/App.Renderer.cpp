@@ -1281,15 +1281,25 @@ namespace pP {
         // signature against the new shape, so the current packet proceeds
         // against the surface it just shaped. The gate above already retired
         // every pre-existing mismatch, so no second check is needed below.
+        //
+        // The requested size can also repeat while the swapchain still holds
+        // the extent the backend materialized last frame (it shapes the
+        // swapchain to the live window, not to the request). That remembered
+        // drift forces the same reconfigure, so a settled drag is never left
+        // presenting a shape the record has not reconciled with.
         SurfaceRecord *record = nullptr;
         if (const auto it = m_surfaces.find(window.m_handle); it == m_surfaces.end()) [[unlikely]] {
             PPR_RETURN_ERROR_ON_FAIL(Renderer, createWindowSurface_(window, &record));
         } else {
-            if (it->second.m_extent.x != window.m_framebuffer_size.x or
-                it->second.m_extent.y != window.m_framebuffer_size.y) [[unlikely]] {
-                PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(it->second, window.m_framebuffer_size));
+            SurfaceRecord &existing = it->second;
+            const bool requested_extent_changed = existing.m_extent.x != window.m_framebuffer_size.x or
+                                                  existing.m_extent.y != window.m_framebuffer_size.y;
+            const bool materialized_drift = existing.m_observed_extent.x != existing.m_extent.x or
+                                            existing.m_observed_extent.y != existing.m_extent.y;
+            if (requested_extent_changed or materialized_drift) [[unlikely]] {
+                PPR_RETURN_ERROR_ON_FAIL(Renderer, resizeWindowSurface_(existing, window.m_framebuffer_size));
             }
-            record = std::addressof(it->second);
+            record = std::addressof(existing);
         }
 
         // m_configured is the in-flight-work token: no claim means nothing was submitted, so restore may skip the
@@ -1378,6 +1388,35 @@ namespace pP {
         std::error_code first_err{};
         const rhi::ComPtr<rhi::ITextureView> image_view = image->getDefaultView();
 
+        // The acquired image is this frame's only materialized-extent
+        // observation: the surface was configured with the requested size, but
+        // the backend may shape the swapchain to the live window instead. A
+        // disagreement is a transient of interactive resizing, not a violated
+        // invariant, so it records the drop status (which skips encode/submit
+        // below while the acquired image still meets its present obligation)
+        // and remembers the observed extent so the next frame reconfigures
+        // even when the requested size repeats.
+        AttachmentInfo acquired_info{};
+        if (const std::error_code err = inspectAttachment_(image_view.get(), &acquired_info)) {
+            first_err = err;
+        } else {
+            record->m_observed_extent = acquired_info.m_extent;
+            const bool materialized_drift = acquired_info.m_extent.x != record->m_extent.x or
+                                            acquired_info.m_extent.y != record->m_extent.y;
+            if (materialized_drift) [[unlikely]] {
+                PPR_LOG(
+                    Renderer, info, "acquired swapchain extent differs from the requested surface extent",
+                    {
+                        {"requested_width", record->m_extent.x},
+                        {"requested_height", record->m_extent.y},
+                        {"acquired_width", acquired_info.m_extent.x},
+                        {"acquired_height", acquired_info.m_extent.y},
+                        {"generation", record->m_generation},
+                    });
+                first_err = std::make_error_code(std::errc::resource_unavailable_try_again);
+            }
+        }
+
         // Fail early when the acquired backbuffer no longer matches the
         // resize-matched depth view instead of tripping per-frame validation.
         // Only passes selecting renderer-owned depth need the pair to match.
@@ -1393,18 +1432,13 @@ namespace pP {
                 }
             }
 
-            if (wants_owned_depth and not first_err) {
-                AttachmentInfo acquired_info{};
-                if (const std::error_code err = inspectAttachment_(image_view.get(), &acquired_info)) {
-                    first_err = err;
-                } else if (record->m_depth_view) {
-                    AttachmentInfo depth_info{};
-                    if (const std::error_code depth_err = inspectAttachment_(record->m_depth_view.get(), &depth_info)) {
-                        first_err = depth_err;
-                    } else if (acquired_info.m_extent.x != depth_info.m_extent.x or
-                               acquired_info.m_extent.y != depth_info.m_extent.y) [[unlikely]] {
-                        first_err = std::make_error_code(std::errc::invalid_argument);
-                    }
+            if (wants_owned_depth and not first_err and record->m_depth_view) {
+                AttachmentInfo depth_info{};
+                if (const std::error_code depth_err = inspectAttachment_(record->m_depth_view.get(), &depth_info)) {
+                    first_err = depth_err;
+                } else if (acquired_info.m_extent.x != depth_info.m_extent.x or
+                           acquired_info.m_extent.y != depth_info.m_extent.y) [[unlikely]] {
+                    first_err = std::make_error_code(std::errc::invalid_argument);
                 }
             }
         }
@@ -1420,10 +1454,17 @@ namespace pP {
         // attachment, and descriptor, then resolve its pipeline signature and
         // reference extent, all before anything is recorded. The first failure
         // stops the build, so phase 2 never runs against a partial frame.
+        // A failure recorded after acquisition (acquired-extent drift, depth
+        // mismatch) has already armed the present-only path: no pass is built,
+        // and a later successful resolve can never clear that status.
         Array<BuiltSurfacePass, mem::ScratchPad> built_passes;
         built_passes.reserve(passes.size());
 
         for (const SurfaceRenderPass &surface_pass: passes) {
+            if (first_err) {
+                break;
+            }
+
             built_passes.push_back(BuiltSurfacePass{});
             BuiltSurfacePass &built = built_passes.back();
 
@@ -1745,6 +1786,7 @@ namespace pP {
             record.m_depth_view.setNull();
             record.m_depth_texture.setNull();
             record.m_extent = new_extent;
+            record.m_observed_extent = new_extent;
             record.m_vsync = vsync;
             // Zero-size is an explicit shape change: mint a fresh generation
             // so packets built for the old shape are rejected before
@@ -1791,6 +1833,10 @@ namespace pP {
         record.m_depth_texture = std::move(depth_texture);
         record.m_depth_view = std::move(depth_view);
         record.m_extent = new_extent;
+        // The configure is the new belief about the swapchain shape; the first
+        // acquired image that contradicts it re-stamps this from the drift
+        // check, which is what forces the next reconfigure.
+        record.m_observed_extent = new_extent;
         record.m_vsync = vsync;
         record.m_configured = true;
         // A successful reconfigure is a new surface shape: mint a fresh

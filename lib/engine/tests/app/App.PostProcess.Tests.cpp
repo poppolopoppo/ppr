@@ -1303,10 +1303,149 @@ namespace pP::tests::detail {
                 // Completion collection releases the retained binding exactly once.
                 PPR_TEST_ASSERT(not pass.collectCompleted(0u));
             };
+
+            PPR_UNIT_TEST (gpu_present_extent_drift_drops_instead_of_failing) {
+                const auto rhi = IRhiService::get();
+                const auto shaders = IShaderService::get();
+                PPR_TEST_ASSERT(rhi.isValid() and shaders.isValid());
+                PPR_TEST_ASSERT(not shaders->initialize());
+                const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
+                const bool validation = setting and *setting == "1";
+                rhi->setCoreValidation(true);
+                rhi->setGpuAssistedValidation(validation);
+#ifdef _WIN32
+                constexpr auto backend = rhi::DeviceType::D3D12;
+#else
+                constexpr auto backend = rhi::DeviceType::Vulkan;
+#endif
+                PPR_TEST_ASSERT(not rhi->initialize(backend, *shaders));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not rhi->shutdown());
+                    PPR_TEST_ASSERT(not shaders->shutdown());
+                };
+
+                auto &device = rhi->getDevice();
+                PostProcessPass pass;
+                PPR_TEST_ASSERT(not pass.initialize(*shaders, std::filesystem::current_path()));
+                PPR_DEFER {
+                    PPR_TEST_ASSERT(not pass.shutdown());
+                };
+
+                const GridWorldIdentity world{.m_job_id = 1u, .m_world_generation = 1u, .m_content_fingerprint = 1u};
+                const int2 resolved{96, 48};
+                PPR_TEST_ASSERT(not pass.beginFrame(device, resolved, world, kFenceValueNone));
+
+                rhi::ComPtr<rhi::ICommandQueue> queue;
+                PPR_TEST_ASSERT(not make_error_code(device.getQueue(rhi::QueueType::Graphics, queue.writeRef())));
+                const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+
+                // Each surface target stands in for one acquired swapchain image;
+                // the present pipeline's SDR branch accepts RGBA8Unorm/targets the
+                // pass writes with its own resolved extent.
+                const auto makeSurfaceTarget = [&device](const int2 extent) {
+                    rhi::TextureDesc description{};
+                    description.type = rhi::TextureType::Texture2D;
+                    description.size = {
+                        .width = static_cast<u32>(extent.x),
+                        .height = static_cast<u32>(extent.y),
+                        .depth = 1u,
+                    };
+                    description.arrayLength = 1u;
+                    description.mipCount = 1u;
+                    description.format = rhi::Format::RGBA8Unorm;
+                    description.usage = rhi::TextureUsage::RenderTarget;
+                    description.defaultState = rhi::ResourceState::RenderTarget;
+                    description.label = "present extent drift target";
+                    rhi::ComPtr<rhi::ITexture> target;
+                    PPR_TEST_ASSERT(not make_error_code(device.createTexture(description, nullptr, target.writeRef())));
+                    return target;
+                };
+
+                // One present attempt over an open render pass on `target`, whose
+                // materialized extent is recorded in the draw context. Nothing is
+                // finished or submitted: a rejected present commits nothing.
+                const auto presentOn = [&](rhi::ITexture *const target, const int2 acquired_extent,
+                                           const PresentationGrid &grid) -> std::error_code {
+                    rhi::ComPtr<rhi::ICommandEncoder> encoder;
+                    PPR_TEST_ASSERT(not make_error_code(queue->createCommandEncoder(encoder.writeRef())));
+                    encoder->setTextureState(target, range, rhi::ResourceState::RenderTarget);
+
+                    const rhi::ComPtr<rhi::ITextureView> view = target->getDefaultView();
+                    const std::array colors{rhi::RenderPassColorAttachment{.view = view}};
+                    rhi::RenderPassDesc description{};
+                    description.colorAttachments = colors.data();
+                    description.colorAttachmentCount = 1u;
+                    rhi::IRenderPassEncoder *const pass_encoder = encoder->beginRenderPass(description);
+                    PPR_TEST_ASSERT(pass_encoder != nullptr);
+
+                    RenderPipelineSignature signature{};
+                    signature.m_color_formats[0] = rhi::Format::RGBA8Unorm;
+                    signature.m_color_format_count = 1u;
+                    signature.m_sample_count = SampleCount::x1;
+                    const RenderPipelineKey key(signature);
+                    const DrawContext context{
+                        .m_device = device,
+                        .m_pass = *pass_encoder,
+                        .m_render_pipeline_key = key,
+                        .m_viewport = rhi::Viewport::fromSize(
+                            static_cast<float>(acquired_extent.x), static_cast<float>(acquired_extent.y)),
+                        .m_scissor = rhi::ScissorRect::fromSize(
+                            static_cast<u32>(acquired_extent.x), static_cast<u32>(acquired_extent.y)),
+                        .m_target_extent = acquired_extent,
+                        .m_completed_fence_value = kFenceValueNone,
+                        .m_wait_for_fence = {},
+                    };
+
+                    const std::error_code error = pass.present(context, grid);
+                    pass_encoder->end();
+                    return error;
+                };
+
+                const auto presentation = makePresentationGrid(int2{96, 48}, 1u);
+                PPR_TEST_ASSERT(presentation.has_value());
+                const PresentationGrid grid = *presentation;
+
+                // The acquired image materialized one WM step ahead of the
+                // packet's window extent: the interactive-drag race is dropped,
+                // never fatal.
+                const rhi::ComPtr<rhi::ITexture> drifted_target = makeSurfaceTarget(int2{100, 50});
+                PPR_TEST_ASSERT(
+                    presentOn(drifted_target.get(), int2{100, 50}, grid) == std::errc::resource_unavailable_try_again);
+
+                // The pass's own bookkeeping stays fatal: a slot created for a
+                // different resolved extent or an out-of-range pixel scale.
+                PresentationGrid mismatched_slot = grid;
+                mismatched_slot.m_resolved = int2{95, 47};
+                PPR_TEST_ASSERT(
+                    presentOn(drifted_target.get(), int2{100, 50}, mismatched_slot) == std::errc::invalid_argument);
+
+                PresentationGrid invalid_scale = grid;
+                invalid_scale.m_pixel_scale = 0u;
+                PPR_TEST_ASSERT(
+                    presentOn(drifted_target.get(), int2{100, 50}, invalid_scale) == std::errc::invalid_argument);
+
+                // Neither rejection committed the slot: the next frame begins at
+                // the observed extent and presents there.
+                pass.discardUnsubmitted();
+                const int2 observed{100, 50};
+                PPR_TEST_ASSERT(not pass.beginFrame(device, observed, world, kFenceValueNone));
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().size.width == 100u);
+                PPR_TEST_ASSERT(pass.outputTexture().getDesc().size.height == 50u);
+
+                const auto observed_presentation = makePresentationGrid(observed, 1u);
+                PPR_TEST_ASSERT(observed_presentation.has_value());
+                const rhi::ComPtr<rhi::ITexture> converged_target = makeSurfaceTarget(observed);
+                PPR_TEST_ASSERT(not presentOn(converged_target.get(), observed, *observed_presentation));
+
+                PPR_TEST_ASSERT(not pass.collectCompleted(0u));
+            };
         }
 
         const UnitTest output_lifetime = UnitTest::Named("output_lifetime") / [](UnitTest::IRun &run) -> void {
-            run.recurse({OutputLifetime::gpu_prepare_rejects_mismatched_view_and_output_is_reusable});
+            run.recurse({
+                OutputLifetime::gpu_prepare_rejects_mismatched_view_and_output_is_reusable,
+                OutputLifetime::gpu_present_extent_drift_drops_instead_of_failing,
+            });
         };
 
         // ------------------------------------------------------------------

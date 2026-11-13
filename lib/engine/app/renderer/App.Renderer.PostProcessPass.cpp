@@ -1165,15 +1165,26 @@ namespace pP {
                              : std::make_error_code(std::errc::operation_not_permitted));
 
         OutputSlot &slot = m_slots[m_selected];
+
+        // The pass's own bookkeeping: the resolved extent this frame was begun
+        // with and the user's pixel scale. A disagreement here means the wrong
+        // slot, pipeline, or PresentParameters, so it stays fatal.
         PPR_RETURN_ERROR_ON_FAIL(
-            PostProcess, grid.m_window.x == context.m_target_extent.x and
-                                 grid.m_window.y == context.m_target_extent.y and
-                                 grid.m_resolved.x == slot.m_extent.x and
+            PostProcess, grid.m_resolved.x == slot.m_extent.x and
                                  grid.m_resolved.y == slot.m_extent.y and
                                  grid.m_pixel_scale >= 1u and
                                  grid.m_pixel_scale <= 8u
                              ? std::error_code{}
                              : std::make_error_code(std::errc::invalid_argument));
+
+        // The packet's captured window extent and the acquired image extent are
+        // two independent observations. During an interactive drag the backend
+        // materializes the live window size rather than the requested one, so
+        // they legitimately disagree for a frame: that race is transient, and
+        // the Renderer normally drops such a frame before present.
+        if (grid.m_window.x != context.m_target_extent.x or grid.m_window.y != context.m_target_extent.y) [[unlikely]] {
+            return std::make_error_code(std::errc::resource_unavailable_try_again);
+        }
 
         const RenderPipelineSignature &signature = context.m_render_pipeline_key;
         PPR_RETURN_ERROR_ON_FAIL(
