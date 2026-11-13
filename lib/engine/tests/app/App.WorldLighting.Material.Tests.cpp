@@ -3698,6 +3698,218 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 double(kGridParticleSolidHalfExtentScale) * r_cell, double(kGridParticleSolidCornerScale) * r_cell,
                 rho_axis, rho_diagonal));
     };
+
+    // ------------------------------------------------------------------
+    // optional flow cue: direction and magnitude mapping
+    // ------------------------------------------------------------------
+    // Mirrors grid_tiles.slang `particleVertex`/`particleFlowLocal` and the
+    // kParticleMotionReference constant in grid_particle_native.slang. Those two
+    // files hold the only production copies; this twin exists so the mapping, the
+    // anisotropic metric and the support bound are asserted without a screenshot.
+    // The row's own motion sanitising (finite components, each clamped to +-64
+    // cells/step) is asserted on the packed GPU row by
+    // presentation_motion_half_round_trips_and_clamps and the projection entry,
+    // and is not repeated here.
+    inline constexpr float kGridParticleMotionReference{0.10f};
+
+    struct FlowPoint {
+        double x{};
+        double y{};
+    };
+
+    // k = 1 + (cap - 1) * saturate(|motion| / reference), in native cells per
+    // solver step. Exactly 1 at rest and exactly the cap at and beyond the
+    // reference magnitude; the magnitude is illustrative, never a physical speed.
+    [[nodiscard]] constexpr float gridParticleFlowStretch(const float motion_length) noexcept {
+        const float ratio = motion_length / kGridParticleMotionReference;
+        const float saturated = ratio < 0.0f ? 0.0f : (ratio > 1.0f ? 1.0f : ratio);
+        return 1.0f + (kGridParticleStretchCap - 1.0f) * saturated;
+    }
+
+    // The metric divides the flow-axis coordinate by k and leaves the cross-flow
+    // coordinate untouched, so the un-stretched distance and falloff evaluated at
+    // the result describe the shape stretched by k along the flow. k == 1
+    // returns the sample point untouched, so the zero-motion shape is today's.
+    [[nodiscard]] constexpr FlowPoint gridParticleFlowLocal(
+        const FlowPoint local, const FlowPoint flow, const float stretch) noexcept {
+        if (not (stretch > 1.0f))
+            return local;
+
+        const double along = local.x * flow.x + local.y * flow.y;
+        const double shrink = 1.0 - 1.0 / static_cast<double>(stretch);
+        return {local.x - shrink * along * flow.x, local.y - shrink * along * flow.y};
+    }
+
+    // The inverse metric: where a point of the un-stretched shape lands after the
+    // stretch. The largest such reach is the half-extent the billboard and the
+    // unchanged cull margin have to cover.
+    [[nodiscard]] constexpr FlowPoint gridParticleFlowWorld(
+        const FlowPoint base, const FlowPoint flow, const float stretch) noexcept {
+        if (not (stretch > 1.0f))
+            return base;
+
+        const double along = base.x * flow.x + base.y * flow.y;
+        const double grow = static_cast<double>(stretch) - 1.0;
+        return {base.x + grow * along * flow.x, base.y + grow * along * flow.y};
+    }
+
+    [[nodiscard]] FlowPoint gridParticleDirection(const double angle) noexcept {
+        return {std::cos(angle), std::sin(angle)};
+    }
+
+    [[nodiscard]] double gridParticleLength(const FlowPoint point) noexcept {
+        return std::sqrt(point.x * point.x + point.y * point.y);
+    }
+
+    // rho = |point| / R of the un-stretched falloff, for a point in r units.
+    [[nodiscard]] double gridParticleRho(const FlowPoint point) noexcept {
+        return gridParticleLength(point) / double(kGridParticleSupportScale);
+    }
+
+    PPR_UNIT_TEST (particle_flow_cue_stretches_the_major_axis_only) {
+        // Appearance probe for the retained flow cue: the drawn shape stretches
+        // along the published row motion by at most k = 1.2, the minor semi-axis
+        // stays the sealed support R, and the unchanged cull margin covers both.
+        const float support = kGridParticleSupportScale;
+        const float cap = kGridParticleStretchCap;
+
+        // Magnitude map: exactly 1 at rest, exactly the cap at and beyond the
+        // reference magnitude, monotone and bounded over the admissible range.
+        PPR_TEST_ASSERT(gridParticleFlowStretch(0.0f) == 1.0f);
+        PPR_TEST_ASSERT(std::bit_cast<u32>(gridParticleFlowStretch(0.0f)) == std::bit_cast<u32>(1.0f));
+        PPR_TEST_ASSERT(gridParticleFlowStretch(kGridParticleMotionReference) == cap);
+        PPR_TEST_ASSERT(gridParticleFlowStretch(4.0f * kGridParticleMotionReference) == cap);
+        PPR_TEST_ASSERT(gridParticleFlowStretch(64.0f) == cap);
+        float previous = gridParticleFlowStretch(0.0f);
+        for (u32 step = 1u; step <= 64u; ++step) {
+            const float magnitude = static_cast<float>(step) * (kGridParticleMotionReference / 64.0f);
+            const float stretch = gridParticleFlowStretch(magnitude);
+            PPR_TEST_ASSERT(stretch >= previous and stretch >= 1.0f and stretch <= cap);
+            previous = stretch;
+        }
+
+        // Support: the major semi-axis is k R = 2.400 r and the minor semi-axis is
+        // R = 2.000 r, so max(major, minor) stays inside the unchanged 2.45 r cull
+        // margin that the prepare `visible()` test applies. Zero motion (k = 1)
+        // keeps the un-stretched support.
+        const float major = support * cap;
+        const float minor = support;
+        PPR_TEST_ASSERT(std::abs(major - 2.4f) <= 1.0e-6f and minor == 2.0f);
+        PPR_TEST_ASSERT((std::max) (major, minor) <= kGridParticleCullRadiusScale);
+        PPR_TEST_ASSERT(gridParticleFlowStretch(0.0f) * support == support);
+
+        // Billboards and the stretch: the quad half-extent is R * k, and every
+        // point of the stretched shape lands inside it, so the shape is clipped by
+        // neither its own quad nor the frustum.
+        constexpr u32 kDirections = 16u;
+        constexpr u32 kBoundarySamples = 8u;
+        for (u32 direction = 0u; direction < kDirections; ++direction) {
+            const FlowPoint flow = gridParticleDirection(2.0 * kPi * double(direction) / double(kDirections));
+
+            // The flow-aligned boundary point reaches exactly k R.
+            const FlowPoint tip = gridParticleFlowWorld({flow.x * double(minor), flow.y * double(minor)}, flow, cap);
+            PPR_TEST_ASSERT(std::abs(gridParticleLength(tip) - double(major)) <= 1.0e-6);
+            // The cross-flow boundary point does not move at all: the minor axis
+            // stays R for every direction, so the diagonal seam stays closed.
+            const FlowPoint side = gridParticleFlowWorld({-flow.y * double(minor), flow.x * double(minor)}, flow, cap);
+            PPR_TEST_ASSERT(std::abs(side.x + flow.y * double(minor)) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(side.y - flow.x * double(minor)) <= 1.0e-12);
+
+            for (u32 sample = 0u; sample < kBoundarySamples; ++sample) {
+                const FlowPoint base = gridParticleDirection(2.0 * kPi * double(sample) / double(kBoundarySamples));
+                const FlowPoint world = gridParticleFlowWorld(
+                    {base.x * double(minor), base.y * double(minor)}, flow, cap);
+                PPR_TEST_ASSERT(gridParticleLength(world) <= double(major) + 1.0e-6);
+            }
+        }
+
+        // Containment makes the seeded interior of plan §5.2 direction-free: the
+        // stretched shape contains the un-stretched one, so a lattice midpoint
+        // (0.25 cell), a diagonal midpoint and a cell centre (0.3536 cell) keep
+        // alpha = 1 for every flow direction and every offset direction.
+        constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
+        constexpr std::array<double, 2u> distances{0.25, 0.35355339059327373};
+        const double inner = double(kGridParticleFalloffInnerFraction);
+        for (u32 direction = 0u; direction < kDirections; ++direction) {
+            const FlowPoint flow = gridParticleDirection(2.0 * kPi * double(direction) / double(kDirections));
+            for (u32 offset = 0u; offset < kDirections; ++offset) {
+                const FlowPoint axis = gridParticleDirection(2.0 * kPi * double(offset) / double(kDirections));
+                for (const double distance: distances) {
+                    const FlowPoint local = gridParticleFlowLocal(
+                        {axis.x * distance / r_cell, axis.y * distance / r_cell}, flow, cap);
+                    const double rho = gridParticleRho(local);
+                    const double isotropic = distance / r_cell / double(support);
+
+                    PPR_TEST_ASSERT(rho <= inner);
+                    PPR_TEST_ASSERT(rho <= isotropic + 1.0e-12);
+                    PPR_TEST_ASSERT(gridParticleFalloff(static_cast<float>(rho)) == 1.0f);
+                }
+            }
+        }
+
+        // Deterministic: the same row and direction produce the same shape.
+        const FlowPoint sample_local{0.37, -1.21};
+        const FlowPoint sample_flow = gridParticleDirection(0.7);
+        const FlowPoint first = gridParticleFlowLocal(sample_local, sample_flow, 1.17f);
+        const FlowPoint second = gridParticleFlowLocal(sample_local, sample_flow, 1.17f);
+        PPR_TEST_ASSERT(first.x == second.x and first.y == second.y);
+        PPR_TEST_ASSERT(first.x != sample_local.x or first.y != sample_local.y);
+
+        // No invariant moved: the shared support, cull, falloff and silhouette
+        // thresholds are the ones the sealing proof, the phase shapes, the
+        // occlusion decision and the material/transport contracts already use.
+        PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
+        PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 2.45f);
+        PPR_TEST_ASSERT(kGridParticleStretchCap == 1.2f);
+        PPR_TEST_ASSERT(kGridParticleFalloffInnerFraction == 2.0f / 3.0f);
+        PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_flow major={:.4f} minor={:.4f} cull={:.4f} "
+                "reference={:.3f} stretch@reference={:.4f}",
+                major, minor, kGridParticleCullRadiusScale, kGridParticleMotionReference,
+                gridParticleFlowStretch(kGridParticleMotionReference)));
+    };
+
+    PPR_UNIT_TEST (particle_flow_cue_is_the_identity_at_zero_motion) {
+        // The seed and paused cases: a row whose published motion is zero draws
+        // today's un-stretched disk/rounded square, bit for bit, so a world that
+        // has not stepped and a paused world look exactly as they do today.
+        PPR_TEST_ASSERT(gridParticleFlowStretch(0.0f) == 1.0f);
+
+        constexpr u32 kDirections = 8u;
+        constexpr std::array<FlowPoint, 4u> locals{{{0.0, 0.0}, {2.0, 0.0}, {-1.25, 0.75}, {0.3, -1.9}}};
+        for (u32 direction = 0u; direction < kDirections; ++direction) {
+            const FlowPoint flow = gridParticleDirection(2.0 * kPi * double(direction) / double(kDirections));
+            for (const FlowPoint local: locals) {
+                const FlowPoint identity = gridParticleFlowLocal(local, flow, gridParticleFlowStretch(0.0f));
+                PPR_TEST_ASSERT(identity.x == local.x and identity.y == local.y);
+            }
+        }
+
+        // The vertex extent at k = 1 is the unchanged binary32 expression, so the
+        // billboard itself is bit-identical and no direction is consulted.
+        const float radius = 0.2821f;
+        const float extent = radius * (kGridParticleSupportScale * gridParticleFlowStretch(0.0f));
+        PPR_TEST_ASSERT(std::bit_cast<u32>(extent) == std::bit_cast<u32>(radius * kGridParticleSupportScale));
+
+        // The cue reads the existing motion pair of the 24-byte row and adds no
+        // storage, so the packet, solver and export layout are untouched.
+        PPR_TEST_ASSERT(sizeof(ParticleGpu) == 24u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
+
+        // No pop when a world starts stepping: the elongation picks up
+        // continuously, one saturating ratio step at a time.
+        const float increment = gridParticleFlowStretch(kGridParticleMotionReference / 64.0f) - 1.0f;
+        PPR_TEST_ASSERT(increment > 0.0f);
+        PPR_TEST_ASSERT(increment <= (kGridParticleStretchCap - 1.0f) / 63.0f);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_flow_zero extent={:.6f} unchanged={:.6f} increment={:.6f}", extent,
+                radius * kGridParticleSupportScale, increment));
+    };
 }
 
 namespace pP::tests {
@@ -3735,6 +3947,8 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::presentation_row_layout_matches_the_cpu_twin,
                 detail::WorldLightingMaterial::particle_descriptions_use_the_rows_own_phase_material,
                 detail::WorldLightingMaterial::particle_shapes_share_one_support_bound,
+                detail::WorldLightingMaterial::particle_flow_cue_stretches_the_major_axis_only,
+                detail::WorldLightingMaterial::particle_flow_cue_is_the_identity_at_zero_motion,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,

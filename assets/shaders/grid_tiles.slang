@@ -1208,10 +1208,18 @@ struct ParticleVertexOutput {
     nointerpolation float4 color:COLOR0;
     // Quad corner in units of the row's physical radius r: 64/62 for the gas
     // mask, and the shared support 2.0 for both restored classes (the
-    // fragment's phase SDF and falloff produce the actual silhouette).
+    // fragment's phase SDF and falloff produce the actual silhouette). A row
+    // with published motion carries the flow cue's k here, so the quad encloses
+    // the stretched shape.
     nointerpolation float shape_scale:TEXCOORD3;
     // Canonical packCell word rebuilt from the row: material | temperature << 16.
     nointerpolation uint canonical:TEXCOORD4;
+    // Flow cue of the optional Task 4 shape: the unit direction of the row's
+    // motion in the quad's (screen-axis) frame and the elongation k >= 1. Both
+    // are uniform per instance; k == 1 is the un-stretched shape and the
+    // fragment evaluates today's local coordinates unchanged.
+    nointerpolation float2 flow:TEXCOORD5;
+    nointerpolation float flow_stretch:TEXCOORD6;
 };
 
 ParticleVertexOutput particleVertex(uint vertex,uint instance) {
@@ -1241,15 +1249,43 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
         return output;
     }
 
-    // Gas keeps the shared mask texture and its two-texel transparent border;
-    // the restored classes use the analytic shapes. Both shapes are inscribed in
-    // the same support circle R = 2.0 r, so one quad encloses either and the
-    // fragment's phase test selects the actual silhouette. Sizing the quad from
-    // the draw class instead would clip an opaque liquid's disk.
-    float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
-        : particle.m_radius_m*kParticleSupportScale;
+    // Billboard basis: the world directions of the screen axes. The flow cue
+    // below needs them before it can project the row's motion.
     float3 right=normalize(mul(float4(1,0,0,0),g_grid_frame.m_inverse_view_projection).xyz);
     float3 up=normalize(mul(float4(0,1,0,0),g_grid_frame.m_inverse_view_projection).xyz);
+
+    // Retained flow cue (Task 4): stretch the drawn shape along the row's
+    // published per-step motion, major axis only. The magnitude map is a fixed,
+    // illustrative curve (kParticleMotionReference native cells per solver step
+    // saturate the cap), not a physical speed, and no dt enters it. Gas keeps its
+    // mask texture and reads no motion. A flow with no in-plane component has no
+    // direction to align to and keeps the un-stretched shape.
+    float2 motion=float2(float(particle.m_motion.x),float(particle.m_motion.y));
+    float2 flow=float2(1.0,0.0);
+    float stretch=1.0;
+    float motion_length=draw_class==kParticleDrawGas ? 0.0 : length(motion);
+    if (motion_length>0.0) {
+        float2 screen_motion=float2(dot(float3(motion,0.0),right),dot(float3(motion,0.0),up));
+        float screen_length=length(screen_motion);
+        if (screen_length>1.0e-5) {
+            flow=screen_motion/screen_length;
+            stretch=1.0+(kParticleStretchCap-1.0)*saturate(motion_length/kParticleMotionReference);
+        }
+    }
+
+    // Gas keeps the shared mask texture and its two-texel transparent border; the
+    // restored classes use the analytic shapes. Both shapes are inscribed in the
+    // same support circle R = 2.0 r, so one quad encloses either and the
+    // fragment's phase test selects the actual silhouette. Sizing the quad from
+    // the draw class instead would clip an opaque liquid's disk.
+    //
+    // The quad is the un-stretched support scaled by the same k, so it encloses
+    // the stretched shape: that shape's support in any direction is at most
+    // k R = 2.400 r, inside the unchanged 2.45 r cull margin, and the fragment
+    // applies the same bound to the minor axis, which stays at R. With stretch
+    // == 1 every factor here is exactly the previous expression.
+    float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
+        : particle.m_radius_m*(kParticleSupportScale*stretch);
     float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;
     output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
@@ -1258,6 +1294,8 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     output.color=float4(unpackParticleTint(particle.m_color_rgb9e5),1.0);
     output.shape_scale=extent/particle.m_radius_m;
     output.canonical=material|(particle.m_material_flags_temperature&0xffff0000u);
+    output.flow=flow;
+    output.flow_stretch=stretch;
     return output;
 }
 
@@ -1440,6 +1478,19 @@ float particleFalloff(float2 local) {
     return t*t*(3.0-2.0*t);
 }
 
+// Anisotropic metric of the optional flow cue: the sample point is compressed
+// along the flow axis by 1/k, so the un-stretched disk/rounded-square distance
+// and the falloff above, evaluated at the result, describe the shape stretched
+// by k along that axis. The stretch is a metric change rather than a rotation of
+// the shape's own frame, so k == 1 is the exact identity for every direction: a
+// solid's rounded square does not spin when a world starts stepping, and no
+// direction has to be chosen for zero motion. Since k >= 1 the stretched shape
+// contains the un-stretched one, and the cross-flow semi-axis stays R.
+float2 particleFlowLocal(float2 local,float2 flow,float stretch) {
+    if (!(stretch>1.0)) return local;
+    return local-(1.0-1.0/stretch)*dot(local,flow)*flow;
+}
+
 // Pure full-cell occlusion decision. A particle is hidden by its destination
 // native cell only when the cell is owned by opaque terrain: it carries a
 // material, the committed projection recorded no particle winner for it, the
@@ -1483,6 +1534,10 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     float2 world_gradient_y=clamp(ddy(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
     ParticleTerrainFootprint footprint=particleTerrainFootprint(input.fine_position,g_sampler);
     float2 local=(input.uv*2.0-1.0)*input.shape_scale;
+    // The optional flow cue only reshapes the local coordinates; at k == 1 this
+    // is the unchanged value, so a zero-motion row draws today's disk/rounded
+    // square bit for bit.
+    local=particleFlowLocal(local,input.flow,input.flow_stretch);
     float falloff=particleFalloff(local);
     // A blended class shapes its edge with alpha; a non-blending class cannot,
     // so its silhouette is the alpha = 0.5 contour (the R_s circle, plan §3).

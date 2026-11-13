@@ -53,9 +53,21 @@ struct ParticleNativeCell { uint x,y,status; };
 // has support 2.621 r, the unrounded square of half-extent a = R has 2.828 r and
 // the earlier 0.5-cell half-extent square has 2.507 r; all exceed the margin and
 // would clip at the frustum edge.
+//
+// Retained flow cue (Task 4, appearance only): the drawn shape is stretched
+// along the published per-step motion, major axis only, by
+// k = 1 + (kParticleStretchCap - 1) * saturate(|motion| / kParticleMotionReference).
+// The major semi-axis is therefore at most 1.2 R = 2.400 r, inside the unchanged
+// cull margin, and the minor semi-axis stays the un-stretched support R = 2.0 r.
+// The reference magnitude is a fixed, illustrative curve shape in native cells
+// per solver step, not a physical speed: the row's motion is per-step and this
+// path introduces no dt. Since k >= 1 the stretched shape contains the
+// un-stretched one, so the seeded interior of plan §5.2 stays saturated and the
+// cross-flow (diagonal) support never shrinks.
 static const float kParticleSupportScale = 2.0;
 static const float kParticleCullRadiusScale = 2.45;
 static const float kParticleStretchCap = 1.2;
+static const float kParticleMotionReference = 0.10;
 static const float kParticleRoundedSquareSupport = 1.3106;
 static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kParticleRoundedSquareSupport;
 static const float kParticleSolidCornerFraction = 0.25;
