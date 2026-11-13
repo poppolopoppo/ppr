@@ -1115,8 +1115,9 @@ export namespace pP {
         // Liveness of the retained committed view and the world it belongs to.
         [[nodiscard]] bool retainedGpuParticleCurrent_() const noexcept;
         // The held preparation: no pack, no solver buffer read, and the retained
-        // packed rows and stable IDs stay drawable. Counted and logged once per
-        // hold entry; a never-packed hold presents no particles.
+        // packed rows and stable IDs stay drawable. A never-packed hold presents no
+        // particles. The per-frame detail is debug; a hold that persists past
+        // `kParticleHoldWarnFrames` warns exactly once per episode.
         [[nodiscard]] std::error_code holdGpuParticles_();
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
@@ -1476,8 +1477,10 @@ export namespace pP {
             // world-scoped so a world swap cannot inherit another world's hold.
             EParticlePresentation m_particle_presentation{EParticlePresentation::seeds};
             // Consecutive held preparations since the last current publication.
-            // Entry and exit are logged once each, and there is no timeout: the
-            // hold expires at a publication, a world event or matter detach.
+            // While the solver runs this is normally a one-frame lag, so the
+            // per-frame entry/exit is debug detail; a hold that persists past
+            // `kParticleHoldWarnFrames` warns once and recovers with one info.
+            // Expiry is a publication, a world event or matter detach (no timeout).
             u64 m_particle_hold_attempts{};
             bool m_particle_seeds_dirty{};
             bool m_has_background{};

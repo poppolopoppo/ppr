@@ -53,6 +53,14 @@ namespace pP {
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_count) == 104u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_block_count) == 112u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_census_world_edge) == 116u);
+
+        // Consecutive held preparations before the hold is reported at warning.
+        // While the solver runs, the committed publication is normally one epoch
+        // behind the capture, so a one-frame hold is the ordinary liveness lag and
+        // stays at debug. Eight consecutive frames (~130 ms at 60 Hz) is far beyond
+        // that lag while still bounded, so a persistent hold is visible once
+        // without turning a normal solve cadence into log noise.
+        inline constexpr u64 kParticleHoldWarnFrames{8u};
     }
 
     Expected<std::shared_ptr<const GridParticleMetadataResource>> prepareGridParticleMetadata(
@@ -561,21 +569,36 @@ namespace pP {
                 slot.m_census->m_encoded = false;
                 slot.m_census->m_submission = kFenceValueNone;
             }
+        }
 
-            if (m_world.m_particle_hold_attempts == 1u) {
-                const auto &view = particles.m_view;
-                PPR_LOG(
-                    GridPass, info, "particle publication is not current; presenting the last packed rows",
-                    {
-                        {"device_epoch", view.m_device_epoch},
-                        {"live_epoch", view.m_live_epoch ? view.m_live_epoch->load(std::memory_order_acquire) : u64{}},
-                        {"packed", particles.m_packed_owner != nullptr},
-                        {"packed_epoch", particles.m_packed_epoch},
-                    });
-            }
-        } else if (m_world.m_particle_hold_attempts == 1u) {
+        // While the solver runs, the committed publication is normally one epoch
+        // behind the capture, so a short hold is the ordinary liveness lag, not an
+        // exceptional state. The per-frame detail is therefore debug; only a hold
+        // that persists is reported, once, at warning.
+        PPR_LOG(
+            GridPass, debug, "particle publication is not current; presenting the retained packed rows",
+            {
+                {"held_frames", m_world.m_particle_hold_attempts},
+                {"device_epoch", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_view.m_device_epoch : u64{}},
+                {"live_epoch", m_world.m_gpu_particles and m_world.m_gpu_particles->m_view.m_live_epoch
+                                   ? m_world.m_gpu_particles->m_view.m_live_epoch->load(std::memory_order_acquire)
+                                   : u64{}},
+                {"packed", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_owner != nullptr : false},
+                {"packed_epoch", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_epoch : u64{}},
+            });
+        if (m_world.m_particle_hold_attempts == kParticleHoldWarnFrames) {
             PPR_LOG(
-                GridPass, info, "particle publication is not current; no rows are retained yet", {{"packed", false}});
+                GridPass, warning, "particle publication is still held; presenting the retained packed rows",
+                {
+                    {"held_frames", m_world.m_particle_hold_attempts},
+                    {"threshold", kParticleHoldWarnFrames},
+                    {"device_epoch", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_view.m_device_epoch : u64{}},
+                    {"live_epoch", m_world.m_gpu_particles and m_world.m_gpu_particles->m_view.m_live_epoch
+                                       ? m_world.m_gpu_particles->m_view.m_live_epoch->load(std::memory_order_acquire)
+                                       : u64{}},
+                    {"packed", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_owner != nullptr : false},
+                    {"packed_epoch", m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_epoch : u64{}},
+                });
         }
 
         return {};
@@ -737,16 +760,26 @@ namespace pP {
         }
 
         // A current publication ends the hold: this frame re-packs from the new
-        // epoch and resumes. The exit is one log for the whole hold, not one per
-        // frame, and there is no timeout (expiry is a publication or a world
-        // event).
+        // epoch and resumes. The normal one-frame lag exits silently (debug);
+        // recovering from a persistent hold is reported once at info. There is no
+        // timeout: expiry is a publication or a world event.
         if (m_world.m_particle_hold_attempts != 0u) {
             PPR_LOG(
-                GridPass, info, "particle publication is current again; resuming the packed presentation",
+                GridPass, debug, "particle publication is current again; resuming the packed presentation",
                 {
-                    {"held_attempts", m_world.m_particle_hold_attempts},
+                    {"held_frames", m_world.m_particle_hold_attempts},
                     {"device_epoch", m_world.m_gpu_particles->m_view.m_device_epoch},
                 });
+            if (m_world.m_particle_hold_attempts >= kParticleHoldWarnFrames) {
+                PPR_LOG(
+                    GridPass, info,
+                    "particle publication recovered after a persistent hold; resuming the packed presentation",
+                    {
+                        {"held_frames", m_world.m_particle_hold_attempts},
+                        {"threshold", kParticleHoldWarnFrames},
+                        {"device_epoch", m_world.m_gpu_particles->m_view.m_device_epoch},
+                    });
+            }
             m_world.m_particle_hold_attempts = 0u;
         }
 
