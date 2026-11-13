@@ -1927,7 +1927,7 @@ namespace demo {
             }
         }
 
-        void applyBuildOrder_(const game::SessionBuildOrder &order) {
+        void applyBuildOrder_(const game::SessionBuildOrder &order, const TimePoint now) {
             if (not m_driver or not m_driver_ready) {
                 return;
             }
@@ -1936,7 +1936,7 @@ namespace demo {
                                                                                       : 0u;
             const auto placed = game::applySessionBuildOrder(*m_driver, order, displayed_world);
             if (not placed and placed.error() == std::errc::device_or_resource_busy) {
-                deferSessionTool_(order);
+                deferSessionTool_(order, now);
                 return;
             }
 
@@ -5627,7 +5627,7 @@ namespace demo {
             }
 
             for (const auto &acknowledgment: acknowledgments) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, applySessionDelivery_(acknowledgment, edit_rejected));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applySessionDelivery_(acknowledgment, now, edit_rejected));
             }
 
             if (m_session_service.takeClose()) {
@@ -5695,7 +5695,7 @@ namespace demo {
                 return {};
             }
 
-            auto batch = m_session_service.beginService();
+            auto batch = m_session_service.beginService(now);
             if (not batch) {
                 return {};
             }
@@ -5703,6 +5703,14 @@ namespace demo {
             PPR_DEFER {
                 m_session_service.endService();
             };
+
+            // A retry the service abandoned for exceeding its budget stays a
+            // visible outcome: one warning and one bounded notice, exactly like
+            // the permanent one-shot rejection above.
+            for (const auto &expired: m_session_service.takeExpiredTools()) {
+                reportExpiredToolOrder_(expired);
+            }
+
             if (batch->m_close) {
                 m_close_requested.store(true, std::memory_order_release);
             }
@@ -5718,7 +5726,7 @@ namespace demo {
 
             while (m_delivery_cursor < m_retained_deliveries.size()) {
                 PPR_RETURN_ERROR_ON_FAIL(
-                    Demo, applySessionDelivery_(m_retained_deliveries[m_delivery_cursor], edit_rejected));
+                    Demo, applySessionDelivery_(m_retained_deliveries[m_delivery_cursor], now, edit_rejected));
                 ++m_delivery_cursor;
                 if (m_matter_runtime.requestPending()) {
                     return {};
@@ -5793,7 +5801,7 @@ namespace demo {
                 PPR_RETURN_ERROR_ON_FAIL(Demo, refreshRadialForce_());
                 PPR_RETURN_ERROR_ON_FAIL(Demo, applyControlInput_());
                 if (not m_world_modal) {
-                    PPR_RETURN_ERROR_ON_FAIL(Demo, drainToolRequests_());
+                    PPR_RETURN_ERROR_ON_FAIL(Demo, drainToolRequests_(now));
                 }
 
                 // Frozen profiling capture pauses through the ordinary driver
@@ -5827,7 +5835,7 @@ namespace demo {
         }
 
         [[nodiscard]] std::error_code applySessionDelivery_(
-            const game::SessionDelivery &delivery, bool &edit_rejected) {
+            const game::SessionDelivery &delivery, const TimePoint now, bool &edit_rejected) {
             PPR_RETURN_ERROR_ON_FAIL(
                 Demo, std::visit(
                           [&](const auto &value) -> std::error_code {
@@ -5848,11 +5856,11 @@ namespace demo {
                               } else if constexpr (std::is_same_v<T, game::ui::EUnsavedAction>) {
                                   applyUnsavedAction_(value);
                               } else if constexpr (std::is_same_v<T, game::SessionBuildOrder>) {
-                                  applyBuildOrder_(value);
+                                  applyBuildOrder_(value, now);
                               } else if constexpr (std::is_same_v<T, game::SessionDigOrder>) {
-                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_(value));
+                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_(value, now));
                               } else if constexpr (std::is_same_v<T, game::SessionParticleOrder>) {
-                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyParticleOrder_(value));
+                                  PPR_RETURN_ERROR_ON_FAIL(Demo, applyParticleOrder_(value, now));
                               } else {
                                   if (not m_world_job or value.m_job != m_world_job->view().m_id) {
                                       return {}; // A modal action must not affect a later job.
@@ -5898,11 +5906,33 @@ namespace demo {
             }
         }
 
-        void deferSessionTool_(game::SessionToolOrder order) {
-            const auto deferred = m_session_service.deferTool(std::move(order));
+        void deferSessionTool_(game::SessionToolOrder order, const TimePoint now) {
+            const auto deferred = m_session_service.deferTool(std::move(order), now);
             if (deferred and deferred != std::errc::operation_canceled) {
                 retainInputError_(deferred);
             }
+        }
+
+        /// The service abandoned a genuinely transient order because its budget
+        /// ran out. Like a one-shot rejection this stays a visible outcome: one
+        /// warning and one bounded notice name the tool, and nothing is retained.
+        void reportExpiredToolOrder_(const game::SessionToolOrder &order) noexcept {
+            const std::string_view label = std::visit(
+                [](const auto &value) -> std::string_view {
+                    using T = std::remove_cvref_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, game::SessionBuildOrder>) {
+                        return value.m_tool == colony::EColonyTool::build_wall ? "wall order expired"
+                                                                               : "demolish order expired";
+                    } else if constexpr (std::is_same_v<T, game::SessionDigOrder>) {
+                        return "dig order expired";
+                    } else {
+                        return "particle stroke expired";
+                    }
+                },
+                order);
+
+            PPR_LOG(Demo, warning, "tool order retry expired", {{"tool", label}});
+            postDisplayNotice_(label, std::make_error_code(std::errc::timed_out));
         }
 
         void onGridWorldCompleted_(const GridWorldResult &result) override {
@@ -6889,7 +6919,7 @@ namespace demo {
             }
         }
 
-        [[nodiscard]] std::error_code applyDigOrder_(const game::SessionDigOrder &order) {
+        [[nodiscard]] std::error_code applyDigOrder_(const game::SessionDigOrder &order, const TimePoint now) {
             if (not m_driver or not m_driver_ready) {
                 return {};
             }
@@ -6898,7 +6928,7 @@ namespace demo {
                                                                                       : 0u;
             const auto accepted = game::applySessionDigOrder(*m_driver, order, displayed_world);
             if (not accepted and accepted.error() == std::errc::device_or_resource_busy) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order, now));
                 return {};
             }
 
@@ -6967,7 +6997,8 @@ namespace demo {
             return {};
         }
 
-        [[nodiscard]] std::error_code applyParticleOrder_(const game::SessionParticleOrder &order) {
+        [[nodiscard]] std::error_code applyParticleOrder_(
+            const game::SessionParticleOrder &order, const TimePoint now) {
             if (not m_driver or not m_driver_ready) {
                 return {};
             }
@@ -6976,7 +7007,7 @@ namespace demo {
                                                                                       : 0u;
             const auto accepted = game::applySessionParticleOrder(*m_driver, order, displayed_world);
             if (not accepted and accepted.error() == std::errc::device_or_resource_busy) {
-                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, m_session_service.deferTool(order, now));
                 return {};
             }
 
@@ -6994,17 +7025,17 @@ namespace demo {
             return {};
         }
 
-        [[nodiscard]] std::error_code drainToolRequests_() {
+        [[nodiscard]] std::error_code drainToolRequests_(const TimePoint now) {
             // Accepted click precedes drag cells, with the press-time world tag.
             if (m_tool.m_accepted_click) {
                 const auto cell = *std::exchange(m_tool.m_accepted_click, std::nullopt);
-                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}, now));
             }
 
             while (not m_tool.m_drag_queue.empty()) {
                 const auto cell = m_tool.m_drag_queue.front();
                 m_tool.m_drag_queue.erase(m_tool.m_drag_queue.begin());
-                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}));
+                PPR_RETURN_ERROR_ON_FAIL(Demo, applyDigOrder_({m_tool.m_world_generation, {cell, 1u, 1u}}, now));
             }
             return {};
         }
@@ -7331,7 +7362,9 @@ namespace demo {
             // no longer drive gameplay during terminal cleanup; base credit
             // settlement already occurred in their receiver hook. Drain the
             // session inbox so close() sees no pending deliveries.
-            if (auto batch = m_session_service.beginService()) {
+            // Retries were already cleared by stopControls(), so this drain
+            // needs no service time.
+            if (auto batch = m_session_service.beginService(TimePoint{})) {
                 PPR_DEFER {
                     m_session_service.endService();
                 };

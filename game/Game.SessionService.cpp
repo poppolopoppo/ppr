@@ -310,6 +310,41 @@ namespace pP::game {
     // admission and owned inbox
     // ------------------------------------------------------------------
 
+    namespace {
+        /// Retry identity is exact: a re-issued order updates only the same
+        /// blocked gesture, so distinct orders keep their own budget.
+        [[nodiscard]] bool sameToolOrder(const SessionToolOrder &left, const SessionToolOrder &right) noexcept {
+            if (left.index() != right.index()) {
+                return false;
+            }
+
+            return std::visit(
+                [](const auto &lhs, const auto &rhs) -> bool {
+                    using L = std::remove_cvref_t<decltype(lhs)>;
+                    using R = std::remove_cvref_t<decltype(rhs)>;
+                    if constexpr (not std::is_same_v<L, R>) {
+                        return false;
+                    } else if constexpr (std::is_same_v<L, SessionBuildOrder>) {
+                        return lhs.m_world == rhs.m_world and
+                               lhs.m_footprint == rhs.m_footprint and
+                               lhs.m_tool == rhs.m_tool;
+                    } else if constexpr (std::is_same_v<L, SessionDigOrder>) {
+                        return lhs.m_world == rhs.m_world and lhs.m_rect == rhs.m_rect;
+                    } else {
+                        // The particle command carries no equality operator.
+                        return lhs.m_world == rhs.m_world and
+                               lhs.m_command.m_x_m == rhs.m_command.m_x_m and
+                               lhs.m_command.m_y_m == rhs.m_command.m_y_m and
+                               lhs.m_command.m_radius_m == rhs.m_command.m_radius_m and
+                               lhs.m_command.m_count == rhs.m_command.m_count and
+                               lhs.m_command.m_material == rhs.m_command.m_material and
+                               lhs.m_command.m_kind == rhs.m_command.m_kind;
+                    }
+                },
+                left, right);
+        }
+    }
+
     std::error_code SessionService::post(SessionDelivery delivery) {
         const bool acknowledgment = std::holds_alternative<RenderFrameResult>(delivery) or
                                     std::holds_alternative<GridWorldResult>(delivery);
@@ -325,14 +360,25 @@ namespace pP::game {
         return {};
     }
 
-    std::error_code SessionService::deferTool(SessionToolOrder order) {
+    std::error_code SessionService::deferTool(SessionToolOrder order, const TimePoint now) {
         if (not m_controls_open or not m_receiver_open) {
             // Same expected teardown cancellation as post(): once controls or
             // the receiver close, a retried tool order has no session owner.
             return std::make_error_code(std::errc::operation_canceled);
         }
 
-        m_retries.push_back(std::move(order));
+        const auto existing = std::ranges::find_if(
+            m_retries, [&](const ToolRetry &retry) { return sameToolOrder(retry.m_order, order); });
+        if (existing != m_retries.end()) {
+            // First deferral keeps its stamp: retrying a blocked gesture may not
+            // postpone the budget that exists to end the retrying.
+            ++existing->m_attempts;
+            existing->m_redeferred = true;
+            return {};
+        }
+
+        m_retries.push_back(
+            ToolRetry{.m_order = std::move(order), .m_first_deferred = now, .m_attempts = 1u, .m_redeferred = true});
         return {};
     }
 
@@ -341,19 +387,31 @@ namespace pP::game {
         m_close.compare_exchange_strong(expected, ECloseState::pending, std::memory_order_release);
     }
 
-    std::optional<SessionServiceBatch> SessionService::beginService() {
+    std::optional<SessionServiceBatch> SessionService::beginService(const TimePoint now) {
         if (m_active or not m_receiver_open) {
             return std::nullopt;
         }
 
         SessionServiceBatch batch{};
         batch.m_deliveries.swap(m_pending);
-        auto retries = std::move(m_retries);
-        m_retries = {};
 
-        for (auto &order: retries) {
-            std::visit([&](auto &value) { batch.m_deliveries.emplace_back(std::move(value)); }, order);
+        // A retry that exhausted its opaque budget is retired here instead of
+        // injected: it is the only place the service stops retrying.
+        Array<ToolRetry> waiting{};
+        for (auto &retry: m_retries) {
+            if (retry.m_attempts >= kToolRetryAttemptLimit or now - retry.m_first_deferred > kToolRetryExpiry) {
+                m_expired.push_back(std::move(retry.m_order));
+                continue;
+            }
+
+            // The entry stays owned by the inbox while its order is in flight;
+            // only a re-deferral by the host keeps it past this service.
+            retry.m_redeferred = false;
+            std::visit([&](const auto &value) { batch.m_deliveries.emplace_back(value); }, retry.m_order);
+            waiting.push_back(std::move(retry));
         }
+
+        m_retries = std::move(waiting);
 
         auto expected = ECloseState::pending;
         batch.m_close = m_close.compare_exchange_strong(expected, ECloseState::idle, std::memory_order_acq_rel);
@@ -392,6 +450,11 @@ namespace pP::game {
 
     void SessionService::endService() noexcept {
         PPR_ASSERT(m_active);
+
+        // An order the host did not defer again resolved during that service:
+        // it was applied, permanently rejected, or no longer belongs to the
+        // displayed world. Only a repeated deferral keeps a budget running.
+        std::erase_if(m_retries, [](const ToolRetry &retry) { return not retry.m_redeferred; });
         m_active = false;
     }
 
@@ -403,6 +466,7 @@ namespace pP::game {
         m_controls_open = false;
         m_close.store(ECloseState::stopped, std::memory_order_release);
         m_retries.clear();
+        m_expired.clear();
         std::erase_if(m_pending, [](const SessionDelivery &delivery) {
             return not std::holds_alternative<RenderFrameResult>(delivery) and
                    not std::holds_alternative<GridWorldResult>(delivery);
@@ -430,5 +494,11 @@ namespace pP::game {
 
     bool SessionService::retriesPending() const noexcept {
         return not m_retries.empty();
+    }
+
+    Array<SessionToolOrder> SessionService::takeExpiredTools() {
+        Array<SessionToolOrder> expired{};
+        expired.swap(m_expired);
+        return expired;
     }
 }

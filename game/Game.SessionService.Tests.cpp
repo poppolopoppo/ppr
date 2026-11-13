@@ -6,6 +6,8 @@ module;
 module game.tests;
 
 import game.application;
+import game.colony.agents;
+import game.colony.buildings;
 import game.colony.driver;
 import game.colony.matter;
 import game.colony.panel;
@@ -28,6 +30,10 @@ namespace pP::game::tests::detail {
     // ------------------------------------------------------------------
 
     PPR_DEFINE_LOG_CATEGORY(SessionWaitFixture, debug, none)
+
+    /// Injected service time for the retry budget: tests advance it explicitly
+    /// instead of reading a clock, so expiry is deterministic.
+    constexpr TimePoint kToolServiceTime{};
 
     std::error_code finishOwnedOperation(
         RenderLane &lane, std::unique_ptr<RenderLaneOperation> operation, bool *const out_ran) {
@@ -365,7 +371,7 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(service.takeClose());
         PPR_TEST_ASSERT(not service.takeClose() and not service.acknowledgmentsPending());
 
-        auto batch = service.beginService();
+        auto batch = service.beginService(kToolServiceTime);
         PPR_TEST_ASSERT(batch and batch->m_deliveries.size() == 2u and not batch->m_close);
         PPR_TEST_ASSERT(std::get<SessionWorldAction>(batch->m_deliveries[0]).m_job == 11u);
         PPR_TEST_ASSERT(std::get<SessionWorldAction>(batch->m_deliveries[1]).m_job == 12u);
@@ -395,7 +401,7 @@ namespace pP::game::tests::detail {
             {}, [](const RenderFrameRequest &, RenderFrameResult &) { return std::error_code{}; }, {}, {}));
 
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -428,7 +434,7 @@ namespace pP::game::tests::detail {
                 }
 
                 service.requestClose();
-                reentry_rejected = not service.beginService().has_value();
+                reentry_rejected = not service.beginService(kToolServiceTime).has_value();
                 pumped = true;
             });
 
@@ -444,7 +450,7 @@ namespace pP::game::tests::detail {
         }
 
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -470,11 +476,11 @@ namespace pP::game::tests::detail {
             // rejected reentry consumes neither that payload nor native close.
             PPR_TEST_ASSERT(not service.post(SessionWorldAction{10u, ui::EWorldAction::retry}));
             service.requestClose();
-            PPR_TEST_ASSERT(not service.beginService());
+            PPR_TEST_ASSERT(not service.beginService(kToolServiceTime));
         }
 
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -518,12 +524,12 @@ namespace pP::game::tests::detail {
             arrival.m_grid_ack_revisions.push_back(117u);
             PPR_TEST_ASSERT(not service.post(arrival));
             service.requestClose();
-            PPR_TEST_ASSERT(not service.beginService());
+            PPR_TEST_ASSERT(not service.beginService(kToolServiceTime));
             pumped = true;
         });
 
         const auto operation = [&]() -> std::error_code {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -540,7 +546,7 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(operation() == cause);
         PPR_TEST_ASSERT(acknowledged and pumped and not service.active());
 
-        auto batch = service.beginService();
+        auto batch = service.beginService(kToolServiceTime);
         PPR_TEST_ASSERT(batch.has_value());
         PPR_DEFER {
             service.endService();
@@ -554,13 +560,13 @@ namespace pP::game::tests::detail {
         SessionService service;
         const SessionBuildOrder order{
             7u, {.m_min = {1u, 2u}, .m_width = 1u, .m_height = 1u}, colony::EColonyTool::demolish};
-        PPR_TEST_ASSERT(not service.deferTool(order));
+        PPR_TEST_ASSERT(not service.deferTool(order, kToolServiceTime));
         PPR_TEST_ASSERT(service.retriesPending() and not service.pending());
         PPR_TEST_ASSERT(not service.post(SessionColonyIntent{7u, {.m_kind = colony::EColonyIntent::pause_toggle}}));
         PPR_TEST_ASSERT(service.pending());
 
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -568,10 +574,12 @@ namespace pP::game::tests::detail {
             PPR_TEST_ASSERT(batch->m_deliveries.size() == 2u);
             PPR_TEST_ASSERT(std::holds_alternative<SessionColonyIntent>(batch->m_deliveries[0u]));
             PPR_TEST_ASSERT(std::get<SessionBuildOrder>(batch->m_deliveries[1u]).m_world == 7u);
-            PPR_TEST_ASSERT(not service.retriesPending());
+            // The budget entry stays owned while its order is in flight; only a
+            // repeated deferral keeps it past this service.
+            PPR_TEST_ASSERT(service.retriesPending());
 
-            PPR_TEST_ASSERT(not service.deferTool(order));
-            PPR_TEST_ASSERT(not service.beginService());
+            PPR_TEST_ASSERT(not service.deferTool(order, kToolServiceTime));
+            PPR_TEST_ASSERT(not service.beginService(kToolServiceTime));
             PPR_TEST_ASSERT(service.retriesPending() and not service.pending());
         }
 
@@ -604,7 +612,7 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(not service.post(GridWorldResult{}));
         PPR_TEST_ASSERT(service.close() == std::errc::device_or_resource_busy);
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -615,7 +623,7 @@ namespace pP::game::tests::detail {
         }
 
         PPR_TEST_ASSERT(not service.close());
-        PPR_TEST_ASSERT(not service.beginService());
+        PPR_TEST_ASSERT(not service.beginService(kToolServiceTime));
         PPR_TEST_ASSERT(service.post(result) == std::errc::operation_canceled);
         service.requestClose();
         PPR_TEST_ASSERT(not service.pending());
@@ -719,13 +727,13 @@ namespace pP::game::tests::detail {
         destroy.m_command.m_kind = colony::EParticleToolKind::destroy;
         destroy.m_command.m_radius_m = 6.0;
         PPR_TEST_ASSERT(not service.post(spawn));
-        PPR_TEST_ASSERT(not service.deferTool(destroy));
+        PPR_TEST_ASSERT(not service.deferTool(destroy, kToolServiceTime));
 
         spawn.m_world = 99u;
         spawn.m_command.m_count = 4096u;
         destroy.m_command.m_radius_m = 1.0;
         {
-            auto batch = service.beginService();
+            auto batch = service.beginService(kToolServiceTime);
             PPR_TEST_ASSERT(batch.has_value());
             PPR_DEFER {
                 service.endService();
@@ -740,13 +748,279 @@ namespace pP::game::tests::detail {
             PPR_TEST_ASSERT(retried.m_world == 7u and retried.m_command.m_kind == colony::EParticleToolKind::destroy);
             PPR_TEST_ASSERT(retried.m_command.m_radius_m == 6.0);
 
-            PPR_TEST_ASSERT(not service.deferTool(retried));
+            PPR_TEST_ASSERT(not service.deferTool(retried, kToolServiceTime));
         }
 
         PPR_TEST_ASSERT(service.retriesPending());
         service.stopControls();
         PPR_TEST_ASSERT(not service.retriesPending());
         PPR_TEST_ASSERT(service.post(spawn) == std::errc::operation_canceled);
+        PPR_TEST_ASSERT(not service.close());
+    };
+
+    // ------------------------------------------------------------------
+    // build-order rejection and retry budget
+    // ------------------------------------------------------------------
+
+    [[nodiscard]] bool footprintIsVacuum(const sim::ChunkGrid &grid, const colony::Footprint &print) {
+        for (u32 y = 0u; y < print.m_height; ++y) {
+            for (u32 x = 0u; x < print.m_width; ++x) {
+                const auto cell = grid.getCell({print.m_min.m_x + x, print.m_min.m_y + y});
+                if (not cell or cell->m_element != 0u) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// The authored landing carves vacuum around the start, so a metre-aligned
+    /// 3x3 destination exists within a few metres of the spawn.
+    [[nodiscard]] std::optional<colony::Footprint> findVacuumFootprint(
+        const sim::ChunkGrid &grid, const float x_m, const float y_m, const u32 radius_m) {
+        const auto origin_x = static_cast<u32>(std::max(x_m, 0.0f));
+        const auto origin_y = static_cast<u32>(std::max(y_m, 0.0f));
+        for (u32 step_y = 0u; step_y <= radius_m * 2u; ++step_y) {
+            for (u32 step_x = 0u; step_x <= radius_m * 2u; ++step_x) {
+                const colony::Footprint print{
+                    .m_min = {.m_x = (origin_x + step_x) * 3u, .m_y = (origin_y + step_y) * 3u},
+                    .m_width = 3u,
+                    .m_height = 3u};
+                if (footprintIsVacuum(grid, print)) {
+                    return print;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    /// The fixture creates exactly one agent. It is the only transient occupant
+    /// a session test can place and move without a resident matter runtime.
+    [[nodiscard]] sim::Entity soleAgent(colony::ColonyDriver &driver) {
+        sim::Entity found{};
+        for (const auto &[entity, agent]: driver.registry().view<colony::Agent>()) {
+            (void) agent;
+            found = entity;
+        }
+        return found;
+    }
+
+    PPR_UNIT_TEST (permanently_rejected_build_order_is_not_retained) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        const auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto print = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(print.has_value());
+
+        // Completed terrain in one destination cell can never become vacuum by
+        // waiting, so the whole order is a permanent rejection.
+        PPR_TEST_ASSERT(not driver.grid().setCell(
+            {print->m_min.m_x + 1u, print->m_min.m_y + 1u}, {driver.boundaryMaterial(), 300.0f}));
+
+        SessionService service;
+        const SessionBuildOrder order{world, *print, colony::EColonyTool::build_wall};
+        PPR_TEST_ASSERT(not service.post(order));
+        const auto errands = driver.errandCount();
+
+        {
+            auto batch = service.beginService(kToolServiceTime);
+            PPR_TEST_ASSERT(batch and batch->m_deliveries.size() == 1u);
+            PPR_DEFER {
+                service.endService();
+            };
+            const auto placed = applySessionBuildOrder(
+                driver, std::get<SessionBuildOrder>(batch->m_deliveries[0u]), world);
+            PPR_TEST_ASSERT(not placed);
+            PPR_TEST_ASSERT(placed.error() != std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(placed.error() == std::errc::file_exists);
+            PPR_TEST_ASSERT(driver.errandCount() == errands);
+        }
+
+        // The host acks and drops a non-busy rejection: nothing waits for the
+        // next service and no budget is consumed.
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(service.takeExpiredTools().empty());
+
+        // A second delivery through a fresh batch reaches the same verdict and
+        // is not silently applied.
+        PPR_TEST_ASSERT(not service.post(order));
+        {
+            auto batch = service.beginService(kToolServiceTime);
+            PPR_TEST_ASSERT(batch and batch->m_deliveries.size() == 1u);
+            PPR_DEFER {
+                service.endService();
+            };
+            const auto again = applySessionBuildOrder(
+                driver, std::get<SessionBuildOrder>(batch->m_deliveries[0u]), world);
+            PPR_TEST_ASSERT(not again and again.error() == std::errc::file_exists);
+            PPR_TEST_ASSERT(driver.errandCount() == errands);
+        }
+
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(not service.close());
+    };
+
+    PPR_UNIT_TEST (valid_build_order_still_places_once) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto print = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(print.has_value());
+
+        // Keep the actor clear so only the destination decides.
+        *pose = {static_cast<float>(print->m_min.m_x) / 3.0f + 5.0f, pose->m_y};
+
+        SessionService service;
+        const SessionBuildOrder order{world, *print, colony::EColonyTool::build_wall};
+        const auto errands = driver.errandCount();
+        const auto placed = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(placed and placed->has_value());
+        PPR_TEST_ASSERT(driver.errandCount() == errands + 1u);
+
+        // The errand owns the destination but has written nothing yet; complete
+        // it the way advanceErrands does before the single-shot replay.
+        auto *const errand = driver.registry().get<colony::BuildErrand>(**placed);
+        PPR_TEST_ASSERT(errand != nullptr);
+        for (u32 y = 0u; y < print->m_height; ++y) {
+            for (u32 x = 0u; x < print->m_width; ++x) {
+                PPR_TEST_ASSERT(not driver.grid().setCell(
+                    {print->m_min.m_x + x, print->m_min.m_y + y}, {driver.boundaryMaterial(), 300.0f}));
+            }
+        }
+
+        errand->m_progress = errand->m_total;
+
+        const auto replay = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(not replay and replay.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == errands + 1u);
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(not service.close());
+    };
+
+    PPR_UNIT_TEST (stuck_transient_busy_is_dropped_after_budget) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto print = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(print.has_value());
+
+        // An actor standing in the destination is a genuine transient busy.
+        *pose = {
+            static_cast<float>(print->m_min.m_x) / 3.0f + 0.5f, static_cast<float>(print->m_min.m_y) / 3.0f + 0.5f};
+        const auto errands = driver.errandCount();
+
+        SessionService service;
+        const SessionBuildOrder order{world, *print, colony::EColonyTool::build_wall};
+        const auto blocked = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(not blocked and blocked.error() == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(not service.deferTool(order, kToolServiceTime));
+
+        // The first service is still inside the budget: the order is delivered
+        // again and re-deferred exactly as the host would.
+        const auto first_service = kToolServiceTime + std::chrono::milliseconds{400};
+        {
+            auto batch = service.beginService(first_service);
+            PPR_TEST_ASSERT(batch and batch->m_deliveries.size() == 1u);
+            PPR_DEFER {
+                service.endService();
+            };
+            const auto retried = applySessionBuildOrder(
+                driver, std::get<SessionBuildOrder>(batch->m_deliveries[0u]), world);
+            PPR_TEST_ASSERT(not retried and retried.error() == std::errc::device_or_resource_busy);
+            PPR_TEST_ASSERT(not service.deferTool(order, first_service));
+        }
+
+        PPR_TEST_ASSERT(service.retriesPending());
+        PPR_TEST_ASSERT(service.takeExpiredTools().empty());
+
+        // Past the expiry the stuck order is dropped instead of injected, so the
+        // 1 ms retry deadline can no longer spin the pump.
+        const auto expired_at = kToolServiceTime + std::chrono::milliseconds{2000};
+        {
+            auto batch = service.beginService(expired_at);
+            PPR_TEST_ASSERT(batch and batch->m_deliveries.empty());
+            PPR_DEFER {
+                service.endService();
+            };
+
+            auto expired = service.takeExpiredTools();
+            PPR_TEST_ASSERT(expired.size() == 1u);
+            const auto &dropped = std::get<SessionBuildOrder>(expired[0u]);
+            PPR_TEST_ASSERT(dropped.m_world == world);
+            PPR_TEST_ASSERT(dropped.m_footprint == *print);
+        }
+
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(service.takeExpiredTools().empty());
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
+        PPR_TEST_ASSERT(not service.close());
+    };
+
+    PPR_UNIT_TEST (transient_busy_still_applies_when_the_destination_clears) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto print = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(print.has_value());
+
+        *pose = {
+            static_cast<float>(print->m_min.m_x) / 3.0f + 0.5f, static_cast<float>(print->m_min.m_y) / 3.0f + 0.5f};
+        const auto errands = driver.errandCount();
+
+        SessionService service;
+        const SessionBuildOrder order{world, *print, colony::EColonyTool::build_wall};
+        const auto blocked = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(not blocked and blocked.error() == std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(not service.deferTool(order, kToolServiceTime));
+        PPR_TEST_ASSERT(service.retriesPending());
+
+        // The actor steps out well before the budget expires.
+        *pose = {pose->m_x + 5.0f, pose->m_y + 5.0f};
+
+        const auto next_service = kToolServiceTime + std::chrono::milliseconds{500};
+        {
+            auto batch = service.beginService(next_service);
+            PPR_TEST_ASSERT(batch and batch->m_deliveries.size() == 1u);
+            PPR_DEFER {
+                service.endService();
+            };
+            const auto placed = applySessionBuildOrder(
+                driver, std::get<SessionBuildOrder>(batch->m_deliveries[0u]), world);
+            PPR_TEST_ASSERT(placed and placed->has_value());
+            PPR_TEST_ASSERT(driver.errandCount() == errands + 1u);
+        }
+
+        // Success resolves the retry: nothing is re-deferred and nothing expires.
+        PPR_TEST_ASSERT(not service.retriesPending());
+        PPR_TEST_ASSERT(service.takeExpiredTools().empty());
         PPR_TEST_ASSERT(not service.close());
     };
 }
@@ -770,6 +1044,10 @@ namespace pP::game::tests {
             detail::stale_build_and_dig_orders_never_touch_replacement_driver,
             detail::particle_orders_ignore_stale_and_hidden_worlds_and_report_unavailable_runtime,
             detail::particle_orders_keep_owned_parameters_through_delivery_and_retry,
+            detail::permanently_rejected_build_order_is_not_retained,
+            detail::valid_build_order_still_places_once,
+            detail::stuck_transient_busy_is_dropped_after_budget,
+            detail::transient_busy_still_applies_when_the_destination_clears,
         });
     };
 

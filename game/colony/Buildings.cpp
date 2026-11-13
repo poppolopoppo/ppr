@@ -162,7 +162,11 @@ namespace pP::colony {
                 const auto cell = grid.getCell({x, y});
                 PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, cell);
                 if (cell->m_element != kElementVacuum) {
-                    PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::device_or_resource_busy);
+                    // Terrain and completed walls never become vacuum by
+                    // waiting, so an occupied destination is a permanent
+                    // rejection. The host acks and reports it once instead of
+                    // retaining the order for an endless retry.
+                    PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::file_exists);
                 }
             }
         }

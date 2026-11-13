@@ -139,6 +139,8 @@ export namespace pP::game {
 
     /// Stale displayed-world orders are expected absence. A busy live driver
     /// returns device_or_resource_busy so the host can retain the exact order.
+    /// A permanent rejection (an occupied destination) returns another code and
+    /// is acknowledged once, never retained.
     [[nodiscard]] Expected<std::optional<sim::Entity>> applySessionBuildOrder(
         colony::ColonyDriver &driver, const SessionBuildOrder &order, u64 displayed_world);
     [[nodiscard]] Expected<bool> applySessionDigOrder(
@@ -153,6 +155,16 @@ export namespace pP::game {
         bool m_close{};
     };
 
+    /// A genuine transient (an actor or a live errand leaving the destination)
+    /// clears within this window at normal cadence. Past it the service drops
+    /// the order, so the 1 ms retry deadline is bounded rather than perpetual.
+    inline constexpr TimeSpan kToolRetryExpiry{std::chrono::milliseconds{1500}};
+
+    /// Backstop for a clock that does not advance while the deadline keeps
+    /// waking the pump: a stuck order is still abandoned after this many
+    /// attempts instead of retrying forever.
+    inline constexpr u32 kToolRetryAttemptLimit{4096u};
+
     /// Main owns the inbox. Only the native-close latch permits cross-thread
     /// posting. A detached batch remains exclusive through device publication
     /// and dependent Scene mutation; arrivals wait for the next service.
@@ -163,8 +175,21 @@ export namespace pP::game {
             stopped
         };
 
+        /// One deferred tool order plus its budget stamp. The service stores the
+        /// stamp opaquely: it compares age and attempt count only, and knows no
+        /// error codes or tool policy. A retry survives the service that
+        /// injected it only when the host defers that exact order again; a
+        /// success, a permanent rejection or a stale world resolves it.
+        struct ToolRetry {
+            SessionToolOrder m_order{};
+            TimePoint m_first_deferred{};
+            u32 m_attempts{};
+            bool m_redeferred{};
+        };
+
         Array<SessionDelivery> m_pending{};
-        Array<SessionToolOrder> m_retries{};
+        Array<ToolRetry> m_retries{};
+        Array<SessionToolOrder> m_expired{};
         mutable std::atomic<ECloseState> m_close{ECloseState::idle};
         bool m_active{};
         bool m_controls_open{true};
@@ -175,14 +200,17 @@ export namespace pP::game {
 
         /// Busy tools wait for a scheduled service. They do not make fresh
         /// pending() immediately due; new controls can still wake that service.
-        [[nodiscard]] std::error_code deferTool(SessionToolOrder order);
+        /// The budget stamps the first deferral of an order, so a retried
+        /// gesture cannot postpone its own expiry.
+        [[nodiscard]] std::error_code deferTool(SessionToolOrder order, TimePoint now);
         void requestClose() const noexcept;
         [[nodiscard]] bool takeClose() noexcept;
         [[nodiscard]] bool acknowledgmentsPending() const noexcept;
         [[nodiscard]] Array<SessionDelivery> takeAcknowledgments();
 
         /// Empty batches still acquire exclusivity. Reentry consumes nothing.
-        [[nodiscard]] std::optional<SessionServiceBatch> beginService();
+        /// Retries past the budget are dropped here, not injected.
+        [[nodiscard]] std::optional<SessionServiceBatch> beginService(TimePoint now);
         void endService() noexcept;
 
         /// Cancel queued controls and reject new ones, retaining finite result
@@ -193,5 +221,9 @@ export namespace pP::game {
         [[nodiscard]] bool active() const noexcept;
         [[nodiscard]] bool pending() const noexcept;
         [[nodiscard]] bool retriesPending() const noexcept;
+
+        /// Orders the budget dropped since the last call. The host owns the
+        /// response: one diagnostic and one bounded notice per entry.
+        [[nodiscard]] Array<SessionToolOrder> takeExpiredTools();
     };
 }

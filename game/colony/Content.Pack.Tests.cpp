@@ -391,7 +391,9 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
 
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {catalog->findMaterial("basalt")->m_numeric_id, 299.0f}));
-        PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::device_or_resource_busy);
+        // An occupied destination is permanent: terrain cannot become vacuum by
+        // waiting, so it is never reported as a retainable transient.
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::file_exists);
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {0u, 299.0f}));
 
         const auto actor = registry.create();
