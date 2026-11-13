@@ -16,7 +16,7 @@ namespace pP::colony::test_fixture {
             std::string m_namespace, m_world_key, m_manifest;
             std::shared_ptr<const ContentCatalog> m_catalog;
 
-            AuthoredFixture()
+            explicit AuthoredFixture(const bool with_lamp = false)
                 : m_namespace{"resident_fixture"}, m_world_key{"frontier"},
                   m_manifest{"schema_version = 1\npack_id = '" + m_namespace + "'\n"} {
                 static std::atomic<u32> ordinal{};
@@ -85,6 +85,22 @@ namespace pP::colony::test_fixture {
                 material.m_appearance.m_display_name = "Oxygen";
                 add("oxygen", sim::asset::kMaterialKind, "oxygen.toml", material);
 
+                // Optional build-lamp content: the same authored key both
+                // shipped packs bind, so the lamp tool can resolve it by name.
+                if (with_lamp) {
+                    material.m_element = "solid";
+                    material.m_diggable = true;
+                    material.m_representation = sim::definition::EMaterialRepresentation::terrain;
+                    material.m_appearance.m_display_name = "Industrial amber lamp";
+                    material.m_appearance.m_color_rgba = "FFCA75FF";
+                    material.m_appearance.m_alpha_mode = EMaterialAlphaMode::opaque;
+                    material.m_appearance.m_emissive_r = 1.0;
+                    material.m_appearance.m_emissive_g = 0.59061884;
+                    material.m_appearance.m_emissive_b = 0.17788842;
+                    material.m_appearance.m_emissive_strength = 2.5;
+                    add("showcase_amber_lamp", sim::asset::kMaterialKind, "showcase_amber_lamp.toml", material);
+                }
+
                 sim::asset::FieldDescriptor field;
                 field.m_schema_version = 1u;
                 field.m_definition.m_frequency_per_metre = 0.01;
@@ -145,6 +161,10 @@ namespace pP::colony::test_fixture {
                 world.m_palette.m_materials.m_entries = {
                     {"basalt", {"basalt", 1u}}, {"sandstone", {"sandstone", 2u}}, {"water", {"water", 3u}},
                     {"oxygen", {"oxygen", 4u}}};
+                if (with_lamp) {
+                    world.m_palette.m_materials.m_entries.push_back(
+                        {"showcase_amber_lamp", {"showcase_amber_lamp", 5u}});
+                }
                 world.m_palette.m_fields.m_entries.push_back({"noise", {"noise", 0u}});
                 world.m_palette.m_biomes.m_entries.push_back({"hearth", {"hearth", 0u}});
                 world.m_palette.m_features.m_entries.push_back({"landing", {"landing", 0u}});
@@ -178,10 +198,15 @@ namespace pP::colony::test_fixture {
 
                 m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
 
-                PPR_TEST_ASSERT(m_catalog->materials().size() == 4u);
+                PPR_TEST_ASSERT(m_catalog->materials().size() == (with_lamp ? 5u : 4u));
                 const auto *const oxygen = m_catalog->findMaterial("oxygen");
                 PPR_TEST_ASSERT(oxygen != nullptr);
                 PPR_TEST_ASSERT(oxygen->m_numeric_id == 4u and oxygen->m_phase == EMaterialPhase::gas);
+                if (with_lamp) {
+                    const auto *const lamp = m_catalog->findMaterial("showcase_amber_lamp");
+                    PPR_TEST_ASSERT(lamp != nullptr);
+                    PPR_TEST_ASSERT(lamp->m_numeric_id == 5u and lamp->m_phase == EMaterialPhase::solid);
+                }
 
                 initialized = true;
             }

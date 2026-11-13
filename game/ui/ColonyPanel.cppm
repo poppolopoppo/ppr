@@ -49,6 +49,7 @@ export namespace pP::colony {
         pull,
         spawn,
         destroy,
+        build_lamp,
         none,
     };
 

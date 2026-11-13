@@ -504,20 +504,23 @@ namespace demo {
             Array<sim::GlobalCellPos> m_drag_queue{};
             Array<sim::GlobalCellPos> m_visited{};
             std::optional<sim::GlobalCellPos> m_last_cell{};
-            // Slice 5 footprint anchor: the press snapshot for build_wall and
-            // demolish. The dig accepted queue above is never touched by the
-            // footprint path; footprint orders commit directly at release.
+            // Slice 5 footprint anchor: the press snapshot for build_wall,
+            // build_lamp and demolish. The dig accepted queue above is never
+            // touched by the footprint path; footprint orders commit directly
+            // at release.
             std::optional<sim::GlobalCellPos> m_footprint_anchor{};
         };
 
         ToolGesture m_tool{};
 
-        /// Slice 5 footprint preview: logic fills it while a build_wall or
-        /// demolish press is held (anchor to current, inclusive, normalized
-        /// to min/max, clamped per-axis); the designer lane draws it. The
-        /// existing hover outline stays dig-only. `m_reason` is "" while the
-        /// rect is committable, otherwise it names why release will not
-        /// commit ("press outside the world", "drag outside the world").
+        /// Slice 5 footprint preview: logic fills it while a build_wall,
+        /// build_lamp or demolish press is held (anchor to current, inclusive,
+        /// normalized to min/max, clamped per-axis); the designer lane draws
+        /// it. The existing hover outline stays dig-only. Wall previews snap to
+        /// construction tiles; lamp and demolish previews use raw cells.
+        /// `m_reason` is "" while the rect is committable, otherwise it names
+        /// why release will not commit ("press outside the world", "drag
+        /// outside the world").
         struct BuildPreview {
             bool m_active{false};
             sim::GlobalCellPos m_anchor{};
@@ -1686,10 +1689,11 @@ namespace demo {
                 return;
             }
             try {
-                // Slice 5: build_wall and demolish arm a footprint gesture under
-                // the same ownership gates as dig; the dig body below is
-                // otherwise byte-identical.
+                // Slice 5: build_wall, build_lamp and demolish arm a footprint
+                // gesture under the same ownership gates as dig; the dig body
+                // below is otherwise byte-identical.
                 const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                            m_ui_state.m_tool == colony::EColonyTool::build_lamp or
                                             m_ui_state.m_tool == colony::EColonyTool::demolish;
                 const bool simulation_tool = m_ui_state.m_tool == colony::EColonyTool::push or
                                              m_ui_state.m_tool == colony::EColonyTool::pull or
@@ -1776,6 +1780,7 @@ namespace demo {
                 // visited/queue body below stays byte-identical.
                 if (not m_tool.m_dig_armed) {
                     if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                        m_ui_state.m_tool == colony::EColonyTool::build_lamp or
                         m_ui_state.m_tool == colony::EColonyTool::demolish) {
                         updateBuildPreview_();
                     }
@@ -1902,6 +1907,7 @@ namespace demo {
                 return;
             }
             const bool is_wall = m_ui_state.m_tool == colony::EColonyTool::build_wall;
+            const bool is_lamp = m_ui_state.m_tool == colony::EColonyTool::build_lamp;
             if (m_build_preview.m_reason[0] != '\0' or not m_tool.m_footprint_anchor.has_value()) {
                 postNotice_(
                     m_build_preview.m_reason[0] != '\0' ? m_build_preview.m_reason : "no placement to commit",
@@ -1921,7 +1927,9 @@ namespace demo {
                             .m_width = width,
                             .m_height = height,
                             .m_element = m_driver->boundaryMaterial()},
-                        is_wall ? colony::EColonyTool::build_wall : colony::EColonyTool::demolish});
+                        is_wall   ? colony::EColonyTool::build_wall
+                        : is_lamp ? colony::EColonyTool::build_lamp
+                                  : colony::EColonyTool::demolish});
             } catch (...) {
                 retainInputError_(currentException_());
             }
@@ -1945,6 +1953,7 @@ namespace demo {
             }
 
             const bool is_wall = order.m_tool == colony::EColonyTool::build_wall;
+            const bool is_lamp = order.m_tool == colony::EColonyTool::build_lamp;
             const u32 width = order.m_footprint.m_width, height = order.m_footprint.m_height;
             if (not placed) {
                 const std::error_code error = placed.error();
@@ -1956,7 +1965,11 @@ namespace demo {
                         {"error", error.value()},
                         {"category", error.category().name()},
                     });
-                postDisplayNotice_(is_wall ? "Wall order rejected" : "Demolish order rejected", error);
+                postDisplayNotice_(
+                    is_wall   ? "Wall order rejected"
+                    : is_lamp ? "Lamp order rejected"
+                              : "Demolish order rejected",
+                    error);
                 return;
             }
 
@@ -1964,7 +1977,10 @@ namespace demo {
             // waits on Step/Resume (paused) or progresses on its own.
             // Progress after this is driver-side; this never polls errands.
             try {
-                m_status_scratch = std::string(is_wall ? "Wall " : "Demolish ") +
+                m_status_scratch = std::string(
+                                       is_wall   ? "Wall "
+                                       : is_lamp ? "Lamp "
+                                                 : "Demolish ") +
                                    std::to_string(width) +
                                    "x" +
                                    std::to_string(height) +
@@ -1991,6 +2007,7 @@ namespace demo {
             // cancelToolGesture_() below clears held, so a second release
             // can never commit twice.
             if (m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                m_ui_state.m_tool == colony::EColonyTool::build_lamp or
                 m_ui_state.m_tool == colony::EColonyTool::demolish) {
                 updateBuildPreview_();
                 commitBuildGesture_();
@@ -3506,7 +3523,7 @@ namespace demo {
         }
 
         /// Tool selection keeps the dig invariant (armed == tool == dig).
-        /// Build/demolish arm the footprint gesture the release commits.
+        /// Build/lamp/demolish arm the footprint gesture the release commits.
         /// The Colony management view belongs to Inspect, so any other tool
         /// (or no tool) closes it. Switching tools cancels any held transient
         /// gesture; the accepted dig queue stays queued per the lifetime policy.
@@ -3539,6 +3556,9 @@ namespace demo {
                 case colony::EColonyTool::dig: setStatus_("Dig: click a cell to dig it, hold to drag."); break;
                 case colony::EColonyTool::build_wall:
                     setStatus_("Wall: press and drag a rect, release to order.");
+                    break;
+                case colony::EColonyTool::build_lamp:
+                    setStatus_("Lamp: click or drag a rect, release to order.");
                     break;
                 case colony::EColonyTool::demolish:
                     setStatus_("Demolish: press and drag a rect, release to order.");
@@ -5921,8 +5941,9 @@ namespace demo {
                 [](const auto &value) -> std::string_view {
                     using T = std::remove_cvref_t<decltype(value)>;
                     if constexpr (std::is_same_v<T, game::SessionBuildOrder>) {
-                        return value.m_tool == colony::EColonyTool::build_wall ? "wall order expired"
-                                                                               : "demolish order expired";
+                        return value.m_tool == colony::EColonyTool::build_wall   ? "wall order expired"
+                               : value.m_tool == colony::EColonyTool::build_lamp ? "lamp order expired"
+                                                                                 : "demolish order expired";
                     } else if constexpr (std::is_same_v<T, game::SessionDigOrder>) {
                         return "dig order expired";
                     } else {
@@ -6458,6 +6479,7 @@ namespace demo {
             // click would dig draws (cyan when diggable, agent orange
             // when it would not land); otherwise the pinned cell draws.
             const bool footprint_tool = m_ui_state.m_tool == colony::EColonyTool::build_wall or
+                                        m_ui_state.m_tool == colony::EColonyTool::build_lamp or
                                         m_ui_state.m_tool == colony::EColonyTool::demolish;
             if (m_build_preview.m_active and footprint_tool) {
                 if (m_ui_state.m_pinned.has_value()) {

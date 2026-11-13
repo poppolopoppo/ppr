@@ -268,6 +268,8 @@ namespace pP::game {
         Expected<sim::Entity> placed{std::unexpect, std::make_error_code(std::errc::invalid_argument)};
         if (order.m_tool == colony::EColonyTool::build_wall) {
             placed = driver.buildWall(order.m_footprint);
+        } else if (order.m_tool == colony::EColonyTool::build_lamp) {
+            placed = driver.buildLamp(order.m_footprint);
         } else if (order.m_tool == colony::EColonyTool::demolish) {
             const auto &rect = order.m_footprint;
             placed = driver.demolish(rect.m_min, rect.m_width, rect.m_height);

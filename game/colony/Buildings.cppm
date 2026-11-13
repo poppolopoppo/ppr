@@ -74,6 +74,14 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code validateConstruction(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog);
 
+    /// Validates the destination cells of a raw-cell placement: in-world rect,
+    /// known solid terrain material, no occupied destination (a permanent
+    /// rejection), no actor overlap, and no overlapping live errand. Shares the
+    /// cell contract with `validateConstruction`, which adds the 3x3
+    /// construction-tile alignment; lamps place raw cells and use this directly.
+    [[nodiscard]] std::error_code validatePlacement(
+        const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog);
+
     /// Advances every incomplete errand row-major up to `cell_budget` cells
     /// total: setCell (temperature preserved) + sim markDirty + touched-chunk
     /// record for presentation sync + Pathfinder scratch reset on any write.

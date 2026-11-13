@@ -556,6 +556,16 @@ namespace pP::game::tests::detail::presentation {
         PPR_TEST_ASSERT(wall.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::build_wall));
         PPR_TEST_ASSERT(not frame().m_intent);
 
+        state.m_build_menu_open = true;
+        std::ignore = frame();
+        PPR_TEST_ASSERT(not context->OpenPopupStack.empty());
+        auto *const lamp_menu = context->OpenPopupStack.back().Window;
+        std::ignore = frame();
+        const auto lamp = click(itemCenter(lamp_menu, lamp_menu->GetID("Lamp")));
+        PPR_TEST_ASSERT(lamp.m_intent and lamp.m_intent->m_kind == colony::EColonyIntent::select_tool);
+        PPR_TEST_ASSERT(lamp.m_intent->m_arg == static_cast<u32>(colony::EColonyTool::build_lamp));
+        PPR_TEST_ASSERT(not frame().m_intent);
+
         // The showcase switch returns the same typed intent in both committed
         // states. Pending and ordinary-world presentations cannot invoke it.
         view.m_service_door_available = true;
@@ -584,8 +594,11 @@ namespace pP::game::tests::detail::presentation {
     // simulation brush controls
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights) {
-        for (const ImVec2 extent: {ImVec2{1280.0f, 720.0f}, ImVec2{640.0f, 480.0f}, ImVec2{480.0f, 320.0f}}) {
+    // 640x480 is the supported no-scroll minimum for nine tools. A 320-high
+    // viewport is below that contract: the rail may overflow its content area,
+    // so that extent is deliberately not part of this guarantee.
+    PPR_UNIT_TEST (all_nine_tools_are_reachable_without_scroll_at_supported_heights) {
+        for (const ImVec2 extent: {ImVec2{1280.0f, 720.0f}, ImVec2{640.0f, 480.0f}}) {
             ImGuiContext *const context = ImGui::CreateContext();
             PPR_DEFER {
                 ImGui::DestroyContext(context);
@@ -606,9 +619,14 @@ namespace pP::game::tests::detail::presentation {
 
             // Copy glyph UV identity while the current font bake is valid;
             // ImGui clears current baked-font state at frame completion.
+            constexpr std::array tools{
+                colony::EColonyTool::inspect, colony::EColonyTool::dig, colony::EColonyTool::build_wall,
+                colony::EColonyTool::build_lamp, colony::EColonyTool::demolish, colony::EColonyTool::push,
+                colony::EColonyTool::pull, colony::EColonyTool::spawn, colony::EColonyTool::destroy};
             constexpr std::array glyphs{
-                pP::ui::icons::kInspect, pP::ui::icons::kDig, pP::ui::icons::kCubes, pP::ui::icons::kDemolish,
-                pP::ui::icons::kPush, pP::ui::icons::kPull, pP::ui::icons::kSpawn, pP::ui::icons::kDestroy};
+                pP::ui::icons::kInspect, pP::ui::icons::kDig, pP::ui::icons::kCubes, pP::ui::icons::kCubes,
+                pP::ui::icons::kDemolish, pP::ui::icons::kPush, pP::ui::icons::kPull, pP::ui::icons::kSpawn,
+                pP::ui::icons::kDestroy};
             std::array<ImVec4, glyphs.size()> glyph_uvs{};
             const auto frame = [&]() {
                 ImGui::NewFrame();
@@ -648,21 +666,21 @@ namespace pP::game::tests::detail::presentation {
                 }
             }
 
-            if (glyph_vertices.size() != 8u * 4u) {
+            if (glyph_vertices.size() != tools.size() * 4u) {
                 _.log(
                     std::format(
-                        "Rail glyph vertices: {} (expected 32), viewport {} x {}", glyph_vertices.size(), extent.x,
-                        extent.y)
+                        "Rail glyph vertices: {} (expected {}), viewport {} x {}", glyph_vertices.size(),
+                        tools.size() * 4u, extent.x, extent.y)
                         .c_str());
             }
 
-            PPR_TEST_ASSERT(glyph_vertices.size() == 8u * 4u);
+            PPR_TEST_ASSERT(glyph_vertices.size() == tools.size() * 4u);
 
-            for (u32 index = 0u; index < 8u; ++index) {
+            for (std::size_t index = 0u; index < tools.size(); ++index) {
                 ImVec2 minimum{std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
                 ImVec2 maximum{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
                 for (std::size_t corner = 0u; corner < 4u; ++corner) {
-                    const auto position = glyph_vertices[static_cast<std::size_t>(index) * 4u + corner];
+                    const auto position = glyph_vertices[index * 4u + corner];
                     minimum.x = std::min(minimum.x, position.x);
                     minimum.y = std::min(minimum.y, position.y);
                     maximum.x = std::max(maximum.x, position.x);
@@ -678,7 +696,7 @@ namespace pP::game::tests::detail::presentation {
                 PPR_TEST_ASSERT(maximum.x <= button_minimum.x + edge and maximum.y <= button_minimum.y + edge);
             }
 
-            for (u32 index = 0u; index < 8u; ++index) {
+            for (std::size_t index = 0u; index < tools.size(); ++index) {
                 const ImVec2 position{
                     rail->DC.CursorStartPos.x + edge * 0.5f,
                     rail->DC.CursorStartPos.y + static_cast<float>(index) * (edge + gap) + edge * 0.5f};
@@ -689,15 +707,16 @@ namespace pP::game::tests::detail::presentation {
                 std::ignore = frame();
                 io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
                 const auto selected = frame();
-                const auto expected = index == 1u   ? colony::EColonyIntent::toggle_dig
-                                      : index == 2u ? colony::EColonyIntent::open_build_menu
-                                                    : colony::EColonyIntent::select_tool;
+                const auto expected = tools[index] == colony::EColonyTool::dig ? colony::EColonyIntent::toggle_dig
+                                      : tools[index] == colony::EColonyTool::build_wall
+                                          ? colony::EColonyIntent::open_build_menu
+                                          : colony::EColonyIntent::select_tool;
                 PPR_TEST_ASSERT(selected.m_intent and selected.m_intent->m_kind == expected);
                 if (expected == colony::EColonyIntent::select_tool) {
-                    PPR_TEST_ASSERT(selected.m_intent->m_arg == index);
+                    PPR_TEST_ASSERT(selected.m_intent->m_arg == static_cast<u32>(tools[index]));
                 }
 
-                state.m_tool = static_cast<colony::EColonyTool>(index);
+                state.m_tool = tools[index];
                 std::ignore = frame();
                 PPR_TEST_ASSERT(rail->Size.x == original_size.x and rail->Size.y == original_size.y);
                 PPR_TEST_ASSERT(not rail->ScrollbarY and rail->ScrollMax.y == 0.0f and rail->Scroll.y == 0.0f);
@@ -1673,7 +1692,7 @@ namespace pP::game::tests {
             detail::presentation::colony_and_performance_visibility_are_independent,
             detail::presentation::inspector_is_a_passive_pointer_readout_only_in_inspect_mode,
             detail::presentation::native_menu_click_opens_utilities_and_display_emits_one_intent,
-            detail::presentation::all_eight_tools_are_reachable_without_scroll_at_normal_and_short_heights,
+            detail::presentation::all_nine_tools_are_reachable_without_scroll_at_supported_heights,
             detail::presentation::particle_tool_controls_select_and_edit_independent_settings_while_paused,
             detail::presentation::workspace_map_size_selects_each_extent_clamps_crop_and_disables_during_owned_work,
             detail::presentation::workspace_tile_navigation_commits_old_text_and_numeric_edits,

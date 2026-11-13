@@ -543,6 +543,11 @@ export namespace pP::colony {
         /// progressive errand; cells apply through the `build` step.
         [[nodiscard]] Expected<sim::Entity> buildWall(const Footprint &print);
 
+        /// Validates and records a raw-cell lamp placement: every cell takes
+        /// the world's authored `showcase_amber_lamp` material. Missing lamp
+        /// content is a non-retryable rejection.
+        [[nodiscard]] Expected<sim::Entity> buildLamp(const Footprint &print);
+
         /// Records a rectangular demolition (writes vacuum) as an errand.
         [[nodiscard]] Expected<sim::Entity> demolish(sim::GlobalCellPos min, u32 width, u32 height);
 

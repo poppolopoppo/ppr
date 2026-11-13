@@ -327,6 +327,7 @@ namespace pP::colony {
                 case EColonyTool::pull: return "Pull";
                 case EColonyTool::spawn: return "Spawn";
                 case EColonyTool::destroy: return "Destroy";
+                case EColonyTool::build_lamp: return "Build lamp";
                 case EColonyTool::none: return "No tool";
                 default: return "Inspect";
             }
@@ -345,6 +346,7 @@ namespace pP::colony {
                 case EColonyTool::inspect: return "LMB: click a cell to pin";
                 case EColonyTool::dig: return "LMB: click digs 1 cell, hold drags";
                 case EColonyTool::build_wall: return "LMB: press, drag a rect, release to queue one wall; Esc cancels";
+                case EColonyTool::build_lamp: return "LMB: click or drag a rect to queue lamps; Esc cancels";
                 case EColonyTool::demolish: return "LMB: press, drag a rect, release to demolish it; Esc cancels";
                 default: return "";
             }
@@ -1379,21 +1381,30 @@ namespace pP::colony {
             const auto &io = ImGui::GetIO();
             const float fs = ImGui::GetFontSize();
             constexpr std::array tools{
-                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
-                EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
+                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::build_lamp,
+                EColonyTool::demolish, EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
             constexpr std::array glyphs{
-                ui::icons::kInspect, ui::icons::kDig, ui::icons::kCubes, ui::icons::kDemolish, ui::icons::kPush,
-                ui::icons::kPull, ui::icons::kSpawn, ui::icons::kDestroy};
+                ui::icons::kInspect, ui::icons::kDig, ui::icons::kCubes, ui::icons::kCubes, ui::icons::kDemolish,
+                ui::icons::kPush, ui::icons::kPull, ui::icons::kSpawn, ui::icons::kDestroy};
             const auto &style = ImGui::GetStyle();
             const float tool_count = static_cast<float>(tools.size());
             const float padding = fs * 0.25f;
             const float frame = (padding + style.WindowBorderSize) * 2.0f;
             const float gaps = style.ItemSpacing.y * static_cast<float>(tools.size() - 1u);
             const float available_height = std::max(1.0f, io.DisplaySize.y - top);
+
+            // Keep one item gap of headroom inside the window: ImGui truncates
+            // the requested height to whole pixels and rounds item positions,
+            // so a rect sized to exactly the padded content still reports a
+            // non-zero scroll maximum. The reserve only shrinks buttons on
+            // viewports too short for the normal cap, where every tool must
+            // stay reachable without scrolling anyway.
+            const float reserve = style.ItemSpacing.y + 1.0f;
             const float button_size = std::max(
-                1.0f, std::floor(std::min(fs * 2.25f, (available_height - frame - gaps) / tool_count)));
+                1.0f, std::floor(std::min(fs * 2.25f, (available_height - reserve - frame - gaps) / tool_count)));
             const float width = std::min(button_size + frame, io.DisplaySize.x);
-            const float height = button_size * tool_count + gaps + frame;
+            const float content_height = button_size * tool_count + gaps;
+            const float height = std::floor(content_height + frame + reserve);
 
             ImGui::SetNextWindowPos(ImVec2{0.0f, top}, ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2{width, height}, ImGuiCond_Always);
@@ -1406,6 +1417,7 @@ namespace pP::colony {
                 const auto icon = tool == EColonyTool::inspect      ? ui::icons::kInspectLabel
                                   : tool == EColonyTool::dig        ? ui::icons::kDigLabel
                                   : tool == EColonyTool::build_wall ? ui::icons::kCubesLabel
+                                  : tool == EColonyTool::build_lamp ? ui::icons::kCubesLabel
                                   : tool == EColonyTool::demolish   ? ui::icons::kDemolishLabel
                                   : tool == EColonyTool::push       ? ui::icons::kPushLabel
                                   : tool == EColonyTool::pull       ? ui::icons::kPullLabel
@@ -1474,6 +1486,11 @@ namespace pP::colony {
                 if (ImGui::MenuItem("Wall")) {
                     intent = ColonyIntent{
                         .m_arg = static_cast<u32>(EColonyTool::build_wall), .m_kind = EColonyIntent::select_tool};
+                }
+
+                if (ImGui::MenuItem("Lamp")) {
+                    intent = ColonyIntent{
+                        .m_arg = static_cast<u32>(EColonyTool::build_lamp), .m_kind = EColonyIntent::select_tool};
                 }
 
                 if (ImGui::MenuItem("Demolish")) {
@@ -1545,8 +1562,8 @@ namespace pP::colony {
             ImGui::Spacing();
             ImGui::SeparatorText("Tools");
             const EColonyTool tools[]{
-                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::demolish,
-                EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
+                EColonyTool::inspect, EColonyTool::dig, EColonyTool::build_wall, EColonyTool::build_lamp,
+                EColonyTool::demolish, EColonyTool::push, EColonyTool::pull, EColonyTool::spawn, EColonyTool::destroy};
             if (beginLabelTable("##help_tools", label_width)) {
                 for (const EColonyTool tool: tools) {
                     textRow(toolName(tool), gestureText(tool));
@@ -1557,7 +1574,7 @@ namespace pP::colony {
 
             char help_note[96]{};
             std::snprintf(
-                help_note, sizeof(help_note), "%s opens the build menu (Wall, Demolish).",
+                help_note, sizeof(help_note), "%s opens the build menu (Wall, Lamp, Demolish).",
                 boundKey(shortcuts, EColonyIntent::open_build_menu, 0u));
             ui::helpMarker(help_note);
 

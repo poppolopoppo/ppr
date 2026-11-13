@@ -789,6 +789,35 @@ namespace pP::colony {
         return entity;
     }
 
+    Expected<sim::Entity> ColonyDriver::buildLamp(const Footprint &print) {
+        if (not m_timestep) {
+            return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};
+        }
+
+        // A lamp is content-resolved, not a fixed numeric element: both shipped
+        // packs bind this key, and a missing binding is a permanent rejection
+        // (no retry can create the material).
+        const auto *const prepared = preparedWorld();
+        const auto *const lamp = prepared ? prepared->catalog().findMaterial("showcase_amber_lamp") : nullptr;
+        if (lamp == nullptr) {
+            return std::unexpected{std::make_error_code(std::errc::no_such_file_or_directory)};
+        }
+
+        Footprint resolved = print;
+        resolved.m_element = lamp->m_numeric_id;
+        resolved.m_solid = true;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            ColonyPreparation, validatePlacement(m_colony.grid(), m_registry, resolved, prepared->catalog()));
+
+        const auto entity = recordErrand(m_registry, resolved);
+        if (not entity) {
+            return std::unexpected{entity.error()};
+        }
+
+        m_errands = liveErrandCount(m_registry);
+        return entity;
+    }
+
     Expected<sim::Entity> ColonyDriver::demolish(const sim::GlobalCellPos min, const u32 width, const u32 height) {
         if (not m_timestep) {
             return std::unexpected{std::make_error_code(std::errc::operation_not_permitted)};

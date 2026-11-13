@@ -11,6 +11,7 @@ import game.colony.buildings;
 import game.colony.driver;
 import game.colony.matter;
 import game.colony.panel;
+import game.colony.pathfinding;
 import game.colony.tools;
 import game.ui;
 import engine.app;
@@ -895,6 +896,9 @@ namespace pP::game::tests::detail {
         // it the way advanceErrands does before the single-shot replay.
         auto *const errand = driver.registry().get<colony::BuildErrand>(**placed);
         PPR_TEST_ASSERT(errand != nullptr);
+        const auto *const basalt = authored.m_catalog->findMaterial("basalt");
+        PPR_TEST_ASSERT(basalt != nullptr);
+        PPR_TEST_ASSERT(errand->m_print.m_element == basalt->m_numeric_id);
         for (u32 y = 0u; y < print->m_height; ++y) {
             for (u32 x = 0u; x < print->m_width; ++x) {
                 PPR_TEST_ASSERT(not driver.grid().setCell(
@@ -909,6 +913,98 @@ namespace pP::game::tests::detail {
         PPR_TEST_ASSERT(driver.errandCount() == errands + 1u);
         PPR_TEST_ASSERT(not service.retriesPending());
         PPR_TEST_ASSERT(not service.close());
+    };
+
+    PPR_UNIT_TEST (lamp_build_order_resolves_the_authored_material_and_progresses) {
+        colony::test_fixture::AuthoredFixture authored{true};
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        const auto *const lamp = authored.m_catalog->findMaterial("showcase_amber_lamp");
+        PPR_TEST_ASSERT(lamp != nullptr and lamp->m_phase == colony::EMaterialPhase::solid);
+
+        auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto tile = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(tile.has_value());
+
+        // Keep the actor clear so only the raw-cell destination decides.
+        *pose = {static_cast<float>(tile->m_min.m_x) / 3.0f + 5.0f, pose->m_y};
+
+        // A click-sized lamp is one raw cell, not a metre-aligned tile.
+        const colony::Footprint print{.m_min = tile->m_min, .m_width = 1u, .m_height = 1u};
+        const SessionBuildOrder order{world, print, colony::EColonyTool::build_lamp};
+        const auto errands = driver.errandCount();
+        const auto placed = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(placed and placed->has_value());
+        PPR_TEST_ASSERT(driver.errandCount() == errands + 1u);
+
+        auto *const errand = driver.registry().get<colony::BuildErrand>(**placed);
+        PPR_TEST_ASSERT(errand != nullptr);
+        PPR_TEST_ASSERT(errand->m_print.m_solid and errand->m_print.m_element == lamp->m_numeric_id);
+        PPR_TEST_ASSERT(errand->m_total == 1u and errand->m_progress == 0u);
+
+        // The lamp uses the ordinary errand path: one build step writes it.
+        colony::Pathfinder finder{};
+        Array<sim::ChunkPos> touched{};
+        PPR_TEST_ASSERT(not colony::advanceErrands(
+            driver.grid(), driver.registry(), finder, touched, colony::kErrandCellsPerTick, authored.m_catalog.get()));
+        PPR_TEST_ASSERT(errand->m_progress == errand->m_total);
+        const auto cell = driver.grid().getCell(print.m_min);
+        PPR_TEST_ASSERT(cell and cell->m_element == lamp->m_numeric_id);
+    };
+
+    PPR_UNIT_TEST (occupied_lamp_placement_is_a_permanent_rejection) {
+        colony::test_fixture::AuthoredFixture authored{true};
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+        const u64 world = driver.worldGeneration();
+
+        const auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto tile = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(tile.has_value());
+
+        // Completed terrain in the lamp's only destination can never become
+        // vacuum by waiting: a permanent rejection, never a retry.
+        PPR_TEST_ASSERT(not driver.grid().setCell(tile->m_min, {driver.boundaryMaterial(), 300.0f}));
+
+        const colony::Footprint print{.m_min = tile->m_min, .m_width = 1u, .m_height = 1u};
+        const SessionBuildOrder order{world, print, colony::EColonyTool::build_lamp};
+        const auto errands = driver.errandCount();
+        const auto placed = applySessionBuildOrder(driver, order, world);
+        PPR_TEST_ASSERT(not placed);
+        PPR_TEST_ASSERT(placed.error() != std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(placed.error() == std::errc::file_exists);
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
+    };
+
+    PPR_UNIT_TEST (lamp_without_authored_content_is_a_non_retryable_rejection) {
+        colony::test_fixture::AuthoredFixture authored;
+        colony::ColonyDriver driver;
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not driver.shutdown());
+        };
+        PPR_TEST_ASSERT(not authored.initialize(driver, {.m_agent_count = 1u, .m_world_generation = 20u}));
+
+        const auto *const pose = driver.registry().get<sim::BodyState>(soleAgent(driver));
+        PPR_TEST_ASSERT(pose != nullptr);
+        const auto tile = findVacuumFootprint(driver.grid(), pose->m_x, pose->m_y, 3u);
+        PPR_TEST_ASSERT(tile.has_value());
+        const auto errands = driver.errandCount();
+
+        const auto placed = driver.buildLamp({.m_min = tile->m_min, .m_width = 1u, .m_height = 1u});
+        PPR_TEST_ASSERT(not placed);
+        PPR_TEST_ASSERT(placed.error() != std::errc::device_or_resource_busy);
+        PPR_TEST_ASSERT(placed.error() == std::errc::no_such_file_or_directory);
+        PPR_TEST_ASSERT(driver.errandCount() == errands);
     };
 
     PPR_UNIT_TEST (stuck_transient_busy_is_dropped_after_budget) {

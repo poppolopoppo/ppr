@@ -157,8 +157,17 @@ namespace pP::colony {
             {print.m_min.m_x / 3u, print.m_min.m_y / 3u}, {print.m_width / 3u, print.m_height / 3u}, grid.edge());
         PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, bounds);
 
-        for (u32 y = bounds->m_begin.m_y; y < bounds->m_end.m_y; ++y) {
-            for (u32 x = bounds->m_begin.m_x; x < bounds->m_end.m_x; ++x) {
+        return validatePlacement(grid, registry, print, catalog);
+    }
+
+    std::error_code validatePlacement(
+        const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog) {
+        PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(print, &catalog, grid.edge()));
+
+        const u32 far_x = print.m_min.m_x + print.m_width;
+        const u32 far_y = print.m_min.m_y + print.m_height;
+        for (u32 y = print.m_min.m_y; y < far_y; ++y) {
+            for (u32 x = print.m_min.m_x; x < far_x; ++x) {
                 const auto cell = grid.getCell({x, y});
                 PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, cell);
                 if (cell->m_element != kElementVacuum) {
