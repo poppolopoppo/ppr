@@ -168,6 +168,20 @@ export namespace pP {
     inline constexpr float kGridParticleFalloffInnerFraction{2.0f / 3.0f};
     inline constexpr float kGridParticleDiscardThreshold{0.5f};
 
+    // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
+    // alpha = 0.5 contour radius, in rho units, is
+    // k(theta) = k0 * (1 + b*(cos^2(theta) - 1/2)) measured from the surface
+    // tangent read from the committed ownership mask. k0 = 5/6 is the resting 0.5
+    // contour, and b = 0.30 keeps k inside [0.708, 0.958] - both ends inside
+    // [2/3, 1] - so only the band is reshaped: plateau, support radius R, interior
+    // coverage, the diagonal seam and the 3.0625 r cull are untouched for any
+    // orientation. Fixed source values; no tuning UI and no second strength knob.
+    inline constexpr float kGridParticleTangentContourScale{5.0f / 6.0f};
+    inline constexpr float kGridParticleTangentContourBias{0.30f};
+    // A gradient magnitude at or below this is "no surface": a zero test for the
+    // one-bit ownership mask, not a smoothing knob.
+    inline constexpr float kGridParticleTangentGradientEpsilon{1.0e-4f};
+
     // Solid: a rounded square inscribed in the R circle. It is the Minkowski sum
     // of a square of half-extent a-c and a disk of radius c, so its support is
     // S = sqrt(2)*a - c*(sqrt(2)-1). With c = 0.25 a, S = 1.3106 a, giving
@@ -229,6 +243,17 @@ export namespace pP {
     static_assert(
         2.5066f > kGridParticleSupportScale,
         "the rejected 0.5-cell half-extent square (2.507 r) is larger than the adopted support; keep it rejected");
+
+    // The tangent contour never leaves the legal band: its minor radius cannot cut
+    // into the plateau and its major radius cannot exceed the support circle, so it
+    // can only reshape the band between them.
+    static_assert(
+        kGridParticleTangentContourScale * (1.0f - 0.5f * kGridParticleTangentContourBias) >=
+            kGridParticleFalloffInnerFraction,
+        "the tangent contour's minor radius must not cut the plateau");
+    static_assert(
+        kGridParticleTangentContourScale * (1.0f + 0.5f * kGridParticleTangentContourBias) <= 1.0f,
+        "the tangent contour's major radius must stay inside the support radius R");
 
     // ------------------------------------------------------------------
     // particle publication state

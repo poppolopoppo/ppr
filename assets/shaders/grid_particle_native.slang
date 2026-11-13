@@ -71,6 +71,21 @@ static const float kParticleSupportScale = 2.0;
 static const float kParticleCullRadiusScale = 3.0625;
 static const float kParticleStretchCap = 1.5;
 static const float kParticleMotionReference = 0.06;
+// Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
+// alpha = 0.5 contour radius, in rho = |p| / R units, is
+// k(theta) = kParticleTangentContourScale * (1 + kParticleTangentContourBias *
+// (cos^2(theta) - 1/2)) with theta measured from the surface tangent read from
+// the committed ownership mask, so the silhouette is longer along the surface and
+// shorter across it. k0 = 5/6 is where the resting C1 falloff already crosses 0.5
+// and b = 0.30 keeps k inside [0.708, 0.958], both ends inside [2/3, 1]: the
+// plateau, the support radius R, the interior coverage and the diagonal seam are
+// untouched for any orientation, so a wrong tangent costs appearance only and
+// the 3.0625 r cull cannot be exceeded. Fixed source values, no tuning knob.
+static const float kParticleTangentContourScale = 5.0/6.0;
+static const float kParticleTangentContourBias = 0.30;
+// A gradient magnitude at or below this is "no surface": a zero test for the
+// one-bit ownership mask, not a smoothing knob.
+static const float kParticleTangentGradientEpsilon = 1.0e-4;
 static const float kParticleRoundedSquareSupport = 1.3106;
 static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kParticleRoundedSquareSupport;
 static const float kParticleSolidCornerFraction = 0.25;

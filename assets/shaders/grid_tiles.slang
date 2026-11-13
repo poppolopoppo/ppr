@@ -1200,6 +1200,73 @@ GridReactiveOutput fragmentGridReactive(GridVertexOutput input, uint sample_inde
     return output;
 }
 
+// ------------------------------------------------------------------
+// tangent-aligned contour cue from the committed ownership field
+// ------------------------------------------------------------------
+// Task 11 increment 1: a coarse surface tangent from the particle-ownership mask
+// already bound for occlusion. The field is one bit per native cell, so the
+// tangent is derived from a 3x3 stencil around the particle centre, bilinearly
+// reconstructed so a particle's sub-cell offset moves the direction continuously
+// rather than snapping it to one of eight cell directions. No new buffer, no
+// gather over particles and no index: the same publication the occlusion rule
+// already reads is the only input.
+float particleOwnershipTap(int2 cell) {
+    if (any(cell<int2(0)) || any(cell>=int2(int(kResolvedEdge)))) return 0.0;
+    return particleOwnsCell(uint(cell.y)*kResolvedEdge+uint(cell.x),g_best_row) ? 1.0 : 0.0;
+}
+
+// One row of four consecutive cells of the stencil window.
+float4 particleOwnershipRow(int2 cell,int offset_y) {
+    return float4(particleOwnershipTap(cell+int2(-1,offset_y)),particleOwnershipTap(cell+int2(0,offset_y)),
+        particleOwnershipTap(cell+int2(1,offset_y)),particleOwnershipTap(cell+int2(2,offset_y)));
+}
+
+// The tangent of the surface at `cell_position`, in the quad's (screen-axis)
+// frame, or (0,0) when the field is flat around the sample. The bilinear weights
+// below are the Sobel difference on one axis and the 1-2-1 smoothing on the
+// other, applied to the bilinearly reconstructed field: separable, so the 3x3
+// stencil costs one 4x4 window. The mask rises into the body, so the outward
+// normal is minus the gradient and the tangent is its perpendicular.
+bool particleSurfaceTangent(float2 cell_position,float3 right,float3 up,out float2 tangent) {
+    tangent=float2(0.0,0.0);
+
+    float2 p=cell_position-0.5;
+    float2 base=floor(p);
+    float2 fraction=p-base;
+    int2 cell=int2(base);
+    float bx0=1.0-fraction.x;
+    float bx1=fraction.x;
+    float by0=1.0-fraction.y;
+    float by1=fraction.y;
+    float4 difference_x=float4(-bx0,-bx1,bx0,bx1);
+    float4 smooth_x=float4(bx0,2.0*bx0+bx1,bx0+2.0*bx1,bx1);
+    float4 difference_y=float4(-by0,-by1,by0,by1);
+    float4 smooth_y=float4(by0,2.0*by0+by1,by0+2.0*by1,by1);
+
+    float4 row_0=particleOwnershipRow(cell,-1);
+    float4 row_1=particleOwnershipRow(cell,0);
+    float4 row_2=particleOwnershipRow(cell,1);
+    float4 row_3=particleOwnershipRow(cell,2);
+    float gradient_x=dot(row_0,difference_x)*smooth_y.x+dot(row_1,difference_x)*smooth_y.y+
+        dot(row_2,difference_x)*smooth_y.z+dot(row_3,difference_x)*smooth_y.w;
+    float gradient_y=dot(row_0,smooth_x)*difference_y.x+dot(row_1,smooth_x)*difference_y.y+
+        dot(row_2,smooth_x)*difference_y.z+dot(row_3,smooth_x)*difference_y.w;
+
+    if (gradient_x*gradient_x+gradient_y*gradient_y<=
+        kParticleTangentGradientEpsilon*kParticleTangentGradientEpsilon) return false;
+
+    // The field lives on the world plane, so the gradient is projected into the
+    // quad's frame exactly as the flow direction is.
+    float3 gradient=float3(gradient_x,gradient_y,0.0);
+    float2 screen_gradient=float2(dot(gradient,right),dot(gradient,up));
+    float screen_length=length(screen_gradient);
+    if (screen_length<=kParticleTangentGradientEpsilon) return false;
+
+    float2 normal=-screen_gradient/screen_length;
+    tangent=float2(-normal.y,normal.x);
+    return true;
+}
+
 struct ParticleVertexOutput {
     float4 position:SV_Position;
     float2 fine_position:TEXCOORD0;
@@ -1220,6 +1287,11 @@ struct ParticleVertexOutput {
     // fragment evaluates today's local coordinates unchanged.
     nointerpolation float2 flow:TEXCOORD5;
     nointerpolation float flow_stretch:TEXCOORD6;
+    // Tangent cue of the optional Task 11 contour (increment 1): the unit surface
+    // direction read from the committed ownership mask at the particle centre, in
+    // the same frame, or (0,0) when the field is flat there. Uniform per
+    // instance, and no per-instance storage was added for it.
+    nointerpolation float2 surface_tangent:TEXCOORD7;
 };
 
 ParticleVertexOutput particleVertex(uint vertex,uint instance) {
@@ -1273,6 +1345,19 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
         }
     }
 
+    // Tangent cue (Task 11 increment 1): one tangent per instance, read from the
+    // committed ownership mask at the particle centre. It only reshapes the outer
+    // band of the fragment's falloff, so it needs no per-fragment field read. The
+    // ownership bit authorizes reading the 1-Mi-cell grid and is never set while
+    // the zero fallback is bound; gas keeps its mask texture and no contour cue.
+    float2 surface_tangent=float2(0.0,0.0);
+    if (draw_class!=kParticleDrawGas &&
+        (g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)!=0u) {
+        float2 centre_cell=particle.m_position/g_grid_frame.m_cell_size_m;
+        float2 tangent=float2(0.0,0.0);
+        if (particleSurfaceTangent(centre_cell,right,up,tangent)) surface_tangent=tangent;
+    }
+
     // Gas keeps the shared mask texture and its two-texel transparent border; the
     // restored classes use the analytic shapes. Both shapes are inscribed in the
     // same support circle R = 2.0 r, so one quad encloses either and the
@@ -1296,6 +1381,7 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     output.canonical=material|(particle.m_material_flags_temperature&0xffff0000u);
     output.flow=flow;
     output.flow_stretch=stretch;
+    output.surface_tangent=surface_tangent;
     return output;
 }
 
@@ -1491,6 +1577,30 @@ float2 particleFlowLocal(float2 local,float2 flow,float stretch) {
     return local-(1.0-1.0/stretch)*dot(local,flow)*flow;
 }
 
+// Tangent-aligned contour of the optional Task 11 cue, in the same r units and
+// the same frame as particleFalloff. Only the band between the plateau and the
+// support is warped: the alpha = 0.5 contour becomes the angular edge
+// k(theta) = k0*(1 + b*(cos^2(theta) - 1/2)) with theta measured from the surface
+// tangent, so the silhouette is longer along the surface and shorter across it.
+// The warp is a Mobius map of the band coordinate with fixed endpoints and a
+// 0.5 crossing at k(theta), and the same C1 smoothstep polynomial is evaluated on
+// it, so both joins keep zero slope, the plateau keeps alpha = 1 exactly and the
+// support keeps alpha = 0 exactly. No support or cull change can result.
+float particleTangentFalloff(float2 local,float2 tangent) {
+    float length_local=length(local);
+    float2 direction=local/max(length_local,1.0e-12);
+    float cosine=dot(direction,tangent);
+    float contour=kParticleTangentContourScale*(1.0+kParticleTangentContourBias*(cosine*cosine-0.5));
+
+    float rho=length_local/kParticleSupportScale;
+    float u=(rho-kParticleFalloffInnerFraction)/(1.0-kParticleFalloffInnerFraction);
+    float u_contour=(contour-kParticleFalloffInnerFraction)/(1.0-kParticleFalloffInnerFraction);
+    float warp=2.0-1.0/u_contour;
+    float w=u*(1.0-warp)/(1.0-warp*u);
+    float t=1.0-w;
+    return t*t*(3.0-2.0*t);
+}
+
 // Pure full-cell occlusion decision. A particle is hidden by its destination
 // native cell only when the cell is owned by opaque terrain: it carries a
 // material, the committed projection recorded no particle winner for it, the
@@ -1539,6 +1649,13 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // square bit for bit.
     local=particleFlowLocal(local,input.flow,input.flow_stretch);
     float falloff=particleFalloff(local);
+    // The optional tangent cue is an additional outer-edge term, not a
+    // replacement for the flow stretch above: Task 4 reshapes the local metric
+    // and this warps only the band radius, so both compose on one silhouette.
+    // It is applied only inside the open band (0 < alpha < 1), which keeps the
+    // plateau, the support and a flat field byte-identical to today.
+    if (falloff>0.0 && falloff<1.0 && dot(input.surface_tangent,input.surface_tangent)>0.5)
+        falloff=particleTangentFalloff(local,input.surface_tangent);
     // A blended class shapes its edge with alpha; a non-blending class cannot,
     // so its silhouette is the alpha = 0.5 contour (the R_s circle, plan §3).
     // Solids also carry their rounded-square mask.
