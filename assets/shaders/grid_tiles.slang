@@ -1256,11 +1256,12 @@ bool particleCellMotion(int2 cell,out float2 motion) {
 
 // Bilinear (dual-lattice) sample of the per-cell winner-motion field at
 // `cell_position`, in native cells per solver step. The weights are the four
-// products of the two axis fractions, renormalised over the taps that have a
-// winner: a free-surface sample averages the winners that exist instead of fading
-// toward zero, and both the weights and their sum vary continuously with the
-// sub-cell offset, so the result stays C0. `row_motion` is the entry's own row
-// motion, used only when no tap has a winner.
+// products of the two axis fractions. Above total weight W = 1/4 the sample is
+// the weighted mean renormalised over the taps that have a winner: a free-surface
+// sample averages the winners that exist instead of fading toward zero, and both
+// the weights and their sum vary continuously with the sub-cell offset. Below
+// W = 1/4 the sampler blends continuously toward `row_motion` (see the branch at
+// the end), so the W -> 0 limit no longer depends on the approach direction.
 float2 particleFlowMotion(float2 cell_position,float2 row_motion) {
     float2 p=cell_position-0.5;
     float2 base=floor(p);
@@ -1273,20 +1274,21 @@ float2 particleFlowMotion(float2 cell_position,float2 row_motion) {
 
     float2 sum=float2(0.0,0.0);
     float weight=0.0;
-    bool present=false;
     float2 value;
-    if (particleCellMotion(cell,value)) {sum+=w_00*value;weight+=w_00;present=true;}
-    if (particleCellMotion(cell+int2(1,0),value)) {sum+=w_10*value;weight+=w_10;present=true;}
-    if (particleCellMotion(cell+int2(0,1),value)) {sum+=w_01*value;weight+=w_01;present=true;}
-    if (particleCellMotion(cell+int2(1,1),value)) {sum+=w_11*value;weight+=w_11;present=true;}
+    if (particleCellMotion(cell,value)) {sum+=w_00*value;weight+=w_00;}
+    if (particleCellMotion(cell+int2(1,0),value)) {sum+=w_10*value;weight+=w_10;}
+    if (particleCellMotion(cell+int2(0,1),value)) {sum+=w_01*value;weight+=w_01;}
+    if (particleCellMotion(cell+int2(1,1),value)) {sum+=w_11*value;weight+=w_11;}
 
-    // No committed winner in any of the four cells: an isolated particle, or one
-    // whose own cell lost the distance tie. Keep the row's own motion, which is
-    // exactly what this cue read before the filter existed.
-    if (!present) return row_motion;
-    // Present but weightless taps are only reachable at an exact lattice point,
-    // where the base cell is empty and the other three enter with weight 0.
-    if (!(weight>0.0)) return row_motion;
+    // Continuous extension below W = 1/4. The weighted mean above it is the
+    // previous behaviour; at W = 1/4 both branches evaluate to exactly 4S; and at
+    // W = 0 the first returns the row's own motion, so every approach to an empty
+    // window has the same limit instead of the path-dependent fallback. An
+    // admitted particle normally has W >= 1/4 from its own native cell: that cell
+    // is a committed winner, and its bilinear weight at the particle centre is at
+    // least 1/4. This is therefore domain hardening and removal of the
+    // path-dependent limit, not the temporal rotation fix.
+    if (weight<0.25) return 4.0*sum+(1.0-4.0*weight)*row_motion;
     return sum/weight;
 }
 
@@ -1316,13 +1318,18 @@ float4 particleFillRow(int2 cell,int offset_y) {
 }
 
 // The tangent of the surface at `cell_position`, in the quad's (screen-axis)
-// frame, or (0,0) when the field is flat around the sample. The bilinear weights
-// below are the Sobel difference on one axis and the 1-2-1 smoothing on the
-// other, applied to the bilinearly reconstructed field: separable, so the 3x3
-// stencil costs one 4x4 window. The fill rises into the body, so the outward
-// normal is minus the gradient and the tangent is its perpendicular.
-bool particleSurfaceTangent(float2 cell_position,float3 right,float3 up,out float2 tangent) {
+// frame, or (0,0) when the field is flat around the sample. `strength` is the
+// energy gate on the same unnormalised gradient: smoothstep(1, 3, |grad|), i.e.
+// 0 for the ambiguous fields that flip and 1 for a genuine full-fill surface.
+// The bilinear weights below are the Sobel difference on one axis and the 1-2-1
+// smoothing on the other, applied to the bilinearly reconstructed field:
+// separable, so the 3x3 stencil costs one 4x4 window. The fill rises into the
+// body, so the outward normal is minus the gradient and the tangent is its
+// perpendicular.
+bool particleSurfaceTangent(float2 cell_position,float3 right,float3 up,out float2 tangent,
+    out float strength) {
     tangent=float2(0.0,0.0);
+    strength=0.0;
 
     float2 p=cell_position-0.5;
     float2 base=floor(p);
@@ -1346,15 +1353,19 @@ bool particleSurfaceTangent(float2 cell_position,float3 right,float3 up,out floa
     float gradient_y=dot(row_0,smooth_x)*difference_y.x+dot(row_1,smooth_x)*difference_y.y+
         dot(row_2,smooth_x)*difference_y.z+dot(row_3,smooth_x)*difference_y.w;
 
-    if (gradient_x*gradient_x+gradient_y*gradient_y<=
-        kParticleTangentGradientEpsilon*kParticleTangentGradientEpsilon) return false;
+    float magnitude=length(float2(gradient_x,gradient_y));
+    if (magnitude<=kParticleTangentGradientEpsilon) return false;
+    strength=smoothstep(kParticleTangentConfidenceLow,kParticleTangentConfidenceHigh,magnitude);
 
     // The field lives on the world plane, so the gradient is projected into the
     // quad's frame exactly as the flow direction is.
     float3 gradient=float3(gradient_x,gradient_y,0.0);
     float2 screen_gradient=float2(dot(gradient,right),dot(gradient,up));
     float screen_length=length(screen_gradient);
-    if (screen_length<=kParticleTangentGradientEpsilon) return false;
+    if (screen_length<=kParticleTangentGradientEpsilon) {
+        strength=0.0;
+        return false;
+    }
 
     float2 normal=-screen_gradient/screen_length;
     tangent=float2(-normal.y,normal.x);
@@ -1383,9 +1394,13 @@ struct ParticleVertexOutput {
     nointerpolation float flow_stretch:TEXCOORD6;
     // Tangent cue of the optional Task 11 contour (increment 1): the unit surface
     // direction read from the committed per-cell fill field at the particle
-    // centre, in the same frame, or (0,0) when the field is flat there. Uniform
-    // per instance, and no per-instance storage was added for it.
+    // centre, in the same frame, or (0,0) when the field is flat there.
+    // `surface_strength` is the energy gate on that field: 1 for a genuine
+    // surface, 0 for an ambiguous one, so the contour falls back to the round k0.
+    // Both are uniform per instance, and no per-instance storage was added for
+    // either.
     nointerpolation float2 surface_tangent:TEXCOORD7;
+    nointerpolation float surface_strength:TEXCOORD8;
 };
 
 ParticleVertexOutput particleVertex(uint vertex,uint instance) {
@@ -1462,10 +1477,11 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     // set while the zero fallback is bound; gas keeps its mask texture and no
     // contour cue.
     float2 surface_tangent=float2(0.0,0.0);
+    float surface_strength=0.0;
     if (draw_class!=kParticleDrawGas &&
         (g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)!=0u) {
         float2 tangent=float2(0.0,0.0);
-        if (particleSurfaceTangent(centre_cell,right,up,tangent)) surface_tangent=tangent;
+        if (particleSurfaceTangent(centre_cell,right,up,tangent,surface_strength)) surface_tangent=tangent;
     }
 
     // Gas keeps the shared mask texture and its two-texel transparent border; the
@@ -1492,6 +1508,7 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     output.flow=flow;
     output.flow_stretch=stretch;
     output.surface_tangent=surface_tangent;
+    output.surface_strength=surface_strength;
     return output;
 }
 
@@ -1674,7 +1691,9 @@ float particleSolidDistance(float2 local) {
 // multiplies it by the analytic SDF rim below, so the silhouette is the coverage
 // itself rather than a cut at alpha = 0.5; its resting half-coverage contour is
 // rho = 5/6, and the optional tangent cue below moves that contour per angle
-// inside [2/3, 1] without touching either join.
+// inside [2/3, 1] without touching either join. The radial plateau (rho <= 2/3)
+// is exactly 1 as a falloff; final solid coverage multiplies the rim and the
+// terrain complement, so it is exactly 1 only where those leave it untouched.
 float particleFalloff(float2 local) {
     float rho=length(local)/kParticleSupportScale;
     float t=saturate((1.0-rho)/(1.0-kParticleFalloffInnerFraction));
@@ -1712,13 +1731,15 @@ float2 particleFlowLocal(float2 local,float2 flow,float stretch) {
 // one hair above the plateau and to the support, so the warp can never divide by
 // a zero band offset (k_min > 2/3, the finite-band requirement) and no orientation
 // can place the contour at or beyond R (k_max <= 1, the support requirement).
-float particleTangentFalloff(float2 local,float2 tangent) {
+float particleTangentFalloff(float2 local,float2 tangent,float strength) {
     // Compile-time endpoint guard, so a future constant edit fails the build
     // instead of producing a NaN alpha at the normal direction. This Slang
     // version rejects the declaration form of static_assert at module scope
     // (E20001), so the assertion sits at the statement scope of its consumer; it
     // is still evaluated at compile time (a failing b = 0.40 fails shader
     // compilation). The CPU twin carries the same pair in App.Renderer.GridPass.cppm.
+    // The effective bias is b = kParticleTangentContourBias * strength with
+    // 0 <= strength <= 1, so proving the maximum constant bounds every bias used.
     static_assert(kParticleTangentContourScale*(1.0-0.5*kParticleTangentContourBias)>
         kParticleFalloffInnerFraction,
         "the contour's minor radius must stay above the plateau: the warp divides by the band offset");
@@ -1732,7 +1753,10 @@ float particleTangentFalloff(float2 local,float2 tangent) {
 
     float2 direction=local/length_local;
     float cosine=dot(direction,tangent);
-    float contour=kParticleTangentContourScale*(1.0+kParticleTangentContourBias*(cosine*cosine-0.5));
+    // b_eff = 0 gives k(theta) = k0 exactly: the resting circular contour, which
+    // is the intended behaviour for a field the energy gate does not trust.
+    float effective_bias=kParticleTangentContourBias*strength;
+    float contour=kParticleTangentContourScale*(1.0+effective_bias*(cosine*cosine-0.5));
     contour=clamp(contour,kParticleTangentContourMinimum,1.0);
 
     float u=(rho-kParticleFalloffInnerFraction)/(1.0-kParticleFalloffInnerFraction);
@@ -1795,16 +1819,21 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // replacement for the flow stretch above: Task 4 reshapes the local metric
     // and this warps only the band radius, so both compose on one silhouette.
     // It is applied only inside the open band (0 < alpha < 1), which keeps the
-    // plateau, the support and a flat field byte-identical to today.
+    // radial falloff plateau, the support and a flat field byte-identical to
+    // today; input.surface_strength (the energy gate) scales the warp toward the
+    // round k0 contour when the field is too weak to trust.
     if (falloff>0.0 && falloff<1.0 && dot(input.surface_tangent,input.surface_tangent)>0.5)
-        falloff=particleTangentFalloff(local,input.surface_tangent);
+        falloff=particleTangentFalloff(local,input.surface_tangent,input.surface_strength);
     // One coverage term now carries both restored classes: the C1 falloff, the
     // solid's analytic rounded-square rim, and partial terrain coverage. Both
     // classes composite it premultiplied; they differ only in depth ownership
     // (the opaque class writes depth) and in whether authored opacity
     // participates (the optical class) or not (the opaque class). The old hard
     // cuts at alpha = 0.5 and at SDF <= 0 are gone: a solid's flats and corners
-    // both fade over about one pixel through the same pixel-footprint ramp.
+    // both fade over about one pixel through the same pixel-footprint ramp. This
+    // is also the qualification on the "plateau is opaque" claim: final coverage
+    // is exactly 1 only where the rim and the terrain complement leave the radial
+    // plateau untouched (fine zoom, no terrain under the sample).
     float shape_distance=particleSolidDistance(local);
     // Pixel footprint in the same local (r) units: the mean of the two raster
     // axis lengths. It is derived from the derivatives themselves, never a
@@ -1852,7 +1881,8 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
         // refracts the backdrop copy and applies Beer-Lambert absorption. The
         // optical class premultiplies its authored opacity by the edge
         // coverage; the opaque class ignores authored opacity and premultiplies
-        // only the coverage, so its interior stays fully opaque.
+        // only the coverage, so its interior is fully opaque where the rim and
+        // terrain complement leave coverage at 1.
         float4 surface=materialSurface(material,input.fine_position,world_gradient_x,world_gradient_y,
             input.position.xy,float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,
             input.fine_position,false,blend_class);
@@ -1867,7 +1897,8 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // world with no published fine CH shades from an explicit zero field. The
     // optical class premultiplies its authored opacity by the edge coverage;
     // the opaque class ignores authored opacity and premultiplies only the
-    // coverage, so its interior stays fully opaque.
+    // coverage, so its interior is fully opaque where the rim and terrain
+    // complement leave coverage at 1.
     CH coefficients={};
     if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(input.fine_position);
     float4 surface=categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,

@@ -42,8 +42,12 @@ struct ParticleNativeCell { uint x,y,status; };
 // premultiplied by both restored classes, so the shape is unchanged and only
 // its rasterisation is analytically covered; the resting half-coverage contour
 // is rho = 5/6, and the optional tangent cue moves that contour per angle inside
-// [2/3, 1] only. The seeded interior is saturated because every lattice point
-// sits inside R_in.
+// [2/3, 1] only. The seeded interior's radial falloff is saturated because every
+// lattice point sits inside R_in; the *final* solid coverage additionally
+// multiplies the analytic SDF rim and the terrain complement, so it is exactly 1
+// only where those leave the plateau untouched (span <= ~128 for a typical
+// radius; at span220 the rim reaches into the plateau edge and that is the
+// intended AA, not a defect).
 //
 // Solid: a rounded square inscribed in the same R circle. It is the Minkowski
 // sum of a square of half-extent a-c and a disk of radius c, so its support
@@ -74,27 +78,29 @@ struct ParticleNativeCell { uint x,y,status; };
 // The reference magnitude is a fixed, illustrative curve shape in native cells
 // per solver step (0.06, so ordinary flow saturates the cap), not a physical
 // speed: the row's motion is per-step and this path introduces no dt. Since
-// k >= 1 the stretched shape contains the un-stretched one, so the seeded
-// interior of plan §5.2 stays saturated and the cross-flow (diagonal) support
-// never shrinks.
+// k >= 1 the stretched shape contains the un-stretched one, so the radial
+// falloff of the seeded interior (plan §5.2) stays saturated and the cross-flow
+// (diagonal) support never shrinks.
 static const float kParticleSupportScale = 2.0;
 static const float kParticleCullRadiusScale = 3.0625;
 static const float kParticleStretchCap = 1.5;
 static const float kParticleMotionReference = 0.06;
-// The band between the saturated plateau and the support: coverage is exactly 1
-// for rho <= 2/3 and falls to 0 at rho = 1. Both contour cues below are legal
-// only because they move the 0.5 coverage crossing inside this band and touch
-// neither join.
+// The band between the saturated plateau and the support: the radial falloff is
+// exactly 1 for rho <= 2/3 and falls to 0 at rho = 1. Both contour cues below
+// are legal only because they move the 0.5 coverage crossing inside this band
+// and touch neither join.
 static const float kParticleFalloffInnerFraction = 2.0/3.0;
 // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
 // half-coverage contour radius, in rho = |p| / R units, is
-// k(theta) = kParticleTangentContourScale * (1 + kParticleTangentContourBias *
+// k(theta) = kParticleTangentContourScale * (1 + b_eff *
 // (cos^2(theta) - 1/2)) with theta measured from the surface tangent read from
-// the committed per-cell Q16 fill field, so the premultiplied silhouette is
-// longer along the surface and shorter across it. k0 = 5/6 is where the resting
-// C1 falloff already reaches 0.5 coverage. b = 0.3999 is the strongest
-// four-decimal bias whose two endpoints stay strictly inside the legal band in
-// binary32:
+// the committed per-cell Q16 fill field. b_eff = b * strength, where strength is
+// the smoothstep energy gate above, so an ambiguous field renders round (b_eff =
+// 0 and k(theta) = k0 exactly) while a genuine surface keeps the full bias. The
+// premultiplied silhouette is longer along the surface and shorter across it.
+// k0 = 5/6 is where the resting C1 falloff already reaches 0.5 coverage. b =
+// 0.3999 is the strongest four-decimal bias whose two endpoints stay strictly
+// inside the legal band in binary32, and b_eff never exceeds it:
 //   k_max = k0 * (1 + b/2) = 0.999958277   tangent direction
 //   k_min = k0 * (1 - b/2) = 0.666708350   normal direction
 // i.e. a 1.49984 : 1 silhouette aspect (1.49971 : 1 after the clamp below).
@@ -103,33 +109,43 @@ static const float kParticleFalloffInnerFraction = 2.0/3.0;
 // in grid_tiles.slang divides by (contour - 2/3). k_min > 2/3 is therefore a
 // *finite-band* requirement (the warp divides by the band offset), while
 // k_max <= 1 is the *support* requirement (a contour past R would leave the
-// 3.0625 r cull margin). Both ends stay inside [2/3, 1], so the plateau, the
-// support radius R, the interior coverage and the diagonal seam are untouched
-// for any orientation: a wrong tangent costs appearance only. Fixed source
-// values, no tuning knob; the endpoint assertion is at the top of
-// grid_tiles.slang particleTangentFalloff.
+// 3.0625 r cull margin). Both ends stay inside [2/3, 1], so the radial falloff
+// plateau, the support radius R, the interior coverage and the diagonal seam are
+// untouched for any orientation: a wrong tangent costs appearance only. Fixed
+// source values, no tuning knob; the endpoint assertion is at the top of
+// grid_tiles.slang particleTangentFalloff and proves the maximum b_eff <= b.
 static const float kParticleTangentContourScale = 5.0/6.0;
 static const float kParticleTangentContourBias = 0.3999;
 // Defensive clamp of the contour radius, in rho units: one 1e-4 hair above the
-// plateau and the support exactly. With b = 0.3999 it is nearly inert - it bites
-// only within about 0.76 degrees of the normal direction, raising k_min from
-// 0.666708 to 0.666767 - and it removes any possibility of a zero denominator
-// or of a contour at the support for any legal b.
+// plateau and the support exactly. With the maximum b = 0.3999 it is nearly
+// inert - it bites only within about 0.76 degrees of the normal direction,
+// raising k_min from 0.666708 to 0.666767 - and any weaker b_eff is more inert
+// still. It removes any possibility of a zero denominator or of a contour at the
+// support for any legal bias.
 static const float kParticleTangentContourMinimum = kParticleFalloffInnerFraction+1.0e-4;
 // Round-off closure of the two contour joins, relative to R. |local| is a rounded
 // length, so a sample constructed exactly at the support radius can arrive a few
 // ulps inside it; without this hair the warp would return a denormal coverage
 // there instead of exactly 0. Closing it keeps the support boundary exactly 0
-// coverage and the plateau exactly 1 for every tangent. It is a numerical
-// closure, not a shape or strength knob: eight binary32 ulps at rho = 1 (1.2e-7)
-// and about 1e-6 R, i.e. 0.002 px at span64, far below anything visible.
+// coverage and the radial falloff plateau exactly 1 for every tangent. It is a
+// numerical closure, not a shape or strength knob: eight binary32 ulps at rho = 1
+// (1.2e-7) and about 1e-6 R, i.e. 0.002 px at span64, far below anything visible.
 static const float kParticleTangentJoinClosure = 1.0e-6;
-// A gradient magnitude at or below this is "no surface": a zero test, not a
-// smoothing knob. The fill field carries one Q16 quantum (16384 of the word's
-// 65536 units, a quarter of full scale, i.e. 0.25 cell-volume) per particle, so a
-// one-quantum step across the stencil is ~1.06 and far above this; a flat field
-// (the dense interior, a paused world, an isolated particle) gives exactly zero.
+// A gradient magnitude at or below this is "no surface": the numerical guard
+// against dividing by zero, not a confidence threshold. The fill field carries
+// one Q16 quantum (16384 of the word's 65536 units, a quarter of full scale,
+// i.e. 0.25 cell-volume) per particle, so a one-quantum step across the stencil
+// is ~1.06 and far above this; a flat field (the dense interior, a paused world,
+// an isolated particle) gives exactly zero.
 static const float kParticleTangentGradientEpsilon = 1.0e-4;
+// Energy gate on that gradient, in the *unnormalised* Sobel units of
+// particleSurfaceTangent (grid_tiles.slang): a full-fill step has |grad| = 4, a
+// quarter-fill step 1, and a shallow 1/32-per-cell ramp 0.25. The cue's strength
+// is smoothstep(1, 3, |grad|), so a genuine surface keeps full bias while the
+// ambiguous fields that flip fade toward the resting round contour. These are
+// *proposed* values for P2 appearance calibration, not measured thresholds.
+static const float kParticleTangentConfidenceLow = 1.0;
+static const float kParticleTangentConfidenceHigh = 3.0;
 static const float kParticleRoundedSquareSupport = 1.3106;
 static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kParticleRoundedSquareSupport;
 static const float kParticleSolidCornerFraction = 0.25;

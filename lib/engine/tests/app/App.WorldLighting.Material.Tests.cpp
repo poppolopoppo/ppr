@@ -3654,9 +3654,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
     PPR_UNIT_TEST (particle_shapes_share_one_support_bound) {
         // Arithmetic probe for the revised (P1) geometry: 2.0x support, the C1
         // falloff, the 3.0625 r_m cull margin that also covers the retained 1.5x
-        // flow stretch, and the saturated seeded interior. The same constants are
-        // mirrored in grid_particle_native.slang for the draw geometry and the
-        // prepare cull.
+        // flow stretch, and the saturated seeded radial falloff (final solid
+        // coverage is conditional; see particle_plateau_coverage_is_conditional).
+        // The same constants are mirrored in grid_particle_native.slang for the
+        // draw geometry and the prepare cull.
         constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
         const float rounded_support = gridParticleRoundedSquareSupport(
             kGridParticleSolidHalfExtentScale, kGridParticleSolidCornerScale);
@@ -3688,8 +3689,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // Coverage is now a shading quantity consumed by the premultiplied blend,
         // not a discard test: the opaque class composites this same continuous
         // falloff, so the old 0.5 contour is half coverage rather than a cut. Only
-        // the negligible-fringe floor is discarded, which keeps the plateau, the
-        // support and the shape exactly where they were.
+        // the negligible-fringe floor is discarded, which keeps the radial falloff
+        // plateau, the support and the shape exactly where they were.
         const auto opaque_coverage = [](const float rho) { return gridParticleFalloff(rho); };
         PPR_TEST_ASSERT(std::abs(opaque_coverage(5.0f / 6.0f) - 0.5f) <= 1.0e-4f);
         PPR_TEST_ASSERT(opaque_coverage(5.0f / 6.0f) > kGridParticleCoverageFloor);
@@ -3708,12 +3709,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         }
         PPR_TEST_ASSERT(previous_coverage == 0.0f);
 
-        // The seeded interior is saturated: the axis midpoint (0.25 cell) and the
-        // diagonal midpoint / cell centre (0.3536 cell) are all inside R_in, so a
-        // packed body is fully opaque by construction (plan §5.2). Overlapping
-        // particles union their coverages through the premultiplied
-        // One/InvSrcAlpha composite, so "opaque" here means the union of these
-        // continuous coverage terms, not a discard test.
+        // The seeded interior's radial falloff is saturated: the axis midpoint
+        // (0.25 cell) and the diagonal midpoint / cell centre (0.3536 cell) are all
+        // inside R_in, so a packed body is fully opaque in the radial term by
+        // construction (plan §5.2). The final solid composite additionally
+        // multiplies the SDF rim and the terrain complement, so its opacity is
+        // exactly 1 only in the conditional regime above. Overlapping particles
+        // union their coverages through the premultiplied One/InvSrcAlpha
+        // composite, so "opaque" here means the union of these continuous coverage
+        // terms, not a discard test.
         const double support_cell = double(kGridParticleSupportScale) * r_cell;
         const double rho_axis = 0.25 / support_cell;
         const double rho_diagonal = 0.35355339059327373 / support_cell;
@@ -3825,9 +3829,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // Mirrors grid_tiles.slang particleCellMotion/particleFlowMotion. A field
     // answers one lattice value and whether that cell has a committed winner; the
     // sample is the four dual-lattice bilinear weights renormalised over the taps
-    // that have a winner, with the entry's own row motion as the fallback when no
-    // tap does. Out-of-range is empty, so a synthetic field must bound itself the
-    // way the shader's kResolvedEdge guard does.
+    // that have a winner above W = 1/4, and the continuous blend toward the row's
+    // own motion below it. Out-of-range is empty, so a synthetic field must bound
+    // itself the way the shader's kResolvedEdge guard does.
     template<typename Field>
     [[nodiscard]] FlowPoint gridParticleFlowMotion(
         const Field &field, const FlowPoint cell_position, const FlowPoint row_motion) noexcept {
@@ -3843,7 +3847,6 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         FlowPoint sum{};
         double weight = 0.0;
-        bool present = false;
         for (u32 tap = 0u; tap < taps.size(); ++tap) {
             FlowPoint value{};
             if (not field(base_x + static_cast<int>(taps[tap].x), base_y + static_cast<int>(taps[tap].y), value))
@@ -3852,11 +3855,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
             sum.x += weights[tap] * value.x;
             sum.y += weights[tap] * value.y;
             weight += weights[tap];
-            present = true;
         }
 
-        if (not present or not (weight > 0.0))
-            return row_motion;
+        // Continuous extension below W = 1/4, exactly as the shader ships it: the
+        // two branches agree at W = 1/4 (4S) and the sample is the row's own
+        // motion at W = 0 for every approach.
+        if (weight < 0.25)
+            return {
+                4.0 * sum.x + (1.0 - 4.0 * weight) * row_motion.x, 4.0 * sum.y + (1.0 - 4.0 * weight) * row_motion.y};
 
         return {sum.x / weight, sum.y / weight};
     }
@@ -3920,16 +3926,28 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // returns cell volume (1.0 = one full cell) and a boundary ramps through the
     // 0.25 quanta instead of switching one bit.
 
+    // Mirror of the energy gate in grid_particle_native.slang: the cue's strength
+    // is smoothstep(low, high, |grad|) in the unnormalised Sobel units, so a
+    // genuine surface keeps full bias and the ambiguous fields fade to the round
+    // contour.
+    [[nodiscard]] constexpr double gridParticleTangentStrength(const double gradient_magnitude) noexcept {
+        const double low = double(kGridParticleTangentConfidenceLow);
+        const double high = double(kGridParticleTangentConfidenceHigh);
+        const double t = std::clamp((gradient_magnitude - low) / (high - low), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+
     // Separable 3x3 Sobel of the bilinearly reconstructed field: the exact weight
     // sequence grid_tiles.slang particleSurfaceTangent ships (the Sobel difference
-    // on one axis, the 1-2-1 smoothing on the other, over one 4x4 cell window).
+    // on one axis and the 1-2-1 smoothing on the other, over one 4x4 cell window).
     // Returns false when the field is flat around the centre: the dense interior,
     // the empty exterior and an isolated particle then have no surface direction.
-    // `gradient_magnitude`, when requested, reports the pre-normalisation length.
+    // `gradient_magnitude`, when requested, reports the pre-normalisation length;
+    // `strength` reports the energy gate on it.
     template<typename Field>
     [[nodiscard]] bool gridParticleSurfaceTangent(
-        const Field &field, const FlowPoint centre, FlowPoint &tangent,
-        double *const gradient_magnitude = nullptr) noexcept {
+        const Field &field, const FlowPoint centre, FlowPoint &tangent, double *const gradient_magnitude = nullptr,
+        double *const strength = nullptr) noexcept {
         const FlowPoint p{centre.x - 0.5, centre.y - 0.5};
         const int base_x = static_cast<int>(std::floor(p.x));
         const int base_y = static_cast<int>(std::floor(p.y));
@@ -3959,13 +3977,16 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         const double squared = gradient_x * gradient_x + gradient_y * gradient_y;
         const double epsilon = double(kGridParticleTangentGradientEpsilon);
+        const double magnitude = std::sqrt(squared);
         if (gradient_magnitude != nullptr)
-            *gradient_magnitude = std::sqrt(squared);
+            *gradient_magnitude = magnitude;
+        if (strength != nullptr)
+            *strength = gridParticleTangentStrength(magnitude);
 
         if (squared <= epsilon * epsilon)
             return false;
 
-        const double inverse = 1.0 / std::sqrt(squared);
+        const double inverse = 1.0 / magnitude;
         const FlowPoint normal{-gradient_x * inverse, -gradient_y * inverse};
         tangent = {-normal.y, normal.x};
         return true;
@@ -3976,12 +3997,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // inert for b = 0.3999 except within about 0.76 degrees of the normal
     // direction, so `gridParticleTangentContourUnclamped` below is what the
     // endpoint assertions compare against.
-    [[nodiscard]] constexpr float gridParticleTangentContourUnclamped(const float cos_squared) noexcept {
-        return kGridParticleTangentContourScale * (1.0f + kGridParticleTangentContourBias * (cos_squared - 0.5f));
+    [[nodiscard]] constexpr float gridParticleTangentContourUnclamped(
+        const float cos_squared, const float strength = 1.0f) noexcept {
+        const float bias = kGridParticleTangentContourBias * strength;
+        return kGridParticleTangentContourScale * (1.0f + bias * (cos_squared - 0.5f));
     }
 
-    [[nodiscard]] constexpr float gridParticleTangentContour(const float cos_squared) noexcept {
-        const float raw = gridParticleTangentContourUnclamped(cos_squared);
+    [[nodiscard]] constexpr float gridParticleTangentContour(
+        const float cos_squared, const float strength = 1.0f) noexcept {
+        const float raw = gridParticleTangentContourUnclamped(cos_squared, strength);
         return raw < kGridParticleTangentContourMinimum ? kGridParticleTangentContourMinimum
                                                         : (raw > 1.0f ? 1.0f : raw);
     }
@@ -3989,8 +4013,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // Mirror of grid_tiles.slang particleTangentFalloff: the resting C1 smoothstep
     // evaluated on a Mobius-warped band coordinate whose 0.5 crossing is k(theta).
     // The plateau and the support are returned explicitly, exactly as the shader
-    // does, so the mirror is total on the same domain.
-    [[nodiscard]] double gridParticleTangentFalloff(const FlowPoint local, const FlowPoint tangent) noexcept {
+    // does, so the mirror is total on the same domain; the plateau here is the
+    // radial falloff plateau, before the solid rim and terrain complement
+    // multiply it. `strength` scales b toward 0 (the energy gate); at 0 the
+    // contour is exactly k0.
+    [[nodiscard]] double gridParticleTangentFalloff(
+        const FlowPoint local, const FlowPoint tangent, const double strength = 1.0) noexcept {
         const double rho = gridParticleRho(local);
         const double inner = double(kGridParticleFalloffInnerFraction);
         const double closure = double(kGridParticleTangentJoinClosure);
@@ -4003,7 +4031,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const double direction_x = local.x / length;
         const double direction_y = local.y / length;
         const double cosine = direction_x * tangent.x + direction_y * tangent.y;
-        const double contour = double(gridParticleTangentContour(static_cast<float>(cosine * cosine)));
+        const double contour = double(
+            gridParticleTangentContour(static_cast<float>(cosine * cosine), static_cast<float>(strength)));
         const double u = (rho - inner) / (1.0 - inner);
         const double u_contour = (contour - inner) / (1.0 - inner);
         const double warp = 2.0 - 1.0 / u_contour;
@@ -4016,12 +4045,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // outside the open band or without a tangent, the warped contour only inside
     // it. This is the contract that keeps the plateau and the support byte-exact.
     [[nodiscard]] float gridParticleShadedFalloff(
-        const FlowPoint local, const FlowPoint tangent, const bool has_tangent) noexcept {
+        const FlowPoint local, const FlowPoint tangent, const bool has_tangent, const float strength = 1.0f) noexcept {
         const float resting = gridParticleFalloff(static_cast<float>(gridParticleRho(local)));
         if (not has_tangent or not (resting > 0.0f) or not (resting < 1.0f))
             return resting;
 
-        return static_cast<float>(gridParticleTangentFalloff(local, tangent));
+        return static_cast<float>(gridParticleTangentFalloff(local, tangent, double(strength)));
     }
 
     // Mirror of grid_tiles.slang particleSolidDistance: the signed distance to
@@ -4453,13 +4482,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (particle_flow_cue_renormalises_partial_taps) {
-        // particleFlowMotion divides by the sum of the weights that are present, and
-        // that branch is what the free surface depends on: a particle centre inside a
-        // cell with one, two or three committed neighbours samples the winners that
-        // exist rather than an average diluted to a quarter or a half by the empty
-        // cells. The probes pin that arithmetic exactly, show the divisor is
-        // weight-invariant for a uniform field, and bound the step when a non-uniform
-        // neighbour disappears.
+        // particleFlowMotion renormalises by the sum of the weights that are
+        // present above W = 1/4, and that branch is what the free surface depends
+        // on: a particle centre inside a cell with one, two or three committed
+        // neighbours samples the winners that exist rather than an average diluted
+        // to a quarter or a half by the empty cells. Below W = 1/4 the sample
+        // blends continuously toward the row's own motion, so the W -> 0 limit no
+        // longer depends on the approach direction. The probes pin both branches,
+        // show the divisor is weight-invariant above the gate, and bound the step
+        // when a non-uniform neighbour disappears.
         constexpr FlowPoint kSample{4.7, 4.3}; // base (4, 3), fraction (0.2, 0.8)
         const std::array<std::array<int, 2u>, 4u> cells{{{4, 3}, {5, 3}, {4, 4}, {5, 4}}};
         const std::array<FlowPoint, 4u> values{{{0.040, 0.030}, {0.050, 0.040}, {0.030, 0.020}, {0.060, 0.050}}};
@@ -4498,10 +4529,11 @@ namespace pP::tests::detail::WorldLightingMaterial {
             };
         };
 
-        // Every non-empty subset renormalises by the sum of its own weights, so the
-        // sample is exactly the weighted mean of the taps that exist. The masks cover
-        // the four single taps, the six pairs and the four triples: 1, 2 and 3 present
-        // taps at the same sample.
+        // Every non-empty subset follows the shipped continuous extension: above
+        // W = 1/4 it is the weighted mean of the taps that exist; below W = 1/4 it
+        // is the blend toward the row's own motion. The masks cover the four single
+        // taps, the six pairs and the four triples: 1, 2 and 3 present taps at the
+        // same sample.
         u32 partial_configurations = 0u;
         for (u32 mask = 1u; mask < 0x0fu; ++mask) {
             double sum_x = 0.0;
@@ -4517,25 +4549,32 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
 
             const FlowPoint sample = gridParticleFlowMotion(masked(mask), kSample, FlowPoint{0.0, 0.0});
-            PPR_TEST_ASSERT(std::abs(sample.x - sum_x / weight) <= 1.0e-12);
-            PPR_TEST_ASSERT(std::abs(sample.y - sum_y / weight) <= 1.0e-12);
+            const double expected_x = weight < 0.25 ? 4.0 * sum_x : sum_x / weight;
+            const double expected_y = weight < 0.25 ? 4.0 * sum_y : sum_y / weight;
+            PPR_TEST_ASSERT(std::abs(sample.x - expected_x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - expected_y) <= 1.0e-12);
             ++partial_configurations;
         }
         PPR_TEST_ASSERT(partial_configurations == 14u);
 
-        // A single present tap is returned at its full magnitude, not at the 0.16 or
-        // 0.04 the tap's weight would give a fixed-weight average: the divisor is that
-        // tap's own weight. This is the one-neighbour free surface.
+        // The four single-tap masks straddle the gate. A lone tap with weight
+        // >= 1/4 is returned at full magnitude (the 0.64 tap); the lighter taps
+        // (0.16, 0.04, 0.16) are below W = 1/4 and contribute 4W of their value
+        // with zero row motion, so a sliver of coverage no longer asserts a
+        // trusted direction.
         for (u32 tap = 0u; tap < cells.size(); ++tap) {
             const FlowPoint sample = gridParticleFlowMotion(masked(1u << tap), kSample, FlowPoint{0.0, 0.0});
-            PPR_TEST_ASSERT(std::abs(sample.x - values[tap].x) <= 1.0e-12);
-            PPR_TEST_ASSERT(std::abs(sample.y - values[tap].y) <= 1.0e-12);
+            const double expected_scale = weights[tap] < 0.25 ? 4.0 * weights[tap] : 1.0;
+            PPR_TEST_ASSERT(std::abs(sample.x - expected_scale * values[tap].x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - expected_scale * values[tap].y) <= 1.0e-12);
         }
 
-        // Weight-invariance for a uniform field: with every present winner carrying the
-        // same motion, a tap turning absent does not move the sample, because the
-        // divisor shrinks by exactly that tap's weight. A uniform interior therefore
-        // does not fade as its free-surface boundary loses taps.
+        // Weight-invariance for a uniform field above the gate: with every present
+        // winner carrying the same motion, a tap turning absent does not move the
+        // sample, because the divisor shrinks by exactly that tap's weight. A
+        // uniform interior therefore does not fade as its free-surface boundary
+        // loses taps. Subsets below W = 1/4 instead fade by exactly 4W toward a
+        // zero row motion, which is the documented domain-hardening branch.
         constexpr FlowPoint kUniform{0.041, -0.027};
         const auto uniform_field = [&cells, kUniform](const u32 mask) {
             return [&cells, kUniform, mask](const int x, const int y, FlowPoint &motion) {
@@ -4551,10 +4590,48 @@ namespace pP::tests::detail::WorldLightingMaterial {
             };
         };
         for (u32 mask = 1u; mask < 0x0fu; ++mask) {
+            double weight = 0.0;
+            for (u32 tap = 0u; tap < cells.size(); ++tap) {
+                if ((mask & (1u << tap)) != 0u)
+                    weight += weights[tap];
+            }
+
             const FlowPoint sample = gridParticleFlowMotion(uniform_field(mask), kSample, FlowPoint{0.0, 0.0});
-            PPR_TEST_ASSERT(std::abs(sample.x - kUniform.x) <= 1.0e-12);
-            PPR_TEST_ASSERT(std::abs(sample.y - kUniform.y) <= 1.0e-12);
+            const double expected_scale = weight < 0.25 ? 4.0 * weight : 1.0;
+            PPR_TEST_ASSERT(std::abs(sample.x - expected_scale * kUniform.x) <= 1.0e-12);
+            PPR_TEST_ASSERT(std::abs(sample.y - expected_scale * kUniform.y) <= 1.0e-12);
         }
+
+        // The W -> 0 limit is now approach-independent: an empty window returns the
+        // row's own motion exactly, and one weak single tap fades continuously
+        // between that and the full tap value. At W = 1/4 both branches agree.
+        const FlowPoint own_motion{0.013, -0.007};
+        const auto empty_field = [](const int, const int, FlowPoint &) { return false; };
+        const auto lone_tap = [](const int x, const int y, FlowPoint &motion) {
+            if (x != 3 or y != 3)
+                return false;
+
+            motion = FlowPoint{0.08, -0.02};
+            return true;
+        };
+        const FlowPoint empty_sample = gridParticleFlowMotion(empty_field, FlowPoint{4.0, 4.0}, own_motion);
+        PPR_TEST_ASSERT(std::bit_cast<u64>(empty_sample.x) == std::bit_cast<u64>(own_motion.x));
+        PPR_TEST_ASSERT(std::bit_cast<u64>(empty_sample.y) == std::bit_cast<u64>(own_motion.y));
+
+        // p = cell_position - 0.5; at (4.0, 4.0) the fraction is (0.5, 0.5), so the
+        // single tap (3, 3) has W = 1/4 exactly. Moving y by +-0.02 makes it 0.24 or
+        // 0.26, i.e. one step either side of the branch point.
+        const FlowPoint at_gate = gridParticleFlowMotion(lone_tap, FlowPoint{4.0, 4.0}, own_motion);
+        const FlowPoint below_gate = gridParticleFlowMotion(lone_tap, FlowPoint{4.0, 4.02}, own_motion);
+        const FlowPoint above_gate = gridParticleFlowMotion(lone_tap, FlowPoint{4.0, 3.98}, own_motion);
+        const FlowPoint tap_value{0.08, -0.02};
+        PPR_TEST_ASSERT(std::abs(at_gate.x - tap_value.x) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(at_gate.y - tap_value.y) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(below_gate.x - (0.96 * tap_value.x + 0.04 * own_motion.x)) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(below_gate.y - (0.96 * tap_value.y + 0.04 * own_motion.y)) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(above_gate.x - tap_value.x) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(above_gate.y - tap_value.y) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(below_gate.x - at_gate.x) <= 0.02 and std::abs(below_gate.y - at_gate.y) <= 0.02);
 
         // A present tap that carries zero motion is not an absent tap: it divides into
         // the sum and contributes nothing, so it weakens the sample by its own weight.
@@ -4897,7 +4974,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // (14.0 degrees). The binary mask's single-bit flip on the same probe is
         // 0.76617 rad, 3.1x larger, which is why the fill field replaces it.
         // What the eye sees is the contour step, not the rotation: dk =
-        // k0*b*|sin(dtheta)|, i.e. 0.08083 here against 0.23107 for the mask.
+        // k0*b*|sin(dtheta)|, i.e. 0.08083 here against 0.23107 for the mask at
+        // the maximum bias. The energy gate only shrinks these: the ramp has
+        // |grad| = 2 (strength 0.5) while the full-fill mask step has strength 1,
+        // so these remain conservative upper bounds and the comparison holds.
         const auto ramp_flipped = [](const int x, const int y) {
             return x == 4 and y == 5 ? 0.75 : 0.25 * double(x - 2);
         };
@@ -5014,6 +5094,169 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 left_tangent.x, left_tangent.y, first_tangent.x, first_tangent.y, offset_tangent.x, offset_tangent.y,
                 centre_gradient, offset_gradient, fill_gradient, quantum_gradient, ramp_reference.x, ramp_reference.y,
                 fill_rotation, mask_rotation, fill_contour_step, mask_contour_step));
+    };
+
+    PPR_UNIT_TEST (particle_tangent_energy_gate_fades_weak_fields) {
+        // P2 stability, stage 1: the contour bias is scaled by an energy gate on
+        // the unnormalised fill-gradient magnitude, so a genuine surface keeps the
+        // full b while the ambiguous fields that flip render round. The two edges
+        // are proposed calibration values, not measured thresholds.
+        PPR_TEST_ASSERT(kGridParticleTangentConfidenceLow == 1.0f);
+        PPR_TEST_ASSERT(kGridParticleTangentConfidenceHigh == 3.0f);
+        PPR_TEST_ASSERT(kGridParticleTangentConfidenceLow < kGridParticleTangentConfidenceHigh);
+
+        // The gate itself: 0 at the quarter-fill step (|grad| = 1) and below, half
+        // at |grad| = 2, and 1 from a full-fill step (|grad| = 4) upward.
+        PPR_TEST_ASSERT(gridParticleTangentStrength(0.0) == 0.0);
+        PPR_TEST_ASSERT(gridParticleTangentStrength(0.25) == 0.0);
+        PPR_TEST_ASSERT(gridParticleTangentStrength(1.0) == 0.0);
+        PPR_TEST_ASSERT(std::abs(gridParticleTangentStrength(2.0) - 0.5) <= 1.0e-12);
+        PPR_TEST_ASSERT(gridParticleTangentStrength(3.0) == 1.0);
+        PPR_TEST_ASSERT(gridParticleTangentStrength(4.0) == 1.0);
+
+        const FlowPoint centre{4.5, 5.5};
+        const auto body_left = [](const int x, const int) { return x <= 4 ? 1.0 : 0.0; };
+        const auto quarter_step_left = [](const int x, const int) { return x <= 4 ? 0.25 : 0.0; };
+        const auto fill_lower_left = [](const int x, const int y) { return x + y <= 9 ? 0.75 : 0.25; };
+        const auto fill_ramp = [](const int x, const int) { return 0.25 * double(x - 2); };
+        const auto shallow_ramp = [](const int x, const int) { return (1.0 / 32.0) * double(x - 2); };
+
+        FlowPoint tangent{};
+        double gradient = 0.0;
+        double strength = 0.0;
+
+        // A full-fill step is a real surface: |grad| = 4, full strength and the
+        // existing unit tangent.
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_left, centre, tangent, &gradient, &strength));
+        PPR_TEST_ASSERT(std::abs(gradient - 4.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(strength == 1.0);
+
+        // A quarter-fill step has |grad| = 1, exactly the low edge: the direction is
+        // still measurable, but the bias is zero, so the contour stays the resting
+        // k0 instead of retargeting an untrusted axis.
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(quarter_step_left, centre, tangent, &gradient, &strength));
+        PPR_TEST_ASSERT(std::abs(gradient - 1.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(strength == 0.0);
+
+        // A shallow 1/32 ramp is |grad| = 0.25: gated off as well.
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(shallow_ramp, FlowPoint{3.5, 5.3}, tangent, &gradient, &strength));
+        PPR_TEST_ASSERT(std::abs(gradient - 0.25) <= 1.0e-12);
+        PPR_TEST_ASSERT(strength == 0.0);
+
+        // The partial cases sit on the ramp: the 0.75/0.25 diagonal is 2.12132 and
+        // the 0.25-per-cell ramp is 2.0, giving strengths 0.590544 and 0.5.
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(fill_lower_left, centre, tangent, &gradient, &strength));
+        PPR_TEST_ASSERT(std::abs(gradient - 4.242640687119285 / 2.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(strength - 0.5905438404862061) <= 1.0e-12);
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(fill_ramp, FlowPoint{3.5, 5.3}, tangent, &gradient, &strength));
+        PPR_TEST_ASSERT(std::abs(gradient - 2.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(strength == 0.5);
+
+        // b_eff = b * strength never exceeds b, and at strength 0 the contour is
+        // exactly k0 for every direction: the cue becomes the resting circle.
+        const float k0 = kGridParticleTangentContourScale;
+        for (const float cosine_squared: {0.0f, 0.25f, 0.5f, 1.0f}) {
+            PPR_TEST_ASSERT(gridParticleTangentContour(cosine_squared, 0.0f) == k0);
+        }
+        PPR_TEST_ASSERT(gridParticleTangentContour(1.0f, 1.0f) == gridParticleTangentContourUnclamped(1.0f));
+        const float half_bias = gridParticleTangentContour(1.0f, 0.5f);
+        PPR_TEST_ASSERT(half_bias > k0 and half_bias < gridParticleTangentContour(1.0f));
+
+        // The painted band at strength 0 is the resting radial falloff (within the
+        // binary32 k0 quantisation), so an ambiguous field does not open a new
+        // shape; it only loses the angular retarget.
+        const FlowPoint outer{0.0, 0.9 * double(kGridParticleSupportScale)};
+        PPR_TEST_ASSERT(
+            std::abs(gridParticleShadedFalloff(outer, FlowPoint{1.0, 0.0}, true, 0.0f) - gridParticleFalloff(0.9f)) <=
+            1.0e-6f);
+
+        // Deterministic: the gate is a pure function of the same field.
+        double first_strength = 0.0;
+        double second_strength = 0.0;
+        FlowPoint first_tangent{};
+        FlowPoint second_tangent{};
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_left, centre, first_tangent, nullptr, &first_strength));
+        PPR_TEST_ASSERT(gridParticleSurfaceTangent(body_left, centre, second_tangent, nullptr, &second_strength));
+        PPR_TEST_ASSERT(std::bit_cast<u64>(first_strength) == std::bit_cast<u64>(second_strength));
+        PPR_TEST_ASSERT(std::bit_cast<u64>(first_tangent.x) == std::bit_cast<u64>(second_tangent.x));
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_tangent_gate low={:.3f} high={:.3f} full={:.4f} "
+                "quarter={:.4f} diagonal={:.6f} ramp={:.4f}",
+                kGridParticleTangentConfidenceLow, kGridParticleTangentConfidenceHigh, gridParticleTangentStrength(4.0),
+                gridParticleTangentStrength(1.0), gridParticleTangentStrength(4.242640687119285 / 2.0),
+                gridParticleTangentStrength(2.0)));
+    };
+
+    PPR_UNIT_TEST (particle_plateau_coverage_is_conditional) {
+        // Reconciles the plan's "opaque in the plateau" claim with the final
+        // composite: the radial falloff is exactly 1 for rho <= 2/3, but final solid
+        // coverage also multiplies the solid SDF rim and (1 - terrain coverage). The
+        // claim is therefore conditional, not universal. No behaviour changes here:
+        // the coarse-zoom case is the intended analytic rim, not a defect.
+        const float support = kGridParticleSupportScale;
+        constexpr float r_cell = 0.28209479177387814f;
+        const FlowPoint interior{double(0.2f * support), 0.0};
+        const FlowPoint plateau_edge{double((2.0f / 3.0f) * support), 0.0};
+
+        // The radial falloff itself is still exactly 1 at both plateau samples; any
+        // coverage below 1 is the rim/terrain multiplier, not a moved plateau.
+        PPR_TEST_ASSERT(gridParticleFalloff(0.2f) == 1.0f);
+        PPR_TEST_ASSERT(gridParticleFalloff(2.0f / 3.0f) == 1.0f);
+
+        // Conditional claim: at a rim half-width <= 0.15 r (rim width 0.30 r, the
+        // fine span64 regime) and zero terrain coverage, final solid coverage is
+        // exactly 1 across the radial plateau, including its flat edge.
+        constexpr float fine_rim = 0.30f;
+        PPR_TEST_ASSERT(0.5f * fine_rim <= 0.15f);
+        for (const FlowPoint local: {interior, plateau_edge}) {
+            PPR_TEST_ASSERT(gridParticleShapeCoverage(local, fine_rim, false) == 1.0f);
+            PPR_TEST_ASSERT(gridParticleEdgeCoverage(local, FlowPoint{}, false, false, fine_rim, 0.0f) == 1.0f);
+        }
+
+        // The shipped span64 rim (0.3151 r, half-width 0.1576 r) still saturates the
+        // same two samples, so the fine claim is not a special-case constant.
+        const float span64_rim = 64.0f / 720.0f / r_cell;
+        PPR_TEST_ASSERT(std::abs(span64_rim - 0.3151f) <= 1.0e-4f);
+        for (const FlowPoint local: {interior, plateau_edge}) {
+            PPR_TEST_ASSERT(gridParticleEdgeCoverage(local, FlowPoint{}, false, false, span64_rim, 0.0f) == 1.0f);
+        }
+
+        // Coarse zoom (span220, rim 1.0832 r) is the documented exception: the rim
+        // reaches into the plateau. The flat plateau edge is 0.1927 r inside the SDF
+        // and is only 0.6779 covered; rho = 0.5 is 0.9856; the deep interior still
+        // saturates. Asserted rather than pretending the unconditional claim holds.
+        const float span220_rim = 220.0f / 720.0f / r_cell;
+        PPR_TEST_ASSERT(std::abs(span220_rim - 1.0832f) <= 1.0e-4f);
+        PPR_TEST_ASSERT(
+            std::abs(gridParticleEdgeCoverage(plateau_edge, FlowPoint{}, false, false, span220_rim, 0.0f) - 0.67789f) <=
+            1.0e-4f);
+        PPR_TEST_ASSERT(
+            std::abs(
+                gridParticleEdgeCoverage(
+                    FlowPoint{double(0.5f * support), 0.0}, FlowPoint{}, false, false, span220_rim, 0.0f) -
+                0.98563f) <= 1.0e-4f);
+        PPR_TEST_ASSERT(gridParticleEdgeCoverage(interior, FlowPoint{}, false, false, span220_rim, 0.0f) == 1.0f);
+
+        // The terrain complement is the second multiplier: even deep in the radial
+        // plateau, partial terrain coverage makes final coverage partial by exactly
+        // (1 - terrain coverage).
+        PPR_TEST_ASSERT(gridParticleEdgeCoverage(interior, FlowPoint{}, false, false, fine_rim, 0.5f) == 0.5f);
+
+        // The coarse case is the rim and nothing else: the radial falloff remains
+        // exactly 1 there.
+        PPR_TEST_ASSERT(gridParticleFalloff(2.0f / 3.0f) == 1.0f);
+        PPR_TEST_ASSERT(gridParticleShapeCoverage(plateau_edge, span220_rim, false) < 1.0f);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_plateau fine_rim={:.4f} span64={:.4f} span220={:.4f} "
+                "edge_span220={:.5f} mid_span220={:.5f}",
+                fine_rim, span64_rim, span220_rim,
+                gridParticleEdgeCoverage(plateau_edge, FlowPoint{}, false, false, span220_rim, 0.0f),
+                gridParticleEdgeCoverage(
+                    FlowPoint{double(0.5f * support), 0.0}, FlowPoint{}, false, false, span220_rim, 0.0f)));
     };
 
     PPR_UNIT_TEST (particle_solid_rim_is_analytic_coverage) {
@@ -5190,6 +5433,8 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_flow_cue_renormalises_partial_taps,
                 detail::WorldLightingMaterial::particle_tangent_contour_stays_inside_the_support,
                 detail::WorldLightingMaterial::particle_tangent_follows_the_fill_field,
+                detail::WorldLightingMaterial::particle_tangent_energy_gate_fades_weak_fields,
+                detail::WorldLightingMaterial::particle_plateau_coverage_is_conditional,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,

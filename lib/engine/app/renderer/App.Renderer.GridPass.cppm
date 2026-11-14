@@ -170,8 +170,9 @@ export namespace pP {
     // alpha = 0.5; its resting half-coverage contour is rho = 5/6, and the
     // optional tangent cue moves that contour per angle inside [2/3, 1] and
     // touches neither join. Every seeded-lattice point sits inside R_in, so a
-    // packed interior is saturated and the falloff only shapes the free surface
-    // and detached droplets.
+    // packed interior's *radial falloff* is saturated; the final solid coverage
+    // also multiplies the SDF rim and the terrain complement, so it is exactly 1
+    // only where those leave the plateau untouched.
     inline constexpr float kGridParticleFalloffInnerFraction{2.0f / 3.0f};
     // Negligible-fringe floor for depth writes, not a shape threshold: a fragment
     // is cut only when its premultiplied edge coverage is at or below this, so the
@@ -182,32 +183,43 @@ export namespace pP {
 
     // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
     // half-coverage contour radius, in rho units, is
-    // k(theta) = k0 * (1 + b*(cos^2(theta) - 1/2)) measured from the surface
-    // tangent read from the committed per-cell Q16 fill field. k0 = 5/6 is the
-    // resting 0.5 contour. b = 0.3999 is the strongest four-decimal bias whose
-    // endpoints stay strictly inside the legal band in binary32 - k_max =
-    // 0.999958277 along the tangent and k_min = 0.666708350 across it, a
-    // 1.49984 : 1 aspect (1.49971 : 1 after the defensive clamp). b = 0.40 is
-    // degenerate rather than merely stronger: 0.83333331f * 0.80000001f rounds to
-    // exactly float32(2/3), so k_min would sit ON the plateau while the shader's
-    // warp divides by (contour - 2/3). k_min > 2/3 is the *finite-band*
-    // requirement; k_max <= 1 is the *support* requirement. Both ends inside
-    // [2/3, 1] means only the band is reshaped: plateau, support radius R,
-    // interior coverage, the diagonal seam and the 3.0625 r cull are untouched
-    // for any orientation. Fixed source values; no tuning UI and no second
-    // strength knob.
+    // k(theta) = k0 * (1 + b_eff*(cos^2(theta) - 1/2)) measured from the surface
+    // tangent read from the committed per-cell Q16 fill field. b_eff = b *
+    // strength, where strength is the energy gate above, so an ambiguous field
+    // renders round (b_eff = 0, k(theta) = k0 exactly) and b_eff never exceeds b.
+    // k0 = 5/6 is the resting 0.5 contour. b = 0.3999 is the strongest
+    // four-decimal bias whose endpoints stay strictly inside the legal band in
+    // binary32 - k_max = 0.999958277 along the tangent and k_min = 0.666708350
+    // across it, a 1.49984 : 1 aspect (1.49971 : 1 after the defensive clamp).
+    // b = 0.40 is degenerate rather than merely stronger: 0.83333331f *
+    // 0.80000001f rounds to exactly float32(2/3), so k_min would sit ON the
+    // plateau while the shader's warp divides by (contour - 2/3). k_min > 2/3 is
+    // the *finite-band* requirement; k_max <= 1 is the *support* requirement.
+    // Both ends inside [2/3, 1] means only the band is reshaped: plateau, support
+    // radius R, interior coverage, the diagonal seam and the 3.0625 r cull are
+    // untouched for any orientation. Fixed source values; no tuning UI and no
+    // second strength knob.
     inline constexpr float kGridParticleTangentContourScale{5.0f / 6.0f};
     inline constexpr float kGridParticleTangentContourBias{0.3999f};
     // Defensive clamp of the contour radius, in rho units: one 1e-4 hair above
-    // the plateau and the support exactly. With b = 0.3999 it is nearly inert -
+    // the plateau and the support exactly. With the maximum b it is nearly inert -
     // it bites only within about 0.76 degrees of the normal direction, raising
-    // k_min from 0.666708 to 0.666767 - and it removes any possibility of a zero
-    // band offset or of a contour at the support for any legal b.
+    // k_min from 0.666708 to 0.666767 - and any weaker b_eff is more inert still.
+    // It removes any possibility of a zero band offset or of a contour at the
+    // support for any legal bias.
     inline constexpr float kGridParticleTangentContourMinimum{kGridParticleFalloffInnerFraction + 1.0e-4f};
-    // A gradient magnitude at or below this is "no surface": a zero test for the
-    // fill field's gradient, not a smoothing knob. One fill quantum (0.25 cell of
-    // volume) across the stencil is ~1.06, far above it; a flat field is exactly 0.
+    // A gradient magnitude at or below this is "no surface": the numerical guard
+    // against dividing by zero, not a confidence threshold. One fill quantum
+    // (0.25 cell of volume) across the stencil is ~1.06, far above it; a flat field
+    // is exactly 0.
     inline constexpr float kGridParticleTangentGradientEpsilon{1.0e-4f};
+    // Energy gate on that gradient, in the unnormalised Sobel units of
+    // grid_tiles.slang particleSurfaceTangent: a full-fill step is |grad| = 4, a
+    // quarter-fill step 1 and a shallow 1/32 ramp 0.25. The cue strength is
+    // smoothstep(1, 3, |grad|), scaling b toward 0. These are *proposed* values
+    // for P2 appearance calibration, not measured thresholds.
+    inline constexpr float kGridParticleTangentConfidenceLow{1.0f};
+    inline constexpr float kGridParticleTangentConfidenceHigh{3.0f};
     // Round-off closure of the tangent contour's two joins, relative to R. |local|
     // is a rounded length, so a sample constructed exactly at the support radius can
     // arrive a few ulps inside it and the warp would return a denormal alpha there
@@ -297,6 +309,13 @@ export namespace pP {
             kGridParticleTangentContourMinimum <= kGridParticleTangentContourScale and
             kGridParticleTangentContourScale * (1.0f + 0.5f * kGridParticleTangentContourBias) <= 1.0f,
         "the defensive contour clamp must stay inside the legal band");
+    // The energy gate only scales the bias down: strength is 0 below the low edge
+    // and 1 above the high edge, so the maximum-bias proof above still bounds
+    // every b_eff the fragment can use.
+    static_assert(
+        kGridParticleTangentConfidenceLow > 0.0f and
+            kGridParticleTangentConfidenceLow < kGridParticleTangentConfidenceHigh,
+        "the tangent energy gate needs a positive, increasing strength band");
     // The join closure must exceed the binary32 ulp at rho = 1 (so a sample built
     // exactly at R is closed) and stay invisible (well under a thousandth of R).
     static_assert(
