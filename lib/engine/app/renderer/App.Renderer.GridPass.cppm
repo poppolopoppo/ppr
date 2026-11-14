@@ -773,6 +773,59 @@ export namespace pP {
         // to do that.
         [[nodiscard]] std::error_code renderGasParticles(const DrawContext &context);
 
+        // ------------------------------------------------------------------
+        // screen-space particle density (one admitted liquid lane)
+        // ------------------------------------------------------------------
+        // Increment B of the screen-space density plan: a GridPass-owned,
+        // completion-fenced 1x (N, D[, O]) accumulation over the same prepared
+        // rows and indirect arguments the direct classes use, and one
+        // per-scene-sample composite at the lane's existing depth class slot.
+        //
+        // The lane is derived from the admitted palette and the published
+        // metadata: exactly one material that the palette marks as a liquid
+        // phase is admitted; zero admits nothing, and more than one is an
+        // incompatible admission that keeps every particle on its existing
+        // direct class rather than mixing materials in one target. The density
+        // pass has no depth attachment, no history, no dirty tiles and no
+        // partial clear; it clears to exact zero every rendered frame.
+        [[nodiscard]] std::error_code prepareParticleSurface(
+            const PreRenderContext &context, const CameraSnapshot &camera, const rhi::Viewport &viewport,
+            const rhi::ScissorRect &scissor);
+        [[nodiscard]] std::error_code renderParticleSurface(
+            const DrawContext &context, EGridParticleDrawClass draw_class);
+        // True when this frame admitted a lane and its density target was
+        // encoded. The caller composites only at the matching class slot.
+        [[nodiscard]] bool particleSurfaceAdmitted() const noexcept {
+            return m_world.m_particle_surface.admitted();
+        }
+        [[nodiscard]] EGridParticleDrawClass particleSurfaceDrawClass() const noexcept {
+            return m_world.m_particle_surface.m_draw_class;
+        }
+
+        // Tests-only: encodes both direct restored classes at their normal slots
+        // without the density composite, so a fixture can prove the admitted lane
+        // material's rows emit no direct instances while the lane is accumulated.
+        [[nodiscard]] std::error_code renderDirectParticleClassesForTest(const DrawContext &context) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::opaque));
+            return renderGpuParticleClass_(context, EGridParticleDrawClass::optical);
+        }
+
+        // Test-only density target readback after the caller proves completion.
+        // No production path reads these textures on the CPU.
+        struct ParticleSurfaceTargetsForTest {
+            rhi::ITexture *m_density{};
+            rhi::ITexture *m_optical{};
+            u32 m_material{0xffff'ffffu};
+            EGridParticleDrawClass m_draw_class{EGridParticleDrawClass::opaque};
+            float m_pixel_world{};
+        };
+        [[nodiscard]] ParticleSurfaceTargetsForTest particleSurfaceTargetsForTest() const noexcept {
+            const ParticleSurfaceSlot &slot = m_particle_surface_slots[m_particle_surface_slot];
+            return {
+                slot.m_density.get(), slot.m_optical.get(), m_world.m_particle_surface.m_material,
+                m_world.m_particle_surface.m_draw_class, m_particle_surface_pixel_world};
+        }
+
         // Convenience for single-pass callers (capture and fixtures): all three
         // classes in the same order, gas last.
         [[nodiscard]] std::error_code renderParticles(const DrawContext &context);
@@ -1232,17 +1285,21 @@ export namespace pP {
         // Every signature-keyed render pipeline cache this pass owns. Update,
         // submission accounting, retirement and backdrop release walk this one
         // list so a new lane cannot be missed by one of them.
-        [[nodiscard]] std::array<std::optional<GridCachedPipeline> *, 7u> cachedPipelines_() noexcept {
+        [[nodiscard]] std::array<std::optional<GridCachedPipeline> *, 11u> cachedPipelines_() noexcept {
             return {
                 &m_cached_pipeline, &m_particle_classes[0u].m_pipeline, &m_particle_classes[1u].m_pipeline,
                 &m_particle_classes[2u].m_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
-                &m_background_spatial_pipeline};
+                &m_background_spatial_pipeline, &m_particle_surface_accumulate_pipeline,
+                &m_particle_surface_accumulate_optical_pipeline, &m_particle_surface_composite_opaque_pipeline,
+                &m_particle_surface_composite_optical_pipeline};
         }
-        [[nodiscard]] std::array<const std::optional<GridCachedPipeline> *, 7u> cachedPipelines_() const noexcept {
+        [[nodiscard]] std::array<const std::optional<GridCachedPipeline> *, 11u> cachedPipelines_() const noexcept {
             return {
                 &m_cached_pipeline, &m_particle_classes[0u].m_pipeline, &m_particle_classes[1u].m_pipeline,
                 &m_particle_classes[2u].m_pipeline, &m_background_pipeline, &m_background_copy_pipeline,
-                &m_background_spatial_pipeline};
+                &m_background_spatial_pipeline, &m_particle_surface_accumulate_pipeline,
+                &m_particle_surface_accumulate_optical_pipeline, &m_particle_surface_composite_opaque_pipeline,
+                &m_particle_surface_composite_optical_pipeline};
         }
 
         struct ParticleChunk {
@@ -1560,6 +1617,99 @@ export namespace pP {
         [[nodiscard]] rhi::ComPtr<rhi::IShaderProgram> &particleClassReactiveProgram_(
             EGridParticleDrawClass draw_class) noexcept;
 
+        // ------------------------------------------------------------------
+        // screen-space particle density resources
+        // ------------------------------------------------------------------
+
+        // No lane material: every particle keeps its existing direct class.
+        static constexpr u32 kParticleSurfaceNoMaterial{0xffff'ffffu};
+
+        // The single admitted density lane. It is derived from the palette and
+        // the published metadata, never from a user selector or a GPU readback,
+        // and it lives with the world so a world exchange cannot inherit another
+        // world's lane.
+        struct ParticleSurfaceLane {
+            u32 m_material{kParticleSurfaceNoMaterial};
+            EGridParticleDrawClass m_draw_class{EGridParticleDrawClass::opaque};
+
+            [[nodiscard]] bool admitted() const noexcept {
+                return m_material != kParticleSurfaceNoMaterial;
+            }
+        };
+
+        // One completion-selected density target set. Replaced only after this
+        // slot's last reader completed; an in-flight target is never reused.
+        struct ParticleSurfaceSlot {
+            rhi::ComPtr<rhi::ITexture> m_density{};
+            rhi::ComPtr<rhi::ITextureView> m_density_view{};
+            rhi::ComPtr<rhi::ITexture> m_optical{};
+            rhi::ComPtr<rhi::ITextureView> m_optical_view{};
+            FenceCompletionValue m_last_use{kFenceValueNone};
+            u32 m_width{}, m_height{};
+        };
+
+        // Derives the lane from the retained palette and metadata. Called once per
+        // particle preparation, before any hold early return, so a held frame's
+        // direct draws exclude the same material the density pass reconstructs.
+        void deriveParticleSurfaceLane_() noexcept;
+        // Ensures the slot's RGBA16F density target (and the R16F optical target
+        // for an optical lane) exists at the requested raster size. The slot was
+        // already proven complete, so replacement never touches an in-flight
+        // target.
+        [[nodiscard]] std::error_code ensureParticleSurfaceTarget_(
+            rhi::IDevice &device, ParticleSurfaceSlot &slot, u32 width, u32 height);
+        // One density pixel in world-plane metres at the camera's z = 0 plane.
+        // The quad padding and the cull-plane guard both use it, so the raster
+        // footprint and the visibility margin agree.
+        [[nodiscard]] float particleSurfacePixelWorld_(const CameraSnapshot &camera) const noexcept;
+        [[nodiscard]] std::error_code createParticleSurfacePrograms_(
+            IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
+        [[nodiscard]] std::error_code ensureParticleSurfaceSampler_(rhi::IDevice &device);
+        // Narrow binder for the composite root: the frame's categorical resolution
+        // word, the ownership authority's winner grid/availability bit, and the
+        // palette identity guard. The composite program declares no
+        // material/source/thermal field, so the full surface binder cannot be used.
+        [[nodiscard]] std::error_code bindParticleSurfaceInputs_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
+        // Ensures every shared owner the surface set can bind (contour/chunk-slot
+        // maps, palette + source palette + texture inventory + boundary noise,
+        // lighting fallback). Idempotent; the density pass never depends on the
+        // scene pass having prepared these first.
+        [[nodiscard]] std::error_code ensureParticleSurfaceOwners_(rhi::IDevice &device);
+        // Binds the accumulation root's surface inputs. Every field is
+        // validity-guarded (a program that dropped a dead resource is skipped
+        // instead of dereferencing a null cursor) and every resource is ensured
+        // first, so a missing input is a reported error, never a null binding.
+        [[nodiscard]] std::error_code bindParticleSurfaceSplat_(
+            rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
+        [[nodiscard]] Expected<GridCachedPipeline *> particleSurfacePipeline_(
+            rhi::IDevice &device, const RenderPipelineSignature &signature, rhi::IShaderProgram *program,
+            std::optional<RenderPipelineKey> &key, std::optional<GridCachedPipeline> &cache, bool additive,
+            bool depth_test, bool depth_write, const char *label);
+
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_accumulate_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_accumulate_optical_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_composite_program{};
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_composite_optical_program{};
+        // Linear filtering with an exact-zero border: density taps outside the
+        // target contribute zero, never the edge texel.
+        rhi::ComPtr<rhi::ISampler> m_particle_surface_sampler{};
+        std::optional<RenderPipelineKey> m_particle_surface_accumulate_key{};
+        std::optional<GridCachedPipeline> m_particle_surface_accumulate_pipeline{};
+        std::optional<RenderPipelineKey> m_particle_surface_accumulate_optical_key{};
+        std::optional<GridCachedPipeline> m_particle_surface_accumulate_optical_pipeline{};
+        std::optional<RenderPipelineKey> m_particle_surface_composite_opaque_key{};
+        std::optional<GridCachedPipeline> m_particle_surface_composite_opaque_pipeline{};
+        std::optional<RenderPipelineKey> m_particle_surface_composite_optical_key{};
+        std::optional<GridCachedPipeline> m_particle_surface_composite_optical_pipeline{};
+        std::array<ParticleSurfaceSlot, kTileRingSize> m_particle_surface_slots{};
+        // The slot this frame encoded. Recorded by notifyFrameSubmitted; a
+        // definitely-unsubmitted frame never fences it.
+        u32 m_particle_surface_slot{0u};
+        float m_particle_surface_pixel_world{};
+        bool m_particle_surface_encoded{};
+        bool m_particle_surface_ready{};
+
         rhi::ComPtr<rhi::IQueryPool> m_particle_timing_queries{};
         bool m_visibility_prepared{false};
         // Last terrain ownership authority outcome: true when it bound the zero
@@ -1712,6 +1862,9 @@ export namespace pP {
             // `kParticleHoldWarnFrames` warns once and recovers with one info.
             // Expiry is a publication, a world event or matter detach (no timeout).
             u64 m_particle_hold_attempts{};
+            // The one admitted density lane, derived from this world's palette and
+            // the published metadata at every particle preparation.
+            ParticleSurfaceLane m_particle_surface{};
             bool m_particle_seeds_dirty{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};

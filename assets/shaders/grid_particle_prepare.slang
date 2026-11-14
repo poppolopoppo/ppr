@@ -41,7 +41,13 @@ struct PrepareFrame {
     // clock: there is no dt in this mechanism.
     uint orientationUpdate, orientationRemap;
     uint orientationPreviousCount, orientationOwned;
-    uint padding0, padding1;
+    // Density-lane admission padding: one density pixel in world metres and the
+    // one admitted lane material. The homogeneous guard expands that material's
+    // visibility margin only, so a pixel whose centre lies just outside the
+    // analytic support still receives its intersecting footprint while no other
+    // row's cull changes. Zero material means no lane and no guard.
+    float surfaceGuard;
+    uint surfaceMaterial;
 };
 ConstantBuffer<PrepareFrame> g_particle_prepare;
 StructuredBuffer<NumericalRow> g_numerical;
@@ -477,8 +483,12 @@ bool visible(PresentationRow particle) {
     // Enclose the drawn support, not only the disk quad: liquid is a disk of
     // radius R = 2.0 r and the solid rounded square is inscribed in the same
     // circle, so both stay inside this shared 3.0625 r cull margin, which also
-    // covers the retained 1.5x flow stretch at 3.000 r.
+    // covers the retained 1.5x flow stretch at 3.000 r. The admitted density-lane
+    // material adds the one-density-pixel homogeneous guard, which is the same
+    // term as expanding each cull plane by that guard.
     float radius=particle.radius*kParticleCullRadiusScale;
+    if ((particle.material_flags_temperature&kParticleMaterialMask)==g_particle_prepare.surfaceMaterial)
+        radius+=g_particle_prepare.surfaceGuard;
     for (uint plane=0u;plane<6u;++plane) {
         float4 p=g_particle_prepare.planes[plane];
         if (dot(float4(particle.position,0,1),p)+radius*length(p.xyz)<0) return false;

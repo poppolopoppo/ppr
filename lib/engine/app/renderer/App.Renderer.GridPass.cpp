@@ -390,6 +390,27 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createVisibilityPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createOpticalPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createGpuParticlePrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, createParticleSurfacePrograms_(shader_service, device, content_dir));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureParticleSurfaceSampler_(device));
+        // The density field is additive HDR at both possible formats. A device
+        // that cannot render-and-blend either one fails here rather than falling
+        // back to a clamped or storage-only path.
+        {
+            rhi::FormatSupport support{};
+            constexpr u32 required = static_cast<u32>(rhi::FormatSupport::RenderTarget) |
+                                     static_cast<u32>(rhi::FormatSupport::Blendable) |
+                                     static_cast<u32>(rhi::FormatSupport::ShaderSample);
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.getFormatSupport(rhi::Format::RGBA16Float, &support));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, (static_cast<u32>(support) & required) == required
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::function_not_supported));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.getFormatSupport(rhi::Format::R16Float, &support));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, (static_cast<u32>(support) & required) == required
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::function_not_supported));
+        }
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createThermalLut_(device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createBrdfLut_(rhi_service, shader_service, content_dir));
 
@@ -424,6 +445,10 @@ namespace pP {
         m_visibility_prepared = false;
         m_background_ready = false;
         m_background_inputs_prepared = false;
+        // A density lane is admitted by that frame's preparation only: an
+        // unaccumulated target is never composited.
+        m_particle_surface_ready = false;
+        m_particle_surface_encoded = false;
         // A frame's particle draws are admitted by that frame's preparation. The
         // reset lives here so the opaque, optical and gas class draws can all
         // share the one preparation this frame encoded.
@@ -1709,6 +1734,14 @@ namespace pP {
 
         if (m_background_ready) {
             m_background_slots[m_background_cursor].m_last_use = submit_value;
+        }
+
+        // The density targets of this frame were read by the composite in this
+        // submission; only a successful submit fences them. A definitely
+        // unsubmitted frame clears the flag instead.
+        if (m_particle_surface_encoded) {
+            m_particle_surface_slots[m_particle_surface_slot].m_last_use = submit_value;
+            m_particle_surface_encoded = false;
         }
 
         for (auto *const pipeline: cachedPipelines_()) {
@@ -3686,20 +3719,29 @@ namespace pP {
 
     std::error_code GridPass::bindGridPass_(
         rhi::ShaderCursor &cursor, const u32 pass, const EGridParticleDrawClass particle_class) {
-        // CPU mirror of the Slang GridPassSwitch: the particle draw class rides
-        // the same 16-byte constant buffer as the terrain pass selector, so the
-        // particle vertex and fragment stages both read the class of this draw.
+        // CPU mirror of the Slang GridPassSwitch: the particle draw class and the
+        // one admitted density-lane material ride the same 16-byte constant buffer
+        // as the terrain pass selector, so the particle vertex and fragment stages
+        // both read the class of this draw and the direct classes reject the lane
+        // material's non-gas rows without a second constant buffer.
         struct GridPassSwitch {
             u32 m_pass{};
             u32 m_particle_class{};
-            u32 m_pad1{}, m_pad2{};
+            u32 m_surface_material{};
+            u32 m_pad{};
         };
         static_assert(sizeof(GridPassSwitch) == 16u and alignof(GridPassSwitch) == 4u);
         static_assert(PPR_OFFSETOF(GridPassSwitch, m_particle_class) == 4u);
+        static_assert(PPR_OFFSETOF(GridPassSwitch, m_surface_material) == 8u);
 
         GridPassSwitch sw{};
         sw.m_pass = pass;
         sw.m_particle_class = static_cast<u32>(particle_class);
+        // The direct classes exclude the lane only on a frame whose density field
+        // was accumulated. A caller that draws particles without the density
+        // preparation keeps every row direct, so no representation can disappear.
+        sw.m_surface_material = m_particle_surface_ready ? m_world.m_particle_surface.m_material
+                                                         : kParticleSurfaceNoMaterial;
         rhi::ShaderCursor constants{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_grid_pass"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
@@ -4749,6 +4791,28 @@ namespace pP {
         m_world.m_gpu_particles.reset();
         m_particle_census_program = {};
         m_particle_timing_queries.setNull();
+        // Screen-space density lane: the pass-owned programs, sampler, cached
+        // pipelines and completion-fenced targets are dropped together. The lane
+        // itself is world-scoped and re-derived on the next preparation.
+        m_particle_surface_accumulate_program.setNull();
+        m_particle_surface_accumulate_optical_program.setNull();
+        m_particle_surface_composite_program.setNull();
+        m_particle_surface_composite_optical_program.setNull();
+        m_particle_surface_sampler.setNull();
+        m_particle_surface_accumulate_key.reset();
+        m_particle_surface_accumulate_pipeline.reset();
+        m_particle_surface_accumulate_optical_key.reset();
+        m_particle_surface_accumulate_optical_pipeline.reset();
+        m_particle_surface_composite_opaque_key.reset();
+        m_particle_surface_composite_opaque_pipeline.reset();
+        m_particle_surface_composite_optical_key.reset();
+        m_particle_surface_composite_optical_pipeline.reset();
+        m_particle_surface_slots = {};
+        m_particle_surface_slot = 0u;
+        m_particle_surface_pixel_world = 0.0f;
+        m_particle_surface_encoded = false;
+        m_particle_surface_ready = false;
+        m_world.m_particle_surface = {};
         m_background_pipeline.reset();
         m_background_copy_pipeline.reset();
         m_background_key.reset();

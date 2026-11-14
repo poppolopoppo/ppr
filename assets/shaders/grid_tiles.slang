@@ -1,10 +1,14 @@
 #include "world_lighting_codec.slang"
 // The one particle shape constant set, shared with the prepare cull.
 #include "grid_particle_native.slang"
-// Screen-space density kernel and composite mathematics. This file defines the
-// shared formulas only: the direct entries below do not call them yet, so the
-// included program still adds no density target, pass, binding or draw state.
+// Screen-space density kernel and composite mathematics. The 1x accumulation
+// and sample-rate composite entries near the end of this file consume it; the
+// direct entries below are unchanged.
 #include "grid_particle_density.slang"
+// The shared receiving-plane mapping backgroundWorldAt: the sample-rate density
+// composite reconstructs the same z = 0 plane point the background and the
+// terrain do, with the same homogeneous validation.
+#include "grid_background_world.slang"
 
 // Grid tile pass: flat tinted or per-cell quads, one instance per visible chunk-sized
 // tile. Row-major, row-vector convention: transforms call
@@ -124,7 +128,12 @@ StructuredBuffer<GridVisual> g_terrain_visuals;
 struct GridPassSwitch {
     uint pass;
     uint particle_class;
-    uint pad1, pad2;
+    // The one admitted density-lane material (0xffffffff = no lane). The direct
+    // restored classes reject that material's non-gas rows before rasterisation,
+    // so the density splat and the direct draw never present the same particle.
+    // A gas row keeps its own class path even when it shares the material id.
+    uint surface_material;
+    uint pad2;
 };
 ConstantBuffer<GridPassSwitch> g_grid_pass;
 Texture2D<float4> g_boundary_noise;
@@ -168,6 +177,20 @@ StructuredBuffer<ParticleGpu> g_particles;
 // stored world-plane axis and the two amplitudes. Writer: OrientationRow in
 // grid_particle_native.slang; CPU twin: pP::ParticleOrientationGpu.
 StructuredBuffer<OrientationRow> g_particle_orientation;
+// The single admitted density-lane configuration. The splat vertex below reads
+// it for the lane material and the one-pixel admission padding; the fragment
+// entries at the end of this file read the optical flag. The direct classes
+// read only `g_grid_pass.surface_material`, which is the same material.
+struct ParticleSurfaceFrame {
+    // One density pixel in world-plane metres at the camera's z = 0 plane.
+    float m_pixel_world;
+    // The one admitted lane material; every other row rejects in the vertex.
+    uint m_material;
+    // 1 when the admitted lane is optical and the O target participates.
+    uint m_optical;
+    uint m_pad;
+};
+ConstantBuffer<ParticleSurfaceFrame> g_particle_surface;
 struct DiagnosticColor {
     uint m_color_rgba;
     float m_fill_height_fine;
@@ -1279,7 +1302,14 @@ struct ParticleVertexOutput {
     nointerpolation float surface_strength:TEXCOORD8;
 };
 
-ParticleVertexOutput particleVertex(uint vertex,uint instance) {
+// Shared particle quad expansion. `surface` selects the density lane's entry:
+// only the one admitted lane material's non-gas rows are accepted, one density
+// pixel of admission padding is added to the quad, and the class-based depth
+// description is not consulted. The lane material and padding are explicit
+// arguments so each program declares only the constant buffers its own entry
+// reads. The direct entries pass false and keep their byte-identical geometry,
+// class rejection and selected-lane exclusion.
+ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface,uint lane_material,float pad) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
         float2(-1,-1),float2(1,1),float2(-1,1)};
     ParticleGpu particle=g_particles[instance];
@@ -1297,10 +1327,14 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     // One branch, no new buffer and no second compaction: a draw rejects the
     // classes it does not own before rasterisation. The gas draw therefore
     // rejects every moving row explicitly, which is what the retired fragment
-    // discard used to do.
-    bool owned = draw_class==kParticleDrawGas ? is_gas
-        : draw_class==kParticleDrawOpaque ? (!is_gas&&!is_optical)
-        : (draw_class==kParticleDrawOptical&&!is_gas&&is_optical);
+    // discard used to do. The admitted density-lane material is rejected by the
+    // direct classes (held frames included) so nothing is drawn twice; its gas
+    // rows keep the gas path, which is a different representation.
+    bool lane_surface=material==g_grid_pass.surface_material&&!is_gas;
+    bool owned=surface ? (material==lane_material&&!is_gas)
+        : (draw_class==kParticleDrawGas ? is_gas
+            : draw_class==kParticleDrawOpaque ? (!is_gas&&!is_optical)
+            : (draw_class==kParticleDrawOptical&&!is_gas&&is_optical))&&!lane_surface;
     if (!owned) {
         output.position=float4(2.0,2.0,2.0,1.0);
         return output;
@@ -1323,7 +1357,7 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     float2 axis=float2(1.0,0.0);
     float stretch=1.0;
     float surface_strength=0.0;
-    if (draw_class!=kParticleDrawGas) {
+    if (surface||draw_class!=kParticleDrawGas) {
         float bias_fraction=0.0;
         float stretch_fraction=0.0;
         const float2 stored_axis=particleOrientation(right,up,instance,bias_fraction,stretch_fraction);
@@ -1347,9 +1381,14 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
     // the stretched shape: that shape's support in any direction is at most
     // k R = 3.000 r, inside the 3.0625 r cull margin, and the fragment applies
     // the same bound to the minor axis, which stays at R. With stretch == 1
-    // every factor here is exactly the previous expression.
-    float extent=draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
-        : particle.m_radius_m*(kParticleSupportScale*stretch);
+    // every factor here is exactly the previous expression. The density lane
+    // adds one density pixel of admission padding so a pixel whose centre lies
+    // just outside the analytic support still receives the intersecting
+    // footprint; the kernel weight itself still vanishes at rho >= 1.
+    float extent=surface
+        ? particle.m_radius_m*(kParticleSupportScale*stretch)+pad
+        : (draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
+            : particle.m_radius_m*(kParticleSupportScale*stretch));
     float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;
     output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
@@ -1366,6 +1405,10 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
 }
 
 StructuredBuffer<uint> g_particle_ids;
+
+ParticleVertexOutput particleVertex(uint vertex,uint instance) {
+    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_material,0.0);
+}
 
 [shader("vertex")]
 ParticleVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
@@ -1815,6 +1858,202 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
     GridReactiveOutput output;
     output.color=shadeSolidLiquidReactive(input,g_textures,g_sampler,true,output.reactive);
     return output;
+}
+
+// ------------------------------------------------------------------
+// screen-space particle density: 1x accumulation and sample-rate composite
+// ------------------------------------------------------------------
+// The kernel and composite mathematics are grid_particle_density.slang and are
+// consumed unchanged here. This section adds only the two entries and the
+// bindings they read: one additive 1x splat pass over the same prepared rows and
+// indirect arguments, and one per-scene-sample composite at the scene's own
+// resolution. There is no depth attachment in the accumulation, no density
+// history, no blur and no hardware resolve before the existing reconstruction.
+// D, N, O and the composite are linear HDR values throughout.
+
+// (N.rgb, D.a) at the scene raster's 1x resolution. The composite samples it
+// bilinearly with zero extension: the sampler's border is exact zero, so a tap
+// outside the target contributes nothing instead of replicating the edge texel.
+Texture2D<float4> g_particle_density;
+// O = sum w * alpha at the same 1x resolution. Only the optical-lane programs
+// declare a use, so an opaque lane neither allocates nor binds it.
+Texture2D<float> g_particle_optical;
+SamplerState g_particle_density_sampler;
+
+// The authoritative opaque-terrain exclusion at one world-plane position, shared
+// by the four splat quadrature points and the per-sample composite. A position is
+// excluded only by valid opaque terrain ownership: nonzero matching resolved
+// material, no particle winner for that cell, and not optical terrain. This is
+// the same rule the direct particle entry applies as its whole-cell guarantee;
+// the density field is the density of visible, non-occluded particle samples.
+bool terrainExcludesDensity(float2 fine_position) {
+    if ((g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)==0u) return false;
+    uint cell=resolvedCellIndex(fine_position);
+    if (cell==0xffffffffu) return false;
+    uint resolved=g_resolved_cells[cell];
+    uint material=unpackCellMaterial(resolved);
+    if (material==0u) return false;
+    GridVisual visual=g_terrain_visuals[min(material,65535u)];
+    return terrainOccludesParticle(material,visual.m_material_id,
+        (visual.m_surface_flags&kSurfaceOpticalBlend)!=0u,g_best_row[cell]);
+}
+
+// ------------------------------------------------------------------
+// 1x additive accumulation
+// ------------------------------------------------------------------
+
+[shader("vertex")]
+ParticleVertexOutput vertexParticleSurfaceSplat(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_material,
+        g_particle_surface.m_pixel_world);
+}
+
+// One fragment per density pixel. The material is shaded once at the texel-centre
+// world position; the kernel is evaluated at the four fixed 2x2 quadrature
+// offsets of the pixel, each masked by the authoritative terrain exclusion at
+// that exact position. The average weight then multiplies the premultiplied
+// pre-edge surface into N and scales D, and the authored optical alpha into O.
+// The lane is always liquid by admission, so the pre-edge helper takes its liquid
+// path and the blend class follows the admitted depth class.
+float4 particleSurfaceAccumulate(ParticleVertexOutput input,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,SamplerState.Handle g_sampler,
+    out float optical_weight) {
+    optical_weight=0.0;
+
+    // Derivatives are prepared before the support test so both stages stay
+    // coherent: local is the particle's own r-unit metric at the texel centre,
+    // and fine is the same position in native cells for terrain lookups.
+    float2 local=(input.uv*2.0-1.0)*input.shape_scale;
+    float2 local_x=ddx(local),local_y=ddy(local);
+    float2 fine_x=ddx(input.fine_position),fine_y=ddy(input.fine_position);
+    float2 world_gradient_x=clamp(fine_x*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
+    float2 world_gradient_y=clamp(fine_y*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
+
+    // D9: the material is the row's own id in its canonical word. An absent id
+    // writes no contribution and never falls back to entry 0.
+    uint material=input.canonical&kParticleMaterialMask;
+    GridVisual visual=g_terrain_visuals[material];
+    if (visual.m_material_id!=material) return float4(0.0);
+
+    // The kernel decodes the same stored orientation word the direct entry
+    // decodes; the density mapping is not composed with the direct silhouette
+    // warp. flow_stretch is k and surface_strength is the bias fraction.
+    float stretch_fraction=clamp((input.flow_stretch-1.0)/(kParticleStretchCap-1.0),0.0,1.0);
+    ParticleDensityKernel kernel=particleDensityKernel(
+        input.surface_tangent,input.surface_strength,stretch_fraction);
+
+    float weight=0.0;
+    for (uint corner=0u;corner<4u;++corner) {
+        float2 step=particleDensityQuadratureOffset(corner);
+        float2 quadrature=local+step.x*local_x+step.y*local_y;
+        float2 quadrature_fine=input.fine_position+step.x*fine_x+step.y*fine_y;
+        if (terrainExcludesDensity(quadrature_fine)) continue;
+        weight+=particleDensityWeight(quadrature/kParticleSupportScale,kernel);
+    }
+    weight*=0.25;
+    if (!(weight>0.0)) return float4(0.0);
+
+    bool blend_class=g_particle_surface.m_optical!=0u;
+    float4 surface=shadeParticleSurfaceBeforeEdge(true,blend_class,material,input.canonical,
+        input.fine_position,input.position.xy,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+    optical_weight=weight*surface.a;
+    return float4(surface.rgb*weight,weight);
+}
+
+struct ParticleSurfaceAccumulateOutput {
+    float4 m_density:SV_Target0;
+    float m_optical:SV_Target1;
+};
+
+[shader("fragment")]
+float4 fragmentParticleSurfaceAccumulate(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler):SV_Target {
+    float optical_weight;
+    return particleSurfaceAccumulate(input,g_textures,g_sampler,optical_weight);
+}
+
+[shader("fragment")]
+ParticleSurfaceAccumulateOutput fragmentParticleSurfaceAccumulateOptical(ParticleVertexOutput input,
+    uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    uniform SamplerState.Handle g_sampler) {
+    ParticleSurfaceAccumulateOutput output;
+    output.m_density=particleSurfaceAccumulate(input,g_textures,g_sampler,output.m_optical);
+    return output;
+}
+
+// ------------------------------------------------------------------
+// per-scene-sample composite
+// ------------------------------------------------------------------
+
+struct ParticleSurfaceCompositeVertexOutput {
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 uv:TEXCOORD1;
+};
+
+// The full-raster triangle reconstructs the z = 0 scene plane at each corner with
+// the shared receiving-plane mapping, so the composite carries the same clip
+// depth the coplanar particles and terrain use rather than a fixed NDC depth.
+[shader("vertex")]
+ParticleSurfaceCompositeVertexOutput vertexParticleSurfaceComposite(uint vertex:SV_VertexID) {
+    float2 uv=float2((vertex<<1u)&2u,vertex&2u);
+    float2 world=backgroundWorldAt(uv,g_grid_frame.m_inverse_view_projection);
+    ParticleSurfaceCompositeVertexOutput output;
+    output.position=mul(float4(world,0.0,1.0),g_grid_frame.m_view_projection);
+    output.fine_position=world/g_grid_frame.m_cell_size_m;
+    output.uv=uv;
+    return output;
+}
+
+// One invocation per scene sample. D is sampled bilinearly at that sample's UV,
+// differentiated in density-pixel units for the contour width, thresholded at
+// theta before any reconstruction or tone mapping, and composited premultiplied
+// exactly once. N/D and O/D are normalized before coverage; the empty field and
+// the negligible-coverage floor discard, which also suppresses the opaque lane's
+// depth write. The authoritative terrain exclusion is rechecked at the actual
+// sample so interpolation can never paint fluid over opaque terrain.
+// `uv` and `fine` are evaluated by the entry point: a sample-rate interpolation
+// must read the entry's own varyings, so it cannot be performed inside a helper.
+float4 particleSurfaceComposite(ParticleSurfaceCompositeVertexOutput input,float2 uv,float2 fine,
+    float optical_numerator) {
+    if (terrainExcludesDensity(fine)) discard;
+
+    float4 field=g_particle_density.SampleLevel(g_particle_density_sampler,uv,0.0);
+    uint width,height;
+    g_particle_density.GetDimensions(width,height);
+    float2 texel=1.0/float2(float(width),float(height));
+    // Differentiate the bilinear reconstruction itself: one density texel in each
+    // axis. This feeds w_AA only; it is not a mip selection or a blur.
+    float density_x=g_particle_density.SampleLevel(g_particle_density_sampler,uv+float2(texel.x,0.0),0.0).a;
+    float density_y=g_particle_density.SampleLevel(g_particle_density_sampler,uv+float2(0.0,texel.y),0.0).a;
+    float coverage=particleDensityContour(field.a,density_x-field.a,density_y-field.a);
+
+    float4 color;
+    if (!particleDensityComposite(field.rgb,field.a,optical_numerator,g_particle_surface.m_optical!=0u,
+        coverage,color))
+        discard;
+    return color;
+}
+
+// The opaque lane's entry never references the O target: the resource is
+// declared only where the optical entry samples it, so an opaque lane neither
+// allocates nor binds it.
+[shader("fragment")]
+float4 fragmentParticleSurfaceComposite(ParticleSurfaceCompositeVertexOutput input,uint index:SV_SampleIndex):
+    SV_Target {
+    float2 uv=EvaluateAttributeAtSample(input.uv,index);
+    float2 fine=EvaluateAttributeAtSample(input.fine_position,index);
+    return particleSurfaceComposite(input,uv,fine,0.0);
+}
+
+[shader("fragment")]
+float4 fragmentParticleSurfaceCompositeOptical(ParticleSurfaceCompositeVertexOutput input,uint index:SV_SampleIndex):
+    SV_Target {
+    float2 uv=EvaluateAttributeAtSample(input.uv,index);
+    float2 fine=EvaluateAttributeAtSample(input.fine_position,index);
+    return particleSurfaceComposite(
+        input,uv,fine,g_particle_optical.SampleLevel(g_particle_density_sampler,uv,0.0));
 }
 
 // ------------------------------------------------------------------

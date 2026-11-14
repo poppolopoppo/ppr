@@ -188,6 +188,13 @@ export namespace pP {
         // armed; binding errors propagate.
         [[nodiscard]] std::error_code bindFineCH(rhi::ShaderCursor &cursor) const;
 
+        // Binds the committed resolved-cell word alone. The particle-density
+        // composite root reads that one publication field for its authoritative
+        // opaque-terrain exclusion and carries no material/source/thermal
+        // resources, so it must not call the full `bind`. Same attempt authority
+        // and fail-closed contract as `bindFineCH`.
+        [[nodiscard]] std::error_code bindResolvedCells(rhi::ShaderCursor &cursor) const;
+
         // Binds the committed per-native-cell grids: the winner grid that decides
         // categorical base retirement (plan §3) and particle occlusion, and the
         // Q16 physical-fill accumulation the particle prepare pass's fused

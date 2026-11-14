@@ -2035,6 +2035,14 @@ namespace pP {
                 Editor, m_grid_pass->prepareBackground(context, scene_camera, scene_viewport, scene_scissor));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuVisibility(context));
             PPR_RETURN_ERROR_ON_FAIL(Editor, m_grid_pass->prepareGpuParticles(context));
+            // The density lane's 1x accumulation is encoded here, in the same
+            // pre-render callback and after the pack/cue/indirect writes, and ends
+            // before the main scene pass begins. Its texture leaves the pass in
+            // ShaderResource, so the per-sample composite in scene_content_draw
+            // reads this submission's field. No nested render pass exists inside
+            // the scene draw.
+            PPR_RETURN_ERROR_ON_FAIL(
+                Editor, m_grid_pass->prepareParticleSurface(context, scene_camera, scene_viewport, scene_scissor));
             return {};
         };
 

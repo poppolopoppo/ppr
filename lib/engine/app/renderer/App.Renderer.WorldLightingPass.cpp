@@ -837,6 +837,16 @@ namespace pP {
         return {};
     }
 
+    std::error_code WorldLightingPass::bindResolvedCells(rhi::ShaderCursor &cursor) const {
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLighting, m_resources and m_resources->m_resolved ? std::error_code{}
+                                                                   : std::make_error_code(std::errc::not_connected));
+        PPR_RETURN_ERROR_ON_FAIL(
+            WorldLighting, cursor["g_resolved_cells"].setBinding(
+                               rhi::Binding(m_resources->m_resolved, projectionRange(m_resources->m_resolved))));
+        return {};
+    }
+
     std::error_code WorldLightingPass::bindTerrainOwnership(rhi::ShaderCursor &cursor, bool &ownership_bound) const {
         ownership_bound = false;
         // Two per-native-cell grids travel together from this one authority: the

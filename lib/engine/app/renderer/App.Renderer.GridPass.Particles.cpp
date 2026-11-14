@@ -53,7 +53,11 @@ namespace pP {
             // outcome. Host tokens, never a clock: there is no dt.
             u32 m_orientation_update{}, m_orientation_remap{};
             u32 m_orientation_previous_count{}, m_orientation_owned{};
-            u32 m_padding[2]{};
+            // Density-lane admission padding: one density pixel in world metres and
+            // the one admitted lane material. The homogeneous guard expands only
+            // that material's visibility margin, so no other row's cull changes.
+            float m_surface_guard{};
+            u32 m_surface_material{0xffff'ffffu};
         };
 
         static_assert(sizeof(ParticlePrepareFrame) == 144u and alignof(ParticlePrepareFrame) == 16u);
@@ -65,6 +69,8 @@ namespace pP {
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_remap) == 124u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_previous_count) == 128u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_owned) == 132u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_surface_guard) == 136u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_surface_material) == 140u);
 
         // Consecutive held preparations before the hold is reported at warning.
         // While the solver runs, the committed publication is normally one epoch
@@ -858,6 +864,11 @@ namespace pP {
     }
 
     void GridPass::settleParticleAttempt_() noexcept {
+        // A definitely-unsubmitted frame never fenced its density targets and its
+        // composite must not read them; the flag lives outside the particle
+        // storage so it clears even before the first publication.
+        m_particle_surface_encoded = false;
+        m_particle_surface_ready = false;
         if (not m_world.m_gpu_particles) {
             return;
         }
@@ -893,6 +904,12 @@ namespace pP {
         // early return, including a hold, so a stale candidate can never be drawn or
         // committed later.
         settleParticleAttempt_();
+
+        // The density lane is derived before every early return, including a hold:
+        // a held frame draws the retained rows directly and must exclude the same
+        // material the density pass reconstructs, or the two representations would
+        // overlap.
+        deriveParticleSurfaceLane_();
 
         if (m_spatial_msaa) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
@@ -997,6 +1014,9 @@ namespace pP {
         frame.m_count = count;
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
+        frame.m_surface_guard = m_world.m_particle_surface.admitted() ? particleSurfacePixelWorld_(m_camera_view)
+                                                                      : 0.0f;
+        frame.m_surface_material = m_world.m_particle_surface.m_material;
 
         // Orientation publication planning. The orientation clock is the accepted
         // presentation identity (publication, terrain revision, joint tick) plus the
@@ -1513,8 +1533,24 @@ namespace pP {
             context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
         }
 
+        // The admitted density lane is composited at its own class slot: after that
+        // class's direct draw and before the other class. The direct draw already
+        // rejected the lane material (bindGridPass_ writes it only when this frame
+        // accumulated the field), so exactly one representation is visible.
+        const bool surface_lane = m_particle_surface_ready and m_world.m_particle_surface.admitted();
+        const EGridParticleDrawClass surface_class = m_world.m_particle_surface.m_draw_class;
+
         PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::opaque));
-        return renderGpuParticleClass_(context, EGridParticleDrawClass::optical);
+        if (surface_lane and surface_class == EGridParticleDrawClass::opaque) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderParticleSurface(context, EGridParticleDrawClass::opaque));
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::optical));
+        if (surface_lane and surface_class == EGridParticleDrawClass::optical) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderParticleSurface(context, EGridParticleDrawClass::optical));
+        }
+
+        return {};
     }
 
     std::error_code GridPass::renderGasParticles(const DrawContext &context) {

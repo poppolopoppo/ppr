@@ -3494,7 +3494,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         constexpr std::array<std::pair<const char *, u32>, 4u> switch_fields{{
             {"pass", 0u},
             {"particle_class", 4u},
-            {"pad1", 8u},
+            {"surface_material", 8u},
             {"pad2", 12u},
         }};
         PPR_TEST_ASSERT(switch_layout->getFieldCount() == static_cast<unsigned>(switch_fields.size()));
@@ -6672,6 +6672,580 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "max_step={:.6f}",
                 width, lower, upper, maximum_step));
     };
+
+    // ------------------------------------------------------------------
+    // screen-space particle density GPU fixture
+    // ------------------------------------------------------------------
+    // One reusable extension of the existing GridPass device fixture: it stages
+    // one liquid material, one prepared publication and one chunk, encodes the
+    // real density preparation and either the real per-sample composite or the
+    // direct classes alone, then reads the density target and the composite back.
+    // No new harness and no visual golden: every assertion below is numeric.
+
+    struct DensityParticleSpec {
+        double m_x_m{};
+        double m_y_m{};
+        double m_radius_m{0.28209479177387814};
+        bool m_enabled{true};
+    };
+
+    struct DensityCohortSpec {
+        std::vector<DensityParticleSpec> m_particles{};
+        // World metres across the raster. The whole cohorts share one cell metre.
+        float m_world_extent_m{8.0f};
+        u32 m_raster{256u};
+        bool m_optical{};
+        // Subpixel camera translation in raster pixels (+x right, +y down).
+        double m_camera_offset_px{};
+        // When true the draw callback encodes the direct classes without the
+        // density composite; used to prove the lane emits no direct instances.
+        bool m_direct_only{};
+    };
+
+    struct DensityFrameResult {
+        std::vector<float> m_density{}; // D per density pixel
+        std::vector<float> m_composite{}; // premultiplied RGBA per composite pixel
+        u32 m_raster{};
+        u32 m_material{0xffff'ffffu};
+        float m_pixel_world{};
+    };
+
+    [[nodiscard]] DensityFrameResult readDensityFrame(
+        rhi::IDevice &device, const GridPass::ParticleSurfaceTargetsForTest &targets, rhi::ITexture &composite,
+        const u32 raster) {
+        DensityFrameResult result{};
+        result.m_raster = raster;
+        result.m_material = targets.m_material;
+        result.m_pixel_world = targets.m_pixel_world;
+        PPR_TEST_ASSERT(targets.m_density != nullptr);
+
+        const TextureReadback density = readTexture(device, *targets.m_density);
+        result.m_density.resize(std::size_t{raster} * raster);
+        for (u32 y = 0u; y < raster; ++y) {
+            for (u32 x = 0u; x < raster; ++x) {
+                const auto *const words = reinterpret_cast<const u16 *>(
+                    density.m_bytes.data() + std::size_t{y} * density.m_row_pitch + std::size_t{x} * 8u);
+                result.m_density[std::size_t{y} * raster + x] = halfToFloat(words[3]);
+            }
+        }
+
+        const TextureReadback composite_readback = readTexture(device, composite);
+        result.m_composite.resize(std::size_t{raster} * raster * 4u);
+        for (u32 y = 0u; y < raster; ++y) {
+            for (u32 x = 0u; x < raster; ++x) {
+                const auto *const words = reinterpret_cast<const u16 *>(
+                    composite_readback.m_bytes.data() +
+                    std::size_t{y} * composite_readback.m_row_pitch +
+                    std::size_t{x} * 8u);
+                for (u32 channel = 0u; channel < 4u; ++channel) {
+                    result.m_composite[(std::size_t{y} * raster + x) * 4u + channel] = halfToFloat(words[channel]);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Runs `frames` frames of one cohort and returns each frame's readback. A
+    // `hold_after_first` run advances the shared live epoch after the first
+    // accepted frame so the next preparation takes the retained-row hold path.
+    [[nodiscard]] std::vector<DensityFrameResult> runDensityCohort(
+        const DensityCohortSpec &spec, const u32 frames, const bool hold_after_first = false) {
+        std::vector<DensityFrameResult> results;
+        Fixture fixture{};
+        fixture.initialize();
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+            fixture.shutdown();
+        };
+
+        auto &device = fixture.device();
+        const u32 raster = spec.m_raster;
+
+        GridTerrainVisual water{};
+        water.m_material_id = 1u;
+        water.m_color_rgba = 0x0000ffffu;
+        water.m_ior = 1.0f;
+        water.m_opacity = 1.0f;
+        water.m_surface_flags = kGridSurfaceParticleLiquid | (spec.m_optical ? kGridSurfaceOpticalBlend : 0u);
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals.push_back(water);
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+
+        const std::size_t count = spec.m_particles.size();
+        std::vector<GridParticleMetadataRow> rows(count);
+        std::vector<std::array<float, 16u>> hot(std::max<std::size_t>(count, 1u));
+        std::vector<std::array<float, 6u>> cold(std::max<std::size_t>(count, 1u));
+        for (std::size_t row = 0u; row < count; ++row) {
+            const auto &particle = spec.m_particles[row];
+            rows[row].m_id_low = static_cast<u32>(row) + 1u;
+            rows[row].m_source_row = static_cast<u32>(row);
+            const auto packed_temperature = lighting::packCell(1u, 300.0);
+            PPR_TEST_ASSERT(packed_temperature.has_value());
+            rows[row].m_material_temperature = *packed_temperature;
+            // The pack validator admits a committed row only with a finite,
+            // positive presentation radius; the fixture publishes the physical
+            // radius the kernel uses.
+            rows[row].m_radius = static_cast<float>(particle.m_radius_m);
+            // One native cell per metre; the published hot position is in native
+            // cells with the shared origin of three.
+            hot[row][0u] = static_cast<float>(particle.m_x_m) + 3.0f;
+            hot[row][1u] = static_cast<float>(particle.m_y_m) + 3.0f;
+            hot[row][15u] = particle.m_enabled ? 1.0f : 0.0f;
+            cold[row][0u] = 2.0f;
+            cold[row][1u] = static_cast<float>(std::numbers::pi * particle.m_radius_m * particle.m_radius_m);
+            cold[row][2u] = 1.0f;
+        }
+
+        const auto metadata = prepareGridParticleMetadata(
+            device, rows, count == 0u ? 0u : safe_narrowing(count), 1.0, 1u);
+        PPR_TEST_ASSERT(metadata.has_value());
+        GridParticleGpuView view{};
+        view.m_numerical = makeBuffer(
+            device, hot.size() * sizeof(std::array<float, 16u>), sizeof(std::array<float, 16u>), hot.data());
+        view.m_readonly = makeBuffer(
+            device, cold.size() * sizeof(std::array<float, 6u>), sizeof(std::array<float, 6u>), cold.data());
+        view.m_metadata = *metadata;
+        const auto live_epoch = std::make_shared<std::atomic<u64>>(1u);
+        view.m_live_epoch = live_epoch;
+        view.m_world = grid.activeWorldIdentity();
+        view.m_origin = 3.0;
+        view.m_device_epoch = 1u;
+        view.m_publication = 1u;
+        view.m_terrain_revision = 1u;
+        view.m_joint_tick = 1u;
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{0.0f, 0.0f, -0.5f};
+        model.m_ortho_scale = spec.m_world_extent_m / static_cast<float>(raster);
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(
+            TimeSpan{}, model, Viewport{PixelRect{0, 0, static_cast<int>(raster), static_cast<int>(raster)}});
+        const float3 centre{spec.m_world_extent_m * 0.5f, spec.m_world_extent_m * 0.5f, -0.5f};
+        model.m_origin = centre -
+                         camera.getRight() * (spec.m_world_extent_m * 0.5f) -
+                         camera.getUp() * (spec.m_world_extent_m * 0.5f);
+        // A +x camera shift moves the rendered field left in the image.
+        model.m_origin = model.m_origin +
+                         camera.getRight() * static_cast<float>(spec.m_camera_offset_px) * model.m_ortho_scale;
+        camera.updateModel(
+            TimeSpan{}, model, Viewport{PixelRect{0, 0, static_cast<int>(raster), static_cast<int>(raster)}});
+        auto snapshot = camera.getSnapshot();
+        snapshot.m_has_camera_cut = false;
+
+        // Production-shaped scene target for the composite: 4x RGBA16F colour
+        // with a 1x resolve, plus a 4x D32Float depth attachment. The composite
+        // entry is per-sample (SV_SampleIndex / EvaluateAttributeAtSample) and the
+        // production contract is the main scene's 4x + depth signature, so a 1x
+        // depth-less target cannot express it. The accumulation keeps its own
+        // explicit 1-sample, depth-less signature inside the prepare callback.
+        const auto make_color_target = [&](const u32 sample_count, const char *const label) {
+            rhi::TextureDesc description{};
+            description.type = sample_count > 1u ? rhi::TextureType::Texture2DMS : rhi::TextureType::Texture2D;
+            description.size = {.width = raster, .height = raster, .depth = 1u};
+            description.arrayLength = 1u;
+            description.mipCount = 1u;
+            description.format = rhi::Format::RGBA16Float;
+            description.sampleCount = sample_count;
+            description.memoryType = rhi::MemoryType::DeviceLocal;
+            description.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+            description.defaultState = rhi::ResourceState::RenderTarget;
+            description.label = label;
+            rhi::ComPtr<rhi::ITexture> texture{};
+            PPR_TEST_ASSERT(not make_error_code(device.createTexture(description, nullptr, texture.writeRef())));
+            return texture;
+        };
+
+        rhi::ComPtr<rhi::ITexture> scene_color = make_color_target(4u, "grid particle density scene colour 4x");
+        rhi::ComPtr<rhi::ITexture> scene_resolve = make_color_target(1u, "grid particle density scene resolve 1x");
+
+        rhi::TextureDesc depth_description{};
+        depth_description.type = rhi::TextureType::Texture2DMS;
+        depth_description.size = {.width = raster, .height = raster, .depth = 1u};
+        depth_description.arrayLength = 1u;
+        depth_description.mipCount = 1u;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.sampleCount = 4u;
+        depth_description.memoryType = rhi::MemoryType::DeviceLocal;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        depth_description.label = "grid particle density scene depth 4x";
+        rhi::ComPtr<rhi::ITexture> scene_depth{};
+        PPR_TEST_ASSERT(not make_error_code(device.createTexture(depth_description, nullptr, scene_depth.writeRef())));
+
+        // Pin the target shapes the fixture claims to exercise.
+        PPR_TEST_ASSERT(scene_color->getDesc().sampleCount == 4u);
+        PPR_TEST_ASSERT(scene_resolve->getDesc().sampleCount == 1u);
+        PPR_TEST_ASSERT(scene_depth->getDesc().sampleCount == 4u);
+        PPR_TEST_ASSERT(scene_depth->getDesc().format == rhi::Format::D32Float);
+
+        const rhi::ComPtr<rhi::ITextureView> scene_color_view = scene_color->getDefaultView();
+        const rhi::ComPtr<rhi::ITextureView> scene_resolve_view = scene_resolve->getDefaultView();
+        const rhi::ComPtr<rhi::ITextureView> scene_depth_view = scene_depth->getDefaultView();
+        PPR_TEST_ASSERT(
+            scene_color_view.get() != nullptr and
+            scene_resolve_view.get() != nullptr and
+            scene_depth_view.get() != nullptr);
+
+        const auto viewport = rhi::Viewport::fromSize(static_cast<float>(raster), static_cast<float>(raster));
+        const auto scissor = rhi::ScissorRect::fromSize(raster, raster);
+
+        for (u32 frame = 0u; frame < frames; ++frame) {
+            if (hold_after_first and frame == 1u) {
+                // The solver bumped its live epoch: the retained publication is
+                // no longer current, so this frame must present its own rows.
+                live_epoch->fetch_add(1u, std::memory_order_release);
+            }
+
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot, false));
+            const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.prepareBackgroundInputs(context, snapshot, viewport, scissor));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.prepareBackground(context, snapshot, viewport, scissor));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.prepareGpuParticles(context));
+                return grid.prepareParticleSurface(context, snapshot, viewport, scissor);
+            };
+            const auto draw = [&](const DrawContext &context) -> std::error_code {
+                if (spec.m_direct_only) {
+                    return grid.renderDirectParticleClassesForTest(context);
+                }
+
+                return grid.renderParticleSurface(context, grid.particleSurfaceDrawClass());
+            };
+            DrawSubmission submission{"grid particle density fixture", DrawCallback{draw}};
+            submission.m_viewport = viewport;
+            submission.m_scissor = scissor;
+
+            rhi::RenderPassColorAttachment color_attachment{};
+            color_attachment.view = scene_color_view.get();
+            color_attachment.resolveTarget = scene_resolve_view.get();
+            color_attachment.loadOp = rhi::LoadOp::Clear;
+            color_attachment.storeOp = rhi::StoreOp::Store;
+            for (float &component: color_attachment.clearValue)
+                component = 0.0f;
+
+            rhi::RenderPassDepthStencilAttachment depth_attachment{};
+            depth_attachment.view = scene_depth_view.get();
+            depth_attachment.depthLoadOp = rhi::LoadOp::Clear;
+            depth_attachment.depthStoreOp = rhi::StoreOp::Store;
+            depth_attachment.depthClearValue = 1.0f;
+
+            PPR_TEST_ASSERT(not renderer.render(
+                string_literal{std::in_place, "grid particle density fixture"},
+                rhi::RenderPassDesc{
+                    .colorAttachments = &color_attachment,
+                    .colorAttachmentCount = 1u,
+                    .depthStencilAttachment = &depth_attachment,
+                },
+                {submission}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            // The resolve target is the 1x image the pass writes at end-of-pass;
+            // the readback samples that resolved texel, never the 4x surface.
+            results.push_back(readDensityFrame(device, grid.particleSurfaceTargetsForTest(), *scene_resolve, raster));
+        }
+
+        return results;
+    }
+
+    // ------------------------------------------------------------------
+    // screen-space particle density GPU probes
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_density_empty_lane_clears_and_one_splat_integrates_to_its_area) {
+        // Empty admitted lane: the publication still carries the liquid material,
+        // so the lane is admitted, but its only row is disabled and the cull count
+        // is zero. The accumulation must clear to exact zero and the composite must
+        // contribute nothing, never last frame's density.
+        DensityCohortSpec empty{};
+        empty.m_particles.push_back(DensityParticleSpec{.m_enabled = false});
+        const auto empty_frames = runDensityCohort(empty, 1u);
+        PPR_TEST_ASSERT(empty_frames.size() == 1u);
+        PPR_TEST_ASSERT(empty_frames[0].m_material == 1u);
+        for (const float density: empty_frames[0].m_density)
+            PPR_TEST_ASSERT(density == 0.0f);
+        for (u32 pixel = 0u; pixel < empty_frames[0].m_raster * empty_frames[0].m_raster; ++pixel) {
+            PPR_TEST_ASSERT(empty_frames[0].m_composite[pixel * 4u + 3u] == 0.0f);
+        }
+
+        // One enabled neutral splat at the raster centre. Its discrete integral must
+        // equal the independent four-point quadrature prediction for this pixel
+        // scale, and the continuous reference area V to that prediction's own
+        // tolerance -- not by forcing discrete equality at an arbitrary zoom.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr double reference_area = kPi * radius_m * radius_m;
+        DensityCohortSpec single{};
+        single.m_particles.push_back(DensityParticleSpec{.m_x_m = 4.0, .m_y_m = 4.0, .m_radius_m = radius_m});
+        const auto single_frames = runDensityCohort(single, 1u);
+        PPR_TEST_ASSERT(single_frames.size() == 1u);
+        const auto &frame = single_frames[0];
+        const double pixel_world = 8.0 / 256.0;
+        PPR_TEST_ASSERT(std::abs(frame.m_pixel_world - static_cast<float>(pixel_world)) <= 1.0e-7f);
+
+        double integral = 0.0;
+        for (const float density: frame.m_density)
+            integral += static_cast<double>(density) * pixel_world * pixel_world;
+        const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+        const double predicted = densityQuadratureIntegral(neutral, radius_m, pixel_world);
+        PPR_TEST_ASSERT(std::abs(integral - predicted) <= std::max(0.01 * predicted, 1.0e-4));
+        PPR_TEST_ASSERT(std::abs(integral - reference_area) <= 0.01 * reference_area);
+
+        // Composite: the isolated threshold crossing keeps the reference convention
+        // (rho = 5/6 of the shared support), so the centre pixel is saturated and a
+        // pixel far outside the support keeps the cleared target.
+        const auto alpha_at = [&](const u32 x, const u32 y) {
+            return frame.m_composite[(std::size_t{y} * frame.m_raster + x) * 4u + 3u];
+        };
+        PPR_TEST_ASSERT(alpha_at(128u, 128u) >= 0.99f);
+        PPR_TEST_ASSERT(alpha_at(128u + 40u, 128u) == 0.0f);
+        PPR_TEST_ASSERT(alpha_at(8u, 8u) == 0.0f);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_density_gpu field integral={:.9f} predicted={:.9f} "
+                "reference={:.9f} pixel_world={:.6f}",
+                integral, predicted, reference_area, pixel_world));
+    };
+
+    PPR_UNIT_TEST (particle_density_lattice_saturates_and_holds_area_under_subpixel_translation) {
+        // 4x4 rest lattice: V = 0.25 m^2, spacing sqrt(V) = 0.5 m, neutral cues.
+        // Linear accumulation makes the field integral n * V regardless of overlap,
+        // and the four-particle junction plus every centre lies above the contour.
+        DensityCohortSpec lattice{};
+        constexpr double spacing = 0.5;
+        constexpr double radius_m = 0.28209479177387814;
+        for (u32 row = 0u; row < 4u; ++row) {
+            for (u32 column = 0u; column < 4u; ++column) {
+                lattice.m_particles.push_back(
+                    DensityParticleSpec{
+                        .m_x_m = 3.25 + double(column) * spacing,
+                        .m_y_m = 3.25 + double(row) * spacing,
+                        .m_radius_m = radius_m});
+            }
+        }
+
+        const auto base = runDensityCohort(lattice, 1u);
+        PPR_TEST_ASSERT(base.size() == 1u);
+        const auto &frame = base[0];
+        const double pixel_world = 8.0 / 256.0;
+        double integral = 0.0;
+        for (const float density: frame.m_density)
+            integral += static_cast<double>(density) * pixel_world * pixel_world;
+        const double expected = 16.0 * (kPi * radius_m * radius_m);
+        PPR_TEST_ASSERT(std::abs(integral - expected) <= 0.02 * expected);
+
+        // World-to-pixel mapping: +x right, +Y up so image y runs down.
+        const auto pixel_x = [&](const double world_x) { return static_cast<u32>(std::floor(world_x / pixel_world)); };
+        const auto pixel_y = [&](const double world_y) {
+            return static_cast<u32>(std::floor((8.0 - world_y) / pixel_world));
+        };
+        const auto alpha_at = [&](const u32 x, const u32 y) {
+            return frame.m_composite[(std::size_t{y} * frame.m_raster + x) * 4u + 3u];
+        };
+
+        // Saturated interior: a particle centre and the four-particle junction.
+        PPR_TEST_ASSERT(alpha_at(pixel_x(3.25), pixel_y(3.25)) >= 0.99f);
+        PPR_TEST_ASSERT(alpha_at(pixel_x(3.5), pixel_y(3.5)) >= 0.99f);
+        // Outside every support: the free surface above the lattice and the corner.
+        PPR_TEST_ASSERT(alpha_at(pixel_x(4.0), pixel_y(4.0 + 3.0 * 2.0 * radius_m)) == 0.0f);
+        PPR_TEST_ASSERT(alpha_at(2u, 2u) == 0.0f);
+
+        // Subpixel camera translation of one quarter pixel. The integral is a
+        // property of the field, so it is preserved; the field itself must move by
+        // the translated distance rather than snapping to the pixel grid.
+        DensityCohortSpec shifted = lattice;
+        shifted.m_camera_offset_px = 0.25;
+        const auto subpixel = runDensityCohort(shifted, 1u);
+        PPR_TEST_ASSERT(subpixel.size() == 1u);
+        double shifted_integral = 0.0;
+        for (const float density: subpixel[0].m_density)
+            shifted_integral += static_cast<double>(density) * pixel_world * pixel_world;
+        PPR_TEST_ASSERT(std::abs(shifted_integral - integral) <= 0.02 * integral);
+
+        const auto centroid_x = [&](const DensityFrameResult &result) {
+            double weighted = 0.0;
+            double total = 0.0;
+            for (u32 y = 0u; y < result.m_raster; ++y) {
+                for (u32 x = 0u; x < result.m_raster; ++x) {
+                    const double density = static_cast<double>(result.m_density[std::size_t{y} * result.m_raster + x]);
+                    weighted += density * (static_cast<double>(x) + 0.5);
+                    total += density;
+                }
+            }
+
+            return total > 0.0 ? weighted / total : 0.0;
+        };
+        const double moved = centroid_x(subpixel[0]) - centroid_x(frame);
+        PPR_TEST_ASSERT(std::abs(moved + 0.25) <= 0.15);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_density_lattice integral={:.9f} expected={:.9f} "
+                "shifted_integral={:.9f} centroid_move_px={:.6f}",
+                integral, expected, shifted_integral, moved));
+    };
+
+    PPR_UNIT_TEST (particle_density_span_and_droplet_cohorts_keep_the_reference_area) {
+        // Span 64 (64 native cells across 720 px, reproduced at a 256-px raster):
+        // one isolated droplet, one sparse pair whose supports do not meet, and a
+        // two-cluster neck joined by one bridging particle.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr double span64_pixel = 1.0 / (720.0 / 64.0);
+        DensityCohortSpec span64{};
+        span64.m_world_extent_m = static_cast<float>(span64_pixel * 256.0);
+        // Pixel-corner aligned so the independent quadrature prediction and the
+        // rasterised field share one quadrature phase.
+        const double droplet_x = span64_pixel * 56.0;
+        const double droplet_y = span64_pixel * 45.0;
+        span64.m_particles.push_back(
+            DensityParticleSpec{.m_x_m = droplet_x, .m_y_m = droplet_y, .m_radius_m = radius_m});
+        span64.m_particles.push_back(DensityParticleSpec{.m_x_m = 12.0, .m_y_m = 4.0, .m_radius_m = radius_m});
+        span64.m_particles.push_back(DensityParticleSpec{.m_x_m = 13.5, .m_y_m = 4.0, .m_radius_m = radius_m});
+        for (u32 index = 0u; index < 4u; ++index) {
+            const double dx = index < 2u ? -0.45 : 0.45;
+            const double dy = (index % 2u) == 0u ? -0.25 : 0.25;
+            span64.m_particles.push_back(
+                DensityParticleSpec{.m_x_m = 18.0 + dx, .m_y_m = 4.0 + dy, .m_radius_m = radius_m});
+        }
+        span64.m_particles.push_back(DensityParticleSpec{.m_x_m = 18.0, .m_y_m = 4.0, .m_radius_m = radius_m});
+
+        const auto sparse_frames = runDensityCohort(span64, 1u);
+        PPR_TEST_ASSERT(sparse_frames.size() == 1u);
+        const auto &frame = sparse_frames[0];
+        const auto density_at = [&](const double world_x, const double world_y) {
+            const auto x = static_cast<u32>(std::floor(world_x / span64_pixel));
+            const auto y = static_cast<u32>(std::floor((double(span64.m_world_extent_m) - world_y) / span64_pixel));
+            return frame.m_density[std::size_t{y} * frame.m_raster + x];
+        };
+        const auto integral_in = [&](const double x0, const double x1, const double y0, const double y1) {
+            double total = 0.0;
+            const auto first_x = static_cast<u32>(std::floor(x0 / span64_pixel));
+            const auto last_x = static_cast<u32>(std::floor(x1 / span64_pixel));
+            const auto first_y = static_cast<u32>(std::floor((double(span64.m_world_extent_m) - y1) / span64_pixel));
+            const auto last_y = static_cast<u32>(std::floor((double(span64.m_world_extent_m) - y0) / span64_pixel));
+            for (u32 y = first_y; y < last_y; ++y) {
+                for (u32 x = first_x; x < last_x; ++x) {
+                    total += static_cast<double>(frame.m_density[std::size_t{y} * frame.m_raster + x]);
+                }
+            }
+
+            return total * span64_pixel * span64_pixel;
+        };
+
+        // The isolated droplet's region integral equals the discrete prediction.
+        const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+        const double predicted = densityQuadratureIntegral(neutral, radius_m, span64_pixel);
+        const double droplet = integral_in(droplet_x - 2.0, droplet_x + 2.0, droplet_y - 2.0, droplet_y + 2.0);
+        PPR_TEST_ASSERT(std::abs(droplet - predicted) <= std::max(0.01 * predicted, 1.0e-4));
+
+        // Sparse supports do not meet: the midpoint keeps exactly zero density.
+        PPR_TEST_ASSERT(density_at(12.75, 4.0) == 0.0f);
+        PPR_TEST_ASSERT(integral_in(11.0, 12.8, 3.0, 5.0) > 0.0);
+        PPR_TEST_ASSERT(integral_in(12.8, 14.5, 3.0, 5.0) > 0.0);
+
+        // Neck: the bridge particle carries density across the cluster gap.
+        PPR_TEST_ASSERT(density_at(18.0, 4.0) > static_cast<float>(kDensityThreshold));
+        PPR_TEST_ASSERT(density_at(17.55, 4.0) > 0.0f);
+        PPR_TEST_ASSERT(density_at(18.45, 4.0) > 0.0f);
+
+        // Half-coverage width at theta against the analytic 5/6 support radius.
+        const double expected_half_width_px = (5.0 / 6.0) * kDensitySupportScale * radius_m / span64_pixel;
+        u32 crossing = 0u;
+        for (u32 step = 0u; step < 64u; ++step) {
+            const double world_x = droplet_x + (double(step) + 0.5) * span64_pixel;
+            if (density_at(world_x, droplet_y) >= static_cast<float>(kDensityThreshold)) {
+                crossing = step + 1u;
+            }
+        }
+
+        PPR_TEST_ASSERT(std::abs(double(crossing) - expected_half_width_px) <= 0.6);
+
+        // Span 220: the same view contract at 220 cells across 720 px. A droplet
+        // whose half-contour diameter is at least two scene pixels must not vanish;
+        // its integral still matches the discrete prediction within the coarser
+        // quadrature tolerance.
+        constexpr double span220_pixel = 1.0 / (720.0 / 220.0);
+        DensityCohortSpec span220{};
+        span220.m_world_extent_m = static_cast<float>(span220_pixel * 256.0);
+        const double coarse_x = span220_pixel * 128.0;
+        span220.m_particles.push_back(DensityParticleSpec{.m_x_m = coarse_x, .m_y_m = coarse_x, .m_radius_m = 0.6});
+        const auto coarse_frames = runDensityCohort(span220, 1u);
+        PPR_TEST_ASSERT(coarse_frames.size() == 1u);
+        const auto &coarse = coarse_frames[0];
+        float peak = 0.0f;
+        for (const float density: coarse.m_density)
+            peak = std::max(peak, density);
+        PPR_TEST_ASSERT(peak >= static_cast<float>(kDensityThreshold));
+        u32 covered = 0u;
+        for (u32 pixel = 0u; pixel < coarse.m_raster * coarse.m_raster; ++pixel) {
+            if (coarse.m_composite[pixel * 4u + 3u] > 0.0f)
+                ++covered;
+        }
+
+        PPR_TEST_ASSERT(covered >= 8u);
+        const double coarse_predicted = densityQuadratureIntegral(neutral, 0.6, span220_pixel);
+        double coarse_integral = 0.0;
+        for (const float density: coarse.m_density)
+            coarse_integral += static_cast<double>(density) * span220_pixel * span220_pixel;
+        PPR_TEST_ASSERT(std::abs(coarse_integral - coarse_predicted) <= std::max(0.03 * coarse_predicted, 1.0e-3));
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_density_span droplet={:.9f} predicted={:.9f} "
+                "half_width_px={} expected_px={:.4f} coarse_peak={:.4f} coarse_covered={} "
+                "coarse_integral={:.9f}",
+                droplet, predicted, crossing, expected_half_width_px, peak, covered, coarse_integral));
+    };
+
+    PPR_UNIT_TEST (particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere) {
+        // A held publication keeps its own packed rows and stable IDs; the density
+        // field is a view-dependent render product, so the same rows and camera must
+        // reproduce the same field exactly (no cue advance, no accumulation history).
+        DensityCohortSpec cohort{};
+        constexpr double radius_m = 0.28209479177387814;
+        for (u32 index = 0u; index < 5u; ++index) {
+            cohort.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = 3.5 + 0.5 * double(index % 3u),
+                    .m_y_m = 3.5 + 0.5 * double(index / 3u),
+                    .m_radius_m = radius_m});
+        }
+
+        const auto held = runDensityCohort(cohort, 2u, true);
+        PPR_TEST_ASSERT(held.size() == 2u);
+        PPR_TEST_ASSERT(held[0].m_density.size() == held[1].m_density.size());
+        for (std::size_t index = 0u; index < held[0].m_density.size(); ++index) {
+            PPR_TEST_ASSERT(held[0].m_density[index] == held[1].m_density[index]);
+        }
+        for (std::size_t index = 0u; index < held[0].m_composite.size(); ++index) {
+            PPR_TEST_ASSERT(held[0].m_composite[index] == held[1].m_composite[index]);
+        }
+
+        // The admitted lane's own rows must not be encoded by the direct classes.
+        // The same prepared frame with only the direct classes must leave the target
+        // at its cleared value everywhere.
+        DensityCohortSpec direct = cohort;
+        direct.m_direct_only = true;
+        const auto direct_frames = runDensityCohort(direct, 1u);
+        PPR_TEST_ASSERT(direct_frames.size() == 1u);
+        for (const float value: direct_frames[0].m_composite)
+            PPR_TEST_ASSERT(value == 0.0f);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_density_hold rows=5 density_pixels={} direct_pixels={}",
+                held[0].m_density.size(), direct_frames[0].m_composite.size()));
+    };
 }
 
 namespace pP::tests {
@@ -6726,6 +7300,12 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_density_lattice_yields_the_calibrated_examples,
                 detail::WorldLightingMaterial::particle_density_optical_composite_requires_the_opacity_numerator,
                 detail::WorldLightingMaterial::particle_density_contour_is_a_one_texel_antialiased_threshold,
+                detail::WorldLightingMaterial::particle_density_empty_lane_clears_and_one_splat_integrates_to_its_area,
+                detail::WorldLightingMaterial::
+                    particle_density_lattice_saturates_and_holds_area_under_subpixel_translation,
+                detail::WorldLightingMaterial::particle_density_span_and_droplet_cohorts_keep_the_reference_area,
+                detail::WorldLightingMaterial::
+                    particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,
