@@ -1,6 +1,10 @@
 #include "world_lighting_codec.slang"
 // The one particle shape constant set, shared with the prepare cull.
 #include "grid_particle_native.slang"
+// Screen-space density kernel and composite mathematics. This file defines the
+// shared formulas only: the direct entries below do not call them yet, so the
+// included program still adds no density target, pass, binding or draw state.
+#include "grid_particle_density.slang"
 
 // Grid tile pass: flat tinted or per-cell quads, one instance per visible chunk-sized
 // tile. Row-major, row-vector convention: transforms call
@@ -1630,6 +1634,38 @@ bool terrainOccludesParticle(uint resolved_material, uint terrain_material_id, b
         terrain_material_id==resolved_material && !terrain_optical;
 }
 
+// ------------------------------------------------------------------
+// pre-edge phase surface shared by direct and density entries
+// ------------------------------------------------------------------
+// The particle's own material surface before geometric edge coverage: linear HDR
+// premultiplied RGB in .rgb and the authored optical alpha in .a (1 for the
+// opaque class, which ignores authored opacity). This is the one pre-edge
+// evaluation both the direct entry below and the future density entry read; it
+// only factors out the two calls that already followed the material/phase
+// resolution, with their arguments, order and arithmetic unchanged.
+//
+// A liquid shades through the optical surface (its albedo/normal, IOR, optical
+// thickness and absorption sigmas, refracting the backdrop copy); a solid
+// shades through the PBR surface (albedo, normal, tint, metallic, roughness,
+// authored emission and the temperature classification carried in the canonical
+// word). `blend_class` is the optical draw class: it premultiplies the authored
+// opacity and is never re-derived from the phase.
+float4 shadeParticleSurfaceBeforeEdge(bool liquid,bool blend_class,uint material,uint canonical,
+    float2 fine_position,float2 screen,float2 world_gradient_x,float2 world_gradient_y,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,SamplerState.Handle g_sampler) {
+    if (liquid) {
+        return materialSurface(material,fine_position,world_gradient_x,world_gradient_y,screen,
+            float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,fine_position,false,blend_class);
+    }
+
+    // A world with no published fine CH shades from an explicit zero field
+    // instead of indexing the one-element fallback.
+    CH coefficients={};
+    if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(fine_position);
+    return categoricalMaterialSurface(material,canonical,fine_position,world_gradient_x,world_gradient_y,
+        coefficients,g_textures,g_sampler,blend_class);
+}
+
 float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
@@ -1725,34 +1761,15 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
 
     geometric_support=1;
 
-    if (liquid) {
-        // Liquid description: the material's own albedo/normal, IOR, optical
-        // thickness and absorption sigmas through the optical surface, which
-        // refracts the backdrop copy and applies Beer-Lambert absorption. The
-        // optical class premultiplies its authored opacity by the edge
-        // coverage; the opaque class ignores authored opacity and premultiplies
-        // only the coverage, so its interior is fully opaque where the rim and
-        // terrain complement leave coverage at 1.
-        float4 surface=materialSurface(material,input.fine_position,world_gradient_x,world_gradient_y,
-            input.position.xy,float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,
-            input.fine_position,false,blend_class);
-        if (blend_class) return float4(surface.rgb*edge_coverage,surface.a*edge_coverage);
-        return float4(surface.rgb*edge_coverage,edge_coverage);
-    }
-
-    // Solid description: the material's own albedo texture with its period and
-    // patching, normal map and scale, tint, metallic, roughness, authored
-    // emission and the temperature classification carried in the canonical
-    // word, through the PBR surface so the CH/BRDF response is preserved. A
-    // world with no published fine CH shades from an explicit zero field. The
-    // optical class premultiplies its authored opacity by the edge coverage;
-    // the opaque class ignores authored opacity and premultiplies only the
-    // coverage, so its interior is fully opaque where the rim and terrain
-    // complement leave coverage at 1.
-    CH coefficients={};
-    if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(input.fine_position);
-    float4 surface=categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,
-        world_gradient_y,coefficients,g_textures,g_sampler,blend_class);
+    // The phase surface before edge coverage, shared with the density entry. It
+    // is still the material's own description (the liquid optical surface or the
+    // solid PBR surface), so lighting, texture, normal, temperature/emissive and
+    // backdrop evaluation are unchanged. The optical class premultiplies its
+    // authored opacity by the edge coverage; the opaque class ignores authored
+    // opacity and premultiplies only the coverage, so its interior is fully
+    // opaque where the rim and terrain complement leave coverage at 1.
+    float4 surface=shadeParticleSurfaceBeforeEdge(liquid,blend_class,material,input.canonical,
+        input.fine_position,input.position.xy,world_gradient_x,world_gradient_y,g_textures,g_sampler);
     if (blend_class) return float4(surface.rgb*edge_coverage,surface.a*edge_coverage);
     return float4(surface.rgb*edge_coverage,edge_coverage);
 }
