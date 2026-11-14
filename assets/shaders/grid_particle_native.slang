@@ -138,8 +138,9 @@ static const float kParticleSolidInnerHalfExtentScale = kParticleSolidHalfExtent
 // A negligible-fringe floor for depth writes, not a shape threshold. The C1
 // falloff is now the composited edge coverage, so a fragment is cut only when
 // its premultiplied coverage is at or below this: the vanishing tail writes no
-// depth, while the silhouette keeps its analytic coverage. Two hundredths of a
-// pixel at span64.
+// depth, while the silhouette keeps its analytic coverage. The C1 tail ends
+// 0.077 px inside the support at span64 (0.022 px at span220), and at 1/255 the
+// composite cannot move an 8-bit channel by a full LSB.
 static const float kParticleCoverageFloor = 1.0/255.0;
 
 // ------------------------------------------------------------------

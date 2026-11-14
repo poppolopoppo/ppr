@@ -176,7 +176,8 @@ export namespace pP {
     // Negligible-fringe floor for depth writes, not a shape threshold: a fragment
     // is cut only when its premultiplied edge coverage is at or below this, so the
     // C1 falloff's vanishing tail writes nothing while the silhouette keeps its
-    // analytic coverage. Two hundredths of a pixel at span64.
+    // analytic coverage. The tail ends ≈0.077 px inside the support at span64
+    // (≈0.022 px at span220), below any 8-bit LSB.
     inline constexpr float kGridParticleCoverageFloor{1.0f / 255.0f};
 
     // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
