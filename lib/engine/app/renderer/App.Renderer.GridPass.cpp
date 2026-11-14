@@ -4299,7 +4299,12 @@ namespace pP {
         // Plan §3: the gas lane keeps its existing depth-disabled premultiplied
         // state; the restored particle classes test depth because every
         // particle is coplanar with the terrain, and only the opaque one writes
-        // it. The optical class writes no depth and blends premultiplied.
+        // it. Both restored classes now blend premultiplied: each fragment's C1
+        // falloff is its analytic edge coverage, exactly as the terrain pipeline
+        // composites its marching-squares coverage per sample, so the opaque
+        // class shapes its edge by coverage instead of cutting at 0.5. Coplanar
+        // particles remain safe because the depth function is LessEqual, so
+        // every coplanar fragment composites rather than the first one winning.
         //
         // The gas fragment premultiplies only in the sample-rate entry
         // (`point_sample ? color*opacity : color`), so its source factor follows
@@ -4317,8 +4322,8 @@ namespace pP {
                 break;
             case EGridParticleDrawClass::opaque:
                 state = {
-                    .m_blend = false,
-                    .m_premultiplied = false,
+                    .m_blend = true,
+                    .m_premultiplied = true,
                     .m_depth_test = true,
                     .m_depth_write = true,
                     .m_label = "grid particle opaque pipeline"};

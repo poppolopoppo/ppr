@@ -1650,15 +1650,17 @@ GridReactiveOutput fragmentParticleReactive(ParticleVertexOutput input,uint inde
 // The restored instanced classes shade from the instance's own packed material
 // field. The phase flags on that same material choose the description family:
 // solid -> the material's PBR surface, liquid -> its optical surface. That
-// choice is independent of the draw class, which selects only depth/blend: an
-// opaque liquid (liquid phase without kSurfaceOpticalBlend) is drawn by the
-// opaque class and still shades through the liquid description, and an optical
-// solid is drawn by the optical class and still shades through the solid one.
+// choice is independent of the draw class, which selects only depth/blend state
+// and whether authored opacity participates in the edge composite: an opaque
+// liquid (liquid phase without kSurfaceOpticalBlend) is drawn by the opaque
+// class and still shades through the liquid description, and an optical solid
+// is drawn by the optical class and still shades through the solid one.
 
 // Signed distance to the solid rounded-square boundary, in units of the row's
 // physical radius: distance to the inset rectangle (half-extent a-c) plus the
-// corner arc c. It is a distance comparison, never a mask texture fetch. The
-// liquid silhouette is the radial falloff below, so it needs no SDF.
+// corner arc c. It is a distance measurement, never a mask texture fetch; the
+// fragment turns it into a one-pixel coverage ramp. The liquid silhouette is the
+// radial falloff below, so it needs no SDF.
 float particleSolidDistance(float2 local) {
     float2 offset=abs(local)-float2(kParticleSolidInnerHalfExtentScale,kParticleSolidInnerHalfExtentScale);
     return length(max(offset,float2(0.0)))+min(max(offset.x,offset.y),0.0)-kParticleSolidCornerScale;
@@ -1667,9 +1669,12 @@ float particleSolidDistance(float2 local) {
 // C1 radial falloff of the presentation support, shared by both phases. With
 // rho = |local| / R it is 1 inside R_in = (2/3) R, falls as smoothstep(1, 2/3,
 // rho) to 0 at R and is 0 beyond. t is written increasing so this is the ordinary
-// smoothstep polynomial, and both joins have zero slope. Its resting alpha = 0.5
-// contour is rho = 5/6; the optional tangent cue below moves that contour per
-// angle inside [2/3, 1] without touching either join.
+// smoothstep polynomial, and both joins have zero slope. Both restored classes
+// composite this falloff premultiplied as their edge coverage, and a solid
+// multiplies it by the analytic SDF rim below, so the silhouette is the coverage
+// itself rather than a cut at alpha = 0.5; its resting half-coverage contour is
+// rho = 5/6, and the optional tangent cue below moves that contour per angle
+// inside [2/3, 1] without touching either join.
 float particleFalloff(float2 local) {
     float rho=length(local)/kParticleSupportScale;
     float t=saturate((1.0-rho)/(1.0-kParticleFalloffInnerFraction));
@@ -1691,9 +1696,10 @@ float2 particleFlowLocal(float2 local,float2 flow,float stretch) {
 
 // Tangent-aligned contour of the optional Task 11 cue, in the same r units and
 // the same frame as particleFalloff. Only the band between the plateau and the
-// support is warped: the alpha = 0.5 contour becomes the angular edge
+// support is warped: the half-coverage contour becomes the angular edge
 // k(theta) = k0*(1 + b*(cos^2(theta) - 1/2)) with theta measured from the surface
-// tangent, so the silhouette is longer along the surface and shorter across it.
+// tangent, so the premultiplied silhouette is longer along the surface and
+// shorter across it.
 // The warp is a Mobius map of the band coordinate with fixed endpoints and a
 // 0.5 crossing at k(theta), and the same C1 smoothstep polynomial is evaluated on
 // it, so both joins keep zero slope. The plateau and the support are returned
@@ -1792,12 +1798,24 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // plateau, the support and a flat field byte-identical to today.
     if (falloff>0.0 && falloff<1.0 && dot(input.surface_tangent,input.surface_tangent)>0.5)
         falloff=particleTangentFalloff(local,input.surface_tangent);
-    // A blended class shapes its edge with alpha; a non-blending class cannot,
-    // so its silhouette is where alpha = 0.5: the R_s circle at rho = 5/6 when
-    // the tangent cue is absent, and the angular contour k(theta) when it is
-    // present (plan §3). Solids also carry their rounded-square mask.
-    bool inside_solid_shape=liquid || particleSolidDistance(local)<=0.0;
-    if (!inside_solid_shape || falloff<=(blend_class ? 0.0 : kParticleDiscardThreshold)) discard;
+    // One coverage term now carries both restored classes: the C1 falloff, the
+    // solid's analytic rounded-square rim, and partial terrain coverage. Both
+    // classes composite it premultiplied; they differ only in depth ownership
+    // (the opaque class writes depth) and in whether authored opacity
+    // participates (the optical class) or not (the opaque class). The old hard
+    // cuts at alpha = 0.5 and at SDF <= 0 are gone: a solid's flats and corners
+    // both fade over about one pixel through the same pixel-footprint ramp.
+    float shape_distance=particleSolidDistance(local);
+    // Pixel footprint in the same local (r) units: the mean of the two raster
+    // axis lengths. It is derived from the derivatives themselves, never a
+    // hardcoded pixel size, so the rim stays one pixel wide at any zoom.
+    float rim_width=0.5*(length(ddx(local))+length(ddy(local)));
+    // A liquid is the falloff disk alone. A solid's rim is the SDF coverage ramp:
+    // 1 in the interior, 0.5 on the boundary, 0 half a footprint outside it.
+    float shape_coverage=liquid ? 1.0 : saturate(0.5-shape_distance/max(rim_width,1.0e-6));
+    float terrain_coverage=particleOpaqueCoverage(footprint,point_sample);
+    float edge_coverage=falloff*shape_coverage*(1.0-terrain_coverage);
+    if (edge_coverage<=kParticleCoverageFloor) discard;
 
     // Full-cell terrain occlusion: an opaque terrain-owned destination cell
     // hides the particle. The per-pixel hard clip below refines contour edges;
@@ -1821,42 +1839,41 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     }
 
     // The per-pixel terrain hard clip is kept as the second line of defence for
-    // pixels where draw order alone is not enough.
-    float terrain_coverage=particleOpaqueCoverage(footprint,point_sample);
+    // pixels where draw order alone is not enough. It is redundant with the
+    // coverage floor above (full terrain coverage drives edge coverage to zero)
+    // and stays as the explicit whole-cell guarantee.
     if (terrain_coverage==1.0) discard;
 
     geometric_support=1;
-
-    // A blended instance yields to the falloff and to partial terrain coverage;
-    // an opaque class writes straight.
-    float coverage_scale=blend_class ? falloff*(1.0-terrain_coverage) : 1.0;
 
     if (liquid) {
         // Liquid description: the material's own albedo/normal, IOR, optical
         // thickness and absorption sigmas through the optical surface, which
         // refracts the backdrop copy and applies Beer-Lambert absorption. The
-        // surface is premultiplied only when the draw class blends; an opaque
-        // liquid is written straight by the depth-writing opaque class.
+        // optical class premultiplies its authored opacity by the edge
+        // coverage; the opaque class ignores authored opacity and premultiplies
+        // only the coverage, so its interior stays fully opaque.
         float4 surface=materialSurface(material,input.fine_position,world_gradient_x,world_gradient_y,
             input.position.xy,float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,
             input.fine_position,false,blend_class);
-        if (!blend_class) return surface;
-        return float4(surface.rgb*coverage_scale,surface.a*coverage_scale);
+        if (blend_class) return float4(surface.rgb*edge_coverage,surface.a*edge_coverage);
+        return float4(surface.rgb*edge_coverage,edge_coverage);
     }
 
     // Solid description: the material's own albedo texture with its period and
     // patching, normal map and scale, tint, metallic, roughness, authored
     // emission and the temperature classification carried in the canonical
     // word, through the PBR surface so the CH/BRDF response is preserved. A
-    // world with no published fine CH shades from an explicit zero field. An
-    // optical solid is premultiplied for the blending class; the opaque class
-    // writes it straight.
+    // world with no published fine CH shades from an explicit zero field. The
+    // optical class premultiplies its authored opacity by the edge coverage;
+    // the opaque class ignores authored opacity and premultiplies only the
+    // coverage, so its interior stays fully opaque.
     CH coefficients={};
     if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(input.fine_position);
     float4 surface=categoricalMaterialSurface(material,input.canonical,input.fine_position,world_gradient_x,
         world_gradient_y,coefficients,g_textures,g_sampler,blend_class);
-    if (!blend_class) return surface;
-    return float4(surface.rgb*coverage_scale,surface.a*coverage_scale);
+    if (blend_class) return float4(surface.rgb*edge_coverage,surface.a*edge_coverage);
+    return float4(surface.rgb*edge_coverage,edge_coverage);
 }
 
 [shader("fragment")]

@@ -38,9 +38,12 @@ struct ParticleNativeCell { uint x,y,status; };
 //
 // Edge: one C1 radial falloff for both phases, from the normalised radius
 // rho = |p - centre| / R: a = 1 for rho <= 2/3, a = smoothstep(1, 2/3, rho) for
-// 2/3 < rho < 1 and a = 0 beyond. The resting alpha = 0.5 contour is rho = 5/6;
-// the optional tangent cue moves that contour per angle inside [2/3, 1] only. The
-// seeded interior is saturated because every lattice point sits inside R_in.
+// 2/3 < rho < 1 and a = 0 beyond. The silhouette is this falloff composited
+// premultiplied by both restored classes, so the shape is unchanged and only
+// its rasterisation is analytically covered; the resting half-coverage contour
+// is rho = 5/6, and the optional tangent cue moves that contour per angle inside
+// [2/3, 1] only. The seeded interior is saturated because every lattice point
+// sits inside R_in.
 //
 // Solid: a rounded square inscribed in the same R circle. It is the Minkowski
 // sum of a square of half-extent a-c and a disk of radius c, so its support
@@ -78,18 +81,20 @@ static const float kParticleSupportScale = 2.0;
 static const float kParticleCullRadiusScale = 3.0625;
 static const float kParticleStretchCap = 1.5;
 static const float kParticleMotionReference = 0.06;
-// The band between the saturated plateau and the support: alpha is exactly 1 for
-// rho <= 2/3 and falls to 0 at rho = 1. Both contour cues below are legal only
-// because they move the 0.5 crossing inside this band and touch neither join.
+// The band between the saturated plateau and the support: coverage is exactly 1
+// for rho <= 2/3 and falls to 0 at rho = 1. Both contour cues below are legal
+// only because they move the 0.5 coverage crossing inside this band and touch
+// neither join.
 static const float kParticleFalloffInnerFraction = 2.0/3.0;
 // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
-// alpha = 0.5 contour radius, in rho = |p| / R units, is
+// half-coverage contour radius, in rho = |p| / R units, is
 // k(theta) = kParticleTangentContourScale * (1 + kParticleTangentContourBias *
 // (cos^2(theta) - 1/2)) with theta measured from the surface tangent read from
-// the committed per-cell Q16 fill field, so the silhouette is longer along the
-// surface and shorter across it. k0 = 5/6 is where the resting C1 falloff
-// already crosses 0.5. b = 0.3999 is the strongest four-decimal bias whose two
-// endpoints stay strictly inside the legal band in binary32:
+// the committed per-cell Q16 fill field, so the premultiplied silhouette is
+// longer along the surface and shorter across it. k0 = 5/6 is where the resting
+// C1 falloff already reaches 0.5 coverage. b = 0.3999 is the strongest
+// four-decimal bias whose two endpoints stay strictly inside the legal band in
+// binary32:
 //   k_max = k0 * (1 + b/2) = 0.999958277   tangent direction
 //   k_min = k0 * (1 - b/2) = 0.666708350   normal direction
 // i.e. a 1.49984 : 1 silhouette aspect (1.49971 : 1 after the clamp below).
@@ -113,11 +118,11 @@ static const float kParticleTangentContourBias = 0.3999;
 static const float kParticleTangentContourMinimum = kParticleFalloffInnerFraction+1.0e-4;
 // Round-off closure of the two contour joins, relative to R. |local| is a rounded
 // length, so a sample constructed exactly at the support radius can arrive a few
-// ulps inside it; without this hair the warp would return a denormal alpha there
-// instead of exactly 0. Closing it keeps the support boundary exactly alpha = 0
-// and the plateau exactly alpha = 1 for every tangent. It is a numerical closure,
-// not a shape or strength knob: eight binary32 ulps at rho = 1 (1.2e-7) and about
-// 1e-6 R, i.e. 0.002 px at span64, far below anything visible.
+// ulps inside it; without this hair the warp would return a denormal coverage
+// there instead of exactly 0. Closing it keeps the support boundary exactly 0
+// coverage and the plateau exactly 1 for every tangent. It is a numerical
+// closure, not a shape or strength knob: eight binary32 ulps at rho = 1 (1.2e-7)
+// and about 1e-6 R, i.e. 0.002 px at span64, far below anything visible.
 static const float kParticleTangentJoinClosure = 1.0e-6;
 // A gradient magnitude at or below this is "no surface": a zero test, not a
 // smoothing knob. The fill field carries one Q16 quantum (16384 of the word's
@@ -130,7 +135,12 @@ static const float kParticleSolidHalfExtentScale = kParticleSupportScale/kPartic
 static const float kParticleSolidCornerFraction = 0.25;
 static const float kParticleSolidCornerScale = kParticleSolidCornerFraction*kParticleSolidHalfExtentScale;
 static const float kParticleSolidInnerHalfExtentScale = kParticleSolidHalfExtentScale-kParticleSolidCornerScale;
-static const float kParticleDiscardThreshold = 0.5;
+// A negligible-fringe floor for depth writes, not a shape threshold. The C1
+// falloff is now the composited edge coverage, so a fragment is cut only when
+// its premultiplied coverage is at or below this: the vanishing tail writes no
+// depth, while the silhouette keeps its analytic coverage. Two hundredths of a
+// pixel at span64.
+static const float kParticleCoverageFloor = 1.0/255.0;
 
 // ------------------------------------------------------------------
 // committed particle ownership

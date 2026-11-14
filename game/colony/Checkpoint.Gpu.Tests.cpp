@@ -1889,11 +1889,14 @@ namespace pP::game::tests::detail::checkpoint {
         const auto scissor = rhi::ScissorRect::fromSize(512u, 512u);
         // Accepted solid coverage, mirrored from the renderer's own shared
         // constants: a rounded square inscribed in the 2.0 r support circle with
-        // the C1 falloff. Solids discard per sample below alpha = 0.5, so that
-        // contour is the painted silhouette. A sample outside it is a
-        // legitimately open pore: the accepted P1 contract retires the
-        // categorical base under particle-owned cells, dug cavity cells are
-        // vacuum, and the retired base is not replaced by a cell fill.
+        // the C1 falloff. Solids composite that falloff premultiplied, so the
+        // half-coverage contour is the perceptual silhouette; the comparison
+        // below is that coverage, not the shader's negligible-fringe discard
+        // floor. A sample outside the contour is a legitimately open pore: the
+        // accepted P1 contract retires the categorical base under
+        // particle-owned cells, dug cavity cells are vacuum, and the retired
+        // base is not replaced by a cell fill.
+        constexpr float kAuthoredSilhouetteCoverage{0.5f};
         const auto authoredSolidCoverage = [](const Point &centre, const Point &sample) {
             const float radius = static_cast<float>(centre.radius);
             const float half_extent = kGridParticleSolidHalfExtentScale * radius;
@@ -1910,7 +1913,7 @@ namespace pP::game::tests::detail::checkpoint {
         };
         const auto authoredPaint = [&](const Point &sample) {
             for (const Point &centre: points) {
-                if (authoredSolidCoverage(centre, sample) >= kGridParticleDiscardThreshold) {
+                if (authoredSolidCoverage(centre, sample) >= kAuthoredSilhouetteCoverage) {
                     return true;
                 }
             }
@@ -2207,7 +2210,7 @@ namespace pP::game::tests::detail::checkpoint {
                                 Point{0.0, -0.5, 0.0}}) {
                             const Point sample{
                                 point.x + offset.x * point.radius, point.y + offset.y * point.radius, 0.0};
-                            PPR_TEST_ASSERT(authoredSolidCoverage(point, sample) >= kGridParticleDiscardThreshold);
+                            PPR_TEST_ASSERT(authoredSolidCoverage(point, sample) >= kAuthoredSilhouetteCoverage);
                             ++core_samples[0u];
                             if (nothingDrawn(sample)) {
                                 ++core_holes[0u];

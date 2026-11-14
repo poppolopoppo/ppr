@@ -165,15 +165,22 @@ export namespace pP {
 
     // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
     // 1 for rho <= 2/3, smoothstep(1, 2/3, rho) for 2/3 < rho < 1 and 0 beyond.
-    // Its resting alpha = 0.5 contour is rho = 5/6; the optional tangent cue moves
-    // that contour per angle inside [2/3, 1] and touches neither join. Every
-    // seeded-lattice point sits inside R_in, so a packed interior is saturated and
-    // the falloff only shapes the free surface and detached droplets.
+    // Both restored classes composite this falloff premultiplied as their edge
+    // coverage, so the silhouette is the coverage itself rather than a discard at
+    // alpha = 0.5; its resting half-coverage contour is rho = 5/6, and the
+    // optional tangent cue moves that contour per angle inside [2/3, 1] and
+    // touches neither join. Every seeded-lattice point sits inside R_in, so a
+    // packed interior is saturated and the falloff only shapes the free surface
+    // and detached droplets.
     inline constexpr float kGridParticleFalloffInnerFraction{2.0f / 3.0f};
-    inline constexpr float kGridParticleDiscardThreshold{0.5f};
+    // Negligible-fringe floor for depth writes, not a shape threshold: a fragment
+    // is cut only when its premultiplied edge coverage is at or below this, so the
+    // C1 falloff's vanishing tail writes nothing while the silhouette keeps its
+    // analytic coverage. Two hundredths of a pixel at span64.
+    inline constexpr float kGridParticleCoverageFloor{1.0f / 255.0f};
 
     // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
-    // alpha = 0.5 contour radius, in rho units, is
+    // half-coverage contour radius, in rho units, is
     // k(theta) = k0 * (1 + b*(cos^2(theta) - 1/2)) measured from the surface
     // tangent read from the committed per-cell Q16 fill field. k0 = 5/6 is the
     // resting 0.5 contour. b = 0.3999 is the strongest four-decimal bias whose
@@ -325,8 +332,10 @@ export namespace pP {
     // ------------------------------------------------------------------
     // Draw class of one instanced particle draw. It is a per-draw depth/blend
     // state, not a description family: gas keeps the mask disk lane, and the
-    // other two differ only in depth and blend. The material's own phase flags
-    // choose the description, independently of this class.
+    // other two both composite their edge coverage premultiplied and differ only
+    // in depth ownership and in whether authored opacity participates (optical)
+    // or not (opaque). The material's own phase flags choose the description,
+    // independently of this class.
     enum class EGridParticleDrawClass : u32 {
         gas = 0u,
         opaque = 1u,

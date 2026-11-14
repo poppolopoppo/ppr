@@ -3190,11 +3190,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(gas_desc.targets[0u].color.srcFactor == rhi::BlendFactor::SrcAlpha);
         PPR_TEST_ASSERT(gas_desc.targets[0u].color.dstFactor == rhi::BlendFactor::InvSrcAlpha);
 
-        // Opaque: LessEqual, depth writes on, blending off.
+        // Opaque: LessEqual, depth writes on, premultiplied blending, so its
+        // analytic edge coverage composites like the terrain pipeline's.
         const rhi::RenderPipelineDesc &opaque_desc = opaque->getDesc();
         PPR_TEST_ASSERT(opaque_desc.depthStencil.depthTestEnable and opaque_desc.depthStencil.depthWriteEnable);
         PPR_TEST_ASSERT(opaque_desc.depthStencil.depthFunc == rhi::ComparisonFunc::LessEqual);
-        PPR_TEST_ASSERT(not opaque_desc.targets[0u].enableBlend);
+        PPR_TEST_ASSERT(opaque_desc.targets[0u].enableBlend);
+        PPR_TEST_ASSERT(opaque_desc.targets[0u].color.srcFactor == rhi::BlendFactor::One);
+        PPR_TEST_ASSERT(opaque_desc.targets[0u].color.dstFactor == rhi::BlendFactor::InvSrcAlpha);
 
         // Optical: LessEqual, no depth writes, premultiplied blending.
         const rhi::RenderPipelineDesc &optical_desc = optical->getDesc();
@@ -3661,7 +3664,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
         PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 3.0625f);
         PPR_TEST_ASSERT(kGridParticleStretchCap == 1.5f);
-        PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
+        PPR_TEST_ASSERT(kGridParticleCoverageFloor == 1.0f / 255.0f);
         PPR_TEST_ASSERT(std::abs(rounded_support - kGridParticleSupportScale) <= 1.0e-4f);
         // max(support, kStretchCap * support) = 3.000 r <= 3.0625 r.
         PPR_TEST_ASSERT(rounded_support * kGridParticleStretchCap <= kGridParticleCullRadiusScale);
@@ -3670,8 +3673,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(double(kGridParticleSolidCornerScale) * r_cell - 0.1076) <= 5.0e-4);
 
         // The falloff is C1: value 1 up to R_in = (2/3) R, 0 at R and beyond, the
-        // alpha = 0.5 contour at rho = 5/6, and (numerically) zero slope at both
-        // joins.
+        // half-coverage contour at rho = 5/6, and (numerically) zero slope at
+        // both joins.
         constexpr float epsilon = 1.0e-4f;
         const float inner = kGridParticleFalloffInnerFraction;
         PPR_TEST_ASSERT(gridParticleFalloff(0.0f) == 1.0f);
@@ -3682,17 +3685,43 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT((gridParticleFalloff(inner) - gridParticleFalloff(inner + epsilon)) / epsilon <= 1.0e-2f);
         PPR_TEST_ASSERT((gridParticleFalloff(1.0f) - gridParticleFalloff(1.0f - epsilon)) / epsilon <= 1.0e-2f);
 
+        // Coverage is now a shading quantity consumed by the premultiplied blend,
+        // not a discard test: the opaque class composites this same continuous
+        // falloff, so the old 0.5 contour is half coverage rather than a cut. Only
+        // the negligible-fringe floor is discarded, which keeps the plateau, the
+        // support and the shape exactly where they were.
+        const auto opaque_coverage = [](const float rho) { return gridParticleFalloff(rho); };
+        PPR_TEST_ASSERT(std::abs(opaque_coverage(5.0f / 6.0f) - 0.5f) <= 1.0e-4f);
+        PPR_TEST_ASSERT(opaque_coverage(5.0f / 6.0f) > kGridParticleCoverageFloor);
+        PPR_TEST_ASSERT(opaque_coverage(0.0f) == 1.0f);
+        PPR_TEST_ASSERT(opaque_coverage(inner) == 1.0f);
+        PPR_TEST_ASSERT(opaque_coverage(1.0f) == 0.0f);
+        PPR_TEST_ASSERT(opaque_coverage(1.5f) == 0.0f);
+        PPR_TEST_ASSERT(opaque_coverage(1.0f) <= kGridParticleCoverageFloor);
+        PPR_TEST_ASSERT(kGridParticleCoverageFloor > 0.0f);
+        float previous_coverage = opaque_coverage(inner);
+        for (u32 step = 1u; step <= 96u; ++step) {
+            const float rho = static_cast<float>(double(inner) + (1.0 - double(inner)) * double(step) / 96.0);
+            const float coverage = opaque_coverage(rho);
+            PPR_TEST_ASSERT(coverage < previous_coverage);
+            previous_coverage = coverage;
+        }
+        PPR_TEST_ASSERT(previous_coverage == 0.0f);
+
         // The seeded interior is saturated: the axis midpoint (0.25 cell) and the
         // diagonal midpoint / cell centre (0.3536 cell) are all inside R_in, so a
-        // packed body is fully opaque by construction (plan §5.2).
+        // packed body is fully opaque by construction (plan §5.2). Overlapping
+        // particles union their coverages through the premultiplied
+        // One/InvSrcAlpha composite, so "opaque" here means the union of these
+        // continuous coverage terms, not a discard test.
         const double support_cell = double(kGridParticleSupportScale) * r_cell;
         const double rho_axis = 0.25 / support_cell;
         const double rho_diagonal = 0.35355339059327373 / support_cell;
         PPR_TEST_ASSERT(rho_axis < double(kGridParticleFalloffInnerFraction));
         PPR_TEST_ASSERT(rho_diagonal < double(kGridParticleFalloffInnerFraction));
         const auto union_coverage = [](const double rho, const u32 contributors) {
-            const double alpha = double(gridParticleFalloff(static_cast<float>(rho)));
-            return 1.0 - std::pow(1.0 - alpha, double(contributors));
+            const double coverage = double(gridParticleFalloff(static_cast<float>(rho)));
+            return 1.0 - std::pow(1.0 - coverage, double(contributors));
         };
         PPR_TEST_ASSERT(union_coverage(rho_axis, 2u) >= 0.99);
         PPR_TEST_ASSERT(union_coverage(rho_diagonal, 2u) >= 0.98);
@@ -3995,6 +4024,46 @@ namespace pP::tests::detail::WorldLightingMaterial {
         return static_cast<float>(gridParticleTangentFalloff(local, tangent));
     }
 
+    // Mirror of grid_tiles.slang particleSolidDistance: the signed distance to
+    // the solid rounded-square boundary, in the same r units as `local`. Negative
+    // inside the solid, zero on the boundary and positive outside it.
+    [[nodiscard]] float gridParticleSolidDistance(const FlowPoint local) noexcept {
+        const float half_extent = kGridParticleSolidInnerHalfExtentScale;
+        const float offset_x = static_cast<float>(std::abs(local.x)) - half_extent;
+        const float offset_y = static_cast<float>(std::abs(local.y)) - half_extent;
+        const float outside_x = (std::max) (offset_x, 0.0f);
+        const float outside_y = (std::max) (offset_y, 0.0f);
+        return std::sqrt(outside_x * outside_x + outside_y * outside_y) +
+               (std::min) ((std::max) (offset_x, offset_y), 0.0f) -
+               kGridParticleSolidCornerScale;
+    }
+
+    // Mirror of the fragment's analytic rim: a liquid keeps the full shape term,
+    // while a solid crosses from 1 to 0 over `rim_width` (the pixel footprint in
+    // local r units, derived from ddx/ddy in the shader). On the SDF boundary the
+    // coverage is exactly 0.5, which is what replaces the old hard cut.
+    [[nodiscard]] float gridParticleShapeCoverage(
+        const FlowPoint local, const float rim_width, const bool liquid) noexcept {
+        if (liquid)
+            return 1.0f;
+
+        const float width = (std::max) (rim_width, 1.0e-6f);
+        const float coverage = 0.5f - gridParticleSolidDistance(local) / width;
+        return (std::min) ((std::max) (coverage, 0.0f), 1.0f);
+    }
+
+    // The fragment's full pre-blend coverage, mirrored in the shader's float
+    // order: falloff * shape_coverage * (1 - terrain_coverage). The plateau, the
+    // support and a liquid's numbers are asserted through this, not through a
+    // rewritten expression.
+    [[nodiscard]] float gridParticleEdgeCoverage(
+        const FlowPoint local, const FlowPoint tangent, const bool has_tangent, const bool liquid,
+        const float rim_width, const float terrain_coverage) noexcept {
+        const float falloff = gridParticleShadedFalloff(local, tangent, has_tangent);
+        const float shape = gridParticleShapeCoverage(local, rim_width, liquid);
+        return falloff * shape * (1.0f - terrain_coverage);
+    }
+
     PPR_UNIT_TEST (particle_flow_cue_stretches_the_major_axis_only) {
         // Appearance probe for the retained flow cue: the drawn shape stretches
         // along the published row motion by at most k = 1.5, the minor semi-axis
@@ -4085,15 +4154,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(first.x != sample_local.x or first.y != sample_local.y);
 
         // No invariant moved beyond the bounded constant change: the shared
-        // support, the raised cull, the cap and the falloff/silhouette thresholds
-        // are the ones the sealing proof, the phase shapes, the occlusion decision
-        // and the material/transport contracts use.
+        // support, the raised cull, the cap and the falloff/coverage floor
+        // constants are the ones the sealing proof, the phase shapes, the
+        // occlusion decision and the material/transport contracts use.
         PPR_TEST_ASSERT(kGridParticleSupportScale == 2.0f);
         PPR_TEST_ASSERT(kGridParticleCullRadiusScale == 3.0625f);
         PPR_TEST_ASSERT(kGridParticleStretchCap == 1.5f);
         PPR_TEST_ASSERT(kGridParticleMotionReference == 0.06f);
         PPR_TEST_ASSERT(kGridParticleFalloffInnerFraction == 2.0f / 3.0f);
-        PPR_TEST_ASSERT(kGridParticleDiscardThreshold == 0.5f);
+        PPR_TEST_ASSERT(kGridParticleCoverageFloor == 1.0f / 255.0f);
 
         _.log(
             std::format(
@@ -4946,6 +5015,137 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 centre_gradient, offset_gradient, fill_gradient, quantum_gradient, ramp_reference.x, ramp_reference.y,
                 fill_rotation, mask_rotation, fill_contour_step, mask_contour_step));
     };
+
+    PPR_UNIT_TEST (particle_solid_rim_is_analytic_coverage) {
+        // The solid's rounded-square SDF is a coverage term now, not a binary
+        // reject: flats and corners cross the boundary through the same one-pixel
+        // ramp, while a liquid keeps the falloff disk unchanged. The rim width
+        // below is one pixel of the 720-px review raster at span64
+        // (64/720 cell = 0.3151 r). The shader derives that width from
+        // ddx/ddy(local) and never hardcodes it; at span220 one pixel is 1.0832 r.
+        constexpr float r_cell = 0.28209479177387814f;
+        const float rim_width = 64.0f / 720.0f / r_cell;
+        const float support = kGridParticleSupportScale;
+        const float half_extent = kGridParticleSolidHalfExtentScale;
+        const double diagonal = 1.0 / std::sqrt(2.0);
+
+        // The flat boundary is the SDF zero at |x| = a, i.e. rho = a / 2 = 0.763.
+        // The old hard cut dropped the resting falloff 0.7977 there in one step.
+        const FlowPoint flat_boundary{double(half_extent), 0.0};
+        const float flat_rho = half_extent / support;
+        const float resting_falloff = gridParticleFalloff(flat_rho);
+        PPR_TEST_ASSERT(std::abs(gridParticleSolidDistance(flat_boundary)) <= 1.0e-6f);
+        PPR_TEST_ASSERT(std::abs(flat_rho - 0.763f) <= 1.0e-4f);
+        PPR_TEST_ASSERT(std::abs(resting_falloff - 0.7977f) <= 1.0e-4f);
+
+        // On the boundary the ramp is exactly half: 0.5 * 0.7977, where the old
+        // rule produced the full 0.7977 -> 0 step.
+        const float boundary_shape = gridParticleShapeCoverage(flat_boundary, rim_width, false);
+        const float boundary_coverage = gridParticleEdgeCoverage(
+            flat_boundary, FlowPoint{}, false, false, rim_width, 0.0f);
+        PPR_TEST_ASSERT(boundary_shape == 0.5f);
+        PPR_TEST_ASSERT(std::abs(boundary_coverage - 0.5f * resting_falloff) <= 1.0e-5f);
+        PPR_TEST_ASSERT(std::abs(boundary_coverage - 0.39884f) <= 1.0e-4f);
+
+        // One pixel across the flat: still full on the inner side, half on the
+        // boundary, and below the depth-write floor on the outer side. The step
+        // is distributed over the ramp instead of quantised to MSAA levels.
+        const auto flat_at = [&](const float offset_px) {
+            return FlowPoint{double(half_extent) + double(offset_px) * double(rim_width), 0.0};
+        };
+        const float inner_shape = gridParticleShapeCoverage(flat_at(-0.5f), rim_width, false);
+        const float inner_coverage = gridParticleEdgeCoverage(
+            flat_at(-0.5f), FlowPoint{}, false, false, rim_width, 0.0f);
+        const float outer_shape = gridParticleShapeCoverage(flat_at(0.5f), rim_width, false);
+        const float outer_coverage = gridParticleEdgeCoverage(
+            flat_at(0.5f), FlowPoint{}, false, false, rim_width, 0.0f);
+        PPR_TEST_ASSERT(inner_shape >= 0.9999f);
+        PPR_TEST_ASSERT(inner_coverage >= 0.99f);
+        PPR_TEST_ASSERT(outer_shape <= 1.0e-6f);
+        PPR_TEST_ASSERT(outer_coverage <= kGridParticleCoverageFloor);
+        PPR_TEST_ASSERT(inner_coverage > boundary_coverage and boundary_coverage > outer_coverage);
+
+        // The whole ramp is monotone across that pixel and reaches exactly 0 one
+        // footprint outside the boundary, so no re-brightening survives the cut.
+        float previous_flat = gridParticleEdgeCoverage(flat_at(-1.0f), FlowPoint{}, false, false, rim_width, 0.0f);
+        for (u32 step = 1u; step <= 8u; ++step) {
+            const float offset_px = -1.0f + 2.0f * static_cast<float>(step) / 8.0f;
+            const float coverage = gridParticleEdgeCoverage(
+                flat_at(offset_px), FlowPoint{}, false, false, rim_width, 0.0f);
+            PPR_TEST_ASSERT(coverage <= previous_flat);
+            previous_flat = coverage;
+        }
+        PPR_TEST_ASSERT(previous_flat == 0.0f);
+
+        // Deep inside the solid (rho = 0.2, on an axis and in the corner region)
+        // the ramp saturates to exactly 1.0 in float32, so the composite is
+        // bit-identical to the pre-change resting falloff.
+        const FlowPoint plateau_axis{double(0.2f * support), 0.0};
+        const FlowPoint plateau_corner{double(0.2f * support) * diagonal, double(0.2f * support) * diagonal};
+        for (const FlowPoint plateau: {plateau_axis, plateau_corner}) {
+            PPR_TEST_ASSERT(gridParticleShapeCoverage(plateau, rim_width, false) == 1.0f);
+            const float expected = gridParticleShadedFalloff(plateau, FlowPoint{}, false);
+            const float coverage = gridParticleEdgeCoverage(plateau, FlowPoint{}, false, false, rim_width, 0.0f);
+            PPR_TEST_ASSERT(std::bit_cast<u32>(coverage) == std::bit_cast<u32>(expected));
+        }
+        PPR_TEST_ASSERT(gridParticleFalloff(0.2f) == 1.0f);
+
+        // The identity holds wherever the ramp saturates, not only on the
+        // plateau: at rho = 0.9 on the corner ray the falloff is already below 1
+        // but the shape term is still exactly 1.
+        const FlowPoint interior{double(0.9f * support) * diagonal, double(0.9f * support) * diagonal};
+        const float interior_falloff = gridParticleShadedFalloff(interior, FlowPoint{}, false);
+        PPR_TEST_ASSERT(gridParticleShapeCoverage(interior, rim_width, false) == 1.0f);
+        PPR_TEST_ASSERT(interior_falloff > 0.0f and interior_falloff < 1.0f);
+        PPR_TEST_ASSERT(
+            std::bit_cast<u32>(gridParticleEdgeCoverage(interior, FlowPoint{}, false, false, rim_width, 0.0f)) ==
+            std::bit_cast<u32>(interior_falloff));
+
+        // At and beyond R the falloff is exactly 0, so the coverage is 0 and the
+        // floor is the only cut: the support did not move.
+        for (const float rho: {1.0f, 1.05f}) {
+            const FlowPoint local{double(rho * support), 0.0};
+            PPR_TEST_ASSERT(gridParticleEdgeCoverage(local, FlowPoint{}, false, false, rim_width, 0.0f) == 0.0f);
+        }
+        const FlowPoint support_corner{double(1.05f * support) * diagonal, double(1.05f * support) * diagonal};
+        PPR_TEST_ASSERT(gridParticleEdgeCoverage(support_corner, FlowPoint{}, false, false, rim_width, 0.0f) == 0.0f);
+
+        // Coverage falls monotonically from the centre out through a flat and
+        // through a corner, so no flat or diagonal re-brightens before the support.
+        const auto assert_descending = [&](const FlowPoint direction) {
+            float previous = gridParticleEdgeCoverage(FlowPoint{}, FlowPoint{}, false, false, rim_width, 0.0f);
+            PPR_TEST_ASSERT(previous == 1.0f);
+            for (u32 step = 1u; step <= 240u; ++step) {
+                const float rho = static_cast<float>(step) / 200.0f;
+                const FlowPoint local{
+                    direction.x * double(rho) * double(support), direction.y * double(rho) * double(support)};
+                const float coverage = gridParticleEdgeCoverage(local, FlowPoint{}, false, false, rim_width, 0.0f);
+                PPR_TEST_ASSERT(coverage <= previous);
+                previous = coverage;
+            }
+            PPR_TEST_ASSERT(previous == 0.0f);
+        };
+        assert_descending(FlowPoint{1.0, 0.0});
+        assert_descending(FlowPoint{diagonal, diagonal});
+
+        // A liquid has no SDF term: shape coverage is exactly 1 everywhere, so its
+        // composite is the pre-change falloff*(1 - terrain) bit for bit.
+        for (const float rho: {0.1f, 0.5f, 0.763f, 0.9f, 1.0f}) {
+            const FlowPoint local{double(rho * support), 0.0};
+            PPR_TEST_ASSERT(gridParticleShapeCoverage(local, rim_width, true) == 1.0f);
+            const float expected = gridParticleShadedFalloff(local, FlowPoint{}, false) * 0.75f;
+            PPR_TEST_ASSERT(
+                std::bit_cast<u32>(gridParticleEdgeCoverage(local, FlowPoint{}, false, true, rim_width, 0.25f)) ==
+                std::bit_cast<u32>(expected));
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_solid_rim flat_rho={:.4f} resting={:.4f} boundary={:.4f} "
+                "rim_span64_r={:.4f} rim_span220_r={:.4f} inner={:.4f} outer={:.4f}",
+                flat_rho, resting_falloff, boundary_coverage, rim_width, 220.0f / 720.0f / r_cell, inner_coverage,
+                outer_coverage));
+    };
 }
 
 namespace pP::tests {
@@ -4983,6 +5183,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::presentation_row_layout_matches_the_cpu_twin,
                 detail::WorldLightingMaterial::particle_descriptions_use_the_rows_own_phase_material,
                 detail::WorldLightingMaterial::particle_shapes_share_one_support_bound,
+                detail::WorldLightingMaterial::particle_solid_rim_is_analytic_coverage,
                 detail::WorldLightingMaterial::particle_flow_cue_stretches_the_major_axis_only,
                 detail::WorldLightingMaterial::particle_flow_cue_is_the_identity_at_zero_motion,
                 detail::WorldLightingMaterial::particle_flow_cue_samples_a_per_cell_motion_field,
