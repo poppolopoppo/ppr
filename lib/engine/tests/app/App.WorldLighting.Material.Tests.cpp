@@ -5290,6 +5290,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const double strong_after = worst_step(strong, true);
         const double unconditional = k0 * unconditional_bias;
 
+        // `k0 * b` is the unclamped proxy for a 90-degree axis flip; the shipped
+        // contour is clamped at the minor endpoint, so the movement the eye sees is
+        // the span of the clamped contour, which is slightly smaller and is what the
+        // proxy bounds.
+        const float clamped_flip = gridParticleTangentContour(1.0f, 1.0f) - gridParticleTangentContour(0.0f, 1.0f);
+        PPR_TEST_ASSERT(std::abs(double(clamped_flip) - 0.33319163) <= 1.0e-7);
+        PPR_TEST_ASSERT(double(clamped_flip) <= unconditional);
+
         // Before the gate any 90-degree flip moved the contour by k0*b. The gate
         // reduces the weak sequence to zero (strength 0 throughout), and leaves
         // the strong sequence at exactly the old worst case: only cell history can
