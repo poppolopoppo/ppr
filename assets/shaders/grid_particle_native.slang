@@ -45,7 +45,7 @@ struct ParticleNativeCell { uint x,y,status; };
 // [2/3, 1] only. The seeded interior's radial falloff is saturated because every
 // lattice point sits inside R_in; the *final* solid coverage additionally
 // multiplies the analytic SDF rim and the terrain complement, so it is exactly 1
-// only where those leave the plateau untouched (span <= ~128 for a typical
+// only where those leave the plateau untouched (about span <= 78 for a typical
 // radius; at span220 the rim reaches into the plateau edge and that is the
 // intended AA, not a defect).
 //
@@ -133,10 +133,10 @@ static const float kParticleTangentContourMinimum = kParticleFalloffInnerFractio
 static const float kParticleTangentJoinClosure = 1.0e-6;
 // A gradient magnitude at or below this is "no surface": the numerical guard
 // against dividing by zero, not a confidence threshold. The fill field carries
-// one Q16 quantum (16384 of the word's 65536 units, a quarter of full scale,
-// i.e. 0.25 cell-volume) per particle, so a one-quantum step across the stencil
-// is ~1.06 and far above this; a flat field (the dense interior, a paused world,
-// an isolated particle) gives exactly zero.
+// one particle-sized quantum (16384 of the word's 65536 units, a quarter of full
+// scale, i.e. 0.25 cell-volume), and changing one stencil cell by that quantum
+// moves the gradient by at most 0.5 in these units, far above this; a flat field
+// (the dense interior, a paused world, an isolated particle) gives exactly zero.
 static const float kParticleTangentGradientEpsilon = 1.0e-4;
 // Energy gate on that gradient, in the *unnormalised* Sobel units of
 // particleSurfaceTangent (grid_tiles.slang): a full-fill step has |grad| = 4, a

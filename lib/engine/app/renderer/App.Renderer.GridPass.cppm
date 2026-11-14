@@ -209,9 +209,10 @@ export namespace pP {
     // support for any legal bias.
     inline constexpr float kGridParticleTangentContourMinimum{kGridParticleFalloffInnerFraction + 1.0e-4f};
     // A gradient magnitude at or below this is "no surface": the numerical guard
-    // against dividing by zero, not a confidence threshold. One fill quantum
-    // (0.25 cell of volume) across the stencil is ~1.06, far above it; a flat field
-    // is exactly 0.
+    // against dividing by zero, not a confidence threshold. One particle-sized
+    // fill quantum (0.25 cell of volume) changes one stencil cell and moves the
+    // gradient by at most 0.5 in these units, far above it; a flat field is
+    // exactly 0.
     inline constexpr float kGridParticleTangentGradientEpsilon{1.0e-4f};
     // Energy gate on that gradient, in the unnormalised Sobel units of
     // grid_tiles.slang particleSurfaceTangent: a full-fill step is |grad| = 4, a
