@@ -5,13 +5,17 @@ The numerical authority is [ErikSom/pbmpm at
 The original BSD-3-Clause notice is in `LICENSE.md`. Historical EA pins remain
 provenance, not alternative production backends.
 
-PPR uses liquid relaxation **1** with its admitted K2 schedule, rather than
-this fork's default of2. The liquid equations remain unchanged. With default viscosity
-0.01, the isolated isotropic pressure mode linearized about unit density has an
-amplifying eigenvalue about−2.402 at relaxation2; unit relaxation removes that
-mode. This is an explicit profile correction, not a scatter clamp or a change
-to the dense source oracle. Both production and oracle consume the supplied
-profile. See the isolated pressure and frontier5×7-dig regression tests.
+PPR uses liquid relaxation **1** with its admitted K2 schedule, rather than the
+selected fork's default of1.5. The historical EA pin defaulted to2, which is the
+value the instability analysis below was computed at. The liquid equations
+remain unchanged. With default viscosity0.01, the isolated isotropic pressure
+mode linearized about unit density has an amplifying eigenvalue about−2.402 at
+relaxation2; unit relaxation removes that mode, and increasing relaxation
+amplifies it. That analysis describes2, not the selected fork's1.5; the
+regression below covers the unit production value. This is an explicit profile
+correction, not a scatter clamp or a change to the dense source oracle. Both
+production and oracle consume the supplied profile. See the isolated pressure
+and frontier5×7-dig regression tests.
 
 `solver.slang` has two production entry points, `fused0` and `fused1`,
 instantiating the same fused body with compile-time iteration0/1. Both retain

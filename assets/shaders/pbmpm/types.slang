@@ -1,5 +1,6 @@
 // Copyright (c) 2024 Electronic Arts Inc. All rights reserved.
-// Adapted from electronicarts/pbmpm, commit 5a2f438b7115741c41ed429a2a0360d0e5f4b5a9.
+// Adapted from electronicarts/pbmpm, commit 5a2f438b7115741c41ed429a2a0360d0e5f4b5a9,
+// through ErikSom/pbmpm, commit 859c4490c749c1cc364d099543dbf5aa0bd9be1b (the numerical authority).
 // BSD-3-Clause terms are reproduced in LICENSE.md beside this file.
 
 // ------------------------------------------------------------------

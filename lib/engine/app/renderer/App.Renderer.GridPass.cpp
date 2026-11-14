@@ -1655,6 +1655,36 @@ namespace pP {
             particles.m_packed_terrain = particles.m_pending_terrain;
             particles.m_pending_pack = false;
         }
+        if (m_world.m_gpu_particles) {
+            auto &particles = *m_world.m_gpu_particles;
+            // The orientation candidate becomes accepted with this submission and
+            // only this submission. A rejected encoding never reaches here, so it
+            // cannot mutate the accepted history; a failure after scene A does not
+            // undo the acceptance (this hook runs once, after a successful submit).
+            if (particles.m_orientation_pending) {
+                particles.m_orientation_accepted_role ^= 1u;
+                particles.m_orientation_role_valid = true;
+                particles.m_orientation_valid = true;
+                particles.m_orientation_count = particles.m_pending_orientation_count;
+                particles.m_orientation_metadata = std::move(particles.m_pending_orientation_metadata);
+                particles.m_orientation_identity = particles.m_pending_orientation_identity;
+                particles.m_orientation_world = particles.m_pending_orientation_world;
+                particles.m_orientation_version = particles.m_pending_orientation_version;
+                particles.m_orientation_pending = false;
+                // The written role is now the complete accepted history; a retained
+                // pre-growth history allocation is retired past this submission.
+                auto previous = std::move(particles.m_orientation_history);
+                particles.m_orientation_history = particles.m_orientation[particles.m_orientation_accepted_role];
+                if (previous and previous.get() != particles.m_orientation_history.get()) {
+                    m_deferred_releases.defer(submit_value, [kept = std::move(previous)]() mutable { kept.setNull(); });
+                }
+            }
+            // A held frame draws the retained accepted history, so the draw source is
+            // resolved between publications.
+            particles.m_orientation_draw = particles.m_orientation_role_valid
+                                               ? particles.m_orientation[particles.m_orientation_accepted_role]
+                                               : particles.m_orientation_history;
+        }
 
         m_world.m_upload_submission_pending = false;
         for (WorldResources *const world: {m_candidate_world.get(), m_retiring_world.get()}) {
@@ -2626,6 +2656,35 @@ namespace pP {
                     }
                 }
 
+                // Orientation roles, the retained pre-growth history and the draw
+                // source are counted once per unique allocation. The accepted
+                // metadata owner is counted separately when it is not the current
+                // publication's metadata.
+                std::array<rhi::IBuffer *, 4u> orientation_allocations{};
+                u32 orientation_count = 0u;
+                const auto add_orientation = [&](rhi::IBuffer *const buffer) {
+                    if (buffer == nullptr or
+                        std::find(
+                            orientation_allocations.begin(), orientation_allocations.begin() + orientation_count,
+                            buffer) != orientation_allocations.begin() + orientation_count)
+                        return;
+                    orientation_allocations[orientation_count++] = buffer;
+                    out.m_particle_orientation_bytes += buffer->getDesc().size;
+                    out.m_particle_buffer_bytes += buffer->getDesc().size;
+                };
+                for (const auto &role: particles.m_orientation) {
+                    add_orientation(role.get());
+                }
+                add_orientation(particles.m_orientation_history.get());
+                add_orientation(particles.m_orientation_draw.get());
+                if (particles.m_orientation_metadata and
+                    particles.m_orientation_metadata != particles.m_view.m_metadata and
+                    particles.m_orientation_metadata->m_rows) {
+                    const u64 bytes = particles.m_orientation_metadata->m_rows->getDesc().size;
+                    out.m_particle_retained_metadata_bytes += bytes;
+                    out.m_particle_buffer_bytes += bytes;
+                }
+
                 return;
             }
         };
@@ -2797,6 +2856,10 @@ namespace pP {
 
     std::error_code GridPass::notifyDeviceLost() noexcept {
         clearOpticalResources_();
+        // Device recreation is a new orientation lineage: the GPU objects are gone,
+        // so the accepted/candidate roles and their metadata owner reset now and the
+        // first publication after restart re-initialises every row.
+        resetParticleOrientation_();
         if (m_world.m_lighting) {
             // The device's GPU objects are gone; the owner recompiles on the
             // next successful prepare against the restarted device.
@@ -3424,6 +3487,10 @@ namespace pP {
         if (m_world.m_lighting) {
             m_world.m_lighting->discardUnsubmitted();
         }
+    }
+
+    void GridPass::discardUnsubmittedParticles() noexcept {
+        settleParticleAttempt_();
     }
 
     std::error_code GridPass::collectWorldLightingCompleted(const FenceCompletionValue completed) {

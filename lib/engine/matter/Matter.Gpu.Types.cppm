@@ -160,9 +160,10 @@ export namespace pP::matter {
     };
 
     /// Four full constant-buffer rows, mirrored by shader Parameters. Defaults
-    /// follow the pin except for unit liquid relaxation: its value of two
-    /// amplifies density error with the admitted K2 gather/integration schedule.
-    /// The game explicitly configures shared gravity.
+    /// follow the pin except for unit liquid relaxation: the pinned fork
+    /// defaults to 1.5, and unit relaxation departs from that because a larger
+    /// value amplifies density error with the admitted K2 gather/integration
+    /// schedule. The game explicitly configures shared gravity.
     struct GpuParameters {
         u32 m_grid_width{};
         u32 m_grid_height{};

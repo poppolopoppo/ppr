@@ -210,6 +210,7 @@ is in `out/diagnostics/gpu-authoritative-20261020/completion-20261021/`;
 current integrated execution remains a separate validation gate.
 
 The default liquid relaxation is1 for the admitted K2 integration schedule. The
-pin's value2 has an amplifying isolated density/affine-pressure mode; shader
-arithmetic and fixed-point overflow checks are unchanged. Regression coverage
-asserts density-error decay and bounded full-frontier motion after a5×7 dig.
+selected fork defaults to1.5 and the historical EA pin to2, which has an
+amplifying isolated density/affine-pressure mode; shader arithmetic and
+fixed-point overflow checks are unchanged. Regression coverage asserts
+density-error decay and bounded full-frontier motion after a5×7 dig.

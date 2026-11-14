@@ -2258,6 +2258,349 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // shared-grid coupling distance control
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (shared_grid_coupling_precedes_support_contact_diagnostic) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // Zero gravity, no terrain, no shapes and no brush: the only path
+        // between the two rows is the quadratic node stencil. One resident
+        // tick of one substep is one K2 pair, so the published row is the
+        // first gather of a node state that both rows deposited into.
+        fixture.initialize(true, 64u, 64u, true, nullptr, 0.0f);
+        const GpuParameters parameters = fixture.m_solver.profile();
+        PPR_TEST_ASSERT(parameters.m_gravity_strength == 0.0f);
+        PPR_TEST_ASSERT(parameters.m_use_grid_volume_for_liquid == 1u);
+        PPR_TEST_ASSERT(parameters.m_liquid_relaxation == 1.0f);
+
+        // Requested V=.25 calibration. r is the equivalent-area radius and 2r
+        // the drawn support; neither is a solver distance or an exclusion
+        // radius, so this sweep measures the grid and not a collision circle.
+        constexpr double kSampleVolume = 0.25;
+        constexpr double kEquivalentRadius = 0.28209479177387814; // sqrt(.25/pi)
+        constexpr double kDrawnSupport = 2.0 * kEquivalentRadius;
+        constexpr double kSweepFirst = 0.5;
+        constexpr double kSweepStep = 0.05;
+        constexpr u32 kSweepSamples = 61u;
+        constexpr double kSourceMomentum = 0.01;
+
+        const auto sampleRow = [&](const double x, const double y, const double displacement_x) {
+            GpuParticle row = restParticle();
+            row.m_position_x = static_cast<float>(x);
+            row.m_position_y = static_cast<float>(y);
+            row.m_displacement_x = static_cast<float>(displacement_x);
+            row.m_volume = static_cast<float>(kSampleVolume);
+            row.m_material = static_cast<float>(ESourceMaterial::liquid);
+            row.m_log_jp = 0.0f;
+            return row;
+        };
+
+        // Every separation starts from a fresh replacement, so the pair is
+        // rebuilt from the identical rest state and only the distance changes.
+        const auto evolveOnce = [&](const std::span<const GpuParticle> rows) {
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(rows, {}, fixture.m_solver.accounting().m_epoch));
+            fixture.m_solver.publishReplacement();
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            fixture.m_solver.publishTick();
+
+            return fixture.snapshot();
+        };
+        const auto identical = [](const GpuParticle &left, const GpuParticle &right) {
+            return std::bit_cast<std::array<u32, 22u>>(left) == std::bit_cast<std::array<u32, 22u>>(right);
+        };
+
+        // A single undisturbed row is the disjoint-stencil baseline: at J=1
+        // with zero displacement, gravity and affine motion it returns
+        // bit-identical, so any pair difference is transferred state.
+        const std::array<GpuParticle, 1u> control{sampleRow(29.0, 28.5, 0.0)};
+        const auto control_rows = evolveOnce(control);
+        PPR_TEST_ASSERT(control_rows.size() == 1u);
+        PPR_TEST_ASSERT(identical(control_rows[0u], control[0u]));
+        _.log("PBMPM-GRID-COUPLING baseline=isolated_single_row unchanged=true rows=1");
+
+        // Fixed phase triple: between two node samples, just inside a cell,
+        // and exactly on a node sample. The stencil phase, not the separation,
+        // selects the shared nodes, so the onset is reported per phase.
+        const std::array<double, 3u> anchors{28.0, 28.05, 28.5};
+        const std::array<std::string_view, 3u> names{"between_nodes", "near_node", "on_node"};
+
+        double widest_onset = 0.0;
+        for (std::size_t phase = 0u; phase < anchors.size(); ++phase) {
+            const double anchor = anchors[phase];
+            double onset = 0.0;
+            u32 coupled_samples = 0u;
+            bool previous_coupled = false;
+            for (u32 index = 0u; index < kSweepSamples; ++index) {
+                const double separation = kSweepFirst + kSweepStep * static_cast<double>(index);
+                const std::array<GpuParticle, 2u> pair{
+                    sampleRow(anchor, 28.5, kSourceMomentum), sampleRow(anchor + separation, 28.5, 0.0)};
+
+                const auto rows = evolveOnce(pair);
+                PPR_TEST_ASSERT(rows.size() == pair.size());
+                const bool coupled = not identical(rows[1u], pair[1u]);
+                coupled_samples += coupled ? 1u : 0u;
+                if (coupled)
+                    onset = separation;
+
+                // Requested separations: 0.5 cells is inside the grid reach and
+                // still overlapping drawn supports (2R = 1.12837917); 1.5 is inside
+                // the reach and disjoint by 0.37162083 cells; 3.0 and 3.5 lie beyond
+                // every positive weight, so they must stay inert.
+                if (index == 0u or std::abs(separation - 1.5) < 1e-9) {
+                    PPR_TEST_ASSERT(coupled and rows[1u].m_displacement_x != 0.0f);
+                } else if (std::abs(separation - 3.0) < 1e-9 or std::abs(separation - 3.5) < 1e-9) {
+                    PPR_TEST_ASSERT(not coupled and rows[1u].m_displacement_x == 0.0f);
+                }
+
+                if (index == 0u or coupled != previous_coupled) {
+                    _.log(
+                        std::format(
+                            "PBMPM-GRID-COUPLING phase={} separation_cells={:.4f} separation_over_r={:.3f} "
+                            "separation_over_R={:.3f} coupled={} resting_displacement={:.9g}",
+                            names[phase], separation, separation / kEquivalentRadius, separation / kDrawnSupport,
+                            coupled, static_cast<double>(rows[1u].m_displacement_x)));
+                }
+
+                previous_coupled = coupled;
+            }
+
+            widest_onset = std::max(widest_onset, onset);
+            _.log(
+                std::format(
+                    "PBMPM-GRID-COUPLING-SUMMARY phase={} anchor_cell={} sweep_first={} sweep_last={} step={} "
+                    "samples={} coupled_samples={} onset_cells={:.4f} onset_over_r={:.3f} onset_over_R={:.3f} "
+                    "disk_gap_cells={:.4f}",
+                    names[phase], anchor, kSweepFirst,
+                    kSweepFirst + kSweepStep * static_cast<double>(kSweepSamples - 1u), kSweepStep, kSweepSamples,
+                    coupled_samples, onset, onset / kEquivalentRadius, onset / kDrawnSupport,
+                    onset - 2.0 * kDrawnSupport));
+        }
+
+        // Observed model behaviour, not a desired contact law: the reach is
+        // phase dependent, stops below three cells, and starts far beyond the
+        // drawn supports. No assertion here claims a correct contact distance.
+        PPR_TEST_ASSERT(widest_onset > 2.5);
+        PPR_TEST_ASSERT(widest_onset < 3.0);
+    };
+
+    // ------------------------------------------------------------------
+    // mean-occupancy blind spot census
+    // ------------------------------------------------------------------
+
+    struct OccupancyCensus {
+        std::map<std::pair<int, int>, double> m_node_volume;
+        Array<double> m_gathered_volume;
+        u32 m_overfilled_nodes{};
+    };
+
+    std::array<double, 3u> quadraticAxisWeights(const double coordinate) noexcept {
+        const double down = std::floor(coordinate);
+        const double offset = (coordinate - down) - 0.5;
+        return {0.5 * (0.5 - offset) * (0.5 - offset), 0.75 - offset * offset, 0.5 * (0.5 + offset) * (0.5 + offset)};
+    }
+
+    /// Reproduces the two quantities the objective-volume gate consumes: the
+    /// deposited node volume (all rows) and each row's own gathered volume
+    /// (one row). Double precision is the census, not the device arithmetic.
+    OccupancyCensus depositCensus(const std::span<const GpuParticle> rows) {
+        OccupancyCensus census;
+        census.m_gathered_volume.resize(rows.size());
+
+        for (const GpuParticle &row: rows) {
+            const double x = static_cast<double>(row.m_position_x);
+            const double y = static_cast<double>(row.m_position_y);
+            const auto wx = quadraticAxisWeights(x);
+            const auto wy = quadraticAxisWeights(y);
+            const int base_x = static_cast<int>(std::floor(x)) - 1;
+            const int base_y = static_cast<int>(std::floor(y)) - 1;
+
+            for (u32 vertical = 0u; vertical < 3u; ++vertical) {
+                for (u32 horizontal = 0u; horizontal < 3u; ++horizontal) {
+                    census
+                        .m_node_volume[{base_x + static_cast<int>(horizontal), base_y + static_cast<int>(vertical)}] +=
+                        static_cast<double>(row.m_volume) * wx[horizontal] * wy[vertical];
+                }
+            }
+        }
+
+        // Second pass: the gate reads each row's gathered node volume, not the
+        // peak node, over the same weights and the same 3x3 stencil.
+        for (std::size_t index = 0u; index < rows.size(); ++index) {
+            const double x = static_cast<double>(rows[index].m_position_x);
+            const double y = static_cast<double>(rows[index].m_position_y);
+            const auto wx = quadraticAxisWeights(x);
+            const auto wy = quadraticAxisWeights(y);
+            const int base_x = static_cast<int>(std::floor(x)) - 1;
+            const int base_y = static_cast<int>(std::floor(y)) - 1;
+
+            double gathered = 0.0;
+            for (u32 vertical = 0u; vertical < 3u; ++vertical) {
+                for (u32 horizontal = 0u; horizontal < 3u; ++horizontal) {
+                    gathered += wx[horizontal] *
+                                wy[vertical] *
+                                census.m_node_volume.at(
+                                    {base_x + static_cast<int>(horizontal), base_y + static_cast<int>(vertical)});
+                }
+            }
+
+            census.m_gathered_volume[index] = gathered;
+        }
+
+        for (const auto &[node, volume]: census.m_node_volume) {
+            static_cast<void>(node);
+            census.m_overfilled_nodes += volume > 1.0 ? 1u : 0u;
+        }
+
+        return census;
+    }
+
+    PPR_UNIT_TEST (mean_occupancy_gate_blind_spot_census_diagnostic) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // Zero gravity and Sand identity leave the objective-volume impulse as
+        // the only responder. The volume flag keeps its production default.
+        fixture.initialize(true, 64u, 64u, true, nullptr, 0.0f);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_use_grid_volume_for_liquid == 1u);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_gravity_strength == 0.0f);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_liquid_relaxation == 1.0f);
+
+        constexpr double kSampleVolume = 0.25;
+        constexpr u32 kSamplesPerCell = 4u;
+        // Node-centred quadratic products per axis: 0.75*0.75 on the centre
+        // node, and a squared weight sum of (0.125^2 + 0.75^2 + 0.125^2)^2.
+        constexpr double kCentreNodeProduct = 0.5625;
+        constexpr double kStencilProductSum = 0.3525390625;
+
+        const auto cluster = [&](const u32 count) {
+            Array<GpuParticle> rows;
+            for (u32 index = 0u; index < count; ++index) {
+                GpuParticle row = restParticle();
+                row.m_position_x = 28.5f;
+                row.m_position_y = 28.5f;
+                row.m_volume = static_cast<float>(kSampleVolume);
+                row.m_material = static_cast<float>(ESourceMaterial::sand);
+                // Zero plastic history isolates the objective-volume channel
+                // from the inherited Sand logJp decay.
+                row.m_log_jp = 0.0f;
+                rows.push_back(row);
+            }
+
+            return rows;
+        };
+        const auto evolve = [&](const std::span<const GpuParticle> initial, const u32 steps) {
+            PPR_TEST_ASSERT(
+                not fixture.m_solver.prepareReplacement(initial, {}, fixture.m_solver.accounting().m_epoch));
+            fixture.m_solver.publishReplacement();
+            for (u32 step = 0u; step < steps; ++step) {
+                PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 1u, 2u));
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+                const auto complete = fixture.m_solver.pollTick();
+                PPR_TEST_ASSERT(complete and *complete);
+                fixture.m_solver.publishTick();
+            }
+
+            return fixture.snapshot();
+        };
+        const auto trace = [](const GpuParticle &row) {
+            return static_cast<double>(row.m_deformation_displacement.m_c0x) +
+                   static_cast<double>(row.m_deformation_displacement.m_c1y);
+        };
+        const auto coincident = [](const std::span<const GpuParticle> rows) {
+            for (std::size_t left = 0u; left < rows.size(); ++left) {
+                for (std::size_t right = left + 1u; right < rows.size(); ++right) {
+                    if (rows[left].m_position_x != rows[right].m_position_x or
+                        rows[left].m_position_y != rows[right].m_position_y)
+                        return false;
+                }
+            }
+
+            return true;
+        };
+
+        // The audit's analytic control: eleven coincident V=.25 samples
+        // overfill the centre node while every sample's own gathered volume
+        // stays below one, and twelve crosses the gate. Coincidence is the
+        // extreme deterministic case, not a produced seed; it isolates the
+        // gate algebra from worldgen and from the material inventory.
+        for (const u32 count: {11u, 12u}) {
+            const auto initial = cluster(count);
+            const OccupancyCensus census = depositCensus(initial);
+            double peak_node = 0.0;
+            for (const auto &[node, volume]: census.m_node_volume) {
+                static_cast<void>(node);
+                peak_node = std::max(peak_node, volume);
+            }
+
+            double peak_gathered = 0.0;
+            for (const double gathered: census.m_gathered_volume)
+                peak_gathered = std::max(peak_gathered, gathered);
+
+            const double expected_node = static_cast<double>(count) * kSampleVolume * kCentreNodeProduct;
+            const double expected_gathered = static_cast<double>(count) * kSampleVolume * kStencilProductSum;
+            const u32 underfilled_nodes = static_cast<u32>(census.m_node_volume.size()) - census.m_overfilled_nodes;
+
+            PPR_TEST_ASSERT(std::abs(peak_node - expected_node) < 1e-9);
+            PPR_TEST_ASSERT(std::abs(peak_gathered - expected_gathered) < 1e-9);
+            PPR_TEST_ASSERT(census.m_gathered_volume.size() == initial.size());
+            PPR_TEST_ASSERT(census.m_overfilled_nodes == 1u and underfilled_nodes == 8u);
+            PPR_TEST_ASSERT(peak_node > 1.0);
+            PPR_TEST_ASSERT(count > kSamplesPerCell);
+
+            const bool gate_open = peak_gathered > 1.0;
+            const auto first = evolve(initial, 1u);
+            PPR_TEST_ASSERT(first.size() == initial.size());
+            if (gate_open) {
+                // The open gate adds one isotropic impulse whose trace is twice
+                // the retained diagonal; it is a mean/affine term, not a pair
+                // force, so the rows stay exactly coincident.
+                PPR_TEST_ASSERT(trace(first.front()) > 0.0057 and trace(first.front()) < 0.0058);
+            } else {
+                for (std::size_t index = 0u; index < first.size(); ++index) {
+                    PPR_TEST_ASSERT(trace(first[index]) == 0.0);
+                    PPR_TEST_ASSERT(first[index].m_displacement_x == 0.0f);
+                    PPR_TEST_ASSERT(first[index].m_position_x == initial[index].m_position_x);
+                }
+            }
+
+            // The fixed eight-substep tick budget cannot separate either case:
+            // the closed gate never responds, and the open gate responds at
+            // the shared mean, which leaves every row at the same position.
+            const auto late = evolve(initial, 8u);
+            PPR_TEST_ASSERT(late.size() == initial.size());
+            PPR_TEST_ASSERT(coincident(late));
+            for (std::size_t index = 0u; index < late.size(); ++index)
+                PPR_TEST_ASSERT(std::isfinite(trace(late[index])));
+
+            if (not gate_open) {
+                for (std::size_t index = 0u; index < late.size(); ++index) {
+                    PPR_TEST_ASSERT(trace(late[index]) == 0.0);
+                    PPR_TEST_ASSERT(late[index].m_log_jp == 0.0f);
+                    PPR_TEST_ASSERT(late[index].m_position_x == initial[index].m_position_x);
+                    PPR_TEST_ASSERT(late[index].m_position_y == initial[index].m_position_y);
+                }
+            }
+
+            _.log(
+                std::format(
+                    "PBMPM-OCCUPANCY-CENSUS rows={} samples_per_cell_capacity={} centre_node_volume={:.9f} "
+                    "peak_node_volume={:.9f} peak_gathered_volume={:.9f} overfilled_nodes={} underfilled_nodes={} "
+                    "gate_open={} trace_D_after_1={:.9g} trace_D_after_8={:.9g} coincident_after_8={}",
+                    count, kSamplesPerCell, expected_node, peak_node, peak_gathered, census.m_overfilled_nodes,
+                    underfilled_nodes, gate_open, trace(first.front()), trace(late.front()), coincident(late)));
+        }
+    };
+
+    // ------------------------------------------------------------------
     // sand terrain Coulomb response and unchanged base-material contacts
     // ------------------------------------------------------------------
 
@@ -2526,9 +2869,23 @@ namespace pP::tests::detail::MatterGpu {
         std::array<u64, 2u> holes{};
         std::array<u64, 2u> samples{};
         std::array<u64, 2u> outside_painted{};
+        std::array<u64, 2u> outside_edge_band_painted{};
         std::array<u64, 2u> precedence_samples{};
         std::array<u64, 2u> precedence_ok{};
+        std::array<u64, 2u> precedence_edge_band_samples{};
         std::array<u64, 2u> water_pixels{};
+        // The accepted C1 particle edge spans about one target pixel. The fixture
+        // maps 12 m onto 512 px and one native cell is 1/3 m, so a cell is
+        // 512/(12*3) = 14.2222 px and a one-pixel band is 1/14.2222 = 0.0703125 of
+        // a cell per side. Only pixels inside that band on both axes are excluded
+        // from the strict interior contract; edge-band paint is reported separately
+        // and never used to declare the pool gate passed.
+        constexpr double kPoolTargetPixels = 512.0;
+        constexpr double kPoolWorldMetres = 12.0;
+        constexpr double kPoolNativeCellMetres = 1.0 / 3.0;
+        constexpr double kPoolAnalyticEdgePixels = 1.0;
+        const double pool_cell_pixels = kPoolTargetPixels * kPoolNativeCellMetres / kPoolWorldMetres;
+        const double pool_edge_band = kPoolAnalyticEdgePixels / pool_cell_pixels;
         for (u32 state = 0u; state < 2u; ++state) {
             u64 hash = 14695981039346656037ull;
             double rms_motion_squared = 0.0;
@@ -2788,14 +3145,32 @@ namespace pP::tests::detail::MatterGpu {
                                 const u32 cell_y = native_cell(source_y);
                                 const u32 cell = cell_y * kPoolEdge + cell_x;
                                 const bool blue = pixel[2] >= 200u;
+                                // The accepted analytic particle coverage blends across a
+                                // one-pixel edge, so a particle intentionally paints a little
+                                // beyond its own cell. The per-cell contract is therefore
+                                // judged outside that pixel-measured band on both axes;
+                                // interior holes stay strict over every sampled pixel and
+                                // edge-band paint/precedence are reported separately.
+                                const double fraction_x = (source_x - 3.0) - double(cell_x);
+                                const double fraction_y = (source_y - 3.0) - double(cell_y);
+                                const bool cell_interior = fraction_x > pool_edge_band and
+                                                           fraction_x < 1.0 - pool_edge_band and
+                                                           fraction_y > pool_edge_band and
+                                                           fraction_y < 1.0 - pool_edge_band;
                                 if (cell_x == kPrecedenceX and cell_y == kPrecedenceY) {
-                                    ++precedence_samples[index];
-                                    precedence_ok[index] += pixel[0] > pixel[2] ? 1u : 0u;
+                                    if (cell_interior) {
+                                        ++precedence_samples[index];
+                                        precedence_ok[index] += pixel[0] > pixel[2] ? 1u : 0u;
+                                    } else {
+                                        ++precedence_edge_band_samples[index];
+                                    }
                                 } else if (best_row[cell] != 0xffffffffu) {
                                     ++water_pixels[index];
                                     holes[index] += blue ? 0u : 1u;
-                                } else {
+                                } else if (cell_interior) {
                                     outside_painted[index] += blue ? 1u : 0u;
+                                } else {
+                                    outside_edge_band_painted[index] += blue ? 1u : 0u;
                                 }
                             }
 
@@ -2828,10 +3203,11 @@ namespace pP::tests::detail::MatterGpu {
 
                     _.log(
                         std::format(
-                            "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={}",
+                            "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={} outside_edge_band_painted={} precedence={}/{} precedence_edge_band={}",
                             epochs[state], state == 0u ? 1u : 120u, frozen[state].size(), hash,
                             std::sqrt(rms_motion_squared / double(frozen[state].size())), samples[index], holes[index],
-                            outside_painted[index]));
+                            outside_painted[index], outside_edge_band_painted[index], precedence_ok[index],
+                            precedence_samples[index], precedence_edge_band_samples[index]));
                 }
             }
         }
@@ -4770,6 +5146,8 @@ namespace pP::tests {
                 detail::MatterGpu::initialized_rest_gravity_and_publication,
                 detail::MatterGpu::sand_reference_occupancy_compression_and_floor_controls_diagnostic,
                 detail::MatterGpu::sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,
+                detail::MatterGpu::shared_grid_coupling_precedes_support_contact_diagnostic,
+                detail::MatterGpu::mean_occupancy_gate_blind_spot_census_diagnostic,
                 detail::MatterGpu::sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,
                 detail::MatterGpu::evolved_liquid_pool_has_no_interior_render_holes,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,

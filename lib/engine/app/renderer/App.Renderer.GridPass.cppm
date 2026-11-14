@@ -144,6 +144,27 @@ export namespace pP {
     static_assert(std::is_standard_layout_v<ParticleGpu> and std::is_trivially_copyable_v<ParticleGpu>);
 
     // ------------------------------------------------------------------
+    // per-particle presentation orientation history
+    // ------------------------------------------------------------------
+
+    // Renderer-owned 4-byte per-particle orientation record: presentation history
+    // only, not part of the solver ABI, the presentation row or any packet. Two
+    // transactional roles (accepted and candidate) cost 8 B per capacity row, or
+    // 32 KiB / 512 KiB / 8 MiB at 4096 / 65536 / 1048576 rows. The record holds
+    // canonical angle16 (bits 0..15), bias strength B (16..23) and stretch excess S
+    // (24..31). The angle is the history; the vertex stage decodes it to (cos, sin)
+    // for drawing and never writes that decoded pair back. The 4-byte stride is
+    // asserted here and reflected at program creation. The shader twin is
+    // `OrientationRow` in grid_particle_native.slang.
+    struct alignas(4) ParticleOrientationGpu {
+        u32 m_angle_bias_stretch{};
+    };
+    static_assert(sizeof(ParticleOrientationGpu) == 4u and alignof(ParticleOrientationGpu) == 4u);
+    static_assert(PPR_OFFSETOF(ParticleOrientationGpu, m_angle_bias_stretch) == 0u);
+    static_assert(
+        std::is_standard_layout_v<ParticleOrientationGpu> and std::is_trivially_copyable_v<ParticleOrientationGpu>);
+
+    // ------------------------------------------------------------------
     // particle presentation shapes
     // ------------------------------------------------------------------
     // One constant set, mirrored by grid_particle_native.slang (the prepare cull
@@ -158,9 +179,10 @@ export namespace pP {
     // step. Fixed and illustrative, not a physical speed: the cue reads a per-cell
     // motion and introduces no dt. 0.06 makes ordinary flow saturate the cap. The
     // cue's input is the bilinearly sampled per-cell winner-motion field
-    // (grid_tiles.slang particleFlowMotion), not one row's own displacement, so a
-    // neighbour's stretch changes continuously in position (Task 4 continuity fix);
-    // this twin carries only the mapping.
+    // (grid_particle_prepare.slang particleFlowMotion), not one row's own
+    // displacement, so a neighbour's stretch changes continuously in position
+    // (Task 4 continuity fix); the prepare pass resolves it once per accepted
+    // publication and this twin carries only the mapping.
     inline constexpr float kGridParticleMotionReference{0.06f};
 
     // One C1 radial falloff for both phases, from rho = |p - centre| / R: alpha is
@@ -612,6 +634,14 @@ export namespace pP {
         u64 m_particle_uploaded_bytes{};
         u64 m_particle_instances{};
         u64 m_particle_buffer_bytes{};
+        // Unique orientation allocations owned by this world: both transactional
+        // roles plus any retained pre-growth history/draw source (4 B per capacity
+        // row each). Included in m_particle_buffer_bytes as well, and reported
+        // separately so the steady orientation share is visible.
+        u64 m_particle_orientation_bytes{};
+        // A metadata owner retained beside history when the renderer has not yet
+        // replaced it (32 B per row); also included in m_particle_buffer_bytes.
+        u64 m_particle_retained_metadata_bytes{};
         // Distinct published materials the palette does not carry. Those rows
         // discard at shading time (identity guard D9); nothing falls back to
         // palette entry 0. Counted once per successful pack.
@@ -688,11 +718,13 @@ export namespace pP {
             // Availability word for the categorical publication, mirrored by
             // `g_grid_frame.m_has_resolved_cells` in grid_tiles.slang. Bit 0:
             // the resolved-cell and fine-CH publication is bound. Bit 1: the
-            // committed per-cell grids (`g_best_row` and, for the particle
-            // tangent cue, `g_cell_fill`) written by that same projection attempt
-            // are bound, so the terrain fragment may retire particle-owned cells
-            // and the particle draw may read the fill. Bit 1 is never set without
-            // bit 0 and never while the zero fallback is bound.
+            // committed per-cell winner grid (`g_best_row`) written by that same
+            // projection attempt is bound, so the terrain fragment may retire
+            // particle-owned cells and the particle draw may occlude. The
+            // prepare pass's Q16-fill target reads that attempt's grids through
+            // the same ownership authority and carries its own bit in the
+            // prepare constants. Bit 1 is never set without bit 0 and never while
+            // the zero fallback is bound.
             u32 m_has_resolved_cells{};
         };
 
@@ -799,6 +831,11 @@ export namespace pP {
         void notifyWorldLightingSubmitted(FenceCompletionValue value) noexcept;
         void notifyWorldLightingReadSubmitted(FenceCompletionValue value) noexcept;
         void discardWorldLightingUnsubmitted() noexcept;
+        // Settles a definitely-unsubmitted particle preparation: clears the pending
+        // pack and orientation tokens and restores the accepted draw source. The
+        // editor's definite pre-submit rejection calls this beside the lighting
+        // discard; the ambiguous-submission quarantine is untouched.
+        void discardUnsubmittedParticles() noexcept;
         [[nodiscard]] std::error_code collectWorldLightingCompleted(FenceCompletionValue completed);
         [[nodiscard]] WorldLightingPass *activeWorldLightingForTest() const noexcept {
             return m_world.m_lighting.get();
@@ -916,6 +953,47 @@ export namespace pP {
             const auto &particles = *m_world.m_gpu_particles;
             const auto &slot = particles.m_slots[particles.m_selected_slot];
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
+        }
+
+        // Test-only orientation history roles: {accepted, candidate}. The accepted
+        // role is what the next update slews from and what a repeated publication
+        // binds; the candidate is this publication's uncommitted write. Both are
+        // null before the first prepared publication.
+        [[nodiscard]] std::array<rhi::IBuffer *, 2u> particleOrientationRolesForTest() const noexcept {
+            if (not m_world.m_gpu_particles) {
+                return {};
+            }
+            const auto &particles = *m_world.m_gpu_particles;
+            return {particles.m_orientation[0u].get(), particles.m_orientation[1u].get()};
+        }
+        [[nodiscard]] u32 particleOrientationAcceptedRoleForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_orientation_accepted_role : 0u;
+        }
+        [[nodiscard]] bool particleOrientationValidForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_orientation_valid : false;
+        }
+        // Rows the accepted history covers (the metadata count at acceptance).
+        [[nodiscard]] u32 particleOrientationCountForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_orientation_count : 0u;
+        }
+        // The buffer this frame's particle draw reads: the candidate when the frame
+        // encoded an update, otherwise the accepted role or the retained history.
+        [[nodiscard]] rhi::IBuffer *particleOrientationDrawForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_orientation_draw.get() : nullptr;
+        }
+        // The complete accepted history between publications: roles[accepted] when
+        // that role is valid, otherwise the retained pre-growth allocation.
+        [[nodiscard]] rhi::IBuffer *particleOrientationAcceptedForTest() const noexcept {
+            if (not m_world.m_gpu_particles) {
+                return nullptr;
+            }
+            const auto &particles = *m_world.m_gpu_particles;
+            return particles.m_orientation_role_valid
+                       ? particles.m_orientation[particles.m_orientation_accepted_role].get()
+                       : particles.m_orientation_history.get();
+        }
+        [[nodiscard]] rhi::IBuffer *particleOrientationHistoryForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_orientation_history.get() : nullptr;
         }
 
         // Test-only publication observations: the state the last applied stage
@@ -1197,6 +1275,37 @@ export namespace pP {
             std::array<GpuParticleSlot, kTileRingSize> m_slots{};
             rhi::ComPtr<rhi::IBuffer> m_packed{}, m_ranks{}, m_counts{}, m_prefix{};
 
+            // Two transactional orientation roles, indexed by role, 4 B per
+            // capacity row each. `m_orientation_history` is the complete accepted
+            // history the next update reads and a hold draws; it usually aliases
+            // one role, but after a capacity growth it is the retained old
+            // allocation until the first post-growth candidate submission succeeds.
+            // The fresh growth roles are never read before that acceptance.
+            // `m_orientation_draw` is resolved per frame: the candidate when this
+            // frame encoded an update, otherwise the accepted role or the retained
+            // history.
+            std::array<rhi::ComPtr<rhi::IBuffer>, 2u> m_orientation{};
+            rhi::ComPtr<rhi::IBuffer> m_orientation_history{};
+            rhi::ComPtr<rhi::IBuffer> m_orientation_draw{};
+            std::shared_ptr<const GridParticleMetadataResource> m_orientation_metadata{};
+            std::shared_ptr<const GridParticleMetadataResource> m_pending_orientation_metadata{};
+            GridWorldIdentity m_orientation_world{};
+            GridWorldIdentity m_pending_orientation_world{};
+            // Accepted and pending presentation identities: the design's acceptance
+            // clock (publication, terrain revision, joint tick) plus the world.
+            GridParticlePresentationIdentity m_orientation_identity{};
+            GridParticlePresentationIdentity m_pending_orientation_identity{};
+            u64 m_orientation_version{};
+            u64 m_pending_orientation_version{};
+            u32 m_orientation_accepted_role{};
+            u32 m_orientation_count{};
+            u32 m_pending_orientation_count{};
+            // True when roles[accepted_role] holds the complete accepted history;
+            // false after growth until the first new candidate is accepted.
+            bool m_orientation_role_valid{};
+            bool m_orientation_valid{};
+            bool m_orientation_pending{};
+
             GridParticleGpuView m_view{};
             std::shared_ptr<const std::atomic<u64>> m_packed_owner{}, m_pending_owner{};
 
@@ -1228,7 +1337,19 @@ export namespace pP {
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);
-        [[nodiscard]] std::error_code ensureGpuParticleStorage_(rhi::IDevice &device, u32 count);
+        [[nodiscard]] std::error_code ensureGpuParticleStorage_(const PreRenderContext &context, u32 count);
+        // Drops the accepted/candidate orientation roles, the retained history and
+        // the accepted metadata owner. Replaced allocations are deferred through the
+        // reader-fence owner. Called on world/reset lineage and device
+        // discontinuity, never per frame.
+        void resetParticleOrientation_() noexcept;
+        // Clears bookkeeping for a particle attempt that was definitely not
+        // submitted: the pending pack token, the pending orientation token and the
+        // per-frame draw source. Called before any next-frame prepare early return
+        // (including a hold) and on the editor's definite pre-submit rejection, so
+        // a rejected candidate can never be drawn or committed later. An ambiguous
+        // submission never reaches these paths; it stays quarantined.
+        void settleParticleAttempt_() noexcept;
         [[nodiscard]] std::error_code renderGpuParticleClass_(
             const DrawContext &context, EGridParticleDrawClass draw_class);
         void prepareChunkSlotMap_(bool retained_table);
@@ -1300,10 +1421,12 @@ export namespace pP {
 
         // One authority for the terrain availability word and the committed
         // ownership grids: bit 0 is the categorical publication, bit 1 is set only
-        // when this call actually bound every committed grid the root declares
-        // (the winner grid, and the Q16 fill for the particle tangent cue). A stale
-        // attempt, a fixture publication or no publication binds the zero
-        // fallbacks and leaves bit 1 clear.
+        // when this call actually bound every committed grid the root declares (the
+        // winner grid for base retirement and particle occlusion; a root that also
+        // declares the Q16 fill, such as the particle prepare rank invocation,
+        // binds that through the same authority). A stale attempt, a fixture
+        // publication or no publication binds the zero fallbacks and leaves bit 1
+        // clear.
         [[nodiscard]] std::error_code bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability);
 
         // Reclaims deferred pipelines/roots at or below `completed`.

@@ -159,6 +159,11 @@ float3 unpackParticleTint(uint word) {
 Texture2D<float4> g_particle_mask;
 SamplerState g_particle_mask_sampler;
 StructuredBuffer<ParticleGpu> g_particles;
+// Renderer-owned per-particle orientation history, one 8-byte record per packed
+// row. The prepare pass writes it fused into rank; this draw only decodes the
+// stored world-plane axis and the two amplitudes. Writer: OrientationRow in
+// grid_particle_native.slang; CPU twin: pP::ParticleOrientationGpu.
+StructuredBuffer<OrientationRow> g_particle_orientation;
 struct DiagnosticColor {
     uint m_color_rgba;
     float m_fill_height_fine;
@@ -173,25 +178,15 @@ StructuredBuffer<DiagnosticColor> g_diagnostic_colors;
 // The world-lighting owner publishes one packed material+temperature word per
 // native cell, the decoded fine CH field, the derived source-material palette
 // and the device's one thermal table. GridPass owns the immutable BRDF table.
-static const uint kResolvedEdge = 1024u;
+static const uint kResolvedEdge = kParticleNativeEdge;
 StructuredBuffer<uint> g_resolved_cells;
 // Committed per-native-cell winner grid from the same projection attempt, one
 // word per cell; 0xffffffff means no particle winner. Terrain reads it only to
 // retire the categorical base of particle-owned cells (plan §3), the particle
-// draw to occlude and to find each cell's representative row. It is read-only
-// here and never identifies ownership by material.
+// draw to occlude. It is read-only here and never identifies ownership by
+// material. The Q16 fill accumulation of the same attempt is not read here: the
+// prepare pass's fused target is its only consumer now.
 StructuredBuffer<uint> g_best_row;
-// Q16 physical-fill accumulation of that same projection attempt, one word per
-// native cell. It is world-lighting scratch grid 2, written by the key reduction
-// of the same ordered, barrier-separated projection sequence that writes
-// g_best_row, so the two are a matching pair: the same armed/pending (or held
-// last-accepted) attempt serves both, and neither is ever a stale or half
-// updated grid. One particle contributes its volume of 0.25 cell as 16384
-// quanta, so a boundary carries about four distinct levels instead of one bit
-// (Task 11 continuity fix). Read only by the tangent cue, under the same
-// ownership bit and the same bounds guard as the winner grid.
-StructuredBuffer<uint> g_cell_fill;
-static const float kParticleFillQuantum = 65536.0;
 StructuredBuffer<PackedCH> g_fine_ch;
 #include "world_lighting_ch.slang"
 #include "thermal_emission.slang"
@@ -1213,163 +1208,44 @@ GridReactiveOutput fragmentGridReactive(GridVertexOutput input, uint sample_inde
 }
 
 // ------------------------------------------------------------------
-// per-cell winner motion for the flow cue
+// stored per-particle orientation
 // ------------------------------------------------------------------
-// Task 4 continuity fix. The cue used to read each row's own published motion,
-// which is the solver's per-step displacement *after* the per-particle contact,
-// guardian and transport corrections the renderer cannot see: neighbours differ
-// most exactly where the eye looks (a wall, the free surface, inside a jet), so
-// both the stretch and the flow direction stepped from particle to particle.
-//
-// The replacement is a per-cell field. The committed winner grid already names
-// one authoritative row per native cell and g_particles is indexed by that same
-// row id, so a cell's representative motion is one indirection away. Sampling it
-// bilinearly at the particle centre is C0 in position - the four dual-lattice
-// weights vary continuously with the sub-cell offset - which is the fix. A
-// fixed-weight 3x3 tent (1/4, 1/2, 1/4) is rejected: those weights do not depend
-// on the sub-cell offset, so the sample would be piecewise constant and would
-// still step at every cell boundary.
-//
-// Residual, stated honestly: the field is per cell and is recomputed from
-// particle positions each publication, so a *winner swap* inside one cell still
-// changes the sample - by that tap's own bilinear weight times the difference of
-// the two rows' motion, i.e. at most one lattice value's contribution (weight 1
-// at a lattice point, 1/4 at a cell centre). In coherent flow the four
-// neighbouring winners carry nearly the same grid velocity, so the swap is
-// invisible; the residual is confined to contact zones where they differ.
-//
-// Cost: four taps x (one u32 from the winner grid + one 24-byte row read) at the
-// vertex stage, on top of the row read the entry already does. No new buffer,
-// binding, gather or dispatch.
-//
-// One lattice value: true when the cell has a committed winner, which is a valid
-// lattice value even when its motion is exactly zero. Out of range is empty,
-// exactly as particleOwnsCell treats it.
-bool particleCellMotion(int2 cell,out float2 motion) {
-    motion=float2(0.0,0.0);
-    if (any(cell<int2(0)) || any(cell>=int2(int(kResolvedEdge)))) return false;
-    uint row=g_best_row[uint(cell.y)*kResolvedEdge+uint(cell.x)];
-    if (row==0xffffffffu) return false;
-    motion=float2(float(g_particles[row].m_motion.x),float(g_particles[row].m_motion.y));
-    return true;
-}
+// Task 11 increment 2 moved the whole cue solve out of the draw. The per-cell
+// winner-motion field and the committed per-cell Q16 fill field used to be walked
+// once per vertex to build an independent flow direction and surface tangent;
+// that is now one target per accepted publication, computed in the prepare rank
+// invocation and stored as the per-particle history. The vertex stage below
+// decodes that record instead: the packed world-plane axis plus the bias and
+// stretch amplitudes. No fill or winner read remains here, and a stored axis is
+// never recomputed from the fields this draw once sampled.
 
-// Bilinear (dual-lattice) sample of the per-cell winner-motion field at
-// `cell_position`, in native cells per solver step. The weights are the four
-// products of the two axis fractions. Above total weight W = 1/4 the sample is
-// the weighted mean renormalised over the taps that have a winner: a free-surface
-// sample averages the winners that exist instead of fading toward zero, and both
-// the weights and their sum vary continuously with the sub-cell offset. Below
-// W = 1/4 the sampler blends continuously toward `row_motion` (see the branch at
-// the end), so the W -> 0 limit no longer depends on the approach direction.
-float2 particleFlowMotion(float2 cell_position,float2 row_motion) {
-    float2 p=cell_position-0.5;
-    float2 base=floor(p);
-    float2 fraction=p-base;
-    int2 cell=int2(base);
-    float w_00=(1.0-fraction.x)*(1.0-fraction.y);
-    float w_10=fraction.x*(1.0-fraction.y);
-    float w_01=(1.0-fraction.x)*fraction.y;
-    float w_11=fraction.x*fraction.y;
+// Unit drawing direction of the stored world-plane axis, projected into the
+// quad's (screen-axis) frame, or (0,0) when that projection is degenerate (the
+// surface is edge-on, so it has no in-plane axis to align to). Both cue
+// strengths fade with the projected length over the same 1e-5..1e-4 band and fall
+// back to the round response inside it.
+float2 particleOrientation(float3 right,float3 up,uint instance,
+    out float bias_fraction,out float stretch_fraction) {
+    bias_fraction=0.0;
+    stretch_fraction=0.0;
+    OrientationRow row=g_particle_orientation[instance];
+    uint angle=uint(row.angle_bias_stretch&0xffffu);
+    uint bias=uint((row.angle_bias_stretch>>16u)&0xffu);
+    uint stretch=uint((row.angle_bias_stretch>>24u)&0xffu);
+    if (bias==0u && stretch==0u) return float2(0.0,0.0);
 
-    float2 sum=float2(0.0,0.0);
-    float weight=0.0;
-    float2 value;
-    if (particleCellMotion(cell,value)) {sum+=w_00*value;weight+=w_00;}
-    if (particleCellMotion(cell+int2(1,0),value)) {sum+=w_10*value;weight+=w_10;}
-    if (particleCellMotion(cell+int2(0,1),value)) {sum+=w_01*value;weight+=w_01;}
-    if (particleCellMotion(cell+int2(1,1),value)) {sum+=w_11*value;weight+=w_11;}
+    // Decode the canonical unoriented angle: one trig pair per drawn vertex. The
+    // decoded pair is for drawing only and is never stored back.
+    float radians=float(angle)*kParticleOrientationPi/float(kParticleOrientationAngleCount);
+    float2 world_axis=float2(cos(radians),sin(radians));
+    float2 screen_axis=float2(dot(float3(world_axis,0.0),right),dot(float3(world_axis,0.0),up));
+    float projected=length(screen_axis);
+    float fade=smoothstep(1.0e-5,1.0e-4,projected);
+    if (!(projected>1.0e-5)) return float2(0.0,0.0);
 
-    // Continuous extension below W = 1/4. The weighted mean above it is the
-    // previous behaviour; at W = 1/4 both branches evaluate to exactly 4S; and at
-    // W = 0 the first returns the row's own motion, so every approach to an empty
-    // window has the same limit instead of the path-dependent fallback. An
-    // admitted particle normally has W >= 1/4 from its own native cell: that cell
-    // is a committed winner, and its bilinear weight at the particle centre is at
-    // least 1/4. This is therefore domain hardening and removal of the
-    // path-dependent limit, not the temporal rotation fix.
-    if (weight<0.25) return 4.0*sum+(1.0-4.0*weight)*row_motion;
-    return sum/weight;
-}
-
-// ------------------------------------------------------------------
-// tangent-aligned contour cue from the committed fill field
-// ------------------------------------------------------------------
-// Task 11 increment 1: a coarse surface tangent from the committed per-cell Q16
-// fill field. The fill is a volume-integrated quantity with about four distinct
-// levels across a boundary (0.25 / 0.5 / 0.75 / 1.0) instead of the one bit the
-// ownership mask carries, so its gradient is smoother, smaller in quantisation
-// steps and defined one cell further into the body: the cue no longer switches
-// on and off along a surface and no longer flips between x and y elongation on a
-// diagonal. The tangent is derived from a 3x3 stencil around the particle centre,
-// bilinearly reconstructed so a particle's sub-cell offset moves the direction
-// continuously instead of snapping it to one of eight cell directions. No new
-// buffer and no gather over particles: the same publication the occlusion rule
-// already reads, bound by the same authority, is the only input.
-float particleFillTap(int2 cell) {
-    if (any(cell<int2(0)) || any(cell>=int2(int(kResolvedEdge)))) return 0.0;
-    return float(g_cell_fill[uint(cell.y)*kResolvedEdge+uint(cell.x)])/kParticleFillQuantum;
-}
-
-// One row of four consecutive cells of the stencil window.
-float4 particleFillRow(int2 cell,int offset_y) {
-    return float4(particleFillTap(cell+int2(-1,offset_y)),particleFillTap(cell+int2(0,offset_y)),
-        particleFillTap(cell+int2(1,offset_y)),particleFillTap(cell+int2(2,offset_y)));
-}
-
-// The tangent of the surface at `cell_position`, in the quad's (screen-axis)
-// frame, or (0,0) when the field is flat around the sample. `strength` is the
-// energy gate on the same unnormalised gradient: smoothstep(1, 3, |grad|), i.e.
-// 0 for the ambiguous fields that flip and 1 for a genuine full-fill surface.
-// The bilinear weights below are the Sobel difference on one axis and the 1-2-1
-// smoothing on the other, applied to the bilinearly reconstructed field:
-// separable, so the 3x3 stencil costs one 4x4 window. The fill rises into the
-// body, so the outward normal is minus the gradient and the tangent is its
-// perpendicular.
-bool particleSurfaceTangent(float2 cell_position,float3 right,float3 up,out float2 tangent,
-    out float strength) {
-    tangent=float2(0.0,0.0);
-    strength=0.0;
-
-    float2 p=cell_position-0.5;
-    float2 base=floor(p);
-    float2 fraction=p-base;
-    int2 cell=int2(base);
-    float bx0=1.0-fraction.x;
-    float bx1=fraction.x;
-    float by0=1.0-fraction.y;
-    float by1=fraction.y;
-    float4 difference_x=float4(-bx0,-bx1,bx0,bx1);
-    float4 smooth_x=float4(bx0,2.0*bx0+bx1,bx0+2.0*bx1,bx1);
-    float4 difference_y=float4(-by0,-by1,by0,by1);
-    float4 smooth_y=float4(by0,2.0*by0+by1,by0+2.0*by1,by1);
-
-    float4 row_0=particleFillRow(cell,-1);
-    float4 row_1=particleFillRow(cell,0);
-    float4 row_2=particleFillRow(cell,1);
-    float4 row_3=particleFillRow(cell,2);
-    float gradient_x=dot(row_0,difference_x)*smooth_y.x+dot(row_1,difference_x)*smooth_y.y+
-        dot(row_2,difference_x)*smooth_y.z+dot(row_3,difference_x)*smooth_y.w;
-    float gradient_y=dot(row_0,smooth_x)*difference_y.x+dot(row_1,smooth_x)*difference_y.y+
-        dot(row_2,smooth_x)*difference_y.z+dot(row_3,smooth_x)*difference_y.w;
-
-    float magnitude=length(float2(gradient_x,gradient_y));
-    if (magnitude<=kParticleTangentGradientEpsilon) return false;
-    strength=smoothstep(kParticleTangentConfidenceLow,kParticleTangentConfidenceHigh,magnitude);
-
-    // The field lives on the world plane, so the gradient is projected into the
-    // quad's frame exactly as the flow direction is.
-    float3 gradient=float3(gradient_x,gradient_y,0.0);
-    float2 screen_gradient=float2(dot(gradient,right),dot(gradient,up));
-    float screen_length=length(screen_gradient);
-    if (screen_length<=kParticleTangentGradientEpsilon) {
-        strength=0.0;
-        return false;
-    }
-
-    float2 normal=-screen_gradient/screen_length;
-    tangent=float2(-normal.y,normal.x);
-    return true;
+    bias_fraction=float(bias)/255.0*fade;
+    stretch_fraction=float(stretch)/255.0*fade;
+    return screen_axis/projected;
 }
 
 struct ParticleVertexOutput {
@@ -1386,19 +1262,15 @@ struct ParticleVertexOutput {
     nointerpolation float shape_scale:TEXCOORD3;
     // Canonical packCell word rebuilt from the row: material | temperature << 16.
     nointerpolation uint canonical:TEXCOORD4;
-    // Flow cue of the optional Task 4 shape: the unit direction of the sampled
-    // per-cell motion in the quad's (screen-axis) frame and the elongation k >= 1.
-    // Both are uniform per instance; k == 1 is the un-stretched shape and the
-    // fragment evaluates today's local coordinates unchanged.
+    // Shared stored orientation axis in the quad's (screen-axis) frame and the
+    // stretch amplitude's elongation k >= 1. Both are uniform per instance; k == 1
+    // is the un-stretched shape and the fragment evaluates today's local
+    // coordinates unchanged.
     nointerpolation float2 flow:TEXCOORD5;
     nointerpolation float flow_stretch:TEXCOORD6;
-    // Tangent cue of the optional Task 11 contour (increment 1): the unit surface
-    // direction read from the committed per-cell fill field at the particle
-    // centre, in the same frame, or (0,0) when the field is flat there.
-    // `surface_strength` is the energy gate on that field: 1 for a genuine
-    // surface, 0 for an ambiguous one, so the contour falls back to the round k0.
-    // Both are uniform per instance, and no per-instance storage was added for
-    // either.
+    // The same shared axis carried to the fragment's tangent contour, with the
+    // stored bias strength (B/255, faded toward the round contour when the
+    // projected axis is degenerate). Both are uniform per instance.
     nointerpolation float2 surface_tangent:TEXCOORD7;
     nointerpolation float surface_strength:TEXCOORD8;
 };
@@ -1430,59 +1302,36 @@ ParticleVertexOutput particleVertex(uint vertex,uint instance) {
         return output;
     }
 
-    // Billboard basis: the world directions of the screen axes. The flow cue
-    // below needs them before it can project the row's motion. The particle
-    // centre in native-cell units is shared by both cues: it is the sample point
-    // of the per-cell winner-motion field and of the per-cell fill field.
+    // Billboard basis: the world directions of the screen axes. The stored
+    // world-plane axis is projected into this basis below.
     float3 right=normalize(mul(float4(1,0,0,0),g_grid_frame.m_inverse_view_projection).xyz);
     float3 up=normalize(mul(float4(0,1,0,0),g_grid_frame.m_inverse_view_projection).xyz);
-    float2 centre_cell=particle.m_position/g_grid_frame.m_cell_size_m;
 
-    // Retained flow cue (Task 4): stretch the drawn shape along the flow, major
-    // axis only. The magnitude map is a fixed, illustrative curve
-    // (kParticleMotionReference native cells per solver step saturate the cap),
-    // not a physical speed, and no dt enters it. Gas keeps its mask texture and
-    // reads no motion. A flow with no in-plane component has no direction to
-    // align to and keeps the un-stretched shape.
+    // Task 11 increment 2: both cues are decoded from the stored per-particle
+    // history instead of being recomputed from the committed fill and winner
+    // grids. One shared world-plane axis carries flow and tangent; the stored
+    // amplitudes stay independent (b = 0.3999 B along the surface, stretch =
+    // 1 + 0.5 S along the flow). A repeated or held publication rewrites nothing,
+    // so a paused frame decodes the same bytes. There is no dt.
     //
-    // The cue input is the per-cell winner-motion field sampled bilinearly at the
-    // particle centre (particleFlowMotion), not the row's own published pair: the
-    // row's value carries per-particle contact corrections, so neighbours stepped
-    // in both size and direction exactly where the eye looks. The ownership bit
-    // authorizes reading the winner grid and is never set while the zero fallback
-    // is bound; with it clear the entry keeps the row's own motion, which is the
-    // pre-filter behaviour.
-    float2 motion=float2(float(particle.m_motion.x),float(particle.m_motion.y));
-    float2 flow=float2(1.0,0.0);
+    // Gas keeps its mask texture and its exact previous geometry: it decodes no
+    // attribute and stays round.
+    float2 axis=float2(1.0,0.0);
     float stretch=1.0;
+    float surface_strength=0.0;
     if (draw_class!=kParticleDrawGas) {
-        float2 cue_motion=motion;
-        if ((g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)!=0u)
-            cue_motion=particleFlowMotion(centre_cell,motion);
-        float motion_length=length(cue_motion);
-        if (motion_length>0.0) {
-            float2 screen_motion=float2(dot(float3(cue_motion,0.0),right),dot(float3(cue_motion,0.0),up));
-            float screen_length=length(screen_motion);
-            if (screen_length>1.0e-5) {
-                flow=screen_motion/screen_length;
-                stretch=1.0+(kParticleStretchCap-1.0)*saturate(motion_length/kParticleMotionReference);
-            }
-        }
+        float bias_fraction=0.0;
+        float stretch_fraction=0.0;
+        const float2 stored_axis=particleOrientation(right,up,instance,bias_fraction,stretch_fraction);
+        if (dot(stored_axis,stored_axis)>0.5) axis=stored_axis;
+        stretch=1.0+(kParticleStretchCap-1.0)*stretch_fraction;
+        surface_strength=bias_fraction;
     }
 
-    // Tangent cue (Task 11 increment 1): one tangent per instance, read from the
-    // committed per-cell fill field at the particle centre. It only reshapes the
-    // outer band of the fragment's falloff, so it needs no per-fragment field
-    // read. The ownership bit authorizes reading that 1-Mi-cell grid and is never
-    // set while the zero fallback is bound; gas keeps its mask texture and no
-    // contour cue.
-    float2 surface_tangent=float2(0.0,0.0);
-    float surface_strength=0.0;
-    if (draw_class!=kParticleDrawGas &&
-        (g_grid_frame.m_has_resolved_cells&kGridFrameHasParticleOwnership)!=0u) {
-        float2 tangent=float2(0.0,0.0);
-        if (particleSurfaceTangent(centre_cell,right,up,tangent,surface_strength)) surface_tangent=tangent;
-    }
+    // The flow metric and the tangent contour now share that one axis; the
+    // fragment scales the contour bias by the stored tangent strength.
+    float2 flow=axis;
+    float2 surface_tangent=axis;
 
     // Gas keeps the shared mask texture and its two-texel transparent border; the
     // restored classes use the analytic shapes. Both shapes are inscribed in the
@@ -1820,8 +1669,9 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // and this warps only the band radius, so both compose on one silhouette.
     // It is applied only inside the open band (0 < alpha < 1), which keeps the
     // radial falloff plateau, the support and a flat field byte-identical to
-    // today; input.surface_strength (the energy gate) scales the warp toward the
-    // round k0 contour when the field is too weak to trust.
+    // today; input.surface_strength carries the stored bias strength B/255 (the
+    // same 0..1 gate the energy rule used to supply) and scales the warp toward
+    // the round k0 contour.
     if (falloff>0.0 && falloff<1.0 && dot(input.surface_tangent,input.surface_tangent)>0.5)
         falloff=particleTangentFalloff(local,input.surface_tangent,input.surface_strength);
     // One coverage term now carries both restored classes: the C1 falloff, the

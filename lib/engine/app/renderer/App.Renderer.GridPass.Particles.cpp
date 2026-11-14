@@ -5,6 +5,7 @@ module;
 module engine.app;
 import :renderer.grid_pass;
 import :renderer.world_lighting;
+import :renderer.world_lighting_pass;
 import std;
 import engine.core;
 import engine.rhi;
@@ -45,14 +46,25 @@ namespace pP {
             float m_planes[6][4]{};
             float m_cell_metres{}, m_origin{};
             u32 m_count{}, m_moving_count{};
-            u32 m_block_count{}, m_census_world_edge{}, m_padding[2]{};
+            u32 m_block_count{}, m_census_world_edge{};
+            // Orientation publication: one candidate update per newly accepted
+            // publication, the identity remap only on a changed metadata owner, the
+            // accepted row count it searches, and this attempt's ownership binding
+            // outcome. Host tokens, never a clock: there is no dt.
+            u32 m_orientation_update{}, m_orientation_remap{};
+            u32 m_orientation_previous_count{}, m_orientation_owned{};
+            u32 m_padding[2]{};
         };
 
-        static_assert(sizeof(ParticlePrepareFrame) == 128u and alignof(ParticlePrepareFrame) == 16u);
+        static_assert(sizeof(ParticlePrepareFrame) == 144u and alignof(ParticlePrepareFrame) == 16u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_cell_metres) == 96u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_count) == 104u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_block_count) == 112u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_census_world_edge) == 116u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_update) == 120u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_remap) == 124u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_previous_count) == 128u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_owned) == 132u);
 
         // Consecutive held preparations before the hold is reported at warning.
         // While the solver runs, the committed publication is normally one epoch
@@ -346,6 +358,7 @@ namespace pP {
         auto *const packed = field("g_packed");
         auto *const frame = field("g_particle_prepare");
         auto *const palette = field("g_particle_palette");
+        auto *const orientation = field("g_orientation_current");
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, palette != nullptr and
                               palette->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridTerrainVisual) and
@@ -373,11 +386,46 @@ namespace pP {
                     readonly->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == kGridParticleReadonlyStride and
                     metadata->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GridParticleMetadataRow) and
                     packed->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(ParticleGpu) and
+                    orientation and
+                    orientation->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(ParticleOrientationGpu) and
+                    orientation->getFieldCount() == 1u and
                     frame->getSize() == sizeof(ParticlePrepareFrame) and
                     frame->getFieldByIndex(1u)->getOffset() == PPR_OFFSETOF(ParticlePrepareFrame, m_cell_metres) and
-                    frame->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticlePrepareFrame, m_count)
+                    frame->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticlePrepareFrame, m_count) and
+                    frame->getFieldByIndex(7u)->getOffset() ==
+                        PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_update) and
+                    frame->getFieldByIndex(9u)->getOffset() ==
+                        PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_previous_count)
                 ? std::error_code{}
                 : std::make_error_code(std::errc::invalid_argument));
+
+        // The orientation record's 4-byte stride is the canonical angle/bias/stretch
+        // word at offset 0. A target that widens the record fails program creation
+        // here instead of misreading every row.
+        constexpr std::array<std::pair<const char *, u32>, 1u> orientation_fields{{
+            {"angle_bias_stretch", 0u},
+        }};
+        bool orientation_layout_matches = orientation != nullptr and
+                                          orientation->getFieldCount() ==
+                                              static_cast<unsigned>(orientation_fields.size());
+        for (const auto &[name, offset]: orientation_fields) {
+            bool matched = false;
+            for (unsigned index = 0u; orientation_layout_matches and index < orientation->getFieldCount(); ++index) {
+                auto *const member = orientation->getFieldByIndex(index);
+                if (name != std::string_view{member->getName()}) {
+                    continue;
+                }
+
+                matched = member->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                break;
+            }
+
+            orientation_layout_matches = orientation_layout_matches and matched;
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            orientation_layout_matches ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
         // The 24-byte presentation row is a reflected ABI contract, not an
         // assumption: a target that lays out `half2 motion` or the material word
@@ -671,16 +719,27 @@ namespace pP {
             m_world.m_particle_seeds_dirty = false;
         }
 
+        // A view of a different world/reset lineage cannot inherit the accepted
+        // orientation history, even when its ID words numerically repeat. The
+        // ordinary world-change path also replaces the whole particle storage, so
+        // this is the defensive case of a reused container.
+        if (m_world.m_gpu_particles->m_orientation_valid and
+            m_world.m_gpu_particles->m_orientation_world != view.m_world) {
+            resetParticleOrientation_();
+        }
+
         m_world.m_gpu_particles->m_view = view;
         m_world.m_particle_presentation = EParticlePresentation::current;
         return {};
     }
 
-    std::error_code GridPass::ensureGpuParticleStorage_(rhi::IDevice &device, const u32 count) {
+    std::error_code GridPass::ensureGpuParticleStorage_(const PreRenderContext &context, const u32 count) {
         auto &storage = *m_world.m_gpu_particles;
         if (storage.m_capacity >= std::max(1u, count)) {
             return {};
         }
+
+        rhi::IDevice &device = context.m_device;
 
         // Allocate the complete replacement before relinquishing the usable
         // cohort. Its strong source owners survive until the exact reader fence.
@@ -716,6 +775,37 @@ namespace pP {
             }
         }
 
+        // Both orientation roles are allocated with the replacement. There is no
+        // old-to-new copy: the complete accepted history stays readable through
+        // `m_orientation_history` (which aliases the retired storage's accepted
+        // allocation until the first post-growth candidate submission succeeds).
+        // Survivors may reset on a capacity increase (accepted trade), and no fresh
+        // role is ever read before it has been fully written by an accepted update.
+        const u64 orientation_bytes = static_cast<u64>(replacement->m_capacity) * sizeof(ParticleOrientationGpu);
+        for (auto &role: replacement->m_orientation) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, particleBuffer(device, orientation_bytes, sizeof(ParticleOrientationGpu), nullptr, role));
+        }
+
+        replacement->m_orientation_accepted_role = storage.m_orientation_accepted_role;
+        replacement->m_orientation_role_valid = false;
+        replacement->m_orientation_history = storage.m_orientation_history;
+        if (not replacement->m_orientation_history and storage.m_orientation_valid) {
+            replacement->m_orientation_history = storage.m_orientation[storage.m_orientation_accepted_role];
+        }
+        // A history is only valid when a complete allocation actually survived.
+        replacement->m_orientation_valid = storage.m_orientation_valid and
+                                           replacement->m_orientation_history.get() != nullptr;
+        replacement->m_orientation_count = replacement->m_orientation_valid ? storage.m_orientation_count : 0u;
+        replacement->m_orientation_metadata = storage.m_orientation_metadata;
+        replacement->m_orientation_identity = storage.m_orientation_identity;
+        replacement->m_orientation_world = storage.m_orientation_world;
+        replacement->m_orientation_version = storage.m_orientation_version;
+        replacement->m_orientation_draw = replacement->m_orientation_history;
+        if (not replacement->m_orientation_draw) {
+            replacement->m_orientation_draw = replacement->m_orientation[replacement->m_orientation_accepted_role];
+        }
+
         // The callable fallback requires a copyable owner through the reader fence.
         std::shared_ptr<GpuParticleStorage> retired{std::move(m_world.m_gpu_particles)};
         m_world.m_gpu_particles = std::move(replacement);
@@ -724,10 +814,86 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // orientation history lifetime
+    // ------------------------------------------------------------------
+
+    void GridPass::resetParticleOrientation_() noexcept {
+        if (not m_world.m_gpu_particles) {
+            return;
+        }
+
+        auto &particles = *m_world.m_gpu_particles;
+        // In-flight submissions may still read a replaced allocation; the deferred
+        // owner retires it past the last reader. A history that aliases a role holds
+        // an extra reference, so releasing both is safe. The holder is passed by
+        // reference because ComPtr deletes address-of on an owning pointer.
+        const auto retire = [this](rhi::ComPtr<rhi::IBuffer> &holder) noexcept {
+            if (not holder) {
+                return;
+            }
+
+            auto held = std::move(holder);
+            m_deferred_releases.defer(m_world.m_last_reader, [kept = std::move(held)]() mutable { kept.setNull(); });
+        };
+        for (auto &role: particles.m_orientation) {
+            retire(role);
+        }
+        retire(particles.m_orientation_history);
+        retire(particles.m_orientation_draw);
+
+        particles.m_orientation_accepted_role = 0u;
+        particles.m_orientation_count = 0u;
+        particles.m_pending_orientation_count = 0u;
+        particles.m_orientation_role_valid = false;
+        particles.m_orientation_valid = false;
+        particles.m_orientation_pending = false;
+        particles.m_orientation_metadata.reset();
+        particles.m_pending_orientation_metadata.reset();
+        particles.m_orientation_world = {};
+        particles.m_pending_orientation_world = {};
+        particles.m_orientation_identity = {};
+        particles.m_pending_orientation_identity = {};
+        particles.m_orientation_version = 0u;
+        particles.m_pending_orientation_version = 0u;
+    }
+
+    void GridPass::settleParticleAttempt_() noexcept {
+        if (not m_world.m_gpu_particles) {
+            return;
+        }
+
+        auto &particles = *m_world.m_gpu_particles;
+        // A pending token can only survive a frame that was definitely not
+        // submitted: an accepted submission commits in notifyFrameSubmitted, and an
+        // ambiguous one quarantines admission so no later frame reaches here.
+        particles.m_prepared = false;
+        particles.m_pending_pack = false;
+        particles.m_pending_owner.reset();
+        particles.m_pending_epoch = 0u;
+        particles.m_pending_metadata = 0u;
+        particles.m_pending_terrain = 0u;
+        particles.m_orientation_pending = false;
+        particles.m_pending_orientation_metadata.reset();
+        particles.m_pending_orientation_identity = {};
+        particles.m_pending_orientation_world = {};
+        particles.m_pending_orientation_version = 0u;
+        particles.m_pending_orientation_count = 0u;
+        particles.m_orientation_draw = particles.m_orientation_role_valid
+                                           ? particles.m_orientation[particles.m_orientation_accepted_role]
+                                           : particles.m_orientation_history;
+    }
+
+    // ------------------------------------------------------------------
     // GPU circle packing and stable visible row IDs
     // ------------------------------------------------------------------
 
     std::error_code GridPass::prepareGpuParticles(const PreRenderContext &context, const u32 census_world_edge) {
+        // A previous frame that prepared particles but was definitely not submitted
+        // leaves its candidate token and draw source behind; clear them before any
+        // early return, including a hold, so a stale candidate can never be drawn or
+        // committed later.
+        settleParticleAttempt_();
+
         if (m_spatial_msaa) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
             PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSpatialPrograms_(context.m_device));
@@ -793,7 +959,7 @@ namespace pP {
         }
 
         const u32 count = m_world.m_gpu_particles->m_view.m_metadata->m_count;
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureGpuParticleStorage_(context.m_device, count));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureGpuParticleStorage_(context, count));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureSurfaceBuffers_(context.m_device));
         const auto visuals = prepareTerrainVisuals_(context.m_device, 0u);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
@@ -831,6 +997,47 @@ namespace pP {
         frame.m_count = count;
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
+
+        // Orientation publication planning. The orientation clock is the accepted
+        // presentation identity (publication, terrain revision, joint tick) plus the
+        // metadata owner, not the pack token: a terrain-only accepted publication can
+        // change the fill/winners without a new particle source and must still
+        // update. `pack` stays the source-row clock and is independent, so an
+        // orientation-only update never forces a redundant pack. There is no dt and
+        // no render-frame counter in this decision.
+        const GridParticlePresentationIdentity presentation{
+            view.m_world, view.m_publication, view.m_terrain_revision, view.m_joint_tick};
+        const bool pack = storage.m_packed_owner != view.m_live_epoch or
+                          storage.m_packed_epoch != view.m_device_epoch or
+                          storage.m_packed_metadata != metadata.m_version;
+        const bool owner_changed = storage.m_orientation_valid and
+                                   storage.m_orientation_metadata.get() != view.m_metadata.get();
+        // World replacement, a checkpoint restore (a metadata owner whose version
+        // does not advance past the accepted one), and device recreation start a
+        // new lineage: zero history even if the ID words repeat. Replacing the
+        // storage itself is the world-change reset; this covers the reused case.
+        const bool lineage_reset = not storage.m_orientation_valid or
+                                   storage.m_orientation_world != view.m_world or
+                                   (owner_changed and metadata.m_version <= storage.m_orientation_version);
+        const bool remap = owner_changed and not lineage_reset;
+        const bool orientation_update = lineage_reset or
+                                        owner_changed or
+                                        storage.m_orientation_identity != presentation;
+        const u32 previous_count = storage.m_orientation_valid and not lineage_reset ? storage.m_orientation_count : 0u;
+        const u32 orientation_write_role = storage.m_orientation_accepted_role ^ 1u;
+
+        frame.m_orientation_update = orientation_update ? 1u : 0u;
+        frame.m_orientation_remap = remap ? 1u : 0u;
+        frame.m_orientation_previous_count = previous_count;
+        // This frame's draw reads what this frame encoded; a repeated publication
+        // reads the accepted role (or the retained history after growth) and
+        // performs no write at all.
+        storage.m_orientation_draw = orientation_update
+                                         ? storage.m_orientation[orientation_write_role]
+                                         : (storage.m_orientation_role_valid
+                                                   ? storage.m_orientation[storage.m_orientation_accepted_role]
+                                                   : storage.m_orientation_history);
+        storage.m_orientation_pending = false;
 
         if (census_world_edge != 0u) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -952,6 +1159,15 @@ namespace pP {
                 slot.m_ids.get(), slot.m_args.get()}) {
             context.m_encoder.setBufferState(buffer, rhi::ResourceState::UnorderedAccess);
         }
+        // The retained complete history is read and the candidate role is written;
+        // they are distinct allocations (except that a growth's fresh roles are
+        // never the history), so the descriptors never overlap.
+        rhi::IBuffer *const orientation_read = storage.m_orientation_history
+                                                   ? storage.m_orientation_history.get()
+                                                   : storage.m_orientation[orientation_write_role].get();
+        context.m_encoder.setBufferState(orientation_read, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setBufferState(
+            storage.m_orientation[orientation_write_role], rhi::ResourceState::UnorderedAccess);
 
         const auto encode = [&](const u32 phase) -> std::error_code {
             constexpr std::array<const char *, 4u> names{
@@ -965,7 +1181,6 @@ namespace pP {
             rhi::ShaderCursor cursor{root};
             rhi::ShaderCursor constants;
             PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_prepare"].getDereferenced(constants));
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&frame, sizeof(frame)));
             const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, cursor[name].setBinding(rhi::Binding(buffer, particleRange(buffer))));
@@ -986,12 +1201,63 @@ namespace pP {
                 if (phase == 1u) {
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_packed", storage.m_packed));
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_counts", storage.m_counts));
+                    // Orientation history: this publication's candidate is written
+                    // from the retained complete history (which may be a retired
+                    // allocation after growth). The metadata ID search reads the
+                    // accepted metadata owner only when the inventory changed;
+                    // otherwise row identity is direct and no per-row ID is read.
+                    rhi::IBuffer *const previous = orientation_read;
+                    rhi::IBuffer *const candidate = storage.m_orientation[orientation_write_role];
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridPass,
+                        cursor["g_orientation_previous"].setBinding(rhi::Binding(previous, particleRange(previous))));
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridPass,
+                        cursor["g_orientation_current"].setBinding(rhi::Binding(candidate, particleRange(candidate))));
+                    PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_metadata", metadata.m_rows));
+                    rhi::IBuffer *const previous_metadata = storage.m_orientation_metadata
+                                                                ? storage.m_orientation_metadata->m_rows.get()
+                                                                : metadata.m_rows.get();
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridPass, cursor["g_previous_metadata"].setBinding(
+                                      rhi::Binding(previous_metadata, particleRange(previous_metadata))));
+
+                    // The committed per-cell grids come from the one ownership
+                    // authority, which binds this submission's projection attempt
+                    // (the fill and winners this very publication was projected
+                    // from) or reports that none is available. With no ownership
+                    // the tangent confidence is zero and the row's own motion is
+                    // the fallback; a fallback grid is never read. The authority is
+                    // only consulted for a world that publishes its categorical
+                    // cells, exactly as the terrain binder gates it; a capture or
+                    // reference caller without lighting keeps the fallback.
+                    bool ownership_bound = false;
+                    const bool published = m_world.m_lighting and
+                                           m_world.m_lighting->hasPublishedCells() and
+                                           m_world.m_world_edge == WorldLightingPass::kWorldEdge;
+                    if (published) {
+                        const std::error_code ownership = m_world.m_lighting->bindTerrainOwnership(
+                            cursor, ownership_bound);
+                        if (ownership == std::errc::resource_unavailable_try_again) {
+                            ownership_bound = false;
+                        } else {
+                            PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership);
+                        }
+                    }
+                    if (not ownership_bound) {
+                        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+                    }
+                    frame.m_orientation_owned = ownership_bound ? 1u : 0u;
                 } else {
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_prefix", storage.m_prefix));
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_ids", slot.m_ids));
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_args", slot.m_args));
                 }
             }
+
+            // Constants are written after the bindings because the rank phase
+            // derives its ownership bit from the actual binding outcome above.
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&frame, sizeof(frame)));
 
             auto *const pass = context.m_encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
@@ -1009,9 +1275,6 @@ namespace pP {
             return {};
         };
 
-        const bool pack = storage.m_packed_owner != view.m_live_epoch or
-                          storage.m_packed_epoch != view.m_device_epoch or
-                          storage.m_packed_metadata != metadata.m_version;
         if (pack) {
             // D9: the material id is the shading key. Rows whose material the
             // palette does not carry discard at shading time, so count those
@@ -1051,6 +1314,24 @@ namespace pP {
         context.m_encoder.setBufferState(storage.m_packed, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::IndirectArgument);
+        // The draw reads what this frame resolved (the candidate it encoded, or the
+        // accepted role/history on a repeated publication); order that read after
+        // the rank write.
+        context.m_encoder.setBufferState(storage.m_orientation_draw.get(), rhi::ResourceState::ShaderResource);
+
+        // The candidate becomes accepted only with the scene-A submission: this
+        // pending record is committed by notifyFrameSubmitted, never here, and only
+        // when this frame encoded an orientation update. A rejected encoding leaves
+        // the accepted history, its metadata owner and its presentation identity
+        // untouched.
+        if (orientation_update) {
+            storage.m_orientation_pending = true;
+            storage.m_pending_orientation_metadata = view.m_metadata;
+            storage.m_pending_orientation_identity = presentation;
+            storage.m_pending_orientation_world = view.m_world;
+            storage.m_pending_orientation_version = metadata.m_version;
+            storage.m_pending_orientation_count = count;
+        }
         if (m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 1u);
         }
@@ -1169,6 +1450,16 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             cursor["g_particles"].setBinding(rhi::Binding(storage.m_packed, particleRange(storage.m_packed))));
+        // Orientation history: the vertex stage decodes the stored angle and the two
+        // amplitudes. Gas decodes nothing but still binds the resolved source so the
+        // root has no unbound field.
+        rhi::IBuffer *const orientation = storage.m_orientation_draw.get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            orientation != nullptr ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            cursor["g_particle_orientation"].setBinding(rhi::Binding(orientation, particleRange(orientation))));
         auto &slot = storage.m_slots[particle_slot];
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_particle_ids"].setBinding(rhi::Binding(slot.m_ids, particleRange(slot.m_ids))));

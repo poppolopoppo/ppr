@@ -841,9 +841,9 @@ namespace pP {
         ownership_bound = false;
         // Two per-native-cell grids travel together from this one authority: the
         // committed winner grid (base retirement and particle occlusion) and the
-        // Q16 physical-fill accumulation (the particle draw's Task 11 tangent
-        // cue). Both are written by the same projection attempt - the key
-        // reduction accumulates the fill and the row reduction nominates the
+        // Q16 physical-fill accumulation (the particle prepare pass's fused
+        // orientation target). Both are written by the same projection attempt - the
+        // key reduction accumulates the fill and the row reduction nominates the
         // winner inside one ordered, barrier-separated sequence on the same
         // attempt's scratch - so binding them from one gate keeps them a matching
         // pair. A program that references neither field (material and inspection

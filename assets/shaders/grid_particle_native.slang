@@ -29,6 +29,24 @@ struct MetadataRow {
 struct ParticleNativeCell { uint x,y,status; };
 
 // ------------------------------------------------------------------
+// per-particle presentation orientation record
+// ------------------------------------------------------------------
+// 4 bytes per row, per role: one word of exact integer history. Canonical angle16
+// occupies bits 0..15, bias strength B bits 16..23 and stretch excess S bits
+// 24..31. The angle is the history; the vertex stage decodes it to (cos, sin) for
+// drawing and never writes that decoded pair back. The 4-byte stride is asserted
+// on the CPU twin (ParticleOrientationGpu) and reflected at program creation. No
+// cached half2 tangent is stored: it doubled the record for a decode saving that
+// the bounded angle already carries.
+struct OrientationRow {
+    uint angle_bias_stretch; // angle16 | B << 16 | S << 24
+};
+// One canonical angle code spans pi / 65536. Both the prepare slew and the draw
+// decode use this one authority.
+static const uint kParticleOrientationAngleCount = 65536u;
+static const float kParticleOrientationPi = 3.141592653589793;
+
+// ------------------------------------------------------------------
 // presentation support, falloff and the two phase shapes
 // ------------------------------------------------------------------
 // One constant set, read by the prepare cull and the draw geometry so the two
@@ -65,26 +83,34 @@ struct ParticleNativeCell { uint x,y,status; };
 // no longer makes them cull-infeasible, so they are recorded rather than gated.
 //
 // Retained flow cue (Task 4, appearance only): the drawn shape is stretched
-// along the flow, major axis only, by
-// k = 1 + (kParticleStretchCap - 1) * saturate(|motion| / kParticleMotionReference).
-// `motion` is not the row's own published pair: the vertex stage samples the
-// per-cell winner-motion field bilinearly at the particle centre (Task 4
-// continuity fix), so neighbouring particles read overlapping filtered windows
-// instead of their own post-contact displacements. The field is one value per
-// native cell - the committed winner's motion - and it costs four bounded taps
-// of the grids the draw already binds; no buffer, binding or dispatch is added.
-// The major semi-axis is therefore at most 1.5 R = 3.000 r, inside the 3.0625 r
-// cull margin, and the minor semi-axis stays the un-stretched support R = 2.0 r.
-// The reference magnitude is a fixed, illustrative curve shape in native cells
-// per solver step (0.06, so ordinary flow saturates the cap), not a physical
-// speed: the row's motion is per-step and this path introduces no dt. Since
-// k >= 1 the stretched shape contains the un-stretched one, so the radial
-// falloff of the seeded interior (plan §5.2) stays saturated and the cross-flow
-// (diagonal) support never shrinks.
+// along the stored orientation axis, major axis only, by
+// k = 1 + (kParticleStretchCap - 1) * S / 255, where S is the stretch amplitude
+// the prepare pass slew toward
+// saturate(|motion| / kParticleMotionReference). `motion` is not the row's own
+// published pair: the prepare pass samples the per-cell winner-motion field
+// bilinearly at the particle centre (Task 4 continuity fix), so neighbouring
+// particles read overlapping filtered windows instead of their own post-contact
+// displacements, and the result is stored once per accepted publication. The
+// field is one value per native cell - the committed winner's motion. The major
+// semi-axis is at most 1.5 R = 3.000 r, inside the 3.0625 r cull margin, and the
+// minor semi-axis stays the un-stretched support R = 2.0 r. The reference
+// magnitude is a fixed, illustrative curve shape in native cells per solver step
+// (0.06, so ordinary flow saturates the cap), not a physical speed: the row's
+// motion is per-step and this path introduces no dt. Since k >= 1 the stretched
+// shape contains the un-stretched one, so the radial falloff of the seeded
+// interior (plan §5.2) stays saturated and the cross-flow (diagonal) support
+// never shrinks.
 static const float kParticleSupportScale = 2.0;
 static const float kParticleCullRadiusScale = 3.0625;
 static const float kParticleStretchCap = 1.5;
 static const float kParticleMotionReference = 0.06;
+// The committed per-native-cell grids (g_best_row, g_cell_fill) are one word per
+// cell of the 1024 x 1024 native domain, and one particle contributes its volume
+// of 0.25 cell to the fill as 16384 of the word's 65536 units. The prepare target
+// reads both and the draw's terrain base retirement reads the winner grid, so the
+// edge and quantum are shared here instead of being spelled once per module.
+static const uint kParticleNativeEdge = 1024u;
+static const float kParticleFillQuantum = 65536.0;
 // The band between the saturated plateau and the support: the radial falloff is
 // exactly 1 for rho <= 2/3 and falls to 0 at rho = 1. Both contour cues below
 // are legal only because they move the 0.5 coverage crossing inside this band
@@ -93,11 +119,12 @@ static const float kParticleFalloffInnerFraction = 2.0/3.0;
 // Tangent-aligned contour cue (Task 11 increment 1, appearance only). The
 // half-coverage contour radius, in rho = |p| / R units, is
 // k(theta) = kParticleTangentContourScale * (1 + b_eff *
-// (cos^2(theta) - 1/2)) with theta measured from the surface tangent read from
-// the committed per-cell Q16 fill field. b_eff = b * strength, where strength is
-// the smoothstep energy gate above, so an ambiguous field renders round (b_eff =
-// 0 and k(theta) = k0 exactly) while a genuine surface keeps the full bias. The
-// premultiplied silhouette is longer along the surface and shorter across it.
+// (cos^2(theta) - 1/2)) with theta measured from the shared stored axis. b_eff =
+// b * B/255, where B is the bias amplitude the prepare pass resolved from the
+// smoothstep energy gate on the committed fill gradient (so an ambiguous field
+// settles round: b_eff = 0 and k(theta) = k0 exactly) while a genuine surface
+// keeps the full bias. The premultiplied silhouette is longer along the surface
+// and shorter across it.
 // k0 = 5/6 is where the resting C1 falloff already reaches 0.5 coverage. b =
 // 0.3999 is the strongest four-decimal bias whose two endpoints stay strictly
 // inside the legal band in binary32, and b_eff never exceeds it:

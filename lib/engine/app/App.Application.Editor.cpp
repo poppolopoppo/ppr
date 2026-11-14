@@ -1321,6 +1321,7 @@ namespace pP {
     void ApplicationEditor::discardUnsubmittedStages_() noexcept {
         if (m_grid_pass) {
             m_grid_pass->discardWorldLightingUnsubmitted();
+            m_grid_pass->discardUnsubmittedParticles();
         }
         if (m_reconstruction) {
             m_reconstruction->discardUnsubmitted();

@@ -188,20 +188,21 @@ export namespace pP {
         // armed; binding errors propagate.
         [[nodiscard]] std::error_code bindFineCH(rhi::ShaderCursor &cursor) const;
 
-        // Binds the committed per-native-cell grids that decide categorical base
-        // retirement (plan §3) and the particle draw's tangent cue: the winner
-        // grid and the Q16 physical-fill accumulation, both from this attempt's
-        // scratch. Each is bound only when the root declares it; a program that
-        // declares neither succeeds without a binding. The draw follows the
-        // projection in the same submission, so the projection writes are ordered
-        // before these reads, and both grids belong to the same attempt (the fill
-        // accumulates in the key reduction, the winner in the row reduction).
-        // Fails closed with resource_unavailable_try_again unless this
-        // submission's projection attempt is armed; a stale or unavailable
-        // attempt is rejected instead of binding last attempt's grids.
-        // `ownership_bound` reports whether every field the root declared was
-        // actually bound, so the caller derives the frame's ownership bit from the
-        // real binding outcome and can never authorize a read of a fallback grid.
+        // Binds the committed per-native-cell grids: the winner grid that decides
+        // categorical base retirement (plan §3) and particle occlusion, and the
+        // Q16 physical-fill accumulation the particle prepare pass's fused
+        // orientation target reads. Both come from this attempt's scratch. Each is
+        // bound only when the root declares it; a program that declares neither
+        // succeeds without a binding. The reader follows the projection in the
+        // same submission, so the projection writes are ordered before these reads,
+        // and both grids belong to the same attempt (the fill accumulates in the
+        // key reduction, the winner in the row reduction). Fails closed with
+        // resource_unavailable_try_again unless this submission's projection
+        // attempt is armed; a stale or unavailable attempt is rejected instead of
+        // binding last attempt's grids. `ownership_bound` reports whether every
+        // field the root declared was actually bound, so the caller derives its
+        // availability bit from the real binding outcome and can never authorize
+        // a read of a fallback grid.
         [[nodiscard]] std::error_code bindTerrainOwnership(rhi::ShaderCursor &cursor, bool &ownership_bound) const;
 
         // True when this submission's armed projection attempt owns the scratch

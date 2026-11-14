@@ -2041,6 +2041,17 @@ namespace pP::game::tests::detail::checkpoint {
                     const auto *const data = static_cast<const std::byte *>(blob->getBufferPointer());
                     return Array<std::byte>(data, data + blob->getBufferSize());
                 };
+                const u32 orientation_rows = installed.m_metadata ? installed.m_metadata->m_count : 0u;
+                const auto read_orientation = [&]() {
+                    Array<std::byte> bytes(static_cast<std::size_t>(orientation_rows) * sizeof(ParticleOrientationGpu));
+                    rhi::IBuffer *const accepted = grid.particleOrientationAcceptedForTest();
+                    if (accepted == nullptr or bytes.empty()) {
+                        return bytes;
+                    }
+
+                    PPR_TEST_ASSERT(not make_error_code(device.readBuffer(accepted, 0u, bytes.size(), bytes.data())));
+                    return bytes;
+                };
 
                 // A hold before the renderer ever packed presents no particles and
                 // errors nowhere (plan §3): the epoch moved on and there are no
@@ -2090,6 +2101,8 @@ namespace pP::game::tests::detail::checkpoint {
                     const auto retained_buffers = grid.particleBuffersForTest();
                     const auto retained_epoch = grid.particlePackedEpochForTest();
                     const auto retained_packs = grid.particlePackEncodesForTest();
+                    const auto retained_orientation_role = grid.particleOrientationAcceptedRoleForTest();
+                    const auto retained_orientation = read_orientation();
                     const auto before_hold_draws = grid.observations().m_draw_commands;
                     const auto packed_image = read_target();
 
@@ -2110,8 +2123,11 @@ namespace pP::game::tests::detail::checkpoint {
 
                     // The held frame drew the retained rows: same camera, same
                     // retained ids/arguments, so the frame is pixel-identical to
-                    // the packed frame before the epoch moved.
+                    // the packed frame before the epoch moved. Its accepted
+                    // orientation history is untouched too.
                     PPR_TEST_ASSERT(read_target() == packed_image);
+                    PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == retained_orientation_role);
+                    PPR_TEST_ASSERT(read_orientation() == retained_orientation);
 
                     // A paused frame during the hold (nothing publishes): the same
                     // retained rows draw again and still without a pack. A
@@ -2127,6 +2143,8 @@ namespace pP::game::tests::detail::checkpoint {
                     PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == retained_packs);
                     PPR_TEST_ASSERT(grid.particleBuffersForTest() == retained_buffers);
                     PPR_TEST_ASSERT(read_target() == packed_image);
+                    PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == retained_orientation_role);
+                    PPR_TEST_ASSERT(read_orientation() == retained_orientation);
 
                     _.log(
                         std::format(
@@ -2146,6 +2164,13 @@ namespace pP::game::tests::detail::checkpoint {
                     PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
                     PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == retained_packs + 1u);
 
+                    // The recovery publication is a new accepted publication (and it
+                    // advances the orientation ramp), so the second hold belongs to
+                    // that image, not to the first hold's baseline.
+                    const auto recovered_image = read_target();
+                    const auto recovered_orientation_role = grid.particleOrientationAcceptedRoleForTest();
+                    const auto recovered_orientation = read_orientation();
+
                     // A repeated dig alternates again: the second hold presents
                     // the rows packed by that recovery frame.
                     const auto second_buffers = grid.particleBuffersForTest();
@@ -2157,7 +2182,9 @@ namespace pP::game::tests::detail::checkpoint {
                     PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
                     PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == second_packs);
                     PPR_TEST_ASSERT(grid.particleBuffersForTest() == second_buffers);
-                    PPR_TEST_ASSERT(read_target() == packed_image);
+                    PPR_TEST_ASSERT(read_target() == recovered_image);
+                    PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == recovered_orientation_role);
+                    PPR_TEST_ASSERT(read_orientation() == recovered_orientation);
 
                     installed.m_device_epoch += 2u;
                     live->store(installed.m_device_epoch, std::memory_order_release);

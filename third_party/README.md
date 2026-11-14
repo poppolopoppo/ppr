@@ -91,7 +91,7 @@ Sources of dependency versions:
 | [WinPixEventRuntime](WinPixEventRuntime/README.md) | 1.0.240308001 | vcpkg | `engine.core` HAL PIX markers (`pix3.h`) |
 | [FastNoiseLite](FastNoiseLite/README.md) | 1.1.1 @ `7ccfbc16…` | CPM pinned source + local patch | `engine.sim` worldgen noise |
 | [FreeType](FreeType/README.md) | 2.13.3 (port 0) | vcpkg registry port | opt-in M4 ImGui FreeType rasterizer evaluation |
-| [PB-MPM](PBMPM/README.md) | `main` @ `5a2f438` (v1.0.0) | reference source (not built) | `engine.matter` pinned Slang PB-MPM compute port |
+| [PB-MPM](PBMPM/README.md) | selected `ErikSom` @ `859c449`; EA `5a2f438` (v1.0.0) is provenance, 20 commits behind | reference source (not built) | `engine.matter` pinned Slang PB-MPM compute port |
 | NVIDIA Nsight Graphics SDK | 0.9.2 (installed with Nsight Graphics 2026.4) | optional profiling header dependency, discovered at configure time | `game.profile_capture` private adapter (`app.game`, profiling preset only) |
 
 Transitive second-order fetches (Slang-RHI's DXC, Agility SDK, NVAPI, Dawn,

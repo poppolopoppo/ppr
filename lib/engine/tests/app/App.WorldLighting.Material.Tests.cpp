@@ -62,6 +62,124 @@ namespace pP::tests::detail::WorldLightingMaterial {
         double x{}, y{};
     };
 
+    // ------------------------------------------------------------------
+    // particle orientation target/slew mirror
+    // ------------------------------------------------------------------
+    // The prepare shader owns this arithmetic. These mirrors restate the
+    // design's stated target and slew so the encoded limits are checked without a
+    // device readback; they are independent of the production code and must be
+    // kept formula-for-formula with grid_particle_prepare.slang
+    // (updateOrientationRow and its helpers).
+
+    inline constexpr u32 kOrientationAngleCount = 65536u;
+    inline constexpr int kOrientationAngleSlewCodes = 2048;
+    inline constexpr int kOrientationAmplitudeSlewUnits = 32;
+    inline constexpr double kOrientationDegreesPerCode = 180.0 / 65536.0;
+
+    [[nodiscard]] Double2 doubledAxis(const Double2 unit) noexcept {
+        return {unit.x * unit.x - unit.y * unit.y, 2.0 * unit.x * unit.y};
+    }
+
+    struct OrientationTarget {
+        bool m_has_axis{};
+        Double2 m_axis{};
+        double m_bias{};
+        double m_stretch{};
+    };
+
+    // q = f D(n) + (1-f) a D(t), W = f + (1-f) a, h = |q| / max(W, 1e-8).
+    // A vanishing q retains no axis and targets zero bias and stretch.
+    [[nodiscard]] OrientationTarget orientationTarget(
+        const double flow_confidence, const Double2 motion_axis, const double tangent_confidence,
+        const Double2 tangent_axis) noexcept {
+        const Double2 motion_doubled = doubledAxis(motion_axis);
+        const Double2 tangent_doubled = doubledAxis(tangent_axis);
+        const double qx = flow_confidence * motion_doubled.x +
+                          (1.0 - flow_confidence) * tangent_confidence * tangent_doubled.x;
+        const double qy = flow_confidence * motion_doubled.y +
+                          (1.0 - flow_confidence) * tangent_confidence * tangent_doubled.y;
+        const double total = flow_confidence + (1.0 - flow_confidence) * tangent_confidence;
+        const double magnitude = std::sqrt(qx * qx + qy * qy);
+        if (!(magnitude > 1.0e-8))
+            return {};
+
+        const double shared = std::clamp(magnitude / std::max(total, 1.0e-8), 0.0, 1.0);
+        return {true, {qx / magnitude, qy / magnitude}, tangent_confidence * shared, flow_confidence * shared};
+    }
+
+    // Unoriented half-angle of q, modulo pi, rounded to nearest angle16 code.
+    [[nodiscard]] u32 orientationAngleCodes(const Double2 axis) noexcept {
+        double angle = 0.5 * std::atan2(axis.y, axis.x);
+        if (angle < 0.0)
+            angle += kPi;
+        return static_cast<u32>(std::floor(angle / kPi * static_cast<double>(kOrientationAngleCount) + 0.5)) &
+               (kOrientationAngleCount - 1u);
+    }
+
+    [[nodiscard]] u32 orientationAmplitudeUnits(const double value) noexcept {
+        return static_cast<u32>(std::floor(std::clamp(value, 0.0, 1.0) * 255.0 + 0.5));
+    }
+
+    struct OrientationState {
+        u32 m_angle{};
+        u32 m_bias{};
+        u32 m_stretch{};
+        bool m_initialized{};
+    };
+
+    // New identity: target angle (zero if none) and B = S = 0, then ramp.
+    // Otherwise the canonical angle takes the shortest signed modulo-65536 delta
+    // (positive at the exact 32768 tie), clamped to +-2048 codes, and each
+    // amplitude takes at most +-32 units.
+    [[nodiscard]] OrientationState slewOrientation(
+        OrientationState previous, const bool has_axis, const u32 target_angle, const u32 bias_stop,
+        const u32 stretch_stop) noexcept {
+        if (!previous.m_initialized) {
+            previous.m_angle = has_axis ? target_angle : 0u;
+            previous.m_bias = 0u;
+            previous.m_stretch = 0u;
+            previous.m_initialized = true;
+        }
+
+        const i32 angle_stop = static_cast<i32>(has_axis ? target_angle : previous.m_angle);
+        i32 delta = angle_stop - static_cast<i32>(previous.m_angle);
+        constexpr i32 count = static_cast<i32>(kOrientationAngleCount);
+        delta = ((delta % count) + count) % count;
+        if (delta > 32768)
+            delta -= count;
+
+        delta = std::clamp(delta, -kOrientationAngleSlewCodes, kOrientationAngleSlewCodes);
+        previous.m_angle = static_cast<u32>((static_cast<i32>(previous.m_angle) + delta) & 0xffff);
+        const auto step = [](const u32 from, const u32 to) noexcept {
+            const i32 value = std::clamp(
+                static_cast<i32>(to) - static_cast<i32>(from), -kOrientationAmplitudeSlewUnits,
+                kOrientationAmplitudeSlewUnits);
+            return static_cast<u32>(std::clamp(static_cast<i32>(from) + value, 0, 255));
+        };
+        previous.m_bias = step(previous.m_bias, has_axis ? bias_stop : 0u);
+        previous.m_stretch = step(previous.m_stretch, has_axis ? stretch_stop : 0u);
+        return previous;
+    }
+
+    // Decoded unit axis for one canonical angle16, exactly as the draw decodes it:
+    // the vertex stage evaluates the trig pair in binary32. No half pair is stored.
+    [[nodiscard]] Double2 decodedAxis(const u32 angle_codes) noexcept {
+        const float radians = static_cast<float>(
+            static_cast<double>(angle_codes) * kPi / static_cast<double>(kOrientationAngleCount));
+        return {static_cast<double>(std::cos(radians)), static_cast<double>(std::sin(radians))};
+    }
+
+    // Angle between two unoriented axes, in degrees, in [0, 90].
+    [[nodiscard]] double axisDegrees(const Double2 a, const Double2 b) noexcept {
+        double difference = std::atan2(a.y, a.x) - std::atan2(b.y, b.x);
+        difference = std::fmod(difference, kPi);
+        if (difference > kPi / 2.0)
+            difference -= kPi;
+        if (difference < -kPi / 2.0)
+            difference += kPi;
+        return std::abs(difference) * 180.0 / kPi;
+    }
+
     [[nodiscard]] Double3 normalized(const Double3 value, const Double3 fallback) noexcept {
         const double squared = value.x * value.x + value.y * value.y + value.z * value.z;
         if (!(squared > 1.0e-12))
@@ -2796,6 +2914,150 @@ namespace pP::tests::detail::WorldLightingMaterial {
     };
 
     // ------------------------------------------------------------------
+    // per-particle orientation target and slew
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (particle_orientation_target_agrees_and_cancels) {
+        const Double2 axis{std::sqrt(0.5), std::sqrt(0.5)};
+        // Agreeing cues: f = a = 0.5 over one axis gives h = 1 and both stored
+        // amplitudes at their independent maxima (the withdrawn combined cap is
+        // not reintroduced).
+        const auto agreeing = orientationTarget(0.5, axis, 0.5, axis);
+        PPR_TEST_ASSERT(agreeing.m_has_axis);
+        PPR_TEST_ASSERT(std::abs(agreeing.m_bias - 0.5) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(agreeing.m_stretch - 0.5) <= 1.0e-12);
+        const u32 agreeing_codes = orientationAngleCodes(agreeing.m_axis);
+        PPR_TEST_ASSERT(axisDegrees(decodedAxis(agreeing_codes), axis) <= 0.001);
+
+        // Flow takes directional priority as f -> 1: the shared axis is the motion
+        // axis, while the bias amplitude stays a * h because the surface itself is
+        // still genuine (the two amplitudes are independent, not a split budget).
+        const Double2 motion{1.0, 0.0};
+        const Double2 tangent{0.0, 1.0};
+        const auto flowing = orientationTarget(1.0, motion, 1.0, tangent);
+        PPR_TEST_ASSERT(flowing.m_has_axis);
+        PPR_TEST_ASSERT(std::abs(flowing.m_bias - 1.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(flowing.m_stretch - 1.0) <= 1.0e-12);
+        PPR_TEST_ASSERT(axisDegrees(decodedAxis(orientationAngleCodes(flowing.m_axis)), motion) <= 0.001);
+
+        // Orthogonal unoriented axes are opposite doubled axes, so equal weights
+        // cancel: q -> 0, no new axis, and both strengths target zero.
+        const auto cancelled = orientationTarget(0.5, motion, 0.5, tangent);
+        PPR_TEST_ASSERT(not cancelled.m_has_axis);
+        PPR_TEST_ASSERT(cancelled.m_bias == 0.0 and cancelled.m_stretch == 0.0);
+    };
+
+    PPR_UNIT_TEST (particle_orientation_ramp_and_flip_take_eight_and_sixteen_updates) {
+        const u32 full = orientationAmplitudeUnits(1.0);
+        PPR_TEST_ASSERT(full == 255u);
+
+        OrientationState ramped{};
+        for (u32 update = 0u; update < 7u; ++update)
+            ramped = slewOrientation(ramped, true, 0u, full, full);
+        PPR_TEST_ASSERT(ramped.m_bias == 224u and ramped.m_stretch == 224u);
+        ramped = slewOrientation(ramped, true, 0u, full, full);
+        PPR_TEST_ASSERT(ramped.m_bias == 255u and ramped.m_stretch == 255u);
+
+        OrientationState flipped{};
+        flipped.m_initialized = true;
+        for (u32 update = 0u; update < 15u; ++update)
+            flipped = slewOrientation(flipped, true, 32768u, 0u, 0u);
+        PPR_TEST_ASSERT(flipped.m_angle == 30720u);
+        flipped = slewOrientation(flipped, true, 32768u, 0u, 0u);
+        PPR_TEST_ASSERT(flipped.m_angle == 32768u);
+    };
+
+    PPR_UNIT_TEST (particle_orientation_slew_clamps_and_tie_direction) {
+        // One publication turns at most 2048 canonical codes = 5.625 degrees.
+        OrientationState rising{};
+        rising.m_initialized = true;
+        rising = slewOrientation(rising, true, 32768u, 0u, 0u);
+        PPR_TEST_ASSERT(rising.m_angle == 2048u);
+        PPR_TEST_ASSERT(std::abs(static_cast<double>(rising.m_angle) / 65536.0 * 180.0 - 5.625) <= 1.0e-12);
+
+        // The exact 32768 tie is positive in both directions: from 0 toward 32768
+        // and from 32768 toward 0 (whose raw delta is -32768).
+        OrientationState tied{};
+        tied.m_angle = 32768u;
+        tied.m_initialized = true;
+        const auto tied_up = slewOrientation(tied, true, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(tied_up.m_angle == 34816u);
+
+        // One code short of the tie stays negative.
+        OrientationState short_tie{};
+        short_tie.m_angle = 32767u;
+        short_tie.m_initialized = true;
+        const auto short_up = slewOrientation(short_tie, true, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(short_up.m_angle == 30719u);
+
+        // Each stored amplitude moves by at most 32 units.
+        OrientationState bias{};
+        bias = slewOrientation(bias, true, 0u, 255u, 0u);
+        PPR_TEST_ASSERT(bias.m_bias == 32u);
+        bias = slewOrientation(bias, false, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(bias.m_bias == 0u);
+
+        OrientationState down{};
+        down.m_bias = 255u;
+        down.m_stretch = 255u;
+        down.m_initialized = true;
+        down = slewOrientation(down, false, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(down.m_bias == 223u and down.m_stretch == 223u);
+    };
+
+    PPR_UNIT_TEST (particle_orientation_zero_confidence_holds_the_axis_and_rounds) {
+        // With no target axis the canonical angle is held and both amplitudes slew
+        // toward zero, reaching the round response within eight updates.
+        OrientationState state{};
+        state.m_angle = 12345u;
+        state.m_bias = 255u;
+        state.m_stretch = 255u;
+        state.m_initialized = true;
+        for (u32 update = 0u; update < 7u; ++update)
+            state = slewOrientation(state, false, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(state.m_angle == 12345u);
+        PPR_TEST_ASSERT(state.m_bias == 31u and state.m_stretch == 31u);
+        state = slewOrientation(state, false, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(state.m_angle == 12345u);
+        PPR_TEST_ASSERT(state.m_bias == 0u and state.m_stretch == 0u);
+
+        // A new identity with no target starts at angle zero and zero amplitudes.
+        const auto born = slewOrientation(OrientationState{}, false, 0u, 0u, 0u);
+        PPR_TEST_ASSERT(born.m_angle == 0u and born.m_bias == 0u and born.m_stretch == 0u);
+    };
+
+    PPR_UNIT_TEST (particle_orientation_decoded_axis_stays_inside_the_stated_bound) {
+        // The record stores only the canonical angle, so the vertex stage evaluates
+        // (cos, sin) in binary32. The absolute decoded-direction error is bounded by
+        // binary32 trig tolerance (about 1e-5 degrees), and consecutive decoded axes
+        // are therefore the 5.625-degree canonical step plus that tolerance; the
+        // reported conservative screen-independent bound is 5.626 degrees.
+        double worst_absolute = 0.0;
+        for (const u32 codes: {0u, 1u, 2u, 4096u, 32768u, 49152u, 65535u}) {
+            const double radians = static_cast<double>(codes) * kPi / static_cast<double>(kOrientationAngleCount);
+            const Double2 canonical{std::cos(radians), std::sin(radians)};
+            worst_absolute = std::max(worst_absolute, axisDegrees(decodedAxis(codes), canonical));
+            PPR_TEST_ASSERT(axisDegrees(decodedAxis(codes), canonical) <= 0.001);
+        }
+
+        double worst_step = 0.0;
+        for (const u32 codes: {0u, 1u, 2046u, 8192u, 32768u, 63488u}) {
+            const u32 next = (codes + 2048u) & (kOrientationAngleCount - 1u);
+            const double step = axisDegrees(decodedAxis(codes), decodedAxis(next));
+            worst_step = std::max(worst_step, step);
+            PPR_TEST_ASSERT(step <= 5.626);
+        }
+
+        PPR_TEST_ASSERT(std::abs(kOrientationDegreesPerCode * 2048.0 - 5.625) <= 1.0e-12);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL orientation_axis worst_absolute_degrees={:.6f} "
+                "worst_step_degrees={:.6f}",
+                worst_absolute, worst_step));
+    };
+
+    // ------------------------------------------------------------------
     // per-instance particle descriptions and shapes
     // ------------------------------------------------------------------
 
@@ -3242,25 +3504,29 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == switch_fields[index].second);
         }
 
-        // The contour cues add no new binding of their own: the flow cue samples
-        // the winner motion through g_particles (already bound) and g_best_row,
-        // and the tangent reads the Q16 fill grid both bound by the single
-        // ownership authority. No per-instance field was added (the row stayed
-        // 24 B), so a future tangent buffer would have to be named here.
+        // The contour cues now read one shared stored axis: the prepare pass owns
+        // g_orientation_previous/g_orientation_current and the draw owns
+        // g_particle_orientation. The Q16 fill grid is no longer a draw input, so
+        // the draw declares the winner grid only; no per-instance field was added
+        // to the 24-byte row.
         u32 best_row_bindings = 0u;
         u32 cell_fill_bindings = 0u;
+        u32 orientation_bindings = 0u;
         for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
             const std::string_view name{layout->getParameterByIndex(index)->getName()};
             if (name == "g_best_row")
                 ++best_row_bindings;
             if (name == "g_cell_fill")
                 ++cell_fill_bindings;
+            if (name == "g_particle_orientation")
+                ++orientation_bindings;
 
             PPR_TEST_ASSERT(name.find("tangent") == std::string_view::npos);
         }
 
         PPR_TEST_ASSERT(best_row_bindings >= 1u);
-        PPR_TEST_ASSERT(cell_fill_bindings >= 1u);
+        PPR_TEST_ASSERT(cell_fill_bindings == 0u);
+        PPR_TEST_ASSERT(orientation_bindings == 1u);
 
         _.log(
             std::format(
@@ -3269,6 +3535,322 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 after.m_draw_commands - before.m_draw_commands, after.m_particle_description_rejections,
                 opaque_desc.depthStencil.depthTestEnable, opaque_desc.depthStencil.depthWriteEnable,
                 optical_desc.depthStencil.depthTestEnable, optical_desc.depthStencil.depthWriteEnable));
+    };
+
+    PPR_UNIT_TEST (particle_orientation_publication_is_transactional_and_growth_preserves_survivors) {
+        // Real GridPass/frame path, no pixels: one birth publication, one repeated
+        // publication (bit-identical accepted bytes, no update), a converged ramp,
+        // and a capacity growth that must preserve the survivor rows while the
+        // appended identity starts its own history.
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual solid{};
+        solid.m_material_id = 1u;
+        solid.m_color_rgba = 0xff8040ffu;
+        solid.m_ior = 1.0f;
+        solid.m_roughness = 0.4f;
+        solid.m_opacity = 1.0f;
+        solid.m_surface_flags = kGridSurfaceParticleSolid;
+
+        const auto makeMetadata = [&](const u32 count, const u64 version) {
+            Array<GridParticleMetadataRow> rows(count);
+            for (u32 row = 0u; row < count; ++row) {
+                const auto cell = lighting::packCell(1u, 300.0);
+                PPR_TEST_ASSERT(cell.has_value());
+                rows[row].m_id_low = row + 1u;
+                rows[row].m_source_row = row;
+                rows[row].m_material_temperature = *cell;
+                rows[row].m_radius = 0.5f;
+            }
+
+            auto metadata = prepareGridParticleMetadata(
+                fixture.device(), std::span<const GridParticleMetadataRow>{rows.data(), rows.size()}, count, 1.0,
+                version);
+            PPR_TEST_ASSERT(metadata.has_value());
+            return *metadata;
+        };
+
+        // A constant non-zero published displacement gives a non-zero flow target
+        // even with no lighting ownership binding (the own-row fallback), so the
+        // amplitude ramp has something to converge to and survivors can be compared
+        // bit for bit.
+        const auto makeHot = [](const u32 count) {
+            Array<std::array<float, 16u>> hot(count);
+            for (u32 row = 0u; row < count; ++row) {
+                hot[row][0u] = 4.5f + 2.0f * static_cast<float>(row);
+                hot[row][1u] = 5.5f;
+                hot[row][2u] = 0.03f;
+                hot[row][3u] = 0.04f;
+                hot[row][15u] = 1.0f;
+            }
+
+            return hot;
+        };
+        const auto makeCold = [](const u32 count) {
+            Array<std::array<float, 6u>> cold(count);
+            for (auto &row: cold)
+                row[1u] = std::numbers::pi_v<float>;
+
+            return cold;
+        };
+        const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
+                                  const Array<std::array<float, 16u>> &hot, const Array<std::array<float, 6u>> &cold,
+                                  const u64 epoch) {
+            GridParticleGpuView view{};
+            view.m_numerical = makeBuffer(
+                fixture.device(), hot.size() * sizeof(hot[0u]), kGridParticleNumericalStride, hot.data());
+            view.m_readonly = makeBuffer(
+                fixture.device(), cold.size() * sizeof(cold[0u]), kGridParticleReadonlyStride, cold.data());
+            view.m_metadata = metadata;
+            view.m_live_epoch = std::make_shared<std::atomic<u64>>(epoch);
+            view.m_world = grid.activeWorldIdentity();
+            view.m_layout = kGridParticleNumericalLayout;
+            view.m_stride = kGridParticleNumericalStride;
+            view.m_readonly_stride = kGridParticleReadonlyStride;
+            view.m_origin = 3.0;
+            view.m_device_epoch = epoch;
+            view.m_publication = epoch;
+            view.m_terrain_revision = 1u;
+            view.m_joint_tick = epoch;
+            return view;
+        };
+
+        auto hot = makeHot(2u);
+        auto cold = makeCold(2u);
+        auto metadata = makeMetadata(2u, 1u);
+        auto view = makeView(metadata, hot, cold, 1u);
+        PPR_TEST_ASSERT(view.current());
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {solid};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        CameraModel model{};
+        model.m_camera_mode = ECameraProjection::orthographic;
+        model.m_origin = float3{-0.5f, 0.0f, -0.5f};
+        model.m_ortho_scale = 8.0f;
+        Camera camera{ECameraProjection::orthographic};
+        camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+        const auto snapshot = camera.getSnapshot();
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshot));
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+
+        rhi::TextureDesc depth_description = target_description;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        rhi::ComPtr<rhi::ITexture> depth{};
+        rhi::ComPtr<rhi::ITextureView> depth_view{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(depth_description, nullptr, depth.writeRef())));
+        PPR_TEST_ASSERT(not make_error_code(depth->getDefaultView(depth_view.writeRef())));
+
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+            return grid.prepareGpuParticles(context);
+        };
+        const auto draw = [&](const DrawContext &context) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.render(context));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.renderSolidLiquidParticles(context));
+            return grid.renderGasParticles(context);
+        };
+        DrawSubmission submission{"grid particle orientation", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        rhi::ComPtr<rhi::ITextureView> target_view{};
+        PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+        rhi::RenderPassColorAttachment color{};
+        color.view = target_view.get();
+        color.clearValue[3] = 1.0f;
+        rhi::RenderPassDepthStencilAttachment depth_attachment{};
+        depth_attachment.view = depth_view.get();
+        depth_attachment.depthClearValue = 1.0f;
+        rhi::RenderPassDesc pass_description{};
+        pass_description.colorAttachments = &color;
+        pass_description.colorAttachmentCount = 1u;
+        pass_description.depthStencilAttachment = &depth_attachment;
+
+        const auto encode = [&]() -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, renderer.render(
+                              string_literal{std::in_place, "grid particle orientation"}, pass_description,
+                              {submission}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderer.waitOnHost());
+            return renderer.retireCompletedFrames();
+        };
+        const auto readAccepted = [&](const u32 count) {
+            Array<ParticleOrientationGpu> rows(count);
+            rhi::IBuffer *const accepted = grid.particleOrientationAcceptedForTest();
+            PPR_TEST_ASSERT(accepted != nullptr);
+            PPR_TEST_ASSERT(not make_error_code(
+                fixture.device().readBuffer(accepted, 0u, rows.size() * sizeof(ParticleOrientationGpu), rows.data())));
+            return rows;
+        };
+
+        const auto sameRows = [](const auto &left, const auto &right, const u32 count) {
+            return count != 0u and std::memcmp(left.data(), right.data(), count * sizeof(ParticleOrientationGpu)) == 0;
+        };
+
+        // Birth publication: the first accepted publication initialises the target
+        // axis and then applies exactly one clamped amplitude step, so the ramp is
+        // observable rather than instantaneous.
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particleOrientationValidForTest());
+        const auto born = readAccepted(2u);
+        PPR_TEST_ASSERT(((born[0u].m_angle_bias_stretch >> 16u) & 0xffu) == 0u);
+        PPR_TEST_ASSERT(((born[0u].m_angle_bias_stretch >> 24u) & 0xffu) == 32u);
+
+        // A3: the orientation clock is the accepted presentation identity, not the
+        // pack token. A publication/joint-tick-only accepted change advances the
+        // ramp with no redundant particle pack.
+        const u64 pack_before_identity = grid.particlePackEncodesForTest();
+        auto identity_view = view;
+        identity_view.m_publication = 2u;
+        identity_view.m_joint_tick = 2u;
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(identity_view));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == pack_before_identity);
+        const auto identity_updated = readAccepted(2u);
+        PPR_TEST_ASSERT(((identity_updated[0u].m_angle_bias_stretch >> 24u) & 0xffu) == 64u);
+        PPR_TEST_ASSERT(not sameRows(identity_updated, born, 2u));
+
+        // Repeated publication with the same identity: no pack, no update, and the
+        // accepted history is bit-identical.
+        const u64 pack_encodes = grid.particlePackEncodesForTest();
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == pack_encodes);
+        const auto repeated = readAccepted(2u);
+        PPR_TEST_ASSERT(sameRows(repeated, identity_updated, 2u));
+
+        // Converge the amplitude ramp with new accepted publications.
+        for (u32 publish = 0u; publish < 10u; ++publish) {
+            const u64 epoch = 10u + publish;
+            auto next = view;
+            next.m_live_epoch = std::make_shared<std::atomic<u64>>(epoch);
+            next.m_device_epoch = epoch;
+            next.m_publication = epoch;
+            next.m_joint_tick = epoch;
+            PPR_TEST_ASSERT(next.current());
+            PPR_TEST_ASSERT(not grid.applyGpuParticleView(next));
+            PPR_TEST_ASSERT(not encode());
+        }
+
+        const auto converged = readAccepted(2u);
+        PPR_TEST_ASSERT(((converged[0u].m_angle_bias_stretch >> 16u) & 0xffu) == 0u);
+        PPR_TEST_ASSERT(((converged[0u].m_angle_bias_stretch >> 24u) & 0xffu) >= 200u);
+
+        // Growth allocates the replacement roles without an old-to-new copy. The
+        // retained accepted allocation stays the readable history, and because the
+        // converged state is a fixed point the surviving IDs keep their rows.
+        auto grown_hot = makeHot(3u);
+        auto grown_cold = makeCold(3u);
+        auto grown_metadata = makeMetadata(3u, 2u);
+        auto grown_view = makeView(grown_metadata, grown_hot, grown_cold, 32u);
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(grown_view));
+        PPR_TEST_ASSERT(not encode());
+        const auto grown = readAccepted(3u);
+        PPR_TEST_ASSERT(sameRows(grown, converged, 2u));
+        PPR_TEST_ASSERT(((grown[2u].m_angle_bias_stretch >> 16u) & 0xffu) == 0u);
+        PPR_TEST_ASSERT(((grown[2u].m_angle_bias_stretch >> 24u) & 0xffu) == 32u);
+
+        // A1/A2: a prepared growth that is definitely not submitted must leave the
+        // retained history accepted and readable, and the fresh roles must never be
+        // drawn. Then a revoked-source hold and the retry must not read uninitialised
+        // bytes.
+        const auto before_rejected_growth = readAccepted(3u);
+        const u32 role_before_rejected_growth = grid.particleOrientationAcceptedRoleForTest();
+        auto next_hot = makeHot(4u);
+        auto next_cold = makeCold(4u);
+        auto next_metadata = makeMetadata(4u, 3u);
+        auto next_view = makeView(next_metadata, next_hot, next_cold, 40u);
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(next_view));
+        {
+            rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            FenceWaitHook wait{[&](const FenceCompletionValue value) { return renderer.waitForFenceValue(value); }};
+            PreRenderContext context{fixture.device(), *encoder, renderer.completedFenceValue(), std::move(wait)};
+            PPR_TEST_ASSERT(not grid.prepareGpuParticles(context));
+            // The candidate was encoded but this frame is definitely unsubmitted.
+            grid.discardUnsubmittedParticles();
+        }
+
+        const auto roles = grid.particleOrientationRolesForTest();
+        rhi::IBuffer *const retained_history = grid.particleOrientationHistoryForTest();
+        PPR_TEST_ASSERT(retained_history != nullptr);
+        PPR_TEST_ASSERT(retained_history != roles[0u] and retained_history != roles[1u]);
+        PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == role_before_rejected_growth);
+        PPR_TEST_ASSERT(sameRows(readAccepted(3u), before_rejected_growth, 3u));
+        PPR_TEST_ASSERT(grid.particleOrientationDrawForTest() == retained_history);
+
+        // Revoke the source: the next frame is a hold and must draw the retained
+        // history, never the rejected candidate.
+        next_view.m_live_epoch = std::make_shared<std::atomic<u64>>(next_view.m_device_epoch + 1u);
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(next_view));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(grid.particleOrientationDrawForTest() == retained_history);
+        PPR_TEST_ASSERT(sameRows(readAccepted(3u), before_rejected_growth, 3u));
+
+        // Retry the same 4-row publication: it grows nothing, re-initialises the
+        // appended identity and continues the survivors from the retained history.
+        auto retry_view = next_view;
+        retry_view.m_live_epoch = std::make_shared<std::atomic<u64>>(41u);
+        retry_view.m_device_epoch = 41u;
+        retry_view.m_publication = 41u;
+        retry_view.m_joint_tick = 41u;
+        PPR_TEST_ASSERT(retry_view.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(retry_view));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particleOrientationValidForTest());
+        PPR_TEST_ASSERT(grid.particleOrientationCountForTest() == 4u);
+        const auto retried = readAccepted(4u);
+        PPR_TEST_ASSERT(sameRows(retried, before_rejected_growth, 3u));
+        PPR_TEST_ASSERT(((retried[3u].m_angle_bias_stretch >> 16u) & 0xffu) == 0u);
+        PPR_TEST_ASSERT(((retried[3u].m_angle_bias_stretch >> 24u) & 0xffu) == 32u);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_orientation birth_stretch={} identity_stretch={} "
+                "converged_stretch={} appended_stretch={} retried_stretch={}",
+                (born[0u].m_angle_bias_stretch >> 24u) & 0xffu,
+                (identity_updated[0u].m_angle_bias_stretch >> 24u) & 0xffu,
+                (converged[0u].m_angle_bias_stretch >> 24u) & 0xffu, (grown[2u].m_angle_bias_stretch >> 24u) & 0xffu,
+                (retried[3u].m_angle_bias_stretch >> 24u) & 0xffu));
     };
 
     PPR_UNIT_TEST (opaque_terrain_ownership_occludes_solid_and_liquid_particles) {
@@ -4095,8 +4677,11 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_flow_cue_stretches_the_major_axis_only) {
         // Appearance probe for the retained flow cue: the drawn shape stretches
-        // along the published row motion by at most k = 1.5, the minor semi-axis
+        // along the stored orientation axis by at most k = 1.5, the minor semi-axis
         // stays the sealed support R, and the 3.0625 r cull margin covers both.
+        // The per-cell sampler below now feeds the prepare pass's one target per
+        // accepted publication; the draw decodes the stored axis (see the
+        // particle_orientation_* cases).
         const float support = kGridParticleSupportScale;
         const float cap = kGridParticleStretchCap;
 
@@ -4865,8 +5450,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // 3x3 stencil: the four levels a boundary carries (0.25 / 0.5 / 0.75 /
         // 1.0) instead of one bit. A surface gives an outward normal (minus the
         // field gradient) and a tangent perpendicular to it; a flat field gives
-        // none, which is what keeps the accepted P1 visuals byte-exact wherever
-        // the data says "no surface".
+        // none. The prepare pass now evaluates this once per accepted publication
+        // and stores the shared axis; the draw decodes it (see the
+        // particle_orientation_* cases).
         const FlowPoint centre{4.5, 5.5}; // a cell centre, so the bilinear weights collapse
         const double support = double(kGridParticleSupportScale);
 
