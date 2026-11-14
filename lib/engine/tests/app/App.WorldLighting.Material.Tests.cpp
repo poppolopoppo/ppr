@@ -5189,6 +5189,149 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 gridParticleTangentStrength(2.0)));
     };
 
+    PPR_UNIT_TEST (particle_tangent_gate_sequence_reduces_weak_flips_only) {
+        // Mechanism evidence, not scene statistics: two scripted synthetic
+        // sequences at one fixed sample point, over consecutive "publications".
+        // The weak sequence models the owner-reported failure (the only gradient
+        // is a particle-sized quantum whose axis flips between x and y); the strong
+        // sequence models a real surface whose axis still flips between two
+        // coherent publications. Displacement uses the maximum over sample
+        // directions of the half-coverage contour move,
+        //   dk = k0 * (b_i + b_j)/2 * max_theta |cos^2(theta-axis_j) -
+        //                                            cos^2(theta-axis_i)|,
+        // where the maximum is |sin(axis angle)| for two unoriented axes (1 for
+        // the 90-degree flips here). It does not establish that the owner's scene
+        // is weak-gradient dominated, and it does not bound temporal acceptance.
+        constexpr double k0 = double(kGridParticleTangentContourScale);
+        const double unconditional_bias = double(kGridParticleTangentContourBias);
+        constexpr double r_cell = 0.28209479177387814; // sqrt(0.25/pi) for volume 0.25
+        const double r_px_span64 = double(kGridParticleSupportScale) * r_cell * (720.0 / 64.0);
+        PPR_TEST_ASSERT(std::abs(r_px_span64 - 6.347) <= 1.0e-3);
+
+        struct Step {
+            double m_gradient{};
+            double m_strength{};
+            float m_bias{};
+            FlowPoint m_tangent{};
+        };
+
+        const FlowPoint centre{4.5, 5.5};
+        const auto weak_x = [](const int x, const int y) {
+            double value = 0.25;
+            if (x == 5 and y == 5)
+                value = 0.5;
+            else if (x == 3 and y == 5)
+                value = 0.0;
+            return value;
+        };
+        const auto weak_y = [](const int x, const int y) {
+            double value = 0.25;
+            if (x == 4 and y == 6)
+                value = 0.5;
+            else if (x == 4 and y == 4)
+                value = 0.0;
+            return value;
+        };
+        const auto body_left = [](const int x, const int) { return x <= 4 ? 1.0 : 0.0; };
+        const auto body_below = [](const int, const int y) { return y <= 5 ? 1.0 : 0.0; };
+
+        const auto sample = [&](const auto &field) {
+            Step step{};
+            PPR_TEST_ASSERT(
+                gridParticleSurfaceTangent(field, centre, step.m_tangent, &step.m_gradient, &step.m_strength));
+            step.m_bias = kGridParticleTangentContourBias * static_cast<float>(step.m_strength);
+            return step;
+        };
+        const auto axis_sine = [](const Step &left, const Step &right) {
+            const double cross = left.m_tangent.x * right.m_tangent.y - left.m_tangent.y * right.m_tangent.x;
+            return (std::min) (std::abs(cross), 1.0);
+        };
+        const auto displacement = [&](const Step &left, const Step &right, const bool gated) {
+            const double left_bias = gated ? double(left.m_bias) : unconditional_bias;
+            const double right_bias = gated ? double(right.m_bias) : unconditional_bias;
+            return k0 * 0.5 * (left_bias + right_bias) * axis_sine(left, right);
+        };
+        const auto worst_step = [&](const auto &steps, const bool gated) {
+            double worst = 0.0;
+            for (u32 index = 1u; index < steps.size(); ++index)
+                worst = (std::max) (worst, displacement(steps[index - 1u], steps[index], gated));
+            return worst;
+        };
+
+        // Weak-field failure mode: eight publications alternating an x pair and a
+        // y pair of +/-0.25 cells (one fill quantum) around a 0.25 baseline. The
+        // raw gradient is exactly 1.0 in every step, so the gate's strength is 0
+        // and b_eff is 0: the resting round contour in every publication.
+        std::array<Step, 8u> weak{};
+        for (u32 index = 0u; index < weak.size(); ++index) {
+            weak[index] = index % 2u == 0u ? sample(weak_x) : sample(weak_y);
+            PPR_TEST_ASSERT(std::abs(weak[index].m_gradient - 1.0) <= 1.0e-12);
+            PPR_TEST_ASSERT(weak[index].m_strength <= 0.1);
+            PPR_TEST_ASSERT(weak[index].m_bias == 0.0f);
+        }
+
+        // Strong-field documented residual: six publications of full-fill coherent
+        // half-planes, alternating the surface axis by 90 degrees (this is also a
+        // three-step coherent sequence). Every step has |grad| = 4, strength 1 and
+        // b_eff bit-identical to the constant bias, so the gate cannot change a
+        // real surface.
+        std::array<Step, 6u> strong{};
+        for (u32 index = 0u; index < strong.size(); ++index) {
+            strong[index] = index % 2u == 0u ? sample(body_left) : sample(body_below);
+            PPR_TEST_ASSERT(std::abs(strong[index].m_gradient - 4.0) <= 1.0e-12);
+            PPR_TEST_ASSERT(strong[index].m_strength == 1.0);
+            PPR_TEST_ASSERT(
+                std::bit_cast<u32>(strong[index].m_bias) == std::bit_cast<u32>(kGridParticleTangentContourBias));
+        }
+
+        const double weak_before = worst_step(weak, false);
+        const double weak_after = worst_step(weak, true);
+        const double strong_before = worst_step(strong, false);
+        const double strong_after = worst_step(strong, true);
+        const double unconditional = k0 * unconditional_bias;
+
+        // Before the gate any 90-degree flip moved the contour by k0*b. The gate
+        // reduces the weak sequence to zero (strength 0 throughout), and leaves
+        // the strong sequence at exactly the old worst case: only cell history can
+        // bound the latter, so this test does not claim closure for it.
+        PPR_TEST_ASSERT(std::abs(weak_before - unconditional) <= 1.0e-9);
+        PPR_TEST_ASSERT(std::abs(strong_before - unconditional) <= 1.0e-9);
+        PPR_TEST_ASSERT(weak_after <= 0.0034);
+        PPR_TEST_ASSERT(std::abs(strong_after - unconditional) <= 1.0e-9);
+
+        for (u32 index = 0u; index < weak.size(); ++index) {
+            const double before = index == 0u ? 0.0 : displacement(weak[index - 1u], weak[index], false);
+            const double after = index == 0u ? 0.0 : displacement(weak[index - 1u], weak[index], true);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_tangent_sequence weak step={} G={:.6f} strength={:.6f} "
+                    "b_eff={:.6f} axis=({:.4f},{:.4f}) axis_turn={:.6f} before_R={:.6f} after_R={:.6f}",
+                    index, weak[index].m_gradient, weak[index].m_strength, double(weak[index].m_bias),
+                    weak[index].m_tangent.x, weak[index].m_tangent.y,
+                    std::asin(axis_sine(index == 0u ? weak[index] : weak[index - 1u], weak[index])), before, after));
+        }
+        for (u32 index = 0u; index < strong.size(); ++index) {
+            const double before = index == 0u ? 0.0 : displacement(strong[index - 1u], strong[index], false);
+            const double after = index == 0u ? 0.0 : displacement(strong[index - 1u], strong[index], true);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_tangent_sequence strong step={} G={:.6f} strength={:.6f} "
+                    "b_eff={:.6f} axis=({:.4f},{:.4f}) axis_turn={:.6f} before_R={:.6f} after_R={:.6f}",
+                    index, strong[index].m_gradient, strong[index].m_strength, double(strong[index].m_bias),
+                    strong[index].m_tangent.x, strong[index].m_tangent.y,
+                    std::asin(axis_sine(index == 0u ? strong[index] : strong[index - 1u], strong[index])), before,
+                    after));
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_tangent_sequence summary R_px_span64={:.4f} "
+                "weak_before_R={:.6f} weak_after_R={:.6f} weak_before_px={:.4f} weak_after_px={:.4f} "
+                "strong_before_R={:.6f} strong_after_R={:.6f} strong_before_px={:.4f} strong_after_px={:.4f}",
+                r_px_span64, weak_before, weak_after, weak_before * r_px_span64, weak_after * r_px_span64,
+                strong_before, strong_after, strong_before * r_px_span64, strong_after * r_px_span64));
+    };
+
     PPR_UNIT_TEST (particle_plateau_coverage_is_conditional) {
         // Reconciles the plan's "opaque in the plateau" claim with the final
         // composite: the radial falloff is exactly 1 for rho <= 2/3, but final solid
@@ -5434,6 +5577,7 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_tangent_contour_stays_inside_the_support,
                 detail::WorldLightingMaterial::particle_tangent_follows_the_fill_field,
                 detail::WorldLightingMaterial::particle_tangent_energy_gate_fades_weak_fields,
+                detail::WorldLightingMaterial::particle_tangent_gate_sequence_reduces_weak_flips_only,
                 detail::WorldLightingMaterial::particle_plateau_coverage_is_conditional,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
