@@ -167,6 +167,36 @@ export namespace pP {
         std::is_standard_layout_v<ParticleOrientationGpu> and std::is_trivially_copyable_v<ParticleOrientationGpu>);
 
     // ------------------------------------------------------------------
+    // six-byte conic draw record
+    // ------------------------------------------------------------------
+    // Derived draw cache, not additional temporal state: the 4-byte canonical
+    // history above remains the only history, and each record is a pure function
+    // of one canonical word. Six logical bytes per packed row (binary16 a, b, c
+    // at byte offsets 0, 2, 4), pair-packed into three uints per two rows by the
+    // prepare rank. The record is camera-independent world XY: a camera change
+    // rerasterises the field, never the history.
+    //
+    // One buffer per prepared slot at 12 * ceil(capacity / 2) bytes, so a single
+    // slot is 24 KiB / 384 KiB / 6 MiB at 4096 / 65536 / 1048576 rows and three
+    // slots are 18 MiB at the 1,048,576-row admitted capacity. The shader twin is
+    // `ParticleConicBits` / `ParticleConicMetric` in grid_particle_native.slang.
+    inline constexpr u32 kGridParticleConicStride{6u};
+    // The decoded record's smaller eigenvalue is 1/k^2 >= 4/9 for every admitted
+    // cue (k <= 1.5); the upward floor covers binary16 rounding and FP32
+    // evaluation, so the decoded support never exceeds 3r.
+    inline constexpr float kGridParticleConicLambdaFloor{4.0f / 9.0f + 1.0f / 262144.0f};
+    // Decoded conic support: 1.5 R = 3.0 r at the stretch cap, inside the
+    // retained 3.0625 r cull margin. Mirrors the shader's bound.
+    inline constexpr float kGridParticleConicSupportMaximum{2.0f * 1.5f};
+    static_assert(kGridParticleConicSupportMaximum < 3.0625f);
+
+    // Bytes of one prepared slot's pair-packed conic buffer. An odd final record
+    // is neutral and still allocated.
+    [[nodiscard]] constexpr u64 gridParticleConicBytes(const u32 capacity) noexcept {
+        return static_cast<u64>(12u) * ((static_cast<u64>(capacity) + 1u) / 2u);
+    }
+
+    // ------------------------------------------------------------------
     // particle presentation shapes
     // ------------------------------------------------------------------
     // One constant set, mirrored by grid_particle_native.slang (the prepare cull
@@ -1010,6 +1040,21 @@ export namespace pP {
             return {particles.m_packed.get(), slot.m_args.get(), slot.m_ids.get()};
         }
 
+        // The selected slot's pair-packed six-byte conic records: probe owner for
+        // the capacity sizing and for a CPU-mirror comparison of the GPU packing.
+        [[nodiscard]] rhi::IBuffer *particleConicForTest() const noexcept {
+            if (not m_world.m_gpu_particles) {
+                return nullptr;
+            }
+            const auto &particles = *m_world.m_gpu_particles;
+            return particles.m_slots[particles.m_selected_slot].m_conic.get();
+        }
+
+        // Rows of the accepted packed publication a held frame culls.
+        [[nodiscard]] u32 particlePackedCountForTest() const noexcept {
+            return m_world.m_gpu_particles ? m_world.m_gpu_particles->m_packed_count : 0u;
+        }
+
         // Test-only orientation history roles: {accepted, candidate}. The accepted
         // role is what the next update slews from and what a repeated publication
         // binds; the candidate is this publication's uncommitted write. Both are
@@ -1324,9 +1369,24 @@ export namespace pP {
         };
 
         struct GpuParticleSlot {
-            rhi::ComPtr<rhi::IBuffer> m_ids{}, m_args{};
+            rhi::ComPtr<rhi::IBuffer> m_ids{}, m_args{}, m_conic{};
             std::optional<GridParticleGpuView> m_reader{};
             std::unique_ptr<ParticleCensusStorage> m_census{};
+        };
+
+        // Inputs of the retained visibility compaction. A held frame recomputes
+        // them from the current camera and the retained rows; when they are
+        // unchanged, rank/scan/scatter would reproduce the retained ids,
+        // arguments and conic exactly, so the hold reuses them instead of
+        // re-encoding. This is why a repeated publication with an unchanged
+        // camera stays bit-identical and costs no dispatch.
+        struct ParticleCullKey {
+            std::array<std::array<float, 4u>, 6u> m_planes{};
+            float m_guard{};
+            u32 m_material{0xffff'ffffu};
+            u32 m_count{};
+
+            [[nodiscard]] bool operator==(const ParticleCullKey &) const = default;
         };
 
         struct GpuParticleStorage {
@@ -1370,7 +1430,27 @@ export namespace pP {
 
             u64 m_packed_epoch{std::numeric_limits<u64>::max()}, m_packed_metadata{}, m_packed_terrain{};
             u64 m_pending_epoch{}, m_pending_metadata{}, m_pending_terrain{};
+            // The metadata owner of the accepted packed rows. Admission and any
+            // held recull must describe the rows actually drawn, never the latest
+            // incoming view: a rejected attempt can leave a current-but-rejected
+            // owner installed in `m_view` while the packed rows are still the
+            // previous accepted publication's.
+            std::shared_ptr<const GridParticleMetadataResource> m_packed_metadata_owner{},
+                m_pending_packed_metadata_owner{};
+            // Row count of the accepted packed publication. The hold recull culls
+            // exactly these retained rows; it never derives a count from the
+            // incoming view, which a hold does not install.
+            u32 m_packed_count{}, m_pending_count{};
             u32 m_capacity{}, m_selected_slot{};
+            // The compaction inputs the selected slot's ids/arguments/conic were
+            // encoded from. The key is committed with the submission, never when
+            // it is encoded, so a definitely-unsubmitted attempt cannot describe
+            // the retained slot; `m_cull_slot` names the slot it belongs to, which
+            // is what lets an unsubmitted slot rotation be undone.
+            ParticleCullKey m_cull{}, m_pending_cull{};
+            u32 m_cull_slot{};
+            bool m_cull_valid{};
+            bool m_pending_cull_valid{};
             bool m_pending_pack{}, m_prepared{}, m_slot_encoded{};
         };
 
@@ -1392,7 +1472,15 @@ export namespace pP {
         // packed rows and stable IDs stay drawable. A never-packed hold presents no
         // particles. The per-frame detail is debug; a hold that persists past
         // `kParticleHoldWarnFrames` warns exactly once per episode.
-        [[nodiscard]] std::error_code holdGpuParticles_();
+        [[nodiscard]] std::error_code holdGpuParticles_(const PreRenderContext &context);
+        // Held-view recull: reruns the existing rank/scan/scatter against the
+        // retained packed rows and their retained count with the current camera
+        // and viewport, into a completion-safe prepared slot. It advances no cue
+        // slew, writes no orientation history and reads no solver buffer. The
+        // caller has already proved the retained publication is drawable.
+        [[nodiscard]] std::error_code recullGpuParticles_(const PreRenderContext &context);
+        // The compaction inputs of the current camera and retained rows.
+        [[nodiscard]] ParticleCullKey particleCullKey_(u32 count) const noexcept;
         [[nodiscard]] std::error_code createGpuParticlePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code ensureParticleMask_(rhi::IDevice &device);

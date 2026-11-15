@@ -602,7 +602,25 @@ namespace pP {
                view.m_world.m_content_fingerprint == m_world.m_content_fingerprint;
     }
 
-    std::error_code GridPass::holdGpuParticles_() {
+    auto GridPass::particleCullKey_(const u32 count) const noexcept -> ParticleCullKey {
+        // The one definition of "what the compaction was encoded against": the
+        // six clip planes, the density-lane guard and material, and the row
+        // count. Both the pack and the held recull derive their constants and
+        // this key from the same call, so the reuse decision cannot disagree with
+        // the encoded cull.
+        ParticleCullKey key{};
+        for (u32 plane = 0u; plane < 6u; ++plane) {
+            const auto &source = m_camera_view.m_frustum.clip[plane];
+            std::memcpy(key.m_planes[plane].data(), source.data(), sizeof(key.m_planes[plane]));
+        }
+
+        key.m_guard = m_world.m_particle_surface.admitted() ? particleSurfacePixelWorld_(m_camera_view) : 0.0f;
+        key.m_material = m_world.m_particle_surface.m_material;
+        key.m_count = count;
+        return key;
+    }
+
+    std::error_code GridPass::holdGpuParticles_(const PreRenderContext &context) {
         ++m_world.m_particle_hold_attempts;
         m_world.m_particle_presentation = EParticlePresentation::held;
 
@@ -622,6 +640,24 @@ namespace pP {
             if (slot.m_census) {
                 slot.m_census->m_encoded = false;
                 slot.m_census->m_submission = kFenceValueNone;
+            }
+
+            // A held frame draws the retained rows against the current camera, so
+            // the retained visible-ID list is only valid while the camera it was
+            // culled against is unchanged. When the cull inputs move - a pan, a
+            // zoom or a raster change - rerasterise the retained rows from the
+            // retained packed buffer; rerasterising the previous ID list would
+            // keep the rows that left the view and could never reveal a row that
+            // entered it. The retained cull is the last *committed* one, in the
+            // slot it was committed for.
+            if (particles.m_prepared and particles.m_packed_count != 0u) {
+                const ParticleCullKey key = particleCullKey_(particles.m_packed_count);
+                const bool retained = particles.m_cull_valid and
+                                      particles.m_cull_slot == particles.m_selected_slot and
+                                      particles.m_cull == key;
+                if (not retained) {
+                    PPR_RETURN_ERROR_ON_FAIL(GridPass, recullGpuParticles_(context));
+                }
             }
         }
 
@@ -655,6 +691,179 @@ namespace pP {
                 });
         }
 
+        return {};
+    }
+
+    // ------------------------------------------------------------------
+    // held-view recull
+    // ------------------------------------------------------------------
+
+    std::error_code GridPass::recullGpuParticles_(const PreRenderContext &context) {
+        auto &particles = *m_world.m_gpu_particles;
+        const u32 count = particles.m_packed_count;
+        // The retained rows' own metadata: a rejected attempt may have left a
+        // different incoming owner installed in `m_view`.
+        const auto &retained_metadata = particles.m_packed_metadata_owner;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, particles.m_packed and retained_metadata and count != 0u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::state_not_recoverable));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, m_particle_prepare_programs[1u].m_program != nullptr and
+                              m_particle_prepare_programs[2u].m_program != nullptr and
+                              m_particle_prepare_programs[3u].m_program != nullptr
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::not_supported));
+
+        // The draw source the hold presents: the retained accepted history, never
+        // this frame's candidate and never an unwritten role.
+        rhi::IBuffer *const orientation = particles.m_orientation_draw.get();
+        rhi::IBuffer *const orientation_candidate =
+            particles.m_orientation[particles.m_orientation_accepted_role ^ 1u].get();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, orientation and orientation_candidate ? std::error_code{}
+                                                            : std::make_error_code(std::errc::state_not_recoverable));
+
+        // The rank root declares the ownership grids even though no target is
+        // computed this frame; the zero fallback keeps it complete and is never
+        // read because the frame's ownership bit stays clear.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(context.m_device));
+
+        const hal::ProfileScope scope{"App.Grid.Particles.Recull"};
+
+        // Completion-selected slot: the same ring, roots and fence protocol the
+        // packed preparation uses, so a recull never rewrites ids or arguments a
+        // submitted frame may still read.
+        if (not m_visibility_prepared) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, selectSlot_(context.m_completed_fence_value, context.m_wait_for_fence));
+        }
+
+        particles.m_selected_slot = m_tile_ring_cursor;
+        auto &slot = particles.m_slots[particles.m_selected_slot];
+        // This slot carries no capture of a superseded epoch.
+        slot.m_reader.reset();
+        if (slot.m_census) {
+            slot.m_census->m_encoded = false;
+            slot.m_census->m_submission = kFenceValueNone;
+        }
+
+        const ParticleCullKey key = particleCullKey_(count);
+        const auto &metadata = *retained_metadata;
+        ParticlePrepareFrame frame{};
+        for (u32 plane = 0u; plane < 6u; ++plane) {
+            for (u32 component = 0u; component < 4u; ++component) {
+                frame.m_planes[plane][component] = key.m_planes[plane][component];
+            }
+        }
+
+        frame.m_cell_metres = static_cast<float>(metadata.m_cell_metres);
+        frame.m_origin = static_cast<float>(particles.m_view.m_origin);
+        frame.m_count = count;
+        // Only the capture census reads this; the recull never encodes it.
+        frame.m_moving_count = metadata.m_moving_count;
+        frame.m_block_count = std::max(1u, (count + 255u) / 256u);
+        frame.m_surface_guard = key.m_guard;
+        frame.m_surface_material = key.m_material;
+        // A hold advances no cue slew and writes no history: rank derives the
+        // conic from the retained accepted word into the newly selected slot and
+        // writes nothing to either orientation role.
+        frame.m_orientation_update = 0u;
+        frame.m_orientation_remap = 0u;
+        frame.m_orientation_previous_count = 0u;
+        frame.m_orientation_owned = 0u;
+
+        for (auto *const buffer:
+            {particles.m_ranks.get(), particles.m_counts.get(), particles.m_prefix.get(), slot.m_ids.get(),
+                slot.m_args.get(), slot.m_conic.get()}) {
+            context.m_encoder.setBufferState(buffer, rhi::ResourceState::UnorderedAccess);
+        }
+        context.m_encoder.setBufferState(particles.m_packed, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setBufferState(orientation, rhi::ResourceState::ShaderResource);
+
+        rhi::IBuffer *const previous_metadata = particles.m_orientation_metadata
+                                                    ? particles.m_orientation_metadata->m_rows.get()
+                                                    : metadata.m_rows.get();
+        const u32 blocks = frame.m_block_count;
+        constexpr std::array<const char *, 3u> names{
+            "Particles.Recull", "Particles.RecullPrefix", "Particles.RecullCompact"};
+        for (u32 phase = 0u; phase < 3u; ++phase) {
+            context.m_encoder.pushDebugGroup(names[phase], {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+
+            const u32 program = phase + 1u;
+            auto *const root = particles.m_roots[program][particles.m_selected_slot].get();
+            rhi::ShaderCursor cursor{root};
+            const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) -> std::error_code {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor[name].setBinding(rhi::Binding(buffer, particleRange(buffer))));
+                return {};
+            };
+
+            if (phase == 0u) {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_ranks", particles.m_ranks));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_packed", particles.m_packed));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_counts", particles.m_counts));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_metadata", metadata.m_rows));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_previous_metadata", previous_metadata));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass,
+                    cursor["g_orientation_previous"].setBinding(rhi::Binding(orientation, particleRange(orientation))));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, cursor["g_orientation_current"].setBinding(
+                                  rhi::Binding(orientation_candidate, particleRange(orientation_candidate))));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_conic", slot.m_conic));
+                // The orientation target is not computed, so no fill or winner
+                // grid is read; the fallback keeps the root complete.
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+            } else if (phase == 1u) {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_counts", particles.m_counts));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_prefix", particles.m_prefix));
+            } else {
+                // The scatter root is a separate root object from the rank phase
+                // (per program AND slot), so it must bind every field the program
+                // reads. `scatterParticles` reads g_ranks to decide whether and
+                // where each ID is stored; omitting it makes a held recull's stores
+                // depend on a previous frame that happened to visit this root. The
+                // indirect count comes straight from the block prefix, so correct
+                // arguments never prove correct ID stores.
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_ranks", particles.m_ranks));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_prefix", particles.m_prefix));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_ids", slot.m_ids));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_args", slot.m_args));
+            }
+
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_prepare"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&frame, sizeof(frame)));
+
+            auto *const pass = context.m_encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            {
+                PPR_DEFER {
+                    pass->end();
+                };
+                pass->bindPipeline(m_particle_prepare_programs[program].m_pipeline, root);
+                pass->dispatchCompute(program == 2u ? 1u : blocks, 1u, 1u);
+                ++m_dispatch_commands;
+            }
+
+            context.m_encoder.globalBarrier();
+        }
+
+        // Order this frame's reads after the recull's writes: the draw reads the
+        // retained rows, the ids/arguments just produced and the conic record
+        // that was re-derived from the retained canonical word.
+        context.m_encoder.setBufferState(particles.m_packed, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::IndirectArgument);
+        context.m_encoder.setBufferState(slot.m_conic, rhi::ResourceState::ShaderResource);
+
+        particles.m_pending_cull = key;
+        particles.m_pending_cull_valid = true;
+        particles.m_slot_encoded = true;
         return {};
     }
 
@@ -773,6 +982,15 @@ namespace pP {
                 GridPass, particleBuffer(
                               device, sizeof(rhi::IndirectDrawArguments), sizeof(u32), nullptr,
                               replacement->m_slots[slot].m_args, true));
+            // Six-byte conic draw records, pair-packed into uints: 12 bytes per
+            // two capacity rows. Written by the rank invocation that also
+            // advances the canonical history, so every pair containing a drawn
+            // row is fully written before the slot is drawn; an odd final record
+            // is neutral and unused.
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, particleBuffer(
+                              device, gridParticleConicBytes(replacement->m_capacity), sizeof(u32), nullptr,
+                              replacement->m_slots[slot].m_conic));
             for (u32 program = 0u; program < m_particle_prepare_programs.size(); ++program) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, device.createRootShaderObject(
@@ -883,6 +1101,19 @@ namespace pP {
         particles.m_pending_epoch = 0u;
         particles.m_pending_metadata = 0u;
         particles.m_pending_terrain = 0u;
+        particles.m_pending_count = 0u;
+        // A pending compaction key can only survive a frame that was definitely
+        // not submitted. Its encoded ids, arguments and conic never reached the
+        // device, so the retained compaction is still the last committed one:
+        // clear the pending key and put the selected slot back on the committed
+        // cull, which is what a later hold must reuse.
+        particles.m_pending_cull_valid = false;
+        if (particles.m_cull_valid) {
+            particles.m_selected_slot = particles.m_cull_slot;
+        }
+        // A rejected attempt's metadata owner is dropped; the accepted owner of the
+        // rows that are still drawable is retained.
+        particles.m_pending_packed_metadata_owner.reset();
         particles.m_orientation_pending = false;
         particles.m_pending_orientation_metadata.reset();
         particles.m_pending_orientation_identity = {};
@@ -921,7 +1152,7 @@ namespace pP {
             // No committed view has ever been installed. A held stage still
             // presents no particles and is counted; a seed-only world keeps its
             // CPU admission path. Neither is an error.
-            return m_world.m_particle_presentation == EParticlePresentation::held ? holdGpuParticles_()
+            return m_world.m_particle_presentation == EParticlePresentation::held ? holdGpuParticles_(context)
                                                                                   : std::error_code{};
         }
 
@@ -939,7 +1170,7 @@ namespace pP {
         // pack, read no solver buffer, and keep drawing the renderer's own last
         // packed rows and stable IDs. A retryable state must never stop the loop.
         if (not retainedGpuParticleCurrent_()) {
-            return holdGpuParticles_();
+            return holdGpuParticles_(context);
         }
 
         // A current publication ends the hold: this frame re-packs from the new
@@ -1003,10 +1234,12 @@ namespace pP {
             slot.m_census->m_submission = kFenceValueNone;
         }
 
+        ParticleCullKey cull = particleCullKey_(count);
         ParticlePrepareFrame frame{};
         for (u32 plane = 0u; plane < 6u; ++plane) {
-            std::memcpy(
-                frame.m_planes[plane], m_camera_view.m_frustum.clip[plane].data(), sizeof(frame.m_planes[plane]));
+            for (u32 component = 0u; component < 4u; ++component) {
+                frame.m_planes[plane][component] = cull.m_planes[plane][component];
+            }
         }
 
         frame.m_cell_metres = static_cast<float>(metadata.m_cell_metres);
@@ -1014,9 +1247,8 @@ namespace pP {
         frame.m_count = count;
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
-        frame.m_surface_guard = m_world.m_particle_surface.admitted() ? particleSurfacePixelWorld_(m_camera_view)
-                                                                      : 0.0f;
-        frame.m_surface_material = m_world.m_particle_surface.m_material;
+        frame.m_surface_guard = cull.m_guard;
+        frame.m_surface_material = cull.m_material;
 
         // Orientation publication planning. The orientation clock is the accepted
         // presentation identity (publication, terrain revision, joint tick) plus the
@@ -1176,7 +1408,7 @@ namespace pP {
 
         for (auto *const buffer:
             {storage.m_packed.get(), storage.m_ranks.get(), storage.m_counts.get(), storage.m_prefix.get(),
-                slot.m_ids.get(), slot.m_args.get()}) {
+                slot.m_ids.get(), slot.m_args.get(), slot.m_conic.get()}) {
             context.m_encoder.setBufferState(buffer, rhi::ResourceState::UnorderedAccess);
         }
         // The retained complete history is read and the candidate role is written;
@@ -1221,6 +1453,10 @@ namespace pP {
                 if (phase == 1u) {
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_packed", storage.m_packed));
                     PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_block_counts", storage.m_counts));
+                    // The derived six-byte conic record: rank derives each pair
+                    // from the canonical word it just wrote (or read, on a repeated
+                    // publication) into this prepared slot.
+                    PPR_RETURN_ERROR_ON_FAIL(GridPass, bind("g_particle_conic", slot.m_conic));
                     // Orientation history: this publication's candidate is written
                     // from the retained complete history (which may be a retired
                     // allocation after growth). The metadata ID search reads the
@@ -1325,6 +1561,10 @@ namespace pP {
             storage.m_pending_epoch = view.m_device_epoch;
             storage.m_pending_metadata = metadata.m_version;
             storage.m_pending_terrain = view.m_terrain_revision;
+            storage.m_pending_count = count;
+            // Retain the exact owner these rows were packed from; it becomes the
+            // accepted metadata of the drawable cohort on submission.
+            storage.m_pending_packed_metadata_owner = view.m_metadata;
             storage.m_pending_pack = true;
         }
 
@@ -1334,10 +1574,19 @@ namespace pP {
         context.m_encoder.setBufferState(storage.m_packed, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::ShaderResource);
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::IndirectArgument);
+        // The draw reads the conic record this frame's rank derived into the same
+        // prepared slot.
+        context.m_encoder.setBufferState(slot.m_conic, rhi::ResourceState::ShaderResource);
         // The draw reads what this frame resolved (the candidate it encoded, or the
         // accepted role/history on a repeated publication); order that read after
         // the rank write.
         context.m_encoder.setBufferState(storage.m_orientation_draw.get(), rhi::ResourceState::ShaderResource);
+
+        // The compaction inputs this slot's ids, arguments and conic were encoded
+        // from. Committed with the submission, so a rejected encoding never
+        // describes the retained slot.
+        storage.m_pending_cull = cull;
+        storage.m_pending_cull_valid = true;
 
         // The candidate becomes accepted only with the scene-A submission: this
         // pending record is committed by notifyFrameSubmitted, never here, and only
@@ -1481,6 +1730,17 @@ namespace pP {
             GridPass,
             cursor["g_particle_orientation"].setBinding(rhi::Binding(orientation, particleRange(orientation))));
         auto &slot = storage.m_slots[particle_slot];
+        // The direct classes never read the six-byte conic record; the shared
+        // program declares it, so bind the same prepared slot the density lane
+        // uses when this program kept the field.
+        const rhi::ShaderCursor conic_field = cursor["g_particle_conic"];
+        if (conic_field.isValid()) {
+            rhi::IBuffer *const conic = slot.m_conic.get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass,
+                conic != nullptr ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, conic_field.setBinding(rhi::Binding(conic, particleRange(conic))));
+        }
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_particle_ids"].setBinding(rhi::Binding(slot.m_ids, particleRange(slot.m_ids))));
         (*pipeline)->m_slot_particle_buffers[particle_slot] = storage.m_packed;

@@ -62,13 +62,23 @@ namespace pP {
         // material admits nothing: an ambiguous admission keeps every particle
         // on its existing direct class rather than mixing materials in one field.
         m_world.m_particle_surface = {};
-        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or
-            not m_world.m_gpu_particles or
-            not m_world.m_gpu_particles->m_view.m_metadata) {
+        if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or not m_world.m_gpu_particles) {
             return;
         }
 
-        const auto &materials = m_world.m_gpu_particles->m_view.m_metadata->m_materials;
+        // The lane must describe the rows this frame draws. A current publication
+        // is about to be packed, so its incoming metadata is authoritative; a hold
+        // draws the retained accepted rows, so only the accepted packed owner is.
+        // The incoming view may be a rejected attempt's inventory while the packed
+        // rows are still the previous publication's, which is why the owner is
+        // committed with the pack instead of inferred from the latest view.
+        const auto &retained = m_world.m_gpu_particles->m_packed_metadata_owner;
+        const auto &metadata = retainedGpuParticleCurrent_() ? m_world.m_gpu_particles->m_view.m_metadata : retained;
+        if (not metadata) {
+            return;
+        }
+
+        const auto &materials = metadata->m_materials;
         u32 admitted = kParticleSurfaceNoMaterial;
         EGridParticleDrawClass draw_class = EGridParticleDrawClass::opaque;
         u32 liquid_materials = 0u;
@@ -543,6 +553,14 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, cursor["g_particle_orientation"].setBinding(
                               rhi::Binding(orientation, particleSurfaceRange(orientation))));
+            rhi::IBuffer *const conic = particle_slot.m_conic.get();
+            const rhi::ShaderCursor conic_field = cursor["g_particle_conic"];
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, conic != nullptr and conic_field.isValid()
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::state_not_recoverable));
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, conic_field.setBinding(rhi::Binding(conic, particleSurfaceRange(conic))));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, cursor["g_particle_ids"].setBinding(
                               rhi::Binding(particle_slot.m_ids, particleSurfaceRange(particle_slot.m_ids))));

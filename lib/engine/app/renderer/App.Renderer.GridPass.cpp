@@ -1678,6 +1678,8 @@ namespace pP {
             particles.m_packed_epoch = particles.m_pending_epoch;
             particles.m_packed_metadata = particles.m_pending_metadata;
             particles.m_packed_terrain = particles.m_pending_terrain;
+            particles.m_packed_count = particles.m_pending_count;
+            particles.m_packed_metadata_owner = std::move(particles.m_pending_packed_metadata_owner);
             particles.m_pending_pack = false;
         }
         if (m_world.m_gpu_particles) {
@@ -1727,6 +1729,16 @@ namespace pP {
             auto &census = particles.m_slots[particles.m_selected_slot].m_census;
             if (census and census->m_encoded) {
                 census->m_submission = submit_value;
+            }
+
+            // The compaction encoded into this slot is now the retained one. The
+            // key is committed here, never at encode time, so a definitely
+            // unsubmitted attempt can never describe the retained slot.
+            if (particles.m_pending_cull_valid) {
+                particles.m_cull = particles.m_pending_cull;
+                particles.m_cull_slot = particles.m_selected_slot;
+                particles.m_cull_valid = true;
+                particles.m_pending_cull_valid = false;
             }
 
             particles.m_slot_encoded = false;
@@ -2714,6 +2726,15 @@ namespace pP {
                     particles.m_orientation_metadata != particles.m_view.m_metadata and
                     particles.m_orientation_metadata->m_rows) {
                     const u64 bytes = particles.m_orientation_metadata->m_rows->getDesc().size;
+                    out.m_particle_retained_metadata_bytes += bytes;
+                    out.m_particle_buffer_bytes += bytes;
+                }
+                // The accepted packed cohort's own metadata owner is retained
+                // separately from the latest incoming view.
+                if (particles.m_packed_metadata_owner and
+                    particles.m_packed_metadata_owner != particles.m_view.m_metadata and
+                    particles.m_packed_metadata_owner->m_rows) {
+                    const u64 bytes = particles.m_packed_metadata_owner->m_rows->getDesc().size;
                     out.m_particle_retained_metadata_bytes += bytes;
                     out.m_particle_buffer_bytes += bytes;
                 }

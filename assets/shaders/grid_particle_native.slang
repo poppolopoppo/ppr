@@ -228,4 +228,97 @@ ParticleNativeCell particleNativeCell(MetadataRow metadata,float2 movingPosition
     }
     return result;
 }
+
+// ------------------------------------------------------------------
+// six-byte conic draw record
+// ------------------------------------------------------------------
+// Derived draw cache, never temporal state: the 4-byte canonical word above is
+// the only history, and this record is a pure function of it. Six logical bytes
+// per packed row (binary16 a, b, c at byte offsets 0, 2, 4) pair-packed into
+// three uints per two rows. Both conversions round to nearest, ties to even.
+//
+//   l = 1/k^2, m = 1/eta^2, k in [1, 1.5], eta in [2/3, 1]
+//   a = C*C*l + S*S*m   b = C*S*(l - m)   c = S*S*l + C*C*m
+//
+// The quadratic a*x^2 + 2*b*x*y + c*y^2 is the inverse metric of the retained
+// kernel metric K = rotation(axis) * diag(k, eta): the curve rho = 1 is K's own
+// support ellipse in world XY, and det = a*c - b*b is 1/det(K)^2, which is the
+// kernel's volume normalisation. k and eta keep the retained cue mapping - the
+// bias cap sets the anisotropy ratio exactly as the 5/6 silhouette band did -
+// so the record changes the metric's frame, not the kernel, the support or the
+// normalisation.
+//
+// Decoded support. lambda_min of the record is 1/k^2 >= 4/9 for k <= 1.5, so the
+// support semiaxis is R/sqrt(lambda_min) <= 1.5 R = 3.000 r; eta <= 1 only
+// shrinks the minor axis. binary16 rounding can lower lambda_min by at most
+// about 2^-10, so the specified upward diagonal correction restores it to the
+// 4/9 + 2^-18 floor and the decoded support can never exceed the 3.0625 r cull
+// margin. Neutral (bias and stretch both zero) is exactly (1, 0, 1) and
+// bypasses trigonometry, so an unoriented row cannot pick up a cos/sin rounding.
+static const float kParticleConicLambdaFloor = 4.0/9.0+1.0/262144.0;
+static const float kParticleConicSupportMaximum = kParticleSupportScale*kParticleStretchCap;
+// The decoded conic support must fit the retained cull margin. The module-scope
+// assertion cannot be expressed in this Slang revision, so the CPU twin pins the
+// same relation (kGridParticleConicSupportMaximum < kGridParticleCullRadiusScale).
+
+struct ParticleConicBits {
+    uint m_a,m_b,m_c;
+};
+
+ParticleConicBits particleConicBits(uint angle_bias_stretch) {
+    ParticleConicBits result;
+    result.m_a=f32tof16(1.0);
+    result.m_b=f32tof16(0.0);
+    result.m_c=f32tof16(1.0);
+
+    uint angle=angle_bias_stretch&0xffffu;
+    uint bias=(angle_bias_stretch>>16u)&0xffu;
+    uint stretch=(angle_bias_stretch>>24u)&0xffu;
+    if (bias==0u&&stretch==0u) return result;
+
+    float radians=float(angle)*kParticleOrientationPi/float(kParticleOrientationAngleCount);
+    float cosine=cos(radians);
+    float sine=sin(radians);
+    // The retained cue mapping: b = bias_cap * B/255 sets eta, and k = 1 +
+    // (stretch_cap - 1) * S/255 the major axis. eta >= 2/3 keeps the division
+    // below away from zero for every admitted amplitude.
+    float anisotropy=kParticleTangentContourBias*(float(bias)/255.0);
+    float stretch_scale=1.0+(kParticleStretchCap-1.0)*(float(stretch)/255.0);
+    float along=1.0/(stretch_scale*stretch_scale);
+    float across_ratio=(1.0+0.5*anisotropy)/(1.0-0.5*anisotropy);
+    float across=across_ratio*across_ratio;
+
+    result.m_a=f32tof16(cosine*cosine*along+sine*sine*across);
+    result.m_b=f32tof16(cosine*sine*(along-across));
+    result.m_c=f32tof16(sine*sine*along+cosine*cosine*across);
+    return result;
+}
+
+// Decoded, eigenvalue-corrected metric of one record. `m_sqrt_determinant` is
+// 1/det(K) and `m_support` the major semiaxis in units of R, i.e. 1/sqrt of the
+// corrected smaller eigenvalue.
+struct ParticleConicMetric {
+    float m_a,m_b,m_c,m_sqrt_determinant,m_support;
+};
+
+ParticleConicMetric particleConicMetric(uint a_bits,uint b_bits,uint c_bits) {
+    ParticleConicMetric result;
+    float a=f16tof32(a_bits);
+    float b=f16tof32(b_bits);
+    float c=f16tof32(c_bits);
+
+    // Both diagonal terms rise together, so the correction is a uniform shrink
+    // of the support ellipse and never rotates the decoded axis. The 2^-18
+    // margin covers binary16 rounding, the FP32 evaluation below and a computed
+    // k of exactly 1.5.
+    float difference=a-c;
+    float lambda_min=0.5*(a+c-sqrt(difference*difference+4.0*b*b));
+    float correction=max(0.0,kParticleConicLambdaFloor-lambda_min);
+    result.m_a=a+correction;
+    result.m_b=b;
+    result.m_c=c+correction;
+    result.m_sqrt_determinant=sqrt(result.m_a*result.m_c-b*b);
+    result.m_support=rsqrt(max(lambda_min,kParticleConicLambdaFloor));
+    return result;
+}
 #endif

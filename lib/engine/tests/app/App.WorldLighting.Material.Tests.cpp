@@ -3855,6 +3855,1038 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 (retried[3u].m_angle_bias_stretch >> 24u) & 0xffu));
     };
 
+    PPR_UNIT_TEST (held_publication_reculls_retained_rows_against_the_current_camera) {
+        // The peer review's clarification 1: a held frame must rerasterise the
+        // retained rows against the current camera. A pan that leaves a row's
+        // frustum culls it, and a pan that brings another row in reveals it, while
+        // the retained publication identity, the packed rows and the canonical cue
+        // history stay untouched. An unchanged camera reuses the retained
+        // compaction bit for bit and encodes no dispatch.
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual solid{};
+        solid.m_material_id = 1u;
+        solid.m_color_rgba = 0xff8040ffu;
+        solid.m_ior = 1.0f;
+        solid.m_roughness = 0.4f;
+        solid.m_opacity = 1.0f;
+        solid.m_surface_flags = kGridSurfaceParticleSolid;
+
+        // Two rows 8 m apart on the z = 0 plane, small enough that the 3.0625 r
+        // cull margin cannot keep both inside a narrow orthographic view.
+        constexpr float particle_radius_m = 0.05f;
+        constexpr float left_x_m = 1.0f;
+        constexpr float right_x_m = 9.0f;
+        constexpr float origin_cells = 3.0f;
+
+        const auto makeMetadata = [&](const u32 count, const u64 version) {
+            Array<GridParticleMetadataRow> rows(count);
+            for (u32 row = 0u; row < count; ++row) {
+                const auto cell = lighting::packCell(1u, 300.0);
+                PPR_TEST_ASSERT(cell.has_value());
+                rows[row].m_id_low = row + 1u;
+                rows[row].m_source_row = row;
+                rows[row].m_material_temperature = *cell;
+                rows[row].m_radius = particle_radius_m;
+            }
+
+            auto metadata = prepareGridParticleMetadata(
+                fixture.device(), std::span<const GridParticleMetadataRow>{rows.data(), rows.size()}, count, 1.0,
+                version);
+            PPR_TEST_ASSERT(metadata.has_value());
+            return *metadata;
+        };
+
+        // Distinct per-row cues. The stored angle is the UNORIENTED half-angle of the
+        // doubled motion axis, so it is quadratic in the motion: flipping both motion
+        // components maps to the same axis and the same conic. Opposite-signed cross
+        // terms therefore require opposite signs of motion.x * motion.y (quadrants
+        // I/III versus II/IV), not a direction flip. For these cues, with the birth
+        // slew landing on stretch 32/255 (bias 0, so eta = 1):
+        //   row 0  motion ( 0.03,  0.04) -> phi = 0.9273 -> b = -0.055006,
+        //                                   a = 0.958745, c = 0.926659
+        //   row 1  motion ( 0.04, -0.03) -> phi = 2.4981 -> b = +0.055006,
+        //                                   a = 0.926659, c = 0.958745
+        // Equal |b| and identical eigenvalues: only a signed coefficient comparison
+        // can tell these records apart.
+        constexpr std::array<std::array<float, 2u>, 2u> motions{{{0.03f, 0.04f}, {0.04f, -0.03f}}};
+        const auto makeHot = [&](const std::array<float, 2u> positions_x_m) {
+            Array<std::array<float, 16u>> hot(positions_x_m.size());
+            for (std::size_t row = 0u; row < hot.size(); ++row) {
+                hot[row][0u] = positions_x_m[row] + origin_cells;
+                hot[row][1u] = 1.0f + origin_cells;
+                hot[row][2u] = motions[row][0u];
+                hot[row][3u] = motions[row][1u];
+                hot[row][15u] = 1.0f;
+            }
+
+            return hot;
+        };
+        const auto makeCold = [&](const u32 count) {
+            Array<std::array<float, 6u>> cold(count);
+            for (auto &row: cold) {
+                row[1u] = std::numbers::pi_v<float> * particle_radius_m * particle_radius_m;
+            }
+
+            return cold;
+        };
+        const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
+                                  const Array<std::array<float, 16u>> &hot, const Array<std::array<float, 6u>> &cold,
+                                  const std::shared_ptr<std::atomic<u64>> &live_epoch, const u64 epoch) {
+            GridParticleGpuView view{};
+            view.m_numerical = makeBuffer(
+                fixture.device(), hot.size() * sizeof(hot[0u]), kGridParticleNumericalStride, hot.data());
+            view.m_readonly = makeBuffer(
+                fixture.device(), cold.size() * sizeof(cold[0u]), kGridParticleReadonlyStride, cold.data());
+            view.m_metadata = metadata;
+            view.m_live_epoch = live_epoch;
+            view.m_world = grid.activeWorldIdentity();
+            view.m_layout = kGridParticleNumericalLayout;
+            view.m_stride = kGridParticleNumericalStride;
+            view.m_readonly_stride = kGridParticleReadonlyStride;
+            view.m_origin = 3.0;
+            view.m_device_epoch = epoch;
+            view.m_publication = epoch;
+            view.m_terrain_revision = 1u;
+            view.m_joint_tick = epoch;
+            return view;
+        };
+
+        const std::array<float, 2u> positions{left_x_m, right_x_m};
+        auto live = std::make_shared<std::atomic<u64>>(1u);
+        auto hot = makeHot(positions);
+        auto cold = makeCold(2u);
+        auto metadata = makeMetadata(2u, 1u);
+        auto view = makeView(metadata, hot, cold, live, 1u);
+        PPR_TEST_ASSERT(view.current());
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {solid};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        // A 64-pixel orthographic view. `rhi::getOrthoMatrix` is
+        // `orthoD3D(0, width, 0, height, 0, 1)`, i.e. an OFF-CENTRE view box: the
+        // visible world rectangle is origin + [0, W] * right + [0, H] * up, with
+        // W = H = viewport * ortho_scale, not origin +/- extent/2. Place the origin
+        // half an extent back along the screen axes so the requested world point is
+        // the window centre, exactly as the density cohort fixture does.
+        const auto snapshotFor = [](const float centre_x_m, const float scale) {
+            constexpr float viewport_px = 64.0f;
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = scale;
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            const float half_extent = 0.5f * viewport_px * scale;
+            const float3 centre{centre_x_m, 1.0f, -0.5f};
+            model.m_origin = centre - camera.getRight() * half_extent - camera.getUp() * half_extent;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            return camera.getSnapshot();
+        };
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+
+        rhi::TextureDesc depth_description = target_description;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        rhi::ComPtr<rhi::ITexture> depth{};
+        rhi::ComPtr<rhi::ITextureView> depth_view{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(depth_description, nullptr, depth.writeRef())));
+        PPR_TEST_ASSERT(not make_error_code(depth->getDefaultView(depth_view.writeRef())));
+
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+            return grid.prepareGpuParticles(context);
+        };
+        const auto draw = [&](const DrawContext &context) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.render(context));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.renderSolidLiquidParticles(context));
+            return grid.renderGasParticles(context);
+        };
+        DrawSubmission submission{"held particle recull", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        rhi::ComPtr<rhi::ITextureView> target_view{};
+        PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+        rhi::RenderPassColorAttachment color{};
+        color.view = target_view.get();
+        color.clearValue[3] = 1.0f;
+        rhi::RenderPassDepthStencilAttachment depth_attachment{};
+        depth_attachment.view = depth_view.get();
+        depth_attachment.depthClearValue = 1.0f;
+        rhi::RenderPassDesc pass_description{};
+        pass_description.colorAttachments = &color;
+        pass_description.colorAttachmentCount = 1u;
+        pass_description.depthStencilAttachment = &depth_attachment;
+
+        const auto encode = [&]() -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, renderer.render(
+                              string_literal{std::in_place, "held particle recull"}, pass_description, {submission},
+                              PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderer.waitOnHost());
+            return renderer.retireCompletedFrames();
+        };
+
+        const auto readArgs = [&]() {
+            rhi::IndirectDrawArguments arguments{};
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[1u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            PPR_TEST_ASSERT(
+                not make_error_code(fixture.device().readBuffer(buffer, 0u, sizeof(arguments), &arguments)));
+            return arguments;
+        };
+        const auto readIds = [&](const u32 count) {
+            Array<u32> ids(count, 0u);
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[2u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            if (not ids.empty()) {
+                PPR_TEST_ASSERT(
+                    not make_error_code(fixture.device().readBuffer(buffer, 0u, ids.size() * sizeof(u32), ids.data())));
+            }
+
+            return ids;
+        };
+        const auto readOrientation = [&](const u32 count) {
+            Array<ParticleOrientationGpu> rows(count);
+            rhi::IBuffer *const accepted = grid.particleOrientationAcceptedForTest();
+            PPR_TEST_ASSERT(accepted != nullptr);
+            PPR_TEST_ASSERT(not make_error_code(
+                fixture.device().readBuffer(accepted, 0u, rows.size() * sizeof(ParticleOrientationGpu), rows.data())));
+            return rows;
+        };
+        const auto sameOrientation = [](const auto &left, const auto &right) {
+            return left.size() == right.size() and
+                   (left.empty() or std::memcmp(left.data(), right.data(), left.size() * sizeof(left[0u])) == 0);
+        };
+
+        // IEEE binary16 decode for the record probe: exact, including signed zeros
+        // and subnormals. `sign * magnitude` with `sign` decoded as +/-0 would lose
+        // every subnormal, so the sign is applied to the magnitude explicitly.
+        const auto halfValue = [](const u16 bits) {
+            constexpr float subnormal_unit = std::bit_cast<float>(0x33800000u); // 2^-24
+            const u32 exponent = (bits >> 10u) & 0x1fu;
+            const u32 mantissa = bits & 0x3ffu;
+            float magnitude{};
+            if (exponent == 0u) {
+                magnitude = static_cast<float>(mantissa) * subnormal_unit;
+            } else if (exponent == 0x1fu) {
+                return std::bit_cast<float>(0x7f800000u | (mantissa << 13u)) * ((bits & 0x8000u) != 0u ? -1.0f : 1.0f);
+            } else {
+                magnitude = std::bit_cast<float>(((exponent + 112u) << 23u) | (mantissa << 13u));
+            }
+
+            return (bits & 0x8000u) != 0u ? -magnitude : magnitude;
+        };
+        // Subnormal and signed-zero literals: the encoder/decoder pair is exact here.
+        PPR_TEST_ASSERT(halfValue(0x0001u) == 5.9604644775390625e-08f); // +2^-24
+        PPR_TEST_ASSERT(halfValue(0x8001u) == -5.9604644775390625e-08f); // -2^-24
+        PPR_TEST_ASSERT(halfValue(0x03ffu) == 6.097555160522461e-05f); // 1023 * 2^-24
+        PPR_TEST_ASSERT(halfValue(0x0000u) == 0.0f and not std::signbit(halfValue(0x0000u)));
+        PPR_TEST_ASSERT(halfValue(0x8000u) == 0.0f and std::signbit(halfValue(0x8000u)));
+
+        // Camera A: a 4 m window centred on x = 0, so x in [-2, 2], y in [-1, 3].
+        // The left row at x = 1 is inside; the right row at x = 9 is 7 m outside.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(0.0f, 0.0625f)));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+        PPR_TEST_ASSERT(grid.particlePackedCountForTest() == 2u);
+        const u32 camera_a_visible = readArgs().instanceCount;
+        PPR_TEST_ASSERT(camera_a_visible == 1u);
+        const auto camera_a_ids = readIds(1u);
+        PPR_TEST_ASSERT(camera_a_ids[0u] == 0u);
+
+        const auto packed_epoch = grid.particlePackedEpochForTest();
+        const auto packed_encodes = grid.particlePackEncodesForTest();
+        const auto retained_buffers = grid.particleBuffersForTest();
+        const auto retained_conic = grid.particleConicForTest();
+        const auto retained_orientation = readOrientation(2u);
+        const auto retained_role = grid.particleOrientationAcceptedRoleForTest();
+        // The retained packed rows themselves, byte for byte: a hold must reuse them
+        // untouched (no pack, no solver read).
+        const auto readPackedRows = [&]() {
+            Array<std::byte> bytes(std::size_t{grid.particlePackedCountForTest()} * sizeof(ParticleGpu), std::byte{0});
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[0u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(buffer, 0u, bytes.size(), bytes.data())));
+            return bytes;
+        };
+        const auto retained_rows = readPackedRows();
+
+        // The GPU record matches the canonical word it was derived from. Each row
+        // carries a distinct cue (different axis, opposite-signed cross term), so
+        // the signed coefficients pin the derivation, the writer's pair layout and
+        // the decoder's row parity; the spectrum alone could not tell them apart.
+        PPR_TEST_ASSERT(retained_conic != nullptr);
+        const u32 conic_words = 3u * ((grid.particlePackedCountForTest() + 1u) / 2u);
+        const auto readConic = [&]() {
+            Array<u32> words(conic_words, 0u);
+            PPR_TEST_ASSERT(not make_error_code(
+                fixture.device().readBuffer(retained_conic, 0u, words.size() * sizeof(u32), words.data())));
+            return words;
+        };
+        const Array<u32> conic = readConic();
+        float worst_eigenvalue_error{};
+        std::array<float, 2u> cross_terms{};
+        for (u32 row = 0u; row < grid.particlePackedCountForTest(); ++row) {
+            const u32 cue = retained_orientation[row].m_angle_bias_stretch;
+            const u32 bias = (cue >> 16u) & 0xffu;
+            const u32 stretch = (cue >> 24u) & 0xffu;
+            const float anisotropy = kGridParticleTangentContourBias * (static_cast<float>(bias) / 255.0f);
+            const float stretch_scale = 1.0f +
+                                        (kGridParticleStretchCap - 1.0f) * (static_cast<float>(stretch) / 255.0f);
+            const float along = 1.0f / (stretch_scale * stretch_scale);
+            const float across_ratio = (1.0f + 0.5f * anisotropy) / (1.0f - 0.5f * anisotropy);
+            const float across = across_ratio * across_ratio;
+            const float radians = static_cast<float>(cue & 0xffffu) * std::numbers::pi_v<float> / 65536.0f;
+            const float cosine = std::cos(radians);
+            const float sine = std::sin(radians);
+            const float expected_a = cosine * cosine * along + sine * sine * across;
+            const float expected_b = cosine * sine * (along - across);
+            const float expected_c = sine * sine * along + cosine * cosine * across;
+
+            const std::size_t base = 3u * (row / 2u) + row % 2u;
+            u16 a_bits{}, b_bits{}, c_bits{};
+            if (row % 2u == 0u) {
+                a_bits = static_cast<u16>(conic[base] & 0xffffu);
+                b_bits = static_cast<u16>(conic[base] >> 16u);
+                c_bits = static_cast<u16>(conic[base + 1u] & 0xffffu);
+            } else {
+                a_bits = static_cast<u16>(conic[base] >> 16u);
+                b_bits = static_cast<u16>(conic[base + 1u] & 0xffffu);
+                c_bits = static_cast<u16>(conic[base + 1u] >> 16u);
+            }
+
+            const float a = halfValue(a_bits);
+            const float b = halfValue(b_bits);
+            const float c = halfValue(c_bits);
+            // Signed, componentwise: a swapped parity, a flipped cross term or a
+            // rotated metric cannot satisfy these against the row's own cue.
+            PPR_TEST_ASSERT(std::abs(a - expected_a) <= 1.0f / 1024.0f);
+            PPR_TEST_ASSERT(std::abs(b - expected_b) <= 1.0f / 4096.0f);
+            PPR_TEST_ASSERT(std::abs(c - expected_c) <= 1.0f / 1024.0f);
+            PPR_TEST_ASSERT(expected_b * expected_b > 0.0f);
+
+            const float difference = a - c;
+            const float lambda_min = 0.5f * (a + c - std::sqrt(difference * difference + 4.0f * b * b));
+            const float lambda_max = a + c - lambda_min;
+            // binary16 half-rounding of the two diagonals bounds a metric
+            // eigenvalue shift by 2 * 2^-10 + 2^-12, and the determinant follows;
+            // these probes pin the derivation and the packing, not bit identity.
+            const float tolerance = 4.0f / 1024.0f;
+            PPR_TEST_ASSERT(std::abs(lambda_min - along) <= tolerance);
+            PPR_TEST_ASSERT(std::abs(lambda_max - across) <= tolerance);
+            // sqrt(det) is 1/det(K) = 1/(k eta), and eta = 1/across_ratio.
+            PPR_TEST_ASSERT(std::abs(std::sqrt(a * c - b * b) - across_ratio / stretch_scale) <= tolerance);
+            // The decoded support can never exceed 3 r: 1.5 R.
+            PPR_TEST_ASSERT(1.0f / std::sqrt(lambda_min) <= kGridParticleStretchCap + tolerance);
+            cross_terms[row] = b;
+            worst_eigenvalue_error = std::max(
+                {worst_eigenvalue_error, std::abs(lambda_min - along), std::abs(lambda_max - across)});
+        }
+
+        // The two rows carry cues from opposite motion quadrants, so their cross
+        // terms have opposite signs while their eigenvalues agree: an implementation
+        // that collapsed the cue or swapped the row parity fails here.
+        PPR_TEST_ASSERT(cross_terms[0u] < 0.0f and cross_terms[1u] > 0.0f);
+        PPR_TEST_ASSERT(cross_terms[0u] * cross_terms[1u] < 0.0f);
+
+        // Every checkpoint reads the compacted IDs once and logs the actual values
+        // before asserting, so a future failure reports the observed array rather
+        // than a guessed permutation. IDs are global packed-row indices and must be
+        // strictly ascending: the design resolves an equal-distance tie to the
+        // first (lowest-row) instance, which a reordered compaction would break.
+        const auto checkIds = [&](const char *const label, const Array<u32> &ids) {
+            const u32 published = readArgs().instanceCount;
+            std::string joined{};
+            for (const u32 id: ids) {
+                joined += std::format("{} ", id);
+            }
+
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL held_recull {} ids=[{}] args={} slot={} dispatches={}", label, joined,
+                    published, grid.particleBuffersForTest() == retained_buffers ? "retained" : "rotated",
+                    grid.observations().m_dispatch_commands));
+            PPR_TEST_ASSERT(ids.size() == published);
+            for (std::size_t index = 0u; index < ids.size(); ++index) {
+                PPR_TEST_ASSERT(ids[index] < grid.particlePackedCountForTest());
+                if (index != 0u) {
+                    PPR_TEST_ASSERT(ids[index - 1u] < ids[index]);
+                }
+            }
+        };
+
+        // A repeated publication with an unchanged camera reuses the retained
+        // compaction exactly: same slot buffers, same visible set, no dispatch and
+        // the same accepted history. The publisher bumps the shared live epoch in
+        // place, exactly as the production hold does, so the retained view is no
+        // longer current while its allocation stays valid.
+        PPR_TEST_ASSERT(live != nullptr);
+        live->store(view.m_device_epoch + 1u, std::memory_order_release);
+        PPR_TEST_ASSERT(not view.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+
+        const auto dispatches_before_hold = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        const auto unchanged = grid.observations();
+        PPR_TEST_ASSERT(unchanged.m_dispatch_commands == dispatches_before_hold);
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 1u);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == retained_buffers);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packed_encodes);
+        PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == retained_role);
+        const auto hold_ids = readIds(1u);
+        checkIds("unchanged hold", hold_ids);
+        PPR_TEST_ASSERT(hold_ids[0u] == 0u);
+        // A reuse re-derives nothing, so the derived record is byte-identical.
+        PPR_TEST_ASSERT(readConic() == conic);
+        PPR_TEST_ASSERT(readPackedRows() == retained_rows);
+
+        // Camera C: a 16 m window centred on x = 5, so x in [-3, 13], y in [-7, 9].
+        // Both retained rows are inside with at least 3 m of margin against the
+        // 3.0625 r = 0.153 m cull radius, so the row that camera A culled must
+        // appear, and the recull costs the existing three dispatches.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(5.0f, 0.25f)));
+        const auto dispatches_before_recull = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 2u);
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        const u32 camera_c_visible = readArgs().instanceCount;
+        PPR_TEST_ASSERT(camera_c_visible == 2u);
+        const auto slot_one_ids = readIds(2u);
+        checkIds("recull slot 1", slot_one_ids);
+        PPR_TEST_ASSERT(slot_one_ids == Array<u32>{0u, 1u});
+        PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_before_recull + 3u);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packed_encodes);
+        PPR_TEST_ASSERT(grid.particlePackedCountForTest() == 2u);
+        PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == retained_role);
+        PPR_TEST_ASSERT(sameOrientation(readOrientation(2u), retained_orientation));
+        // A recull re-derives the same record from the same accepted word.
+        PPR_TEST_ASSERT(readConic() == conic);
+
+        // Camera B: the same 4 m window centred on x = 8, so x in [6, 10]. The
+        // right row stays and the left row leaves the frustum, while the retained
+        // publication identity is unchanged.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(8.0f, 0.0625f)));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 3u);
+        const auto slot_two_ids = readIds(1u);
+        checkIds("recull slot 2", slot_two_ids);
+        PPR_TEST_ASSERT(slot_two_ids[0u] == 1u);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packed_encodes);
+        PPR_TEST_ASSERT(grid.particleOrientationAcceptedRoleForTest() == retained_role);
+        PPR_TEST_ASSERT(sameOrientation(readOrientation(2u), retained_orientation));
+
+        // Back to camera C: the third ring slot, so every prepared slot has been
+        // written by a held recull root rather than only by the pack frame.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(5.0f, 0.25f)));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particleHoldAttemptsForTest() == 4u);
+        const auto slot_three_ids = readIds(2u);
+        checkIds("recull slot 3", slot_three_ids);
+        PPR_TEST_ASSERT(slot_three_ids == slot_one_ids);
+
+        // A definitely-unsubmitted changed-camera attempt must not replace the
+        // accepted compaction: prepare at camera B and discard before submission,
+        // then hold at the committed camera C with no compaction dispatch at all.
+        // Retrying camera B must encode exactly the three dispatches again.
+        const auto prepareWithoutSubmit = [&](const CameraSnapshot &camera) {
+            PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera));
+            rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            FenceWaitHook wait{[&](const FenceCompletionValue value) { return renderer.waitForFenceValue(value); }};
+            PreRenderContext context{fixture.device(), *encoder, renderer.completedFenceValue(), std::move(wait)};
+            PPR_TEST_ASSERT(not grid.prepareGpuParticles(context));
+            grid.discardUnsubmittedParticles();
+        };
+        prepareWithoutSubmit(snapshotFor(8.0f, 0.0625f));
+        const auto committed_buffers = grid.particleBuffersForTest();
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(5.0f, 0.25f)));
+        const auto dispatches_after_rejection = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_after_rejection);
+        PPR_TEST_ASSERT(grid.particleBuffersForTest() == committed_buffers);
+        PPR_TEST_ASSERT(readIds(2u) == slot_one_ids);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packed_encodes);
+
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(8.0f, 0.0625f)));
+        const auto dispatches_before_retry = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_before_retry + 3u);
+        PPR_TEST_ASSERT(readIds(1u)[0u] == 1u);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL held_recull rows={} eigenvalues={:.3e} visible=({},{},{}) discharges={} "
+                "packs={} epoch={}",
+                grid.particlePackedCountForTest(), worst_eigenvalue_error, camera_a_visible, camera_c_visible,
+                slot_two_ids.size(), grid.observations().m_dispatch_commands, grid.particlePackEncodesForTest(),
+                grid.particlePackedEpochForTest()));
+    };
+
+    PPR_UNIT_TEST (held_recull_keeps_global_ascending_ids_across_blocks) {
+        // A 4097-row publication whose only visible rows straddle the 256-lane group
+        // boundary (rows 255/256) and blocks 15/16 (rows 4095/4096). A held recull
+        // must reproduce the normal pack's complete ascending ID list, which is what
+        // distinguishes a correct global block prefix from a merely correct
+        // single-group result. 4097 is odd, so the final conic pair also covers the
+        // neutral unused partner.
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual solid{};
+        solid.m_material_id = 1u;
+        solid.m_color_rgba = 0xff8040ffu;
+        solid.m_ior = 1.0f;
+        solid.m_roughness = 0.4f;
+        solid.m_opacity = 1.0f;
+        solid.m_surface_flags = kGridSurfaceParticleSolid;
+
+        constexpr u32 row_count = 4097u;
+        constexpr u32 visible_row_count = 6u;
+        constexpr std::array<u32, visible_row_count> visible_rows{0u, 1u, 255u, 256u, 4095u, 4096u};
+        constexpr float particle_radius_m = 0.05f;
+        constexpr float origin_cells = 3.0f;
+
+        // The visible rows share one in-window point; every other row sits far
+        // outside both cameras, so the visibility mask is identical for the pack
+        // and the recull while the camera itself moves.
+        const auto makeMetadata = [&](const u64 version) {
+            Array<GridParticleMetadataRow> rows(row_count);
+            const auto cell = lighting::packCell(1u, 300.0);
+            PPR_TEST_ASSERT(cell.has_value());
+            for (u32 row = 0u; row < row_count; ++row) {
+                rows[row].m_id_low = row + 1u;
+                rows[row].m_source_row = row;
+                rows[row].m_material_temperature = *cell;
+                rows[row].m_radius = particle_radius_m;
+            }
+
+            auto metadata = prepareGridParticleMetadata(
+                fixture.device(), std::span<const GridParticleMetadataRow>{rows.data(), rows.size()}, row_count, 1.0,
+                version);
+            PPR_TEST_ASSERT(metadata.has_value());
+            return *metadata;
+        };
+        auto live = std::make_shared<std::atomic<u64>>(1u);
+        // The numerical and readonly staging rows must match their declared strides
+        // (64 and 24 bytes), so each has its own array type.
+        const auto makeHot = [&]() {
+            Array<std::array<float, 16u>> rows(row_count);
+            for (u32 row = 0u; row < row_count; ++row) {
+                const bool visible = std::ranges::find(visible_rows, row) != visible_rows.end();
+                rows[row][0u] = (visible ? 1.0f : 2000.0f) + origin_cells;
+                rows[row][1u] = (visible ? 1.0f : 2000.0f) + origin_cells;
+                rows[row][15u] = 1.0f;
+            }
+
+            return rows;
+        };
+        const auto makeCold = [&]() {
+            Array<std::array<float, 6u>> rows(row_count);
+            for (auto &row: rows) {
+                row[1u] = std::numbers::pi_v<float> * particle_radius_m * particle_radius_m;
+            }
+
+            return rows;
+        };
+        const auto hot = makeHot();
+        const auto cold = makeCold();
+        auto metadata = makeMetadata(1u);
+        GridParticleGpuView view{};
+        view.m_numerical = makeBuffer(
+            fixture.device(), hot.size() * sizeof(hot[0u]), kGridParticleNumericalStride, hot.data());
+        view.m_readonly = makeBuffer(
+            fixture.device(), cold.size() * sizeof(cold[0u]), kGridParticleReadonlyStride, cold.data());
+        view.m_metadata = metadata;
+        view.m_live_epoch = live;
+        view.m_world = grid.activeWorldIdentity();
+        view.m_layout = kGridParticleNumericalLayout;
+        view.m_stride = kGridParticleNumericalStride;
+        view.m_readonly_stride = kGridParticleReadonlyStride;
+        view.m_origin = 3.0;
+        view.m_device_epoch = 1u;
+        view.m_publication = 1u;
+        view.m_terrain_revision = 1u;
+        view.m_joint_tick = 1u;
+        PPR_TEST_ASSERT(view.current());
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {solid};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+
+        // Same helper as the two-row fixture: the orthographic window is
+        // origin + [0, extent], so the origin is placed half an extent back.
+        const auto snapshotFor = [](const float centre_x_m, const float scale) {
+            constexpr float viewport_px = 64.0f;
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = scale;
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            const float half_extent = 0.5f * viewport_px * scale;
+            const float3 centre{centre_x_m, 1.0f, -0.5f};
+            model.m_origin = centre - camera.getRight() * half_extent - camera.getUp() * half_extent;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            return camera.getSnapshot();
+        };
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        rhi::TextureDesc depth_description = target_description;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        rhi::ComPtr<rhi::ITexture> depth{};
+        rhi::ComPtr<rhi::ITextureView> depth_view{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(depth_description, nullptr, depth.writeRef())));
+        PPR_TEST_ASSERT(not make_error_code(depth->getDefaultView(depth_view.writeRef())));
+
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+            return grid.prepareGpuParticles(context);
+        };
+        const auto draw = [&](const DrawContext &context) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.render(context));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.renderSolidLiquidParticles(context));
+            return grid.renderGasParticles(context);
+        };
+        DrawSubmission submission{"held recull cross-block order", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        rhi::ComPtr<rhi::ITextureView> target_view{};
+        PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+        rhi::RenderPassColorAttachment color{};
+        color.view = target_view.get();
+        color.clearValue[3] = 1.0f;
+        rhi::RenderPassDepthStencilAttachment depth_attachment{};
+        depth_attachment.view = depth_view.get();
+        depth_attachment.depthClearValue = 1.0f;
+        rhi::RenderPassDesc pass_description{};
+        pass_description.colorAttachments = &color;
+        pass_description.colorAttachmentCount = 1u;
+        pass_description.depthStencilAttachment = &depth_attachment;
+
+        const auto encode = [&]() -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, renderer.render(
+                              string_literal{std::in_place, "held recull cross-block order"}, pass_description,
+                              {submission}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderer.waitOnHost());
+            return renderer.retireCompletedFrames();
+        };
+        const auto readIds = [&]() {
+            Array<u32> ids(visible_row_count, 0u);
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[2u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            PPR_TEST_ASSERT(
+                not make_error_code(fixture.device().readBuffer(buffer, 0u, ids.size() * sizeof(u32), ids.data())));
+            return ids;
+        };
+        const auto checkIds = [&](const char *const label, const Array<u32> &ids) {
+            const rhi::IndirectDrawArguments arguments = [&] {
+                rhi::IndirectDrawArguments value{};
+                rhi::IBuffer *const buffer = grid.particleBuffersForTest()[1u];
+                PPR_TEST_ASSERT(buffer != nullptr);
+                PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(buffer, 0u, sizeof(value), &value)));
+                return value;
+            }();
+            std::string joined{};
+            for (const u32 id: ids) {
+                joined += std::format("{} ", id);
+            }
+
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL held_recull {} ids=[{}] args={} dispatches={}", label, joined,
+                    arguments.instanceCount, grid.observations().m_dispatch_commands));
+            PPR_TEST_ASSERT(arguments.instanceCount == visible_row_count);
+            for (std::size_t index = 0u; index < ids.size(); ++index) {
+                PPR_TEST_ASSERT(ids[index] == visible_rows[index]);
+            }
+        };
+
+        // Camera A: a 4 m window at (0, 1). The six selected rows are at (1, 1); the
+        // other 4091 rows are at (2000, 2000) and cannot enter either window.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(0.0f, 0.0625f)));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+        PPR_TEST_ASSERT(grid.particlePackedCountForTest() == row_count);
+        const auto packed_ids = readIds();
+        checkIds("normal pack", packed_ids);
+
+        const auto packed_encodes = grid.particlePackEncodesForTest();
+        const auto packed_epoch = grid.particlePackedEpochForTest();
+
+        // The final conic pair: row 4096 is even and its odd partner 4097 is past the
+        // count, so the pair is (neutral row, neutral partner). Exact words pin the
+        // writer's pair layout and the odd tail on the GPU.
+        rhi::IBuffer *const conic = grid.particleConicForTest();
+        PPR_TEST_ASSERT(conic != nullptr);
+        PPR_TEST_ASSERT(conic->getDesc().size == gridParticleConicBytes(row_count));
+        const std::size_t last_pair_word = 3u * ((row_count + 1u) / 2u) - 3u;
+        std::array<u32, 3u> tail{};
+        PPR_TEST_ASSERT(not make_error_code(
+            fixture.device().readBuffer(conic, last_pair_word * sizeof(u32), sizeof(tail), tail.data())));
+        PPR_TEST_ASSERT(tail[0u] == 0x0000'3c00u); // a(4096) = 1, b(4096) = 0
+        PPR_TEST_ASSERT(tail[1u] == 0x3c00'3c00u); // c(4096) = 1, a(4097 partner) = 1
+        PPR_TEST_ASSERT(tail[2u] == 0x3c00'0000u); // b(4097 partner) = 0, c(4097 partner) = 1
+
+        // Hold at a slightly wider camera with the same visibility mask: the recull
+        // must reproduce the pack's full ascending list exactly.
+        live->store(view.m_device_epoch + 1u, std::memory_order_release);
+        PPR_TEST_ASSERT(not view.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, snapshotFor(0.0f, 0.078125f)));
+        const auto dispatches_before_recull = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_before_recull + 3u);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packed_encodes);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        const auto recull_ids = readIds();
+        checkIds("held recull", recull_ids);
+        PPR_TEST_ASSERT(recull_ids == packed_ids);
+    };
+
+    PPR_UNIT_TEST (held_publication_keeps_the_accepted_liquid_lane_after_a_rejected_inventory) {
+        // The peer review's retained-source rule. A hold draws the accepted packed
+        // rows, so admission must be derived from that publication's metadata, not
+        // from an incoming view that was installed and then definitely rejected.
+        // Accepted liquid A -> rejected same-capacity solid inventory B -> A's epoch
+        // revocation -> hold of A must still admit A's liquid lane on A's rows.
+        Fixture fixture{};
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+
+        Renderer renderer{};
+        PPR_TEST_ASSERT(not renderer.initialize(*fixture.m_rhi));
+        GridPass grid{};
+        PPR_TEST_ASSERT(not grid.initialize(*fixture.m_rhi, *fixture.m_shaders, std::filesystem::current_path()));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not renderer.waitOnHost());
+            PPR_TEST_ASSERT(not grid.shutdown());
+            PPR_TEST_ASSERT(not renderer.shutdown());
+        };
+
+        GridTerrainVisual liquid{};
+        liquid.m_material_id = 1u;
+        liquid.m_color_rgba = 0x0000ffffu;
+        liquid.m_ior = 1.0f;
+        liquid.m_opacity = 1.0f;
+        liquid.m_surface_flags = kGridSurfaceParticleLiquid;
+        GridTerrainVisual solid{};
+        solid.m_material_id = 2u;
+        solid.m_color_rgba = 0xff8040ffu;
+        solid.m_ior = 1.0f;
+        solid.m_roughness = 0.4f;
+        solid.m_opacity = 1.0f;
+        solid.m_surface_flags = kGridSurfaceParticleSolid;
+
+        constexpr float particle_radius_m = 0.05f;
+        constexpr float origin_cells = 3.0f;
+        // A's rows are in the camera window; B's are far away, so drawing B's rows
+        // instead of A's would present no particles at all.
+        const auto makeInventory = [&](const u32 material, const u64 version) {
+            Array<GridParticleMetadataRow> rows(2u);
+            for (u32 row = 0u; row < 2u; ++row) {
+                const auto cell = lighting::packCell(static_cast<u16>(material), 300.0);
+                PPR_TEST_ASSERT(cell.has_value());
+                rows[row].m_id_low = static_cast<u32>(version) * 10u + row + 1u;
+                rows[row].m_source_row = row;
+                rows[row].m_material_temperature = *cell;
+                rows[row].m_radius = particle_radius_m;
+            }
+
+            auto metadata = prepareGridParticleMetadata(
+                fixture.device(), std::span<const GridParticleMetadataRow>{rows.data(), rows.size()}, 2u, 1.0, version);
+            PPR_TEST_ASSERT(metadata.has_value());
+            return *metadata;
+        };
+        const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
+                                  const std::shared_ptr<std::atomic<u64>> &live_epoch, const u64 epoch) {
+            Array<std::array<float, 16u>> hot(2u);
+            Array<std::array<float, 6u>> cold(2u);
+            for (u32 row = 0u; row < 2u; ++row) {
+                const bool accepted_inventory = metadata->m_materials.front() == 1u;
+                hot[row][0u] = (accepted_inventory ? 1.0f + static_cast<float>(row) : 2000.0f) + origin_cells;
+                hot[row][1u] = (accepted_inventory ? 1.0f : 2000.0f) + origin_cells;
+                hot[row][15u] = 1.0f;
+                cold[row][1u] = std::numbers::pi_v<float> * particle_radius_m * particle_radius_m;
+            }
+
+            GridParticleGpuView view{};
+            view.m_numerical = makeBuffer(
+                fixture.device(), hot.size() * sizeof(hot[0u]), kGridParticleNumericalStride, hot.data());
+            view.m_readonly = makeBuffer(
+                fixture.device(), cold.size() * sizeof(cold[0u]), kGridParticleReadonlyStride, cold.data());
+            view.m_metadata = metadata;
+            view.m_live_epoch = live_epoch;
+            view.m_world = grid.activeWorldIdentity();
+            view.m_layout = kGridParticleNumericalLayout;
+            view.m_stride = kGridParticleNumericalStride;
+            view.m_readonly_stride = kGridParticleReadonlyStride;
+            view.m_origin = 3.0;
+            view.m_device_epoch = epoch;
+            view.m_publication = epoch;
+            view.m_terrain_revision = 1u;
+            view.m_joint_tick = epoch;
+            return view;
+        };
+
+        auto live_a = std::make_shared<std::atomic<u64>>(1u);
+        auto live_b = std::make_shared<std::atomic<u64>>(4u);
+        auto metadata_a = makeInventory(1u, 1u);
+        auto metadata_b = makeInventory(2u, 4u);
+        auto view_a = makeView(metadata_a, live_a, 1u);
+        auto view_b = makeView(metadata_b, live_b, 4u);
+        PPR_TEST_ASSERT(view_a.current() and view_b.current());
+
+        GridStagedFrame stage{};
+        stage.m_world_edge = WorldLightingPass::kWorldEdge;
+        stage.m_cell_size_m = 1.0f;
+        stage.m_terrain_visuals = {liquid, solid};
+        stage.m_tiles.push_back(
+            GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
+        stage.m_gpu_particles = view_a;
+        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view_a));
+
+        const auto snapshot = [](const float centre_x_m, const float scale) {
+            constexpr float viewport_px = 64.0f;
+            CameraModel model{};
+            model.m_camera_mode = ECameraProjection::orthographic;
+            model.m_origin = float3{0.0f, 0.0f, -0.5f};
+            model.m_ortho_scale = scale;
+            Camera camera{ECameraProjection::orthographic};
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            const float half_extent = 0.5f * viewport_px * scale;
+            const float3 centre{centre_x_m, 1.0f, -0.5f};
+            model.m_origin = centre - camera.getRight() * half_extent - camera.getUp() * half_extent;
+            camera.updateModel(TimeSpan{}, model, Viewport{PixelRect{0, 0, 64, 64}});
+            return camera.getSnapshot();
+        };
+        // A 4 m window centred on (1, 1): A's rows at x = 1 and x = 2 are inside;
+        // B's rows at x = 2000 are far outside.
+        const auto camera = snapshot(1.0f, 0.0625f);
+
+        rhi::TextureDesc target_description{};
+        target_description.type = rhi::TextureType::Texture2D;
+        target_description.size = {.width = 64u, .height = 64u, .depth = 1u};
+        target_description.arrayLength = 1u;
+        target_description.mipCount = 1u;
+        target_description.format = rhi::Format::RGBA16Float;
+        target_description.memoryType = rhi::MemoryType::DeviceLocal;
+        target_description.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::CopySource));
+        target_description.defaultState = rhi::ResourceState::RenderTarget;
+        rhi::ComPtr<rhi::ITexture> target{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(target_description, nullptr, target.writeRef())));
+        rhi::TextureDesc depth_description = target_description;
+        depth_description.format = rhi::Format::D32Float;
+        depth_description.usage = rhi::TextureUsage::DepthStencil;
+        depth_description.defaultState = rhi::ResourceState::DepthWrite;
+        rhi::ComPtr<rhi::ITexture> depth{};
+        rhi::ComPtr<rhi::ITextureView> depth_view{};
+        PPR_TEST_ASSERT(
+            not make_error_code(fixture.device().createTexture(depth_description, nullptr, depth.writeRef())));
+        PPR_TEST_ASSERT(not make_error_code(depth->getDefaultView(depth_view.writeRef())));
+
+        const auto viewport = rhi::Viewport::fromSize(64.0f, 64.0f);
+        const auto scissor = rhi::ScissorRect::fromSize(64u, 64u);
+        const auto prepare = [&](const PreRenderContext &context) -> std::error_code {
+            return grid.prepareGpuParticles(context);
+        };
+        const auto draw = [&](const DrawContext &context) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.render(context));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, grid.renderSolidLiquidParticles(context));
+            return grid.renderGasParticles(context);
+        };
+        DrawSubmission submission{"held accepted lane admission", DrawCallback{draw}};
+        submission.m_viewport = viewport;
+        submission.m_scissor = scissor;
+        rhi::ComPtr<rhi::ITextureView> target_view{};
+        PPR_TEST_ASSERT(not make_error_code(target->getDefaultView(target_view.writeRef())));
+        rhi::RenderPassColorAttachment color{};
+        color.view = target_view.get();
+        color.clearValue[3] = 1.0f;
+        rhi::RenderPassDepthStencilAttachment depth_attachment{};
+        depth_attachment.view = depth_view.get();
+        depth_attachment.depthClearValue = 1.0f;
+        rhi::RenderPassDesc pass_description{};
+        pass_description.colorAttachments = &color;
+        pass_description.colorAttachmentCount = 1u;
+        pass_description.depthStencilAttachment = &depth_attachment;
+
+        const auto encode = [&]() -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, renderer.render(
+                              string_literal{std::in_place, "held accepted lane admission"}, pass_description,
+                              {submission}, PreRenderCallback{prepare}));
+            grid.notifyFrameSubmitted(renderer.lastSubmittedFenceValue());
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, renderer.waitOnHost());
+            return renderer.retireCompletedFrames();
+        };
+        const auto readIds = [&](const u32 count) {
+            Array<u32> ids(count, 0u);
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[2u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            PPR_TEST_ASSERT(
+                not make_error_code(fixture.device().readBuffer(buffer, 0u, ids.size() * sizeof(u32), ids.data())));
+            return ids;
+        };
+
+        const auto readArgs = [&]() {
+            rhi::IndirectDrawArguments arguments{};
+            rhi::IBuffer *const buffer = grid.particleBuffersForTest()[1u];
+            PPR_TEST_ASSERT(buffer != nullptr);
+            PPR_TEST_ASSERT(
+                not make_error_code(fixture.device().readBuffer(buffer, 0u, sizeof(arguments), &arguments)));
+            return arguments;
+        };
+
+        // Accepted publication A: one admitted liquid lane, both rows visible.
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera));
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
+        PPR_TEST_ASSERT(grid.particleSurfaceAdmitted());
+        PPR_TEST_ASSERT(grid.particleSurfaceDrawClass() == EGridParticleDrawClass::opaque);
+        const auto accepted_ids = readIds(2u);
+        PPR_TEST_ASSERT(readArgs().instanceCount == 2u);
+        PPR_TEST_ASSERT(accepted_ids == Array<u32>{0u, 1u});
+        const auto packed_epoch = grid.particlePackedEpochForTest();
+        const auto packed_encodes = grid.particlePackEncodesForTest();
+
+        // Revoke A, install B (current, solid inventory), prepare it and reject the
+        // frame before submission. The accepted rows, count and metadata stay A's.
+        live_a->store(view_a.m_device_epoch + 1u, std::memory_order_release);
+        PPR_TEST_ASSERT(not view_a.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view_b));
+        PPR_TEST_ASSERT(not grid.update(TimeSpan{}, camera));
+        {
+            rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            FenceWaitHook wait{[&](const FenceCompletionValue value) { return renderer.waitForFenceValue(value); }};
+            PreRenderContext context{fixture.device(), *encoder, renderer.completedFenceValue(), std::move(wait)};
+            PPR_TEST_ASSERT(not grid.prepareGpuParticles(context));
+            grid.discardUnsubmittedParticles();
+        }
+
+        // B is a current publication, so that rejected attempt legitimately encoded
+        // one pack (its commands never executed and its tokens were dropped). The
+        // invariant under test is that the *hold* adds no pack and keeps A's accepted
+        // tokens, so the encode baseline is taken after the rejection, and the
+        // per-frame sequence is asserted explicitly.
+        const auto encodes_after_rejection = grid.particlePackEncodesForTest();
+        PPR_TEST_ASSERT(encodes_after_rejection == packed_encodes + 1u);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackedCountForTest() == 2u);
+
+        // Revoke B so the next frame is a hold of A. Admission must be derived from
+        // A's accepted metadata; deriving it from the rejected incoming inventory
+        // would drop the liquid lane and hand A's rows to the direct classes.
+        live_b->store(view_b.m_device_epoch + 1u, std::memory_order_release);
+        PPR_TEST_ASSERT(not view_b.current());
+        PPR_TEST_ASSERT(not grid.applyGpuParticleView(view_b));
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        const auto dispatches_before_hold = grid.observations().m_dispatch_commands;
+        PPR_TEST_ASSERT(not encode());
+        PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_before_hold);
+        PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+        PPR_TEST_ASSERT(grid.particleSurfaceAdmitted());
+        PPR_TEST_ASSERT(grid.particleSurfaceDrawClass() == EGridParticleDrawClass::opaque);
+        const rhi::IndirectDrawArguments held_args = readArgs();
+        PPR_TEST_ASSERT(held_args.instanceCount == 2u);
+        PPR_TEST_ASSERT(readIds(2u) == accepted_ids);
+        PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch);
+        PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == encodes_after_rejection);
+        PPR_TEST_ASSERT(grid.particlePackedCountForTest() == 2u);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL held_lane_admission ids=({},{}) args={} dispatches={} packs={}",
+                accepted_ids[0u], accepted_ids[1u], held_args.instanceCount, grid.observations().m_dispatch_commands,
+                grid.particlePackEncodesForTest()));
+    };
+
     PPR_UNIT_TEST (opaque_terrain_ownership_occludes_solid_and_liquid_particles) {
         Fixture fixture{};
         fixture.initialize();
@@ -7309,6 +8341,10 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::
                     particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
+                detail::WorldLightingMaterial::held_publication_reculls_retained_rows_against_the_current_camera,
+                detail::WorldLightingMaterial::held_recull_keeps_global_ascending_ids_across_blocks,
+                detail::WorldLightingMaterial::
+                    held_publication_keeps_the_accepted_liquid_lane_after_a_rejected_inventory,
                 detail::WorldLightingMaterial::opaque_terrain_ownership_occludes_solid_and_liquid_particles,
                 detail::WorldLightingMaterial::excavated_vacuum_survives_and_opaque_terrain_clips_the_particle,
             });

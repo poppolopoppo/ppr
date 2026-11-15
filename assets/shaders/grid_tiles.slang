@@ -217,6 +217,14 @@ StructuredBuffer<ParticleGpu> g_particles;
 // stored world-plane axis and the two amplitudes. Writer: OrientationRow in
 // grid_particle_native.slang; CPU twin: pP::ParticleOrientationGpu.
 StructuredBuffer<OrientationRow> g_particle_orientation;
+// Per-row six-byte conic draw records, pair-packed into three uints per two rows
+// by the same prepare rank that advances the canonical history. Writer: the
+// pair-packed layout documented in grid_particle_native.slang; the density splat
+// vertex decodes one record with two aligned uint loads. A structured buffer of
+// uints, exactly like g_particle_ids: the packing is explicit, and the slot
+// buffer carries a stride but no format. The direct classes keep their
+// orientation silhouette decode and never read this buffer.
+StructuredBuffer<uint> g_particle_conic;
 // The single admitted density-lane configuration. The splat vertex below reads
 // it for the lane material and the one-pixel admission padding; the fragment
 // entries at the end of this file read the optical flag. The direct classes
@@ -1414,6 +1422,17 @@ float2 particleOrientation(float3 right,float3 up,uint instance,
     return screen_axis/projected;
 }
 
+// One decoded conic record. Two aligned uint loads cover the six logical bytes:
+// even row 2j starts at word 3j (a = low, b = high) and spans word 3j+1 for c;
+// odd row 2j+1 starts at word 3j+1 (a = high) and spans word 3j+2 for b and c.
+// The two loads always lie inside the 12*ceil(capacity/2)-byte allocation.
+ParticleConicMetric particleConic(uint row) {
+    uint base=3u*(row>>1u)+(row&1u);
+    uint2 words=uint2(g_particle_conic[base],g_particle_conic[base+1u]);
+    if ((row&1u)==0u) return particleConicMetric(words.x&0xffffu,words.x>>16u,words.y&0xffffu);
+    return particleConicMetric(words.x>>16u,words.y&0xffffu,words.y>>16u);
+}
+
 struct ParticleVertexOutput {
     float4 position:SV_Position;
     float2 fine_position:TEXCOORD0;
@@ -1446,6 +1465,12 @@ struct ParticleVertexOutput {
     // projected axis is degenerate). Both are uniform per instance.
     nointerpolation float2 surface_tangent:TEXCOORD7;
     nointerpolation float surface_strength:TEXCOORD8;
+    // Density-lane conic metric, uniform per instance: xyz is the corrected
+    // record scaled by 1/R^2 (so the fragment multiplies the world-plane offset
+    // directly) and w is sqrt(det) of the unscaled record, the kernel's volume
+    // normalisation. Only the splat entry reads it; the direct entries leave the
+    // neutral identity.
+    nointerpolation float4 conic:TEXCOORD11;
 };
 
 // Shared particle quad expansion. `surface` selects the density lane's entry:
@@ -1498,18 +1523,39 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     // 1 + 0.5 S along the flow). A repeated or held publication rewrites nothing,
     // so a paused frame decodes the same bytes. There is no dt.
     //
+    // The density lane replaces that projected silhouette decode with the
+    // per-row conic record: its shape is a camera-independent world-plane
+    // metric, so a camera change rescales the raster footprint without
+    // re-deriving the shape and without a second source of truth for the cue.
+    //
     // Gas keeps its mask texture and its exact previous geometry: it decodes no
     // attribute and stays round.
     float2 axis=float2(1.0,0.0);
     float stretch=1.0;
     float surface_strength=0.0;
-    if (surface||draw_class!=kParticleDrawGas) {
+    if (!surface&&draw_class!=kParticleDrawGas) {
         float bias_fraction=0.0;
         float stretch_fraction=0.0;
         const float2 stored_axis=particleOrientation(right,up,instance,bias_fraction,stretch_fraction);
         if (dot(stored_axis,stored_axis)>0.5) axis=stored_axis;
         stretch=1.0+(kParticleStretchCap-1.0)*stretch_fraction;
         surface_strength=bias_fraction;
+    }
+
+    // The density lane's own metric: the same record the draw binds, decoded
+    // once per instance into the corrected coefficients scaled by 1/R^2 and the
+    // kernel normalisation sqrt(det). `conic_support` is its major semiaxis in
+    // units of R (<= 1.5 by the decoded eigenvalue floor) and therefore sizes
+    // the quad exactly like the silhouette stretch does for the direct classes.
+    float4 conic=float4(1.0,0.0,1.0,1.0);
+    float conic_support=1.0;
+    if (surface) {
+        ParticleConicMetric metric=particleConic(instance);
+        float support_radius=particle.m_radius_m*kParticleSupportScale;
+        float inverse_area=1.0/(support_radius*support_radius);
+        conic=float4(metric.m_a*inverse_area,metric.m_b*inverse_area,metric.m_c*inverse_area,
+            metric.m_sqrt_determinant);
+        conic_support=metric.m_support;
     }
 
     // The flow metric and the tangent contour now share that one axis; the
@@ -1530,9 +1576,12 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     // every factor here is exactly the previous expression. The density lane
     // adds one density pixel of admission padding so a pixel whose centre lies
     // just outside the analytic support still receives the intersecting
-    // footprint; the kernel weight itself still vanishes at rho >= 1.
+    // footprint; the kernel weight itself still vanishes at rho >= 1. Its quad
+    // follows the decoded conic's own major semiaxis, which is the same k for an
+    // admitted cue but stays correct when the projected silhouette decode is
+    // degenerate: the conic metric is world XY and needs no projection.
     float extent=surface
-        ? particle.m_radius_m*(kParticleSupportScale*stretch)+pad
+        ? particle.m_radius_m*(kParticleSupportScale*conic_support)+pad
         : (draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
             : particle.m_radius_m*(kParticleSupportScale*stretch));
     float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;
@@ -1548,6 +1597,7 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     output.flow_stretch=stretch;
     output.surface_tangent=surface_tangent;
     output.surface_strength=surface_strength;
+    output.conic=conic;
     return output;
 }
 
@@ -2082,10 +2132,9 @@ float4 particleSurfaceAccumulate(ParticleVertexOutput input,
     optical_weight=0.0;
 
     // Derivatives are prepared before the support test so both stages stay
-    // coherent: local is the particle's own r-unit metric at the texel centre,
-    // and fine is the same position in native cells for terrain lookups.
-    float2 local=(input.uv*2.0-1.0)*input.shape_scale;
-    float2 local_x=ddx(local),local_y=ddy(local);
+    // coherent: local_m is this particle's world-plane offset in metres, and
+    // fine is the same position in native cells for terrain lookups.
+    float2 local_x=ddx(input.local_m),local_y=ddy(input.local_m);
     float2 fine_x=ddx(input.fine_position),fine_y=ddy(input.fine_position);
     float2 world_gradient_x=clamp(fine_x*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
     float2 world_gradient_y=clamp(fine_y*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
@@ -2096,20 +2145,20 @@ float4 particleSurfaceAccumulate(ParticleVertexOutput input,
     GridVisual visual=g_terrain_visuals[material];
     if (visual.m_material_id!=material) return float4(0.0);
 
-    // The kernel decodes the same stored orientation word the direct entry
-    // decodes; the density mapping is not composed with the direct silhouette
-    // warp. flow_stretch is k and surface_strength is the bias fraction.
-    float stretch_fraction=clamp((input.flow_stretch-1.0)/(kParticleStretchCap-1.0),0.0,1.0);
-    ParticleDensityKernel kernel=particleDensityKernel(
-        input.surface_tangent,input.surface_strength,stretch_fraction);
+    // The kernel metric is the stored conic: world XY, camera-independent, with
+    // the vertex's eigenvalue correction and the record's own det normalisation.
+    // The direct classes keep the projected silhouette cue; this mapping is not
+    // composed with it.
+    float3 conic=input.conic.xyz;
+    float sqrt_determinant=input.conic.w;
 
     float weight=0.0;
     for (uint corner=0u;corner<4u;++corner) {
         float2 step=particleDensityQuadratureOffset(corner);
-        float2 quadrature=local+step.x*local_x+step.y*local_y;
+        float2 quadrature=input.local_m+step.x*local_x+step.y*local_y;
         float2 quadrature_fine=input.fine_position+step.x*fine_x+step.y*fine_y;
         if (terrainExcludesDensity(quadrature_fine)) continue;
-        weight+=particleDensityWeight(quadrature/kParticleSupportScale,kernel);
+        weight+=particleDensityWeight(quadrature,conic,sqrt_determinant);
     }
     weight*=0.25;
     if (!(weight>0.0)) return float4(0.0);

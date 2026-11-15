@@ -735,6 +735,292 @@ namespace pP::tests::detail {
             }
             PPR_TEST_ASSERT(covered_instances == plan->m_tiles.size());
         };
+
+        // ------------------------------------------------------------------
+        // particle conic record
+        // ------------------------------------------------------------------
+        // CPU mirror of the shader's six-byte conic draw record
+        // (grid_particle_native.slang particleConicBits / particleConicMetric and
+        // the pair-packed layout). It pins the arithmetic, the packing and the
+        // decoded support bound without a device; the GPU path is probed against
+        // the same contract in the material leaf.
+
+        // IEEE binary16 encode with round-to-nearest, ties-to-even: the rounding
+        // the GPU f32tof16 conversion performs.
+        [[nodiscard]] u16 conicHalfBits(const float value) {
+            const u32 bits = std::bit_cast<u32>(value);
+            const u32 sign = (bits >> 16u) & 0x8000u;
+            const u32 magnitude = bits & 0x7fffffffu;
+            if (magnitude > 0x7f800000u) {
+                return static_cast<u16>(sign | 0x7e00u);
+            }
+
+            if (magnitude == 0x7f800000u) {
+                return static_cast<u16>(sign | 0x7c00u);
+            }
+
+            if (magnitude == 0u) {
+                return static_cast<u16>(sign);
+            }
+
+            const u32 exponent = magnitude >> 23u;
+            u32 mantissa = magnitude & 0x7fffffu;
+            const i32 half_exponent = static_cast<i32>(exponent) - 127 + 15;
+            if (half_exponent >= 0x1f) {
+                return static_cast<u16>(sign | 0x7c00u);
+            }
+
+            if (half_exponent <= 0) {
+                // Subnormal half: the implicit-one mantissa on the 2^-24 unit
+                // grid, with the same ties-to-even rounding.
+                mantissa |= 0x800000u;
+                const u32 shift = static_cast<u32>(14 - half_exponent);
+                const u32 halfway = 1u << (shift - 1u);
+                const u32 remainder = mantissa & ((1u << shift) - 1u);
+                u32 result = mantissa >> shift;
+                if (remainder > halfway or (remainder == halfway and (result & 1u) != 0u)) {
+                    ++result;
+                }
+
+                return static_cast<u16>(sign | result);
+            }
+
+            const u32 rounded = (mantissa + 0xfffu + ((mantissa >> 13u) & 1u)) >> 13u;
+            u32 next_exponent = static_cast<u32>(half_exponent);
+            u32 half_mantissa = rounded;
+            if (half_mantissa == 0x400u) {
+                half_mantissa = 0u;
+                ++next_exponent;
+            }
+
+            if (next_exponent >= 0x1f) {
+                return static_cast<u16>(sign | 0x7c00u);
+            }
+
+            return static_cast<u16>(sign | (next_exponent << 10u) | half_mantissa);
+        }
+
+        // IEEE binary16 decode: exact, so a round trip isolates the encode.
+        [[nodiscard]] float conicHalfValue(const u16 bits) {
+            constexpr float subnormal_unit = std::bit_cast<float>(0x33800000u); // 2^-24
+            const u32 sign = (bits & 0x8000u) != 0u ? 0x80000000u : 0u;
+            const u32 exponent = (bits >> 10u) & 0x1fu;
+            const u32 mantissa = bits & 0x3ffu;
+            if (exponent == 0u) {
+                const float magnitude = static_cast<float>(mantissa) * subnormal_unit;
+                return std::bit_cast<float>(sign) * magnitude;
+            }
+
+            if (exponent == 0x1fu) {
+                return std::bit_cast<float>(sign | 0x7f800000u | (mantissa << 13u));
+            }
+
+            return std::bit_cast<float>(sign | ((exponent + 112u) << 23u) | (mantissa << 13u));
+        }
+
+        // The retained cue mapping and the record's coefficients in FP32, exactly
+        // as grid_particle_native.slang particleConicBits derives them.
+        struct ConicCoefficients {
+            float m_a{}, m_b{}, m_c{};
+            bool m_neutral{};
+        };
+
+        [[nodiscard]] ConicCoefficients conicCoefficients(const u32 angle_bias_stretch) {
+            ConicCoefficients result{.m_a = 1.0f, .m_b = 0.0f, .m_c = 1.0f, .m_neutral = true};
+            const u32 angle = angle_bias_stretch & 0xffffu;
+            const u32 bias = (angle_bias_stretch >> 16u) & 0xffu;
+            const u32 stretch = (angle_bias_stretch >> 24u) & 0xffu;
+            if (bias == 0u and stretch == 0u) {
+                return result;
+            }
+
+            constexpr float pi = 3.141592653589793f;
+            const float radians = static_cast<float>(angle) * pi / 65536.0f;
+            const float cosine = std::cos(radians);
+            const float sine = std::sin(radians);
+            const float anisotropy = kGridParticleTangentContourBias * (static_cast<float>(bias) / 255.0f);
+            const float stretch_scale = 1.0f +
+                                        (kGridParticleStretchCap - 1.0f) * (static_cast<float>(stretch) / 255.0f);
+            const float along = 1.0f / (stretch_scale * stretch_scale);
+            const float across_ratio = (1.0f + 0.5f * anisotropy) / (1.0f - 0.5f * anisotropy);
+            const float across = across_ratio * across_ratio;
+
+            result.m_a = cosine * cosine * along + sine * sine * across;
+            result.m_b = cosine * sine * (along - across);
+            result.m_c = sine * sine * along + cosine * cosine * across;
+            result.m_neutral = false;
+            return result;
+        }
+
+        [[nodiscard]] std::array<u16, 3u> conicBits(const u32 angle_bias_stretch) {
+            const ConicCoefficients coefficients = conicCoefficients(angle_bias_stretch);
+            return {conicHalfBits(coefficients.m_a), conicHalfBits(coefficients.m_b), conicHalfBits(coefficients.m_c)};
+        }
+
+        // Decoded, eigenvalue-corrected metric exactly as the vertex computes it.
+        struct ConicMetric {
+            float m_a{}, m_b{}, m_c{}, m_sqrt_determinant{}, m_support{};
+        };
+
+        [[nodiscard]] ConicMetric conicMetric(const std::array<u16, 3u> &bits) {
+            ConicMetric result{};
+            float a = conicHalfValue(bits[0u]);
+            const float b = conicHalfValue(bits[1u]);
+            float c = conicHalfValue(bits[2u]);
+            const float difference = a - c;
+            const float lambda_min = 0.5f * (a + c - std::sqrt(difference * difference + 4.0f * b * b));
+            const float correction = std::max(0.0f, kGridParticleConicLambdaFloor - lambda_min);
+            a += correction;
+            c += correction;
+            result.m_a = a;
+            result.m_b = b;
+            result.m_c = c;
+            result.m_sqrt_determinant = std::sqrt(a * c - b * b);
+            result.m_support = 1.0f / std::sqrt(std::max(lambda_min, kGridParticleConicLambdaFloor));
+            return result;
+        }
+
+        // Pair-packed slot words: 12 bytes per two rows, three uints per pair.
+        [[nodiscard]] Array<u32> packConicSlot(const std::span<const u32> words) {
+            Array<u32> packed((words.size() + 1u) / 2u * 3u, 0u);
+            for (std::size_t row = 0u; row < words.size(); row += 2u) {
+                const std::array<u16, 3u> even = conicBits(words[row]);
+                const std::array<u16, 3u> odd = row + 1u < words.size() ? conicBits(words[row + 1u])
+                                                                        : std::array<u16, 3u>{0x3c00u, 0u, 0x3c00u};
+                const std::size_t pair = row / 2u * 3u;
+                packed[pair + 0u] = static_cast<u32>(even[0u]) | (static_cast<u32>(even[1u]) << 16u);
+                packed[pair + 1u] = static_cast<u32>(even[2u]) | (static_cast<u32>(odd[0u]) << 16u);
+                packed[pair + 2u] = static_cast<u32>(odd[1u]) | (static_cast<u32>(odd[2u]) << 16u);
+            }
+
+            return packed;
+        }
+
+        // The decoder's two aligned loads; the row parity selects the halfword.
+        [[nodiscard]] std::array<u16, 3u> unpackConicRow(const std::span<const u32> packed, const std::size_t row) {
+            const std::size_t base = 3u * (row / 2u) + row % 2u;
+            const u32 low = packed[base];
+            const u32 high = packed[base + 1u];
+            if (row % 2u == 0u) {
+                return {
+                    static_cast<u16>(low & 0xffffu), static_cast<u16>(low >> 16u), static_cast<u16>(high & 0xffffu)};
+            }
+
+            return {static_cast<u16>(low >> 16u), static_cast<u16>(high & 0xffffu), static_cast<u16>(high >> 16u)};
+        }
+
+        // Admitted cue extremes plus rotated cases; a word is angle16 | B << 16 |
+        // S << 24, and angle 0 with B = S = 0 is the canonical neutral.
+        [[nodiscard]] Array<u32> conicProbeWords() {
+            constexpr std::array<u32, 8u> angles{0u, 1u, 23170u, 32768u, 45000u, 49152u, 65535u, 12345u};
+            constexpr std::array<u32, 6u> biases{0u, 1u, 64u, 128u, 200u, 255u};
+            constexpr std::array<u32, 5u> stretches{0u, 1u, 32u, 128u, 255u};
+            Array<u32> words{};
+            words.push_back(0u);
+            for (const u32 angle: angles) {
+                for (const u32 bias: biases) {
+                    for (const u32 stretch: stretches) {
+                        words.push_back(angle | (bias << 16u) | (stretch << 24u));
+                    }
+                }
+            }
+
+            return words;
+        }
+
+        PPR_UNIT_TEST (grid_particle_conic_quantisation_and_support_bound) {
+            // The record is exact at neutral, within the design's half-rounding
+            // bounds per component, and its decoded support never reaches the
+            // 3 r cull boundary.
+            const Array<u32> words = conicProbeWords();
+            float worst_a{};
+            float worst_b{};
+            float worst_c{};
+            float worst_support{};
+            float worst_radius{};
+            for (const u32 word: words) {
+                const ConicCoefficients exact = conicCoefficients(word);
+                const std::array<u16, 3u> bits = conicBits(word);
+                if (exact.m_neutral) {
+                    PPR_TEST_ASSERT(bits[0u] == 0x3c00u and bits[1u] == 0u and bits[2u] == 0x3c00u);
+                }
+
+                const ConicMetric metric = conicMetric(bits);
+                worst_a = std::max(worst_a, std::abs(metric.m_a - exact.m_a));
+                worst_b = std::max(worst_b, std::abs(metric.m_b - exact.m_b));
+                worst_c = std::max(worst_c, std::abs(metric.m_c - exact.m_c));
+                worst_support = std::max(worst_support, metric.m_support);
+                PPR_TEST_ASSERT(metric.m_sqrt_determinant > 0.0f);
+
+                // Directional radius of the decoded ellipse against the exact one,
+                // both in units of R: rho(u) = 1/sqrt(u^T M u).
+                for (u32 step = 0u; step < 64u; ++step) {
+                    const float angle = static_cast<float>(step) * 2.0f * std::numbers::pi_v<float> / 64.0f;
+                    const float x = std::cos(angle);
+                    const float y = std::sin(angle);
+                    const float exact_quadratic = exact.m_a * x * x + 2.0f * exact.m_b * x * y + exact.m_c * y * y;
+                    const float decoded_quadratic = metric.m_a * x * x + 2.0f * metric.m_b * x * y + metric.m_c * y * y;
+                    PPR_TEST_ASSERT(exact_quadratic > 0.0f and decoded_quadratic > 0.0f);
+                    const float radius = std::sqrt(exact_quadratic / decoded_quadratic) - 1.0f;
+                    worst_radius = std::max(worst_radius, std::abs(radius));
+                }
+            }
+
+            // Conservative half-rounding bounds of the design: |da|, |dc| <= 2^-10
+            // and |db| <= 2^-12. The correction only ever raises the diagonal, so
+            // it cannot exceed the decode error.
+            PPR_TEST_ASSERT(worst_a <= 1.0f / 1024.0f + 1.0f / 262144.0f);
+            PPR_TEST_ASSERT(worst_c <= 1.0f / 1024.0f + 1.0f / 262144.0f);
+            PPR_TEST_ASSERT(worst_b <= 1.0f / 4096.0f);
+            // Support semiaxis in units of R: 1.5 R = 3 r exactly at the k cap, and
+            // the decoded side stays inside it.
+            PPR_TEST_ASSERT(worst_support <= kGridParticleStretchCap);
+            PPR_TEST_ASSERT(2.0f * worst_support <= kGridParticleCullRadiusScale);
+            // The design's metric envelope is under 0.28 % in radius.
+            PPR_TEST_ASSERT(worst_radius <= 0.0028f);
+
+            _.log(
+                std::format(
+                    "GRID_CONIC quantise a={:.3e} b={:.3e} c={:.3e} support_R={:.9f} radius_error={:.3e} words={}",
+                    worst_a, worst_b, worst_c, worst_support, worst_radius, words.size()));
+        };
+
+        PPR_UNIT_TEST (grid_particle_conic_pair_packing_round_trips_every_row) {
+            // Odd/even/group-tail ABI: two aligned uint loads recover exactly the
+            // record that was packed, including an odd final row whose partner is
+            // the neutral record.
+            for (const std::size_t count: {1u, 2u, 3u, 7u, 256u, 257u}) {
+                Array<u32> words{};
+                words.reserve(count);
+                for (std::size_t row = 0u; row < count; ++row) {
+                    words.push_back(
+                        ((static_cast<u32>(row) * 7919u) & 0x00ff'ffffu) |
+                        (((static_cast<u32>(row) * 37u) % 256u) << 16u) |
+                        (((static_cast<u32>(row) * 53u) % 256u) << 24u));
+                }
+
+                const Array<u32> packed = packConicSlot(words);
+                PPR_TEST_ASSERT(packed.size() == (count + 1u) / 2u * 3u);
+                PPR_TEST_ASSERT(packed.size() * sizeof(u32) == gridParticleConicBytes(static_cast<u32>(count)));
+                for (std::size_t row = 0u; row < count; ++row) {
+                    PPR_TEST_ASSERT(unpackConicRow(packed, row) == conicBits(words[row]));
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (grid_particle_conic_slot_sizing_matches_the_peer_review) {
+            // 12 * ceil(capacity / 2) bytes per prepared slot; three slots are the
+            // peer review's 18 MiB at the admitted 1,048,576-row capacity.
+            PPR_TEST_ASSERT(gridParticleConicBytes(1u) == 12u);
+            PPR_TEST_ASSERT(gridParticleConicBytes(2u) == 12u);
+            PPR_TEST_ASSERT(gridParticleConicBytes(3u) == 24u);
+            PPR_TEST_ASSERT(gridParticleConicBytes(4096u) == 24u * 1024u);
+            PPR_TEST_ASSERT(gridParticleConicBytes(65'536u) == 384u * 1024u);
+            PPR_TEST_ASSERT(gridParticleConicBytes(1'048'576u) == 6u * 1024u * 1024u);
+            PPR_TEST_ASSERT(3u * gridParticleConicBytes(1'048'576u) == 18u * 1024u * 1024u);
+            // The logical record stays six bytes: approximately 6 N.
+            PPR_TEST_ASSERT(gridParticleConicBytes(1'048'576u) == 6u * 1'048'576u);
+        };
     }
 
 } // namespace pP::tests::detail
@@ -757,6 +1043,9 @@ namespace pP::tests {
             detail::GridTiles::grid_cpu_and_indirect_lanes_agree_on_plan,
             detail::GridTiles::grid_particle_rejection_preserves_the_retained_stage,
             detail::GridTiles::grid_moving_particles_allow_dense_chunks_and_closed_endpoints,
+            detail::GridTiles::grid_particle_conic_quantisation_and_support_bound,
+            detail::GridTiles::grid_particle_conic_pair_packing_round_trips_every_row,
+            detail::GridTiles::grid_particle_conic_slot_sizing_matches_the_peer_review,
         });
     };
 

@@ -43,10 +43,6 @@ static const float kParticleDensityNormalization =
     kParticleDensityProfileIntegral * kParticleSupportScale * kParticleSupportScale;
 // The ramp occupies the band between the plateau and the support, i.e. R/3.
 static const float kParticleDensityBandFraction = 1.0 - kParticleFalloffInnerFraction;
-// The kernel anisotropy keeps the existing b_max = 0.3999 stored in the
-// orientation cue. It sets the ellipse ratio below instead of warping the old
-// 5/6 silhouette band; the two mappings are never applied together.
-static const float kParticleDensityBiasCap = kParticleTangentContourBias;
 // theta = 5/28 ~= 0.178571429. For an isolated neutral particle w = s/2.8, so
 // the crossing is s = 0.5, rho = 5/6: the old isolated half-coverage radius is
 // preserved before pixel integration. This is a calibrated presentation-domain
@@ -70,58 +66,40 @@ static const float kParticleDensitySupportClosure = 1.0e-6;
 static const float kParticleDensityQuadratureOffset = 0.25;
 
 // ------------------------------------------------------------------
-// orientation-decoded kernel metric
+// conic world-plane metric
 // ------------------------------------------------------------------
-// The existing 4-byte orientation record supplies angle16, bias8 and stretch8.
-// The kernel, not an individual silhouette, carries that orientation:
+// The shape of a splat is the per-row six-byte conic record, decoded by the
+// vertex stage (grid_particle_native.slang particleConicMetric). The retained
+// kernel, not an individual silhouette, carries the orientation cue:
 //
-//   b = kParticleDensityBiasCap * bias8/255
+//   b = kParticleTangentContourBias * bias8/255
 //   k = 1 + (kParticleStretchCap - 1) * stretch8/255
 //   eta = (1 - b/2) / (1 + b/2)
-//   A = rotation(axis) * diag(k, eta)
+//   a,b,c = coefficients of the inverse metric of rotation(axis)*diag(k, eta)
 //
-// det(A) = k * eta normalises the weight. eta <= 1 and k <= 1.5 keep the support
-// inside max(k, eta) * R = 3.000 r, so the existing 3.0625 r cull still bounds
-// every oriented kernel. `axis` must be a unit world-plane axis; callers
-// substitute (1, 0) for a degenerate projection exactly as particleVertex does.
-struct ParticleDensityKernel {
-    float2 m_axis;
-    float m_stretch;
-    float m_ratio;
-    float m_determinant;
-};
-
-ParticleDensityKernel particleDensityKernel(float2 axis,float bias_fraction,float stretch_fraction) {
-    static_assert(kParticleSupportScale*kParticleStretchCap<=kParticleCullRadiusScale,
-        "the stretched density support must fit the existing cull margin");
-    static_assert(kParticleDensityBiasCap>=0.0&&kParticleDensityBiasCap<2.0,
-        "the bias cap must keep the anisotropy ratio positive");
-
-    ParticleDensityKernel kernel;
-    kernel.m_axis=axis;
-    float bias=kParticleDensityBiasCap*saturate(bias_fraction);
-    kernel.m_stretch=1.0+(kParticleStretchCap-1.0)*saturate(stretch_fraction);
-    kernel.m_ratio=(1.0-0.5*bias)/(1.0+0.5*bias);
-    kernel.m_determinant=kernel.m_stretch*kernel.m_ratio;
-    return kernel;
-}
+// det(K) = k * eta normalises the weight, so the stored record's sqrt(det)
+// carries it exactly. eta <= 1 and k <= 1.5 keep the support inside
+// max(k, eta) * R = 3.000 r, so the existing 3.0625 r cull still bounds every
+// decoded conic. The metric is world XY and camera-independent: the fragment
+// evaluates the quadratic at the interpolated world-plane offset, so a camera
+// change rescales the raster footprint without re-deriving the shape.
 
 // ------------------------------------------------------------------
 // normalized kernel weight
 // ------------------------------------------------------------------
-// Weight of one particle at a world-plane offset from its centre in
-// support-radius units, `offset = (x - p)/R`. The kernel is radial in the
-// anisotropic local metric: inverse(A) maps the offset to q, and the ramp is
-// evaluated on rho = |q|. Exactly 0 at and beyond the support (rho = 1); the
-// guard closes the binary32 round-off of a sample constructed on that boundary.
-float particleDensityWeight(float2 offset,ParticleDensityKernel kernel) {
-    float along=dot(offset,kernel.m_axis)/kernel.m_stretch;
-    float across=dot(offset,float2(-kernel.m_axis.y,kernel.m_axis.x))/kernel.m_ratio;
-    float rho=length(float2(along,across));
+// Weight of one particle at a world-plane offset `world_offset` in metres from
+// its centre. The caller supplies the conic scaled by 1/R^2 and sqrt(det) of the
+// unscaled record, so the metric is evaluated in the dimensionless
+// offset = (x - p)/R of the kernel. Exactly 0 at and beyond the support
+// (rho = 1); the guard closes the binary32 round-off of a sample constructed on
+// that boundary.
+float particleDensityWeight(float2 world_offset,float3 conic,float sqrt_determinant) {
+    float rho=sqrt(conic.x*world_offset.x*world_offset.x+2.0*conic.y*world_offset.x*world_offset.y+
+        conic.z*world_offset.y*world_offset.y);
     if (!(rho<1.0-kParticleDensitySupportClosure)) return 0.0;
 
     float t=clamp((1.0-rho)/kParticleDensityBandFraction,0.0,1.0);
-    return t*t*(3.0-2.0*t)/(kParticleDensityNormalization*kernel.m_determinant);
+    return t*t*(3.0-2.0*t)*sqrt_determinant/kParticleDensityNormalization;
 }
 
 // The four fixed 2x2 density-pixel quadrature positions, (+/-1/4, +/-1/4).

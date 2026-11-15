@@ -60,6 +60,14 @@ RWStructuredBuffer<uint> g_block_counts;
 RWStructuredBuffer<uint> g_block_prefix;
 RWStructuredBuffer<uint> g_particle_ids;
 RWStructuredBuffer<uint> g_particle_args;
+// Six-byte conic records, pair-packed into three uints per two packed rows. This
+// is a derived draw cache (grid_particle_native.slang), written by the rank
+// invocation that also advances the canonical history, and it lives in the same
+// prepared slot as the ids and indirect arguments. Declared as a structured
+// buffer of uints, exactly like g_ranks/g_particle_ids: the record layout is the
+// explicit pair packing, not an element struct, and this renderer's buffers
+// carry a stride but no format (a typed Buffer<uint> view has none to bind).
+RWStructuredBuffer<uint> g_particle_conic;
 // Orientation history: the accepted role is read, the candidate is written, and
 // the two never alias. The committed per-cell grids are bound by the world
 // lighting ownership authority, which is also the only source of `orientationOwned`.
@@ -470,6 +478,12 @@ OrientationRow updateOrientationRow(uint row) {
 // stable per-particle frustum compaction and indirect count
 // ------------------------------------------------------------------
 groupshared uint g_scan[256];
+// Per-lane conic half triples, one uint each, staged so the pair write reads its
+// neighbour's record. Two uints of each lane's triple share a word with the
+// neighbour, so the pair is packed by one lane.
+groupshared uint g_conic_a[256];
+groupshared uint g_conic_b[256];
+groupshared uint g_conic_c[256];
 
 void scanLane(uint lane, uint value) {
     g_scan[lane] = value;
@@ -512,8 +526,39 @@ void rankParticles(uint3 id:SV_DispatchThreadID,uint3 local:SV_GroupThreadID,uin
     // The orientation update is fused here because rank already visits every row:
     // culling must not skip a row's history. It contains no barrier and no early
     // return, so every lane still reaches scanLane's group barriers.
-    if (g_particle_prepare.orientationUpdate!=0u && id.x<g_particle_prepare.count)
-        g_orientation_current[id.x]=updateOrientationRow(id.x);
+    bool active=id.x<g_particle_prepare.count;
+    OrientationRow word=(OrientationRow)0;
+    if (active) {
+        if (g_particle_prepare.orientationUpdate!=0u) {
+            word=updateOrientationRow(id.x);
+            g_orientation_current[id.x]=word;
+        } else {
+            // A repeated publication, or a held recull that advances nothing,
+            // reads the accepted word: no slew step and no history write.
+            word=g_orientation_previous[id.x];
+        }
+    }
+
+    // Six-byte conic draw record, pair-packed. Each lane derives its own half
+    // triple into group scratch and every lane reaches the barrier; each even
+    // lane whose global row is below the count then writes the three uints of
+    // its own and its odd neighbour's record. An inactive lane, including the
+    // unused partner of an odd final row, contributes the deterministic neutral
+    // record, so no pair containing a drawn row is left unwritten and no two
+    // lanes write the same uint.
+    ParticleConicBits conic=particleConicBits(word.angle_bias_stretch);
+    g_conic_a[local.x]=conic.m_a;
+    g_conic_b[local.x]=conic.m_b;
+    g_conic_c[local.x]=conic.m_c;
+    GroupMemoryBarrierWithGroupSync();
+    if ((local.x&1u)==0u&&active) {
+        uint pair=(id.x>>1u)*3u;
+        uint neighbour=local.x+1u;
+        g_particle_conic[pair+0u]=g_conic_a[local.x]|(g_conic_b[local.x]<<16u);
+        g_particle_conic[pair+1u]=g_conic_c[local.x]|(g_conic_a[neighbour]<<16u);
+        g_particle_conic[pair+2u]=g_conic_b[neighbour]|(g_conic_c[neighbour]<<16u);
+    }
+
     scanLane(local.x,selected ? 1u : 0u);
     if (id.x<g_particle_prepare.count) g_ranks[id.x]=(g_scan[local.x]-(selected ? 1u : 0u))|(selected ? 0x80000000u : 0u);
     if (local.x==255u) g_block_counts[group.x]=g_scan[255u];
