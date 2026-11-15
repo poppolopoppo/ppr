@@ -228,6 +228,66 @@ void applySandVolumeImpulse(inout Particle p, float referenceVolume) {
 }
 
 // ------------------------------------------------------------------
+// constitutive operand domains
+// ------------------------------------------------------------------
+
+bool finiteMatrix(SourceMatrix m) {
+    return isfinite(m.c0x) && isfinite(m.c0y) && isfinite(m.c1x) && isfinite(m.c1y);
+}
+
+// The determinant, its reciprocal and every inverse component must stay usable.
+// A zero or nonfinite determinant has no admitted reciprocal; an overflowing
+// reciprocal or product has no admitted inverse. This is the same reciprocal
+// constraint forms from inverted(F), and no decomposition is evaluated.
+bool usableInverse(SourceMatrix m) {
+    float df = determinant(m);
+    if (!isfinite(df) || df == 0.0) return false;
+
+    float reciprocal = 1.0 / df;
+    if (!isfinite(reciprocal)) return false;
+
+    return finiteMatrix(scale(matrix(m.c1y, -m.c0y, -m.c1x, m.c0x), reciprocal));
+}
+
+// forkSvd squares E,F,G,H, each a half-sum or half-difference of two gradient
+// entries, so a squared term is at most max_entry^2 and the radicand E^2 + H^2
+// (or F^2 + G^2) at most 2 * max_entry^2. At 1.3e19 that radicand is
+// 2 * 1.69e38 = 3.38e38, below FLT_MAX = 3.4028e38, so the squares and both
+// sqrts stay finite; a magnitude above it has no finite decomposition input.
+// Deliberate singular-value limiting happens after this point, on finite values,
+// so it is never re-inspected here.
+static const float kMaxDecompositionEntry = 1.3e19;
+
+bool usableMagnitude(SourceMatrix m) {
+    float largest = max(max(abs(m.c0x), abs(m.c0y)), max(abs(m.c1x), abs(m.c1y)));
+    return largest < kMaxDecompositionEntry;
+}
+
+bool usableDeformation(SourceMatrix m) {
+    return finiteMatrix(m) && usableMagnitude(m) && usableInverse(m);
+}
+
+// Records the first unusable constitutive operand for this row and reports
+// whether the production constraint/integration may run. Stored F is field 4 and
+// the trial (I + D)F is field 8 of the validation record. Liquids read neither.
+bool deformationOperandsUsable(Particle p, uint row) {
+    if (p.material == MaterialLiquid) return true;
+
+    if (!usableDeformation(p.deformationGradient)) {
+        recordError(8u, 0xffffffffu, 4u, row);
+        return false;
+    }
+
+    SourceMatrix trial = product(add(identity(), p.deformationDisplacement), p.deformationGradient);
+    if (!usableDeformation(trial)) {
+        recordError(8u, 0xffffffffu, 8u, row);
+        return false;
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------
 // bootstrap error acceptance without an unused numerical source tile
 // ------------------------------------------------------------------
 
@@ -370,15 +430,20 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
             }
             p.deformationDisplacement=scale(B,4.0); p.displacementX=d.x; p.displacementY=d.y;
             if (Iteration==1) {
-                p=integration(p,row);
-                // Like retained gravity translation, pressure acts through the
-                // next transfer. Current position and return-mapped F stay intact.
-                applySandVolumeImpulse(p, referenceVolume);
+                // Unusable constitutive operands are a per-particle rejection:
+                // no integration, no engine pressure feedback, no early return.
+                if (deformationOperandsUsable(p,row)) {
+                    p=integration(p,row);
+                    // Like retained gravity translation, pressure acts through the
+                    // next transfer. Current position and return-mapped F stay intact.
+                    applySandVolumeImpulse(p, referenceVolume);
+                }
             }
             if (validParticle(p,row)) saveParticle(row,p);
         }
 
-        Particle updated=constraint(p);
+        Particle updated=p;
+        if (deformationOperandsUsable(p,row)) updated=constraint(p);
         for (int i=0;i<3;++i) {
             for (int j=0;j<3;++j) {
                 float weight=weights.w[i].x*weights.w[j].y;

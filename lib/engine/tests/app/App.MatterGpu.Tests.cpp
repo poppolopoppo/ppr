@@ -5221,6 +5221,585 @@ namespace pP::tests::detail::MatterGpu {
             static_cast<unsigned long long>(loaded_bytes), static_cast<unsigned long long>(kProjectedPeak), api,
             adapter);
     };
+
+    // ------------------------------------------------------------------
+    // constitutive operand rejection witnesses
+    // ------------------------------------------------------------------
+
+    /// One isolated row and the validation field its unusable constitutive
+    /// operand must report. 0xffff'ffffu admits the row without a witness.
+    struct ConstitutiveWitness {
+        std::string_view m_name;
+        GpuParticle m_particle;
+        u32 m_field{0xffff'ffffu};
+    };
+
+    struct ConstitutiveObservation {
+        std::string_view m_name;
+        u32 m_expected_field{0xffff'ffffu};
+        u32 m_field{0xffff'ffffu};
+        u32 m_particle{0xffff'ffffu};
+        u32 m_flags{};
+        u32 m_claimed{};
+        u32 m_node{0xffff'ffffu};
+        std::error_code m_cause{};
+        bool m_published{};
+        bool m_finite{};
+    };
+
+    PPR_UNIT_TEST (constitutive_invalid_operands_do_not_enter_unsafe_operations) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // Zero gravity and no grid-volume feedback isolate the constitutive
+        // operands. The profile stays inside the admitted domain; the visco
+        // profile-domain rejection is exercised separately below.
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_plasticity == 0.0f);
+
+        const auto source = [](const ESourceMaterial identity) {
+            GpuParticle particle = restParticle();
+            particle.m_material = static_cast<float>(identity);
+            return particle;
+        };
+        const auto elastic = [&] { return source(ESourceMaterial::elastic); };
+        const auto rotationMatrix = [](const float angle) {
+            SourceMatrix result{};
+            result.m_c0x = std::cos(angle);
+            result.m_c0y = std::sin(angle);
+            result.m_c1x = -std::sin(angle);
+            result.m_c1y = std::cos(angle);
+            return result;
+        };
+
+        std::vector<ConstitutiveWitness> witnesses;
+
+        // (a) Regression coverage for the pre-existing liquid-density criterion,
+        // not a new guard: `invalidParticleField` returns slot 12 for
+        // `liquidDensity <= 0` (types.slang), and both `sparseParticle`
+        // (sparse_grid.slang) and `validParticle` (solver.slang) report it through
+        // `recordError(8u, 0xffffffffu, field, row)`. The stored 1e-39f is a
+        // subnormal, so the device's flush-to-zero comparison already reads zero.
+        {
+            GpuParticle particle = source(ESourceMaterial::liquid);
+            particle.m_liquid_density = 1.0e-39f;
+            witnesses.push_back({"liquid_density_reciprocal", particle, 12u});
+        }
+
+        // (b) The stored deformation gradient is the zero matrix, so its
+        // determinant reciprocal and inverse components are unusable.
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {0.0f, 0.0f, 0.0f, 0.0f};
+            witnesses.push_back({"stored_zero_gradient", particle, 4u});
+        }
+
+        // (c) A singular stored gradient that still carries a finite entry.
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {0.0f, 0.0f, 0.0f, 1.0f};
+            witnesses.push_back({"stored_singular_gradient", particle, 4u});
+        }
+
+        // (d) The trial deformation (I + D)F is singular although both stored
+        // operands are finite.
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_displacement = {-1.0f, 0.0f, 0.0f, 0.0f};
+            witnesses.push_back({"trial_singular_deformation", particle, 8u});
+        }
+
+        // (e) The determinant is exactly one and its reciprocal is finite, but the
+        // stored magnitude 1e20 exceeds the decomposition-intermediate bound
+        // (1.3e19), where squared half-sums would pass FLT_MAX. The rejection is
+        // the magnitude bound, still reported as the stored gradient, field 4.
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {1.0e20f, 0.0f, 0.0f, 1.0e-20f};
+            witnesses.push_back({"svd_intermediate_overflow", particle, 4u});
+        }
+
+        // (f) The determinant 1e-30 and its reciprocal are finite, while the
+        // inverse component 1e10/1e-30 overflows.
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {1.0e10f, 0.0f, 0.0f, 1.0e-40f};
+            witnesses.push_back({"inverse_component_overflow", particle, 4u});
+        }
+
+        // (g) The visco yield exponential is a profile constant, so its domain is
+        // rejected at resident-tick admission below rather than per particle.
+
+        // Controls: identity, a rotation, moderate compression and a stored
+        // gradient whose singular values 0.05 fall below the admitted clamp
+        // floor. Upstream limiting is legal and must not be flagged.
+        {
+            witnesses.push_back({"control_identity", elastic(), 0xffff'ffffu});
+        }
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = rotationMatrix(0.5f);
+            witnesses.push_back({"control_rotation", particle, 0xffff'ffffu});
+        }
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {0.9f, 0.0f, 0.0f, 0.9f};
+            witnesses.push_back({"control_compression", particle, 0xffff'ffffu});
+        }
+        {
+            GpuParticle particle = elastic();
+            particle.m_deformation_gradient = {0.05f, 0.0f, 0.0f, 0.05f};
+            witnesses.push_back({"control_clamped_singular_values", particle, 0xffff'ffffu});
+        }
+
+        // Current legal behaviour, not a guard: equal trial singular values 1.5
+        // with zero plastic history give traceE = 2*log(1.5) > 0 and a zero
+        // deviatoric norm, so the sand history projection takes the dilation
+        // branch and never divides. Whether this state should be admitted is the
+        // sand-history question, so the row must publish finite state without a
+        // constitutive witness.
+        {
+            GpuParticle particle = source(ESourceMaterial::sand);
+            particle.m_deformation_gradient = {1.5f, 0.0f, 0.0f, 1.5f};
+            particle.m_log_jp = 0.0f;
+            witnesses.push_back({"control_sand_zero_deviatoric_history", particle, 0xffff'ffffu});
+        }
+
+        // Every case is one complete resident K2 tick over a single row, so the
+        // evidence is the production rejection path, not a helper microgate.
+        std::vector<ConstitutiveObservation> observations;
+        observations.reserve(witnesses.size());
+        for (const ConstitutiveWitness &witness: witnesses) {
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                {&witness.m_particle, 1u}, {}, fixture.m_solver.accounting().m_epoch));
+            fixture.m_solver.publishReplacement();
+
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            ConstitutiveObservation observation;
+            observation.m_name = witness.m_name;
+            observation.m_expected_field = witness.m_field;
+            const auto outcome = fixture.m_solver.pollTick();
+            if (outcome) {
+                observation.m_published = true;
+                observation.m_flags = fixture.m_solver.failure().m_flags;
+                fixture.m_solver.publishTick();
+
+                const auto rows = fixture.snapshot();
+                PPR_TEST_ASSERT(rows.size() == 1u);
+                observation.m_finite = std::ranges::all_of(
+                    std::bit_cast<std::array<float, 22u>>(rows[0u]),
+                    [](const float field) { return std::isfinite(field); });
+            } else {
+                const GpuFailure &failure = fixture.m_solver.failure();
+                observation.m_cause = outcome.error();
+                observation.m_flags = failure.m_flags;
+                observation.m_claimed = failure.m_claimed;
+                observation.m_node = failure.m_node;
+                observation.m_field = failure.m_field;
+                observation.m_particle = failure.m_particle;
+
+                PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+            }
+
+            observations.push_back(observation);
+        }
+
+        for (const ConstitutiveObservation &observation: observations) {
+            _.log(
+                std::format(
+                    "CONSTITUTIVE-WITNESS case={} expected_field={} published={} finite={} cause={} flags={} "
+                    "claimed={} node={} field={} particle={}",
+                    observation.m_name, observation.m_expected_field, observation.m_published, observation.m_finite,
+                    observation.m_cause.value(), observation.m_flags, observation.m_claimed, observation.m_node,
+                    observation.m_field, observation.m_particle));
+        }
+
+        for (const ConstitutiveObservation &observation: observations) {
+            if (observation.m_expected_field == 0xffff'ffffu) {
+                PPR_TEST_ASSERT(observation.m_published and observation.m_finite);
+                PPR_TEST_ASSERT(observation.m_flags == 0u);
+                continue;
+            }
+
+            // A constitutive rejection is one fatal per-particle verdict in the
+            // existing validation slot: the guard's flag 8 carries the witness
+            // field and row, and the downstream fixed-point conversion (flag 2)
+            // never produced this failure. The reported union may also carry flag
+            // 128, a pre-existing independent stencil-key/budget condition that
+            // solver.slang and sparse_grid.slang record for their own invalidity
+            // causes; that bit says nothing about constitutive validity, so the
+            // pair below, not the whole union, is the accurate contract: the
+            // guard rejected the particle, not the conversion.
+            PPR_TEST_ASSERT(not observation.m_published);
+            PPR_TEST_ASSERT(observation.m_cause == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT((observation.m_flags & 8u) == 8u);
+            PPR_TEST_ASSERT((observation.m_flags & 2u) == 0u);
+            PPR_TEST_ASSERT(observation.m_claimed == 1u);
+            PPR_TEST_ASSERT(observation.m_node == 0xffff'ffffu);
+            PPR_TEST_ASSERT(observation.m_field == observation.m_expected_field);
+            PPR_TEST_ASSERT(observation.m_particle == 0u);
+        }
+
+        // The visco yield exponential is derived from profile constants, so an
+        // unusable domain is refused at resident-tick admission: exp(1 -
+        // plasticity) must stay a positive finite bound, and no particle guard or
+        // clamp may repair it.
+        GpuParameters refused_profile = fixture.m_solver.profile();
+        refused_profile.m_plasticity = -100.0f;
+        PPR_TEST_ASSERT(not std::isfinite(std::exp(1.0f - refused_profile.m_plasticity)));
+
+        GpuSolver refused;
+        PPR_TEST_ASSERT(not refused.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            refused_profile));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not refused.shutdown());
+        };
+
+        const GpuParticle admitted = restParticle();
+        PPR_TEST_ASSERT(not refused.prepareReplacement({&admitted, 1u}, {}, refused.accounting().m_epoch));
+        refused.publishReplacement();
+        const u64 refused_epoch = refused.accounting().m_epoch;
+        const u64 refused_dispatches = refused.accounting().m_dispatches;
+        const auto refused_view = refused.committedView();
+        PPR_TEST_ASSERT(refused_view and refused_view->m_epoch == refused_epoch);
+
+        PPR_TEST_ASSERT(refused.submitResidentTick(refused_epoch, 1u, 2u) == std::errc::invalid_argument);
+        PPR_TEST_ASSERT(not refused.busy());
+        PPR_TEST_ASSERT(refused.accounting().m_epoch == refused_epoch);
+        PPR_TEST_ASSERT(refused.accounting().m_dispatches == refused_dispatches);
+        PPR_TEST_ASSERT(refused.failure().m_flags == 0u);
+        PPR_TEST_ASSERT(refused_view->m_live_epoch->load() == refused_epoch);
+
+        PPR_TEST_ASSERT(not refused.beginSnapshot(refused_epoch));
+        PPR_TEST_ASSERT(not refused.drain());
+        const auto refused_capture = refused.pollSnapshot();
+        PPR_TEST_ASSERT(refused_capture and refused_capture->has_value());
+        PPR_TEST_ASSERT((**refused_capture).m_particles.size() == 1u);
+        PPR_TEST_ASSERT(std::memcmp(&(**refused_capture).m_particles[0u], &admitted, sizeof(GpuParticle)) == 0);
+    };
+
+    // ------------------------------------------------------------------
+    // mixed-batch constitutive rejection is transactional
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (constitutive_rejection_preserves_committed_epoch_and_rows) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+        PPR_TEST_ASSERT(fixture.m_rhi->isCoreValidationEnabled());
+        PPR_TEST_ASSERT(fixture.m_rhi->isGpuAssistedValidationEnabled());
+        auto &device = fixture.m_rhi->getDevice();
+
+        const auto elastic = [] {
+            GpuParticle particle = restParticle();
+            particle.m_material = static_cast<float>(ESourceMaterial::elastic);
+            return particle;
+        };
+
+        // Rows 0-2 share the 6-cell bucket tile at (1,1) and rows 3-5 share the
+        // neighbouring tile at (2,2), so one submission spans two workgroups
+        // while each group mixes an admissible row with unusable rows.
+        std::vector<GpuParticle> rows;
+
+        GpuParticle identity = elastic();
+        identity.m_position_x = 6.5f;
+        identity.m_position_y = 6.5f;
+        rows.push_back(identity);
+
+        GpuParticle zeroGradient = elastic();
+        zeroGradient.m_position_x = 7.5f;
+        zeroGradient.m_position_y = 6.5f;
+        zeroGradient.m_deformation_gradient = {0.0f, 0.0f, 0.0f, 0.0f};
+        rows.push_back(zeroGradient);
+
+        GpuParticle liquid = restParticle();
+        liquid.m_position_x = 8.5f;
+        liquid.m_position_y = 7.5f;
+        rows.push_back(liquid);
+
+        GpuParticle overflow = restParticle();
+        overflow.m_position_x = 12.5f;
+        overflow.m_position_y = 12.5f;
+        overflow.m_liquid_density = 1.0e-39f;
+        rows.push_back(overflow);
+
+        GpuParticle rotation = elastic();
+        rotation.m_position_x = 13.5f;
+        rotation.m_position_y = 12.5f;
+        rotation.m_deformation_gradient = {0.0f, 1.0f, -1.0f, 0.0f};
+        rows.push_back(rotation);
+
+        GpuParticle singularTrial = elastic();
+        singularTrial.m_position_x = 14.5f;
+        singularTrial.m_position_y = 13.5f;
+        singularTrial.m_deformation_displacement = {-1.0f, 0.0f, 0.0f, 0.0f};
+        rows.push_back(singularTrial);
+
+        const u32 row_count = static_cast<u32>(rows.size());
+
+        // Rows 0, 2 and 4 are admissible; the witnesses are 4, 12 and 8. The
+        // first-error latch may name any rejected row, never an admissible one.
+        const auto witness = [](const u32 row) {
+            switch (row) {
+                case 1u: return 4u;
+                case 3u: return 12u;
+                case 5u: return 8u;
+                default: return 0xffff'ffffu;
+            }
+        };
+
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(rows, {}, fixture.m_solver.accounting().m_epoch));
+        fixture.m_solver.publishReplacement();
+        const u64 epoch = fixture.m_solver.accounting().m_epoch;
+
+        const auto published = fixture.m_solver.committedView();
+        PPR_TEST_ASSERT(published and published->m_epoch == epoch and published->m_count == row_count);
+        const auto before = fixture.snapshot();
+        PPR_TEST_ASSERT(before.size() == row_count);
+        PPR_TEST_ASSERT(std::memcmp(before.data(), rows.data(), rows.size() * sizeof(GpuParticle)) == 0);
+
+        // One submission, one drain: a hang would leave the fence unfinished.
+        PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, 2u));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+        const auto outcome = fixture.m_solver.pollTick();
+        const GpuFailure failure = fixture.m_solver.failure();
+        _.log(
+            std::format(
+                "CONSTITUTIVE-MIXED-TICK rows={} epoch={} completed={} cause={} flags={} claimed={} node={} field={} "
+                "particle={} expected_field={}",
+                row_count, epoch, static_cast<bool>(outcome), failure.m_cause.value(), failure.m_flags,
+                failure.m_claimed, failure.m_node, failure.m_field, failure.m_particle, witness(failure.m_particle)));
+
+        // The mixed batch is a single fatal candidate rejection, and the rejection
+        // must carry the witness of the row it names. These rows travel the same
+        // tick path as the isolated cases and can co-record the independent
+        // stencil-key/budget bit 128, so the contract is the guard's flag 8 latched
+        // with no downstream fixed-point conversion (flag 2).
+        PPR_TEST_ASSERT(not outcome);
+        PPR_TEST_ASSERT(outcome.error() == std::errc::result_out_of_range);
+        PPR_TEST_ASSERT((failure.m_flags & 8u) == 8u);
+        PPR_TEST_ASSERT((failure.m_flags & 2u) == 0u);
+        PPR_TEST_ASSERT(failure.m_claimed == 1u);
+        PPR_TEST_ASSERT(failure.m_node == 0xffff'ffffu);
+        PPR_TEST_ASSERT(failure.m_particle < row_count);
+        PPR_TEST_ASSERT(witness(failure.m_particle) == failure.m_field);
+
+        // The documented settle path discards the candidate without touching the
+        // published pair, its revocation value or the committed epoch.
+        PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
+        PPR_TEST_ASSERT(not fixture.m_solver.busy());
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_particle_count == row_count);
+        PPR_TEST_ASSERT(published->m_live_epoch->load() == epoch);
+
+        // The committed split rows are read directly because the retained failure
+        // cause still bars the snapshot transaction, and a discard must not have
+        // rewritten them.
+        std::vector<ParticleWrite> published_hot(row_count);
+        std::vector<ParticleReadonly> published_cold(row_count);
+        PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
+            published->m_hot, 0u, published_hot.size() * sizeof(ParticleWrite), published_hot.data())));
+        PPR_TEST_ASSERT(not make_error_code(device.readBuffer(
+            published->m_cold, 0u, published_cold.size() * sizeof(ParticleReadonly), published_cold.data())));
+
+        for (u32 row = 0u; row < row_count; ++row) {
+            const ParticleWrite expected_hot = packWrite(before[row]);
+            const ParticleReadonly expected_cold = packReadonly(before[row]);
+
+            PPR_TEST_ASSERT(std::memcmp(&published_hot[row], &expected_hot, sizeof(ParticleWrite)) == 0);
+            PPR_TEST_ASSERT(std::memcmp(&published_cold[row], &expected_cold, sizeof(ParticleReadonly)) == 0);
+        }
+
+        // The same committed epoch still admits and publishes a clean batch.
+        const std::vector<GpuParticle> admissible{rows[0u], rows[2u], rows[4u]};
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(admissible, {}, epoch));
+        fixture.m_solver.publishReplacement();
+
+        PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 1u, 2u));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+        const auto recovered = fixture.m_solver.pollTick();
+        PPR_TEST_ASSERT(recovered and *recovered);
+        fixture.m_solver.publishTick();
+        PPR_TEST_ASSERT(fixture.m_solver.failure().m_flags == 0u);
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 2u);
+    };
+
+    // ------------------------------------------------------------------
+    // quadratic transfer stencil identities
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (quadratic_transfer_reproduces_affine_fields_and_moments) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+
+        constexpr std::array<u32, 4u> kCells{6u, 511u, 1023u, 4095u};
+        constexpr std::array<float, 4u> kPhases{0.0f, 0.125f, 0.5f, 0.875f};
+        constexpr u32 kWordsPerQuery = 11u;
+        const u32 query_count = static_cast<u32>(kCells.size() * kPhases.size() * kPhases.size());
+
+        std::vector<std::array<float, 2u>> points;
+        points.reserve(query_count);
+        for (const u32 cell: kCells) {
+            for (const float phase_y: kPhases) {
+                for (const float phase_x: kPhases) {
+                    points.push_back({static_cast<float>(cell) + phase_x, static_cast<float>(cell) + phase_y});
+                }
+            }
+        }
+
+        PPR_TEST_ASSERT(points.size() == query_count);
+
+        shader::SharedModule checks;
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "pbmpm" / "source_checks.slang", "pbmpm_source_checks",
+            checks.writeRef()));
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_TEST_ASSERT(not make_error_code(checks->findEntryPointByName("inspectQuadraticWeights", entry.writeRef())));
+
+        slang::IComponentType *entries[]{entry.get()};
+        rhi::ShaderProgramDesc desc{};
+        desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        desc.slangGlobalScope = checks.get();
+        desc.slangEntryPoints = entries;
+        desc.slangEntryPointCount = 1u;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        shader::Diagnose diagnostics;
+        auto &device = fixture.m_rhi->getDevice();
+        PPR_TEST_ASSERT(
+            not make_error_code(device.createShaderProgram(desc, program.writeRef(), diagnostics.writeRef())));
+
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program;
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_desc, pipeline.writeRef())));
+
+        const auto make_buffer = [&](const u64 bytes, const u32 stride, const void *const initial) {
+            rhi::BufferDesc buffer_desc{};
+            buffer_desc.size = bytes;
+            buffer_desc.elementSize = stride;
+            buffer_desc.usage = static_cast<rhi::BufferUsage>(
+                static_cast<u32>(rhi::BufferUsage::ShaderResource) |
+                static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                static_cast<u32>(rhi::BufferUsage::CopySource));
+            buffer_desc.defaultState = rhi::ResourceState::UnorderedAccess;
+            rhi::ComPtr<rhi::IBuffer> result;
+            PPR_TEST_ASSERT(not make_error_code(device.createBuffer(buffer_desc, initial, result.writeRef())));
+            return result;
+        };
+
+        auto points_buffer = make_buffer(
+            points.size() * sizeof(points[0u]), static_cast<u32>(sizeof(points[0u])), points.data());
+        auto probe_buffer = make_buffer(
+            query_count * kWordsPerQuery * sizeof(float), static_cast<u32>(sizeof(float)), nullptr);
+
+        rhi::ComPtr<rhi::ICommandEncoder> encoder;
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+        auto *const pass = encoder->beginComputePass();
+        PPR_TEST_ASSERT(pass != nullptr);
+        rhi::IShaderObject *const root = pass->bindPipeline(pipeline);
+        PPR_TEST_ASSERT(root != nullptr);
+        rhi::ShaderCursor cursor{root};
+        PPR_TEST_ASSERT(not make_error_code(
+            cursor["g_quadratic_points"].setBinding(
+                rhi::Binding(points_buffer, {.offset = 0u, .size = points_buffer->getDesc().size}))));
+        PPR_TEST_ASSERT(not make_error_code(
+            cursor["g_probe"].setBinding(
+                rhi::Binding(probe_buffer, {.offset = 0u, .size = probe_buffer->getDesc().size}))));
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_quadratic_count"].setData(&query_count, sizeof(query_count))));
+        pass->dispatchCompute(1u, 1u, 1u);
+        pass->end();
+
+        rhi::ComPtr<rhi::ICommandBuffer> commands;
+        PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+        bool may_be_inflight = true;
+        PPR_DEFER {
+            if (may_be_inflight)
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+        };
+
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(commands)));
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+        may_be_inflight = false;
+
+        std::vector<float> words(query_count * kWordsPerQuery);
+        PPR_TEST_ASSERT(
+            not make_error_code(device.readBuffer(probe_buffer, 0u, words.size() * sizeof(float), words.data())));
+
+        // Test-local affine field and analytic moment reference. The weights are
+        // the production stencil; every identity below is evaluated in double.
+        constexpr double kMomentTolerance = 2.0e-6;
+        constexpr double kAffineTolerance = 2.0e-5;
+        const auto affine = [](const double x, const double y) {
+            const std::array<double, 2u> value{3.25 * x - 1.5 * y + 0.75, -0.5 * x + 2.0 * y - 1.25};
+            return value;
+        };
+
+        double worst_unity = 0.0, worst_first_moment = 0.0, worst_second_moment = 0.0, worst_affine = 0.0;
+        for (u32 query = 0u; query < query_count; ++query) {
+            const float *const row = &words[query * kWordsPerQuery];
+            const std::array<double, 3u> weight_x{
+                static_cast<double>(row[2u]), static_cast<double>(row[3u]), static_cast<double>(row[4u])};
+            const std::array<double, 3u> weight_y{
+                static_cast<double>(row[5u]), static_cast<double>(row[6u]), static_cast<double>(row[7u])};
+            const double x = static_cast<double>(points[query][0u]);
+            const double y = static_cast<double>(points[query][1u]);
+
+            double unity = 0.0, first_x = 0.0, first_y = 0.0;
+            double second_xx = 0.0, second_xy = 0.0, second_yy = 0.0;
+            std::array<double, 2u> transferred{};
+            for (u32 axis_y = 0u; axis_y < 3u; ++axis_y) {
+                // Grid node centres are index+0.5 in the solver's cell coordinates.
+                const double node_y = static_cast<double>(row[1u]) + static_cast<double>(axis_y) + 0.5;
+                for (u32 axis_x = 0u; axis_x < 3u; ++axis_x) {
+                    const double node_x = static_cast<double>(row[0u]) + static_cast<double>(axis_x) + 0.5;
+                    const double weight = weight_x[axis_x] * weight_y[axis_y];
+                    const auto value = affine(node_x, node_y);
+                    const double offset_x = node_x - x;
+                    const double offset_y = node_y - y;
+
+                    unity += weight;
+                    first_x += weight * offset_x;
+                    first_y += weight * offset_y;
+                    second_xx += weight * offset_x * offset_x;
+                    second_xy += weight * offset_x * offset_y;
+                    second_yy += weight * offset_y * offset_y;
+                    transferred[0u] += weight * value[0u];
+                    transferred[1u] += weight * value[1u];
+                }
+            }
+
+            const auto expected = affine(x, y);
+            worst_unity = std::max(worst_unity, std::abs(unity - 1.0));
+            worst_first_moment = std::max({worst_first_moment, std::abs(first_x), std::abs(first_y)});
+            worst_second_moment = std::max(
+                {worst_second_moment, std::abs(second_xx - 0.25), std::abs(second_xy), std::abs(second_yy - 0.25)});
+            worst_affine = std::max(
+                worst_affine, std::max(
+                                  std::abs(transferred[0u] - expected[0u]) / std::max(1.0, std::abs(expected[0u])),
+                                  std::abs(transferred[1u] - expected[1u]) / std::max(1.0, std::abs(expected[1u]))));
+        }
+
+        _.log(
+            std::format(
+                "PBMPM-QUADRATIC-TRANSFER cells={} phases={} queries={} worst_unity={:.9g} "
+                "worst_first_moment={:.9g} worst_second_moment={:.9g} worst_affine_relative={:.9g}",
+                kCells.size(), kPhases.size(), query_count, worst_unity, worst_first_moment, worst_second_moment,
+                worst_affine));
+
+        PPR_TEST_ASSERT(worst_unity <= kMomentTolerance);
+        PPR_TEST_ASSERT(worst_first_moment <= kMomentTolerance);
+        PPR_TEST_ASSERT(worst_second_moment <= kMomentTolerance);
+        PPR_TEST_ASSERT(worst_affine <= kAffineTolerance);
+    };
 }
 
 namespace pP::tests {
@@ -5266,6 +5845,9 @@ namespace pP::tests {
                 detail::MatterGpu::body_admission_rejection_and_same_epoch_contact_publication,
                 detail::MatterGpu::predicted_body_slices_select_distinct_substep_rows,
                 detail::MatterGpu::device_peak_footprint_for_dual_grid_ownership,
+                detail::MatterGpu::constitutive_invalid_operands_do_not_enter_unsafe_operations,
+                detail::MatterGpu::constitutive_rejection_preserves_committed_epoch_and_rows,
+                detail::MatterGpu::quadratic_transfer_reproduces_affine_fields_and_moments,
             });
         };
         return group;

@@ -135,6 +135,30 @@ beside gravity, before endpoint constraints. The exact centre receives no radial
 impulse. Zero acceleration bypasses this arithmetic; the independent source
 conformance path has no brush binding or altered equations.
 
+Constitutive operands are admitted, not repaired. `solver.slang` checks the
+stored deformation gradient and the trial `(I + D) * F` immediately before the
+production `constraint` and `integration` calls. An unusable operand is a
+nonfinite matrix, a zero or nonfinite determinant, an unusable inverse (an
+overflowing reciprocal or inverse component) or a nonfinite SVD output; it
+rejects that particle alone through `recordError(8u, 0xffffffffu, field, row)`
+with field4 for the stored gradient and field8 for the trial deformation. Group
+barriers, the other rows and the kernel's remaining work are unaffected.
+Deliberate upstream limiting stays legal: the singular-value clamps,
+`clamp(abs(df), 0.1, ...)` and the guardian only ever see finite operands, and no
+clamped value is re-inspected. Inside the `PBMPM_ENGINE_ADAPTERS` blocks of
+`fork_core.slang` the sand history projection reports field17 when it would
+divide by a zero deviatoric norm, and the visco plastic state reports field16
+when `exp(1 - plasticity)`, `J` or `newJ` is nonfinite or zero at the point of
+use; either rejection restores that particle's step state and continues. The
+no-adapter conformance path keeps its original arithmetic and its preprocessed
+text is byte-identical. Profile constants whose derived operands cannot be
+finite are refused before any work instead: resident-tick admission returns
+`invalid_argument` unless `deltaTime > 0` with a finite `1/deltaTime`, the
+fixed-point multiplier is at least one, elasticity ratio, liquid/elastic
+relaxation and liquid viscosity are finite, the friction angle lies in `[0, 90)`
+so `sin` and `3 - sin` stay usable, and `exp(1 - plasticity)` is finite and
+positive. No error word, semantic field, binding or wire record is added.
+
 Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
 uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,
 grid bodies and the guardian retain their selected-fork coordinate conventions.

@@ -155,12 +155,14 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # Every `app/matter_gpu` leaf must appear in exactly one explicit list below. The
 # lists are explicit tokens, not group prefixes, so each entry's worst observed
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
-# The four responsibility lists plus the resident list are disjoint and cover
-# every leaf the aggregate owned (3 terrain + 9 contact + 13 material + 10 grid
-# + 4 resident = 39), so GPU-validation coverage is unchanged. The two
-# whole-grid terrain leaves are separated from the rest of the contact geometry
-# because their joint worst observed bound co-resident with the contact set was
-# 267.62 s (89 % of 300 s).
+# The responsibility lists plus the resident list are disjoint and cover every
+# leaf the aggregate owned (3 terrain + 9 contact + 13 material + 3
+# constitutive + 10 grid + 5 resident = 43), so GPU-validation coverage is
+# unchanged. The two whole-grid terrain leaves are separated from the rest of
+# the contact geometry because their joint worst observed bound co-resident with
+# the contact set was 267.62 s (89 % of 300 s). The constitutive list exists
+# because the material filter already measures 936 characters: three more tokens
+# would exceed the 1024-character string domain the CLI filter enforces.
 set(ppr_matter_terrain_filter "app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact,app/matter_gpu/transport_exit_repair_is_bounded_and_a_no_op_when_certified")
 
 set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,app/matter_gpu/bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,app/matter_gpu/compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,app/matter_gpu/terrain_endpoint_response_and_complete_boundary_search,app/matter_gpu/wave_boundary_search_matches_serial_for_full_mixed_groups,app/matter_gpu/moving_body_static_limit_translation_rotation_and_one_way_contact,app/matter_gpu/body_admission_rejection_and_same_epoch_contact_publication,app/matter_gpu/predicted_body_slices_select_distinct_substep_rows,app/matter_gpu/guardian_blocks_normal_and_halves_tangent_analytically")
@@ -168,6 +170,12 @@ set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_end
 set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/k2_only_rejects_other_counts_before_work,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication,app/matter_gpu/shared_grid_coupling_precedes_support_contact_diagnostic,app/matter_gpu/mean_occupancy_gate_blind_spot_census_diagnostic")
 
 set(ppr_matter_grid_filter "app/matter_gpu/sparse_capacity_layout_and_independent_admission_bounds,app/matter_gpu/sparse_gpu_aprons_publish_unique_flat_keys_and_group_rows,app/matter_gpu/sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,app/matter_gpu/opt_in_stage_timing_follows_completed_fence_and_epoch,app/matter_gpu/device_peak_footprint_for_dual_grid_ownership,app/matter_gpu/strict_conversion_and_collection_retry_preserve_cause,app/matter_gpu/prepared_replacement_accounts_peak_and_freezes_admission,app/matter_gpu/reflected_scalar_protocol_and_source_helpers,app/matter_gpu/split_device_rows_pack_and_unpack_every_semantic_field_by_name,app/matter_gpu/lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input")
+
+# Each row here is one unusable constitutive operand (liquid reciprocal, stored
+# or trial deformation, viscoplastic yield, sand history) plus the transfer
+# stencil identity; they stay together so one device setup proves the whole
+# per-particle rejection policy.
+set(ppr_matter_constitutive_filter "app/matter_gpu/constitutive_invalid_operands_do_not_enter_unsafe_operations,app/matter_gpu/constitutive_rejection_preserves_committed_epoch_and_rows,app/matter_gpu/quadratic_transfer_reproduces_affine_fields_and_moments")
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_terrain_gpu
@@ -206,6 +214,15 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_constitutive_gpu
+    FILTER "${ppr_matter_constitutive_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_resident_gpu
     FILTER "${ppr_matter_resident_filter}"
     LOOPS
@@ -218,6 +235,7 @@ unset(ppr_matter_terrain_filter)
 unset(ppr_matter_contact_filter)
 unset(ppr_matter_material_filter)
 unset(ppr_matter_grid_filter)
+unset(ppr_matter_constitutive_filter)
 unset(ppr_matter_resident_filter)
 
 # Numeric adapters need no device. Actual-domain pending physics owns a separate

@@ -83,3 +83,27 @@ void inspectSource(uint3 id : SV_DispatchThreadID) {
     g_probe[21] = circleCenter.normal.x;
     g_probe[22] = circleCenter.normal.y;
 }
+
+// ------------------------------------------------------------------
+// quadratic transfer stencil identities
+// ------------------------------------------------------------------
+
+StructuredBuffer<float2> g_quadratic_points;
+
+// One 11-word row per queried particle position: the stencil base index and the
+// separable per-axis weights. The host proves partition of unity, both moments
+// and affine reproduction against an independent double reference.
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void inspectQuadraticWeights(uniform uint g_quadratic_count) {
+    for (uint index = 0u; index < g_quadratic_count; ++index) {
+        Weights weights = quadraticWeights(g_quadratic_points[index]);
+        uint at = index * 11u;
+        g_probe[at] = float(weights.base.x);
+        g_probe[at + 1u] = float(weights.base.y);
+        for (uint axis = 0u; axis < 3u; ++axis) {
+            g_probe[at + 2u + axis] = weights.w[axis].x;
+            g_probe[at + 5u + axis] = weights.w[axis].y;
+        }
+    }
+}

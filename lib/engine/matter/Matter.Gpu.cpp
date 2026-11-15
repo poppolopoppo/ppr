@@ -45,6 +45,36 @@ namespace pP::matter {
                    std::isfinite(m.m_c1y);
         }
 
+        /// Derived constitutive operands must stay finite on the admitted profile
+        /// domain. A profile outside it is refused before any GPU work; nothing is
+        /// clamped into a usable range.
+        bool validProfileDomain(const GpuParameters &profile) noexcept {
+            const bool constant_damping = std::isfinite(profile.m_elasticity_ratio) and
+                                          std::isfinite(profile.m_liquid_relaxation) and
+                                          std::isfinite(profile.m_elastic_relaxation) and
+                                          std::isfinite(profile.m_liquid_viscosity);
+            const bool invertible_time = std::isfinite(profile.m_delta_time) and
+                                         profile.m_delta_time > 0.0f and
+                                         std::isfinite(1.0f / profile.m_delta_time);
+            // sin(angle) and the sand denominator 3 - sin(angle) stay usable only
+            // inside this half-open band.
+            const bool friction = std::isfinite(profile.m_friction_angle) and
+                                  profile.m_friction_angle >= 0.0f and
+                                  profile.m_friction_angle < 90.0f;
+            // exp(1 - plasticity) is the visco yield surface; it must stay a
+            // positive finite bound rather than overflow or vanish.
+            const float yield_surface = std::exp(1.0f - profile.m_plasticity);
+            const bool plastic = std::isfinite(profile.m_plasticity) and
+                                 std::isfinite(yield_surface) and
+                                 yield_surface > 0.0f;
+
+            return profile.m_fixed_point_multiplier >= 1u and
+                   invertible_time and
+                   constant_damping and
+                   friction and
+                   plastic;
+        }
+
         bool validParticle(const GpuParticle &p, const GpuParameters &profile) noexcept {
             const bool supported = p.m_material == 0.0f or
                                    p.m_material == 1.0f or
@@ -1113,6 +1143,12 @@ namespace pP::matter {
             MatterGpu, finite_force and force.m_radius >= 0.0f and enabled_force_valid
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
+
+        // The profile's derived operands are constants for the whole batch, so an
+        // unusable domain is refused here instead of per particle or per operand.
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, validProfileDomain(state.m_profile) ? std::error_code{}
+                                                           : std::make_error_code(std::errc::invalid_argument));
 
         const u64 boundary_rows = static_cast<u64>(body_count) * substeps;
         PPR_RETURN_ERROR_ON_FAIL(

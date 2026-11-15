@@ -148,6 +148,12 @@ Particle integration(Particle p, uint row) {
         p.liquidDensity *= trace(p.deformationDisplacement) + 1.0;
         p.liquidDensity = max(p.liquidDensity, 0.05);
     } else {
+#ifdef PBMPM_ENGINE_ADAPTERS
+        // Adapter-only operand snapshot: rejecting a derived operand leaves this
+        // particle's step state unchanged. The source path keeps its arithmetic.
+        SourceMatrix stepGradient = p.deformationGradient;
+        float stepLogJp = p.logJp;
+#endif
         p.deformationGradient = product(add(identity(), p.deformationDisplacement), p.deformationGradient);
         SvdResult decomposition = forkSvd(p.deformationGradient);
         decomposition.Sigma = clamp(decomposition.Sigma, float2(0.1), float2(10000.0));
@@ -165,14 +171,40 @@ Particle integration(Particle p, uint row) {
                 p.logJp = 0.0;
                 float deltaGamma = frobenius + (g_parameters.elasticityRatio + 1.0) * traceE * alpha;
                 if (deltaGamma > 0.0) {
+#ifdef PBMPM_ENGINE_ADAPTERS
+                    // The projection divides by the deviatoric norm here; zero has
+                    // no admitted direction, so reject the derived operand.
+                    if (frobenius == 0.0) {
+                        p.deformationGradient = stepGradient;
+                        p.logJp = stepLogJp;
+                        recordError(8u, 0xffffffffu, 17u, row);
+                        return p;
+                    }
+#endif
                     decomposition.Sigma = exp(eDiag - deltaGamma / frobenius * (eDiag - traceE * 0.5));
                 }
             }
         } else if (p.material == MaterialVisco) {
             float yieldSurface = exp(1.0 - g_parameters.plasticity);
             float J = decomposition.Sigma.x * decomposition.Sigma.y;
+#ifdef PBMPM_ENGINE_ADAPTERS
+            // Profile admission already bounds yieldSurface; a nonfinite or
+            // vanishing derived operand still has no usable plastic state.
+            if (!isfinite(yieldSurface) || yieldSurface <= 0.0 || !isfinite(J) || J == 0.0) {
+                p.deformationGradient = stepGradient;
+                recordError(8u, 0xffffffffu, 16u, row);
+                return p;
+            }
+#endif
             decomposition.Sigma = clamp(decomposition.Sigma, float2(1.0 / yieldSurface), float2(yieldSurface));
             float newJ = decomposition.Sigma.x * decomposition.Sigma.y;
+#ifdef PBMPM_ENGINE_ADAPTERS
+            if (!isfinite(newJ) || newJ == 0.0) {
+                p.deformationGradient = stepGradient;
+                recordError(8u, 0xffffffffu, 16u, row);
+                return p;
+            }
+#endif
             decomposition.Sigma *= sqrt(J / newJ);
         }
 
