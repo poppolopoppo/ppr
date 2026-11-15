@@ -156,8 +156,9 @@ export namespace pP::matter {
         void publishReplacement() noexcept;
         void cancelReplacement() noexcept;
 
-        /// One working batch; game calls with eight substeps and source K=2.
-        /// K=2 only; other iteration counts fail before GPU work.
+        /// One working batch; game calls with eight substeps and the admitted source
+        /// K=2 default. The admitted iteration counts are {2, 5, 10}; every other
+        /// count fails before GPU work.
         /// Focused fixtures may use fewer complete substeps.
         /// One-way body inputs, GPU publication checks and compact status only.
         /// No full particle copy, CPU candidate construction or reaction readback.

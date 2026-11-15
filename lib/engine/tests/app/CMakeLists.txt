@@ -156,9 +156,10 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # lists are explicit tokens, not group prefixes, so each entry's worst observed
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
-# leaf: 3 terrain + 9 contact + 12 material + 10 grid + 4 constitutive + 4
-# resident + 3 schedule = 45 `app/matter_gpu` leaves, and the resident list also
-# holds one `app/matter_runtime_gpu` token. The two whole-grid terrain leaves are
+# leaf: 3 terrain + 9 contact + 12 material + 10 grid + 3 constitutive + 4
+# resident + 3 schedule + 1 cost = 45 `app/matter_gpu` leaves, and the resident
+# list also holds one `app/matter_runtime_gpu` token. The cost leaf keeps its own
+# entry outside `matter_fast`, below. The two whole-grid terrain leaves are
 # separated from the rest of the contact geometry because their joint worst
 # observed bound co-resident with the contact set was 267.62 s (89 % of 300 s).
 # The material list measures 880 characters; it is split away from the
@@ -239,6 +240,21 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation matter_fast
 )
 
+# Iteration-count operating-point evidence (A4): one fixed scene measured at
+# K in {2, 5, 10}. Opt-in through `PPR_PBMPM_COST_DIAGNOSTIC=1`, and deliberately
+# outside `matter_fast` so the repeated-use gate carries no measurement work; the
+# leaf logs an explicit skip when the switch is unset, so a plain run reports it
+# as unrun rather than as gate coverage.
+set(ppr_matter_cost_filter "app/matter_gpu/iteration_count_gpu_cost_diagnostic")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_cost_gpu
+    FILTER "${ppr_matter_cost_filter}"
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_resident_gpu
     FILTER "${ppr_matter_resident_filter}"
@@ -254,6 +270,7 @@ unset(ppr_matter_material_filter)
 unset(ppr_matter_grid_filter)
 unset(ppr_matter_constitutive_filter)
 unset(ppr_matter_schedule_filter)
+unset(ppr_matter_cost_filter)
 unset(ppr_matter_resident_filter)
 
 # Numeric adapters need no device. Actual-domain pending physics owns a separate

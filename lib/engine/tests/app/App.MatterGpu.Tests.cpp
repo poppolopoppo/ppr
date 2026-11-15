@@ -163,6 +163,12 @@ namespace pP::tests::detail::MatterGpu {
         return particle;
     }
 
+    // Diagnostic timestamp pool size: the solver sizes its opt-in query pool for
+    // the largest admitted schedule, kGameSubsteps * (2 * 10 + 1) + 4 marks, not for
+    // the marks one particular batch uses. Both opt-in timing leaves pin this so a
+    // schedule bound change shows up in one place.
+    constexpr u32 kDiagnosticQueryCount = 172u;
+
     // ------------------------------------------------------------------
     // split device row packing
     // ------------------------------------------------------------------
@@ -1654,7 +1660,7 @@ namespace pP::tests::detail::MatterGpu {
         const bool instrumented = instrumentation == "1";
         const auto &clock = ITimerClock::steady();
         const ITimerClock *const observation_clock = instrumented ? &clock : nullptr;
-        const u32 query_count = instrumented ? 44u : 0u;
+        const u32 query_count = instrumented ? kDiagnosticQueryCount : 0u;
         const std::string_view sample_metric = instrumented ? "gpu_ms" : "completed_tick_wall_ms";
         const std::string_view summary_metric = instrumented ? "gpu" : "completed_tick_wall";
         Fixture fixture;
@@ -1795,6 +1801,273 @@ namespace pP::tests::detail::MatterGpu {
                     summary_metric, median, summary_metric, samples.back(), expected_bytes, expected_dispatches,
                     instrumented));
         }
+    };
+
+    // ------------------------------------------------------------------
+    // iteration-count operating-point cost (opt-in, not a fidelity gate)
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (iteration_count_gpu_cost_diagnostic) {
+        // Opt-in measurement, not a correctness gate: the repeated-use gate must
+        // stay free of measurement work, and an absent switch is reported as an
+        // explicit skip so a reader never mistakes it for evidence.
+        const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            _.log(std::format("ITERATION-GPU-COST skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1"));
+            return;
+        }
+
+        // Same switch pair the sand cost diagnostic uses: instrumented runs also
+        // report the internal timestamp span, uninstrumented runs measure only the
+        // completed-tick wall interval without a query pool.
+        const char *const mode = std::getenv("PPR_PBMPM_COST_INSTRUMENTED");
+        const std::string_view instrumentation = mode != nullptr ? mode : "1";
+        PPR_TEST_ASSERT(instrumentation == "0" or instrumentation == "1");
+        const bool instrumented = instrumentation == "1";
+
+        // The platform's injected steady clock: the same clock the fixture hands to
+        // the solver. No sleep and no direct wall-clock read enters the measurement.
+        const auto &clock = ITimerClock::steady();
+        const u32 query_count = instrumented ? kDiagnosticQueryCount : 0u;
+
+        constexpr u32 kGridEdge = 128u;
+        constexpr u32 kRows = 4096u;
+        constexpr u32 kSubsteps = kGameSubsteps;
+        constexpr u32 kWarmTicks = 5u;
+        constexpr u32 kSampleTicks = 30u;
+        constexpr std::array<u32, 3u> kCounts{2u, 5u, 10u};
+        static_assert(sizeof(GpuParticle) == 88u);
+
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // Validation layers are off for cost measurement, exactly as in the sand
+        // cost diagnostic; they change the arithmetic by orders of magnitude. The
+        // grid-volume channel stays at the production default (on) so the scene
+        // measures the shipping arithmetic including the fourth scattered field.
+        fixture.initialize(true, kGridEdge, kGridEdge, false, instrumented ? &clock : nullptr, 2.5f);
+        const GpuParameters profile = fixture.m_solver.profile();
+        const double frequency = instrumented
+                                     ? static_cast<double>(fixture.m_rhi->getDevice().getInfo().timestampFrequency)
+                                     : 0.0;
+        PPR_TEST_ASSERT(not instrumented or (std::isfinite(frequency) and frequency > 0.0));
+
+        // One fixed scene, reused unchanged for every K: 4096 rows on a 64x64 patch
+        // of 0.8-cell spacing (all four source materials by row index, unit
+        // mass/volume, logJp 0 so sand starts inside its stable branch), a 128x128
+        // solver grid, a solid terrain floor over y=1..20 and one predicted box
+        // boundary swept 0.25 cells across the eight substeps. Rows and terrain are
+        // re-prepared outside every timed interval, so each measured tick starts
+        // from identical owned state and the three K runs measure the same work.
+        Array<GpuParticle> initial;
+        initial.reserve(kRows);
+        for (u32 row = 0u; row < kRows; ++row) {
+            auto particle = restParticle();
+            particle.m_position_x = 32.5f + static_cast<float>(row % 64u) * 0.8f;
+            particle.m_position_y = 32.5f + static_cast<float>(row / 64u) * 0.8f;
+            particle.m_material = static_cast<float>(row % 4u);
+            particle.m_volume = 1.0f;
+            particle.m_mass = 1.0f;
+            particle.m_log_jp = 0.0f;
+            initial.push_back(particle);
+        }
+
+        const auto masks = rectangleMasks(kGridEdge, kGridEdge, 20u);
+        const TerrainView terrain{masks, kGridEdge, kGridEdge, 0.0f, 0.0f};
+
+        std::array<GpuBodyBoundary, kSubsteps> boundaries{};
+        for (u32 substep = 0u; substep < kSubsteps; ++substep) {
+            auto &boundary = boundaries[substep];
+            boundary.m_shape.m_shape = EStaticShape::box;
+            boundary.m_shape.m_position_x = 64.0f;
+            boundary.m_shape.m_position_y = 24.0f + 0.25f * static_cast<float>(substep);
+            boundary.m_shape.m_half_size_x = 8.0f;
+            boundary.m_shape.m_half_size_y = 1.0f;
+            boundary.m_com_x = boundary.m_shape.m_position_x;
+            boundary.m_com_y = boundary.m_shape.m_position_y;
+            boundary.m_velocity_y = 0.25f / profile.m_delta_time;
+        }
+
+        // Zero brush: the final stage then takes its arithmetic bypass, which is the
+        // production default for a tick without a pointer force.
+        const GpuRadialForce force{};
+
+        const auto median_of = [](Array<double> &values) {
+            std::ranges::sort(values);
+            const std::size_t middle = values.size() / 2u;
+            return values.size() % 2u != 0u ? values[middle] : 0.5 * (values[middle - 1u] + values[middle]);
+        };
+
+        struct CostSample {
+            double m_wall_median_ms{}, m_wall_max_ms{}, m_gpu_median_ms{}, m_gpu_max_ms{};
+            u64 m_dispatches_per_tick{}, m_row_copy_bytes_per_tick{}, m_status_bytes_per_tick{};
+            u64 m_device_bytes{}, m_full_snapshot_bytes{};
+        };
+        std::array<CostSample, kCounts.size()> samples{};
+        _.log(
+            std::format(
+                "ITERATION-GPU-COST-PROFILE rows={} materials=row%4 grid={}x{} dt_substep_s={} "
+                "gravity_strength={} volume_channel={} terrain_rows=1..20 boundary_boxes=1 substeps_per_tick={} "
+                "cold_volume=1 cold_mass=1 logJp=0 validation=false warm={} samples={} instrumented={} "
+                "internal_timestamp_queries={} timestamp_payload_bytes={} brush=disabled",
+                kRows, kGridEdge, kGridEdge, profile.m_delta_time, profile.m_gravity_strength,
+                profile.m_use_grid_volume_for_liquid, kSubsteps, kWarmTicks, kSampleTicks, instrumented, query_count,
+                static_cast<u64>(query_count) * sizeof(u64)));
+
+        // The runner surfaces _.log only for failing tests, so the same record also
+        // goes to stdout for a passing run. Formatting follows the existing device
+        // diagnostics in this file (`[matter-peak]` and `[isolated-liquid-pressure]`
+        // use plain std::fprintf with explicit casts and a flushed line); only the
+        // stream differs, per this measurement's evidence requirement.
+        std::fprintf(
+            stdout,
+            "ITERATION-GPU-COST-PROFILE rows=%u materials=row%%4 grid=%ux%u dt_substep_s=%.9g gravity_strength=%.9g "
+            "volume_channel=%u terrain_rows=1..20 boundary_boxes=1 substeps_per_tick=%u cold_volume=1 cold_mass=1 "
+            "logJp=0 validation=false warm=%u samples=%u instrumented=%u internal_timestamp_queries=%u "
+            "timestamp_payload_bytes=%llu brush=disabled\n",
+            static_cast<unsigned>(kRows), static_cast<unsigned>(kGridEdge), static_cast<unsigned>(kGridEdge),
+            static_cast<double>(profile.m_delta_time), static_cast<double>(profile.m_gravity_strength),
+            static_cast<unsigned>(profile.m_use_grid_volume_for_liquid), static_cast<unsigned>(kSubsteps),
+            static_cast<unsigned>(kWarmTicks), static_cast<unsigned>(kSampleTicks), static_cast<unsigned>(instrumented),
+            static_cast<unsigned>(query_count), static_cast<unsigned long long>(query_count) * sizeof(u64));
+        std::fflush(stdout);
+
+        for (std::size_t index = 0u; index < kCounts.size(); ++index) {
+            const u32 iterations = kCounts[index];
+            const u64 expected_dispatches = static_cast<u64>(kSubsteps) * (9u + 2u * iterations);
+            Array<double> wall_ms(kSampleTicks, 0.0);
+            Array<double> gpu_ms(kSampleTicks, 0.0);
+            u64 previous_signal = 0u, previous_gpu = 0u;
+
+            for (u32 tick = 0u; tick < kWarmTicks + kSampleTicks; ++tick) {
+                // Replacement allocation/upload completion precedes the timing
+                // boundary, so only the resident batch is measured.
+                PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                    initial, {}, fixture.m_solver.accounting().m_epoch, terrain));
+                fixture.m_solver.publishReplacement();
+
+                const auto before = fixture.m_solver.accounting();
+                const u64 epoch = before.m_epoch;
+                const auto previous = fixture.m_solver.inspectTimingForTest();
+                PPR_TEST_ASSERT(previous.m_query_count == query_count and not previous.m_error);
+
+                // The interval covers encoding, submission, the completion wait,
+                // compact status collection and publication of the whole batch.
+                const auto wall_begin = clock.now();
+                PPR_TEST_ASSERT(
+                    not fixture.m_solver.submitResidentTick(epoch, kSubsteps, iterations, boundaries, 1u, force));
+
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+                const auto ready = fixture.m_solver.pollTick();
+                PPR_TEST_ASSERT(ready and *ready);
+                fixture.m_solver.publishTick();
+                const auto wall_end = clock.now();
+
+                const auto timing = fixture.m_solver.inspectTimingForTest();
+                PPR_TEST_ASSERT(not timing.m_error and timing.m_query_count == query_count);
+                if (instrumented) {
+                    PPR_TEST_ASSERT(timing.m_completed_samples == previous.m_completed_samples + 1u);
+                    PPR_TEST_ASSERT(timing.m_epoch == epoch and timing.m_signal > previous_signal);
+                    PPR_TEST_ASSERT(
+                        timing.m_last_gpu_timestamp > timing.m_first_gpu_timestamp and
+                        timing.m_first_gpu_timestamp >= previous_gpu);
+                    previous_signal = timing.m_signal;
+                    previous_gpu = timing.m_last_gpu_timestamp;
+                }
+
+                const auto after = fixture.m_solver.accounting();
+                PPR_TEST_ASSERT(after.m_epoch == epoch + 1u and after.m_particle_count == kRows);
+                PPR_TEST_ASSERT(after.m_substeps == kSubsteps and after.m_last_readback_bytes == 6u * sizeof(u32));
+
+                // Attribution: nine maintenance dispatches around discovery plus one
+                // destination initialization and one fused dispatch per stage, in
+                // each of the eight substeps. The delta therefore scales with K.
+                const u64 dispatches = after.m_dispatches - before.m_dispatches;
+                PPR_TEST_ASSERT(dispatches == expected_dispatches);
+
+                if (tick < kWarmTicks)
+                    continue;
+
+                const u32 sample = tick - kWarmTicks;
+                wall_ms[sample] = time::seconds(wall_end - wall_begin) * 1000.0;
+                PPR_TEST_ASSERT(std::isfinite(wall_ms[sample]) and wall_ms[sample] > 0.0);
+                if (instrumented) {
+                    gpu_ms[sample] = static_cast<double>(timing.m_last_gpu_timestamp - timing.m_first_gpu_timestamp) *
+                                     1000.0 /
+                                     frequency;
+
+                    PPR_TEST_ASSERT(std::isfinite(gpu_ms[sample]) and gpu_ms[sample] > 0.0);
+                }
+
+                // Copies per tick: the committed-to-working row copy the batch
+                // encodes, then the six-word status readback. Publication itself
+                // swaps ownership and copies nothing; a full frozen snapshot would
+                // additionally copy m_full_snapshot_bytes.
+                samples[index].m_dispatches_per_tick = dispatches;
+                samples[index].m_row_copy_bytes_per_tick = after.m_last_particle_copy_bytes;
+                samples[index].m_status_bytes_per_tick = after.m_last_readback_bytes;
+                samples[index].m_device_bytes = after.m_device_bytes;
+                samples[index].m_full_snapshot_bytes = after.m_readback_capacity_bytes;
+            }
+
+            samples[index].m_wall_median_ms = median_of(wall_ms);
+            samples[index].m_wall_max_ms = std::ranges::max(wall_ms);
+            if (instrumented) {
+                samples[index].m_gpu_median_ms = median_of(gpu_ms);
+                samples[index].m_gpu_max_ms = std::ranges::max(gpu_ms);
+            }
+
+            // Ratios are relative to the K = 2 reference, which is index 0 and is
+            // already complete when this line runs.
+            const CostSample &reference = samples.front();
+            PPR_TEST_ASSERT(reference.m_wall_median_ms > 0.0);
+            const double wall_ratio = samples[index].m_wall_median_ms / reference.m_wall_median_ms;
+            const double gpu_ratio = instrumented ? samples[index].m_gpu_median_ms / reference.m_gpu_median_ms : 0.0;
+            _.log(
+                std::format(
+                    "ITERATION-GPU-COST K={} rows={} grid={}x{} substeps={} warm={} samples={} instrumented={} "
+                    "wall_median_ms={} wall_max_ms={} wall_ratio_k2={} gpu_median_ms={} gpu_max_ms={} gpu_ratio_k2={} "
+                    "dispatches_per_tick={} expected_dispatches_per_tick={} row_copy_bytes_per_tick={} "
+                    "status_readback_bytes_per_tick={} device_bytes={} full_snapshot_bytes={}",
+                    iterations, kRows, kGridEdge, kGridEdge, kSubsteps, kWarmTicks, kSampleTicks, instrumented,
+                    samples[index].m_wall_median_ms, samples[index].m_wall_max_ms, wall_ratio,
+                    samples[index].m_gpu_median_ms, samples[index].m_gpu_max_ms, gpu_ratio,
+                    samples[index].m_dispatches_per_tick, expected_dispatches, samples[index].m_row_copy_bytes_per_tick,
+                    samples[index].m_status_bytes_per_tick, samples[index].m_device_bytes,
+                    samples[index].m_full_snapshot_bytes));
+
+            // Same evidence on stdout, in the compact machine-readable field set the
+            // operating-point decision consumes.
+            std::fprintf(
+                stdout,
+                "ITERATION-GPU-COST k=%u wall_median_ms=%.9g wall_max_ms=%.9g wall_ratio_k2=%.9g gpu_median_ms=%.9g "
+                "gpu_max_ms=%.9g dispatches_per_tick=%llu row_copy_bytes_per_tick=%llu\n",
+                static_cast<unsigned>(iterations), samples[index].m_wall_median_ms, samples[index].m_wall_max_ms,
+                wall_ratio, samples[index].m_gpu_median_ms, samples[index].m_gpu_max_ms,
+                static_cast<unsigned long long>(samples[index].m_dispatches_per_tick),
+                static_cast<unsigned long long>(samples[index].m_row_copy_bytes_per_tick));
+            std::fflush(stdout);
+        }
+
+        // Acceptance: every admitted count completed and published above, each
+        // tick's dispatch delta is the K-scaled count exactly, and the heaviest
+        // schedule is measurably slower than the lightest on this host. No absolute
+        // millisecond value is asserted: these are operating-point observations.
+        const u64 expected_row_copy = static_cast<u64>(kRows) * (sizeof(ParticleWrite) + sizeof(ParticleReadonly));
+        for (std::size_t index = 0u; index < kCounts.size(); ++index) {
+            PPR_TEST_ASSERT(
+                samples[index].m_dispatches_per_tick == static_cast<u64>(kSubsteps) * (9u + 2u * kCounts[index]));
+            PPR_TEST_ASSERT(samples[index].m_row_copy_bytes_per_tick == expected_row_copy);
+        }
+
+        PPR_TEST_ASSERT(
+            samples[0u].m_dispatches_per_tick < samples[1u].m_dispatches_per_tick and
+            samples[1u].m_dispatches_per_tick < samples[2u].m_dispatches_per_tick);
+        PPR_TEST_ASSERT(samples[2u].m_wall_median_ms > samples[0u].m_wall_median_ms);
     };
 
     // ------------------------------------------------------------------
@@ -6270,6 +6543,7 @@ namespace pP::tests {
                 detail::MatterGpu::supported_iteration_counts_validate_before_work,
                 detail::MatterGpu::iteration_roles_integrate_once_per_substep,
                 detail::MatterGpu::odd_even_schedule_preserves_sparse_sources,
+                detail::MatterGpu::iteration_count_gpu_cost_diagnostic,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
                 detail::MatterGpu::split_device_rows_pack_and_unpack_every_semantic_field_by_name,
                 detail::MatterGpu::lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input,

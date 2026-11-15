@@ -179,3 +179,21 @@ An independent review returned REVISE on the A2 work. Every MUST FIX item was ad
 ### Unresolved incident
 
 After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. A rebuild of the identical committed sources passed 3/3, and both gates have been green since. The cause is **not established**: the failing run's binary and staged shader identities were not captured, so the earlier "staged shader mismatch" explanation is withdrawn. It is retained as an unexplained transient until a reproduction provides identities.
+
+## A4 — iteration-count cost evidence (Release)
+
+Scene: 4096 rows (all four materials by row index), 128×128 grid, `dt = 1/480`, 8 substeps per tick, gravity on, grid-volume channel on, one swept boundary box, no brush. Excludes allocation/upload; the timed interval covers encode, submit, drain and publication. 5 warm-up ticks, 30 measured, Release (`clang-rel`), validation layers off.
+
+| K | Wall median (ms/tick) | Wall max | Ratio vs K2 | GPU median (ms) | Dispatches/tick |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 5.36 | 6.46 | 1.00 | 1.89 | 104 |
+| 5 | 7.83 | 8.17 | 1.46 | 3.58 | 152 |
+| 10 | 12.93 | 13.31 | 2.41 | 6.34 | 232 |
+
+Reading: at 4096 particles one 60 Hz frame is 16.7 ms. K5 costs ~7.8 ms (47 % of the frame), K10 ~12.9 ms (77 %). The GPU stage scales roughly with K (1.89 → 3.58 → 6.34 ms) while wall time grows more slowly at K5 because the fixed per-tick overhead dominates; K10's wall growth exceeds its GPU growth, consistent with the larger dispatch count and per-stage encoding.
+
+These are measurements for this scene and host, not product budgets. The leaf is opt-in (`PPR_PBMPM_COST_DIAGNOSTIC=1`, `engine.tests.app.matter_cost_gpu`), outside `matter_fast`, and logs an explicit skip otherwise.
+
+## A4 — operating-point criteria still open
+
+The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf. Until it exists, the K5 default must not be adopted on cost evidence alone.
