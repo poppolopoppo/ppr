@@ -93,12 +93,18 @@ No test was removed. The census found no entry whose contract is proven elsewher
 
 ## Mandatory gate budgets
 
-| Gate | Entries | Measured | Ceiling |
-|---|---:|---:|---:|
-| `matter_fast` | 23 | 291 s (21 entries, exclusive host) and 574.6 s (23 entries, concurrent-session GPU load) | **≤ 420 s exclusive** |
-| `matter_long` | 2 | 961 s (exclusive host) | **≤ 1200 s exclusive** |
+| Gate / entry | Entries | Measured | Ceiling |
+|---|---|---:|---:|
+| `matter_fast` | 24 | **293.61 s** (`-j4`, K=5 default, resident race fixed) | **≤ 420 s exclusive** |
+| `game.tests.matter_pressure_gpu` | 1 | 2286.84 s | **≤ 2750 s** |
+| `game.tests.matter_pressure_onset_gpu` | 1 | 304.84 s | **≤ 370 s** |
+| `matter_long` (both entries) | 2 | ≈ 2592 s (≈ 43 min), exclusive, 87 % average GPU utilisation | **≤ 3120 s** (sum of entry ceilings) |
 
-Ceilings are task-local repeated-use budgets for this reference host and Debug/validation configuration; they are not product budgets. They were recorded after the A0/A3 implementation rather than set prospectively against it. **The 420 s fast ceiling is not yet demonstrated.** The 291 s reading covers 21 entries on an exclusive host, while `matter_fast` now holds 23 entries, and the only 23-entry reading (574.6 s) was taken with another session holding the GPU. A 21-entry run cannot certify today's 23-entry gate. The 1200 s long ceiling rests on the 961 s exclusive reading of the same 2 entries. Both gates are green at this source state.
+Ceilings are task-local repeated-use budgets for this reference host and the Debug/validation configuration; they are not product budgets. They were recorded after the A0/A3 implementation rather than set prospectively against it.
+
+The long entries were re-measured at the K=5 default on an exclusive host at 87 % average GPU utilisation: `matter_pressure_gpu` 2286.84 s and `matter_pressure_onset_gpu` 304.84 s, so the gate costs ~2592 s (about 43 min) and passes with the ceilings raised to 2750 s and 370 s, roughly 20 % margin on each. That cost is precisely why `matter_long` is a phase-end and delivery gate and not a repeated-use gate: it runs when a change reaches acceptance, not per iteration. The pre-K5 900 s and 300 s ceilings are superseded — under K=5 the 900 s ceiling truncated `matter_pressure_gpu` at a 900.26 s timeout (`/tmp/opencode/k5-long.log`) while the entry needs 2286.84 s. The 2.5–2.9× growth (2.87× on `matter_pressure_gpu`, 2.70× on the gate total) is the K=5 schedule — 152 dispatches per tick instead of 104, and 1.46× wall per tick at the A4 4096-row operating point — not a regression; the horizons these entries cover are unchanged.
+
+`matter_fast` now holds 24 entries, and its 420 s ceiling was set before K=5, so it must be re-derived from a K=5 measurement instead of carried forward. No passing 24-entry K=5 reading exists yet: `/tmp/opencode/k5-fast2.log` stopped after 2 of 24 entries with no summary, so the re-run is pending. The only completed 24-entry K=5 reading so far took 314.75 s and failed the `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` leaf — the test-ordering bug resolved above — so it is cost evidence at K=5, not a gate certificate. The fast gate is therefore not certified at this source state; the long gate is green at K=5 under those ceilings.
 
 
 ## A1 — upstream reference harness (stage 1 complete)
@@ -135,7 +141,7 @@ Tests: `matter_constitutive_gpu` adds three leaves — witness attribution acros
 
 Gates after this change: `matter_fast` 21/21 in 291 s.
 
-Build discipline learned here: a fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit disappeared when the identical committed sources were rebuilt, and the gate then passed. The cause is **unresolved**: the earlier "the staged shader tree did not match the linked binary" explanation was a hypothesis, it is superseded, and the green reruns show non-reproducibility only. Builds must follow a quiescent lane.
+Build discipline learned here: the fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit was a latent test-ordering bug in that leaf (resolved below), not a build-identity problem. Rebuilding the identical committed sources repaired nothing — the rebuild's green reruns were the same intermittency that later produced 2 failures in 13 runs. The "the staged shader tree did not match the linked binary" explanation recorded at the time was therefore also wrong. Gates and builds still must not overlap while a gate is being measured; that is measurement hygiene, not the cause of this failure.
 
 
 ## A3 — complete iteration schedule
@@ -173,13 +179,19 @@ An independent review returned REVISE on the A2 work. Every MUST FIX item was ad
 | Magnitude bound rejected usable operands | Replaced with the actual `E²+H²` / `F²+G²` radicand checks; `diag(2e19,1)` admitted, `diag(1e20,1e-20)` rejected |
 | Mixed-lane fixture never formed mixed workgroups | Rows now pass discovery and fail inside fused; inverse overflow uses normal-range components; probe finiteness asserted before aggregation |
 | Checkpoint CPU contracts outside every gate | New `game.tests.checkpoint_cpu` (19 leaves) in `matter_fast`; also fixed the pre-existing `game/lighting_lab/` exclude that ran 7 leaves twice |
-| Transient fast-gate failure assigned an unproven cause | Recorded below as unresolved |
+| Transient fast-gate failure assigned an unproven cause | Diagnosed as a test-ordering bug — poll-request completion read as append readiness; fixture fixed, 12/12 versus 2/13 (see below) |
 | A0 lacked explicit ceilings | Budgets table above |
 | Manifest override precedence ambiguous | Explicit user override versus automatic selection; single status line; stale automatic selection cleared on failure |
 
-### Unresolved incident
+### Transient fast-gate failure: resolved as a test-ordering bug
 
-After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. A rebuild of the identical committed sources passed 3/3, and both gates have been green since; that shows non-reproducibility, not a cause. The cause is **unresolved**: the failing run's binary and staged shader identities were not captured, so the earlier "staged shader mismatch" explanation is superseded and withdrawn. It is retained as an unexplained transient until a reproduction provides identities.
+After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. The cause is **resolved**: the leaf treated completion of a **poll request** as proof that the GPU append was ready. It called `beginPollEdit` once, discarded the result, and published immediately; when that poll observed "not ready", the runtime correctly left `m_append_prepared = true, m_append_ready = false`, so publication failed the readiness guard. The runtime was right and the test was wrong.
+
+The `device_or_resource_busy` lines in the same leaf are not the failure: they are that leaf's deliberate frozen-snapshot probes, which assert that the demand snapshot stays frozen while a submission is in flight.
+
+The failing interleaving is now prevented by draining the append copy and asserting that the poll returns a readback for the expected identity before publishing. Evidence: 12/12 consecutive runs pass, against 2 failures in 13 runs before. Both the "staged shader tree did not match the linked binary" hypothesis and the reading that the identical rebuild repaired the failure are wrong; the build was never implicated.
+
+The K=5 default change is what made this latent test bug frequent enough to catch: the changed per-tick timing moved the window in which the poll request completes before the append copy is drained. The bug predates K=5 and is not a K=5 regression.
 
 ## A4 — iteration-count cost evidence (Release)
 
