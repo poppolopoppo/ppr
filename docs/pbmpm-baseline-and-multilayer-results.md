@@ -97,7 +97,7 @@ No test was removed. The census found no entry whose contract is proven elsewher
 | `matter_fast` | 23 | 291 s (21 entries, exclusive host) and 574.6 s (23 entries, concurrent-session GPU load) | **≤ 420 s exclusive** |
 | `matter_long` | 2 | 961 s (exclusive host) | **≤ 1200 s exclusive** |
 
-Ceilings are task-local repeated-use budgets for this reference host and Debug/validation configuration; they are not product budgets. A measurement taken while another session holds the GPU is recorded but does not establish the ceiling. Both gates are green at this source state.
+Ceilings are task-local repeated-use budgets for this reference host and Debug/validation configuration; they are not product budgets. They were recorded after the A0/A3 implementation rather than set prospectively against it. **The 420 s fast ceiling is not yet demonstrated.** The 291 s reading covers 21 entries on an exclusive host, while `matter_fast` now holds 23 entries, and the only 23-entry reading (574.6 s) was taken with another session holding the GPU. A 21-entry run cannot certify today's 23-entry gate. The 1200 s long ceiling rests on the 961 s exclusive reading of the same 2 entries. Both gates are green at this source state.
 
 
 ## A1 — upstream reference harness (stage 1 complete)
@@ -134,7 +134,7 @@ Tests: `matter_constitutive_gpu` adds three leaves — witness attribution acros
 
 Gates after this change: `matter_fast` 21/21 in 291 s.
 
-Build discipline learned here: a fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit disappeared when the identical committed sources were rebuilt, and the gate then passed. The build had been taken while an implementation lane was still editing `assets/shaders/pbmpm`; the staged shader tree did not match the linked binary. Builds must follow a quiescent lane.
+Build discipline learned here: a fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit disappeared when the identical committed sources were rebuilt, and the gate then passed. The cause is **unresolved**: the earlier "the staged shader tree did not match the linked binary" explanation was a hypothesis, it is superseded, and the green reruns show non-reproducibility only. Builds must follow a quiescent lane.
 
 
 ## A3 — complete iteration schedule
@@ -178,25 +178,27 @@ An independent review returned REVISE on the A2 work. Every MUST FIX item was ad
 
 ### Unresolved incident
 
-After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. A rebuild of the identical committed sources passed 3/3, and both gates have been green since. The cause is **not established**: the failing run's binary and staged shader identities were not captured, so the earlier "staged shader mismatch" explanation is withdrawn. It is retained as an unexplained transient until a reproduction provides identities.
+After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. A rebuild of the identical committed sources passed 3/3, and both gates have been green since; that shows non-reproducibility, not a cause. The cause is **unresolved**: the failing run's binary and staged shader identities were not captured, so the earlier "staged shader mismatch" explanation is superseded and withdrawn. It is retained as an unexplained transient until a reproduction provides identities.
 
 ## A4 — iteration-count cost evidence (Release)
 
-Scene: 4096 rows (all four materials by row index), 128×128 grid, `dt = 1/480`, 8 substeps per tick, gravity on, grid-volume channel on, one swept boundary box, no brush. Excludes allocation/upload; the timed interval covers encode, submit, drain and publication. 5 warm-up ticks, 30 measured, Release (`clang-rel`), validation layers off.
+Scene: 4096 rows (all four materials by row index), 128×128 grid, `dt = 1/480`, 8 substeps per tick, gravity on, grid-volume channel on, one swept boundary box, no brush. The timed interval covers encode, submit, drain and publication and excludes particle/terrain preparation; the predicted-boundary upload happens inside `submitResidentTick` and is therefore included. 5 warm-up ticks, 30 measured, Release (`clang-rel`), validation layers off.
 
-| K | Wall median (ms/tick) | Wall max | Ratio vs K2 | GPU median (ms) | Dispatches/tick |
-|---:|---:|---:|---:|---:|---:|
-| 2 | 5.36 | 6.46 | 1.00 | 1.89 | 104 |
-| 5 | 7.83 | 8.17 | 1.46 | 3.58 | 152 |
-| 10 | 12.93 | 13.31 | 2.41 | 6.34 | 232 |
+Scope caveat: this is one pass per K, not the plan's five paired runs, and every sample restarts from freshly replaced state. The numbers are a reproducible-tick cost, not a sustained-gameplay cost.
 
-Reading: at 4096 particles one 60 Hz frame is 16.7 ms. K5 costs ~7.8 ms (47 % of the frame), K10 ~12.9 ms (77 %). The GPU stage scales roughly with K (1.89 → 3.58 → 6.34 ms) while wall time grows more slowly at K5 because the fixed per-tick overhead dominates; K10's wall growth exceeds its GPU growth, consistent with the larger dispatch count and per-stage encoding.
+| K | Wall median (ms/tick) | Wall max | Wall ratio vs K2 | GPU median (ms) | GPU ratio vs K2 | Dispatches/tick |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 5.36 | 6.46 | 1.00 | 1.89 | 1.00 | 104 |
+| 5 | 7.83 | 8.17 | 1.46 | 3.58 | 1.89 | 152 |
+| 10 | 12.93 | 13.31 | 2.41 | 6.34 | 3.35 | 232 |
 
-These are measurements for this scene and host, not product budgets. The leaf is opt-in (`PPR_PBMPM_COST_DIAGNOSTIC=1`, `engine.tests.app.matter_cost_gpu`), outside `matter_fast`, and logs an explicit skip otherwise.
+Reading: at 4096 particles one 60 Hz frame is 16.7 ms. K5 costs ~7.8 ms (47 % of the frame), K10 ~12.9 ms (77 %). The GPU stage scales with K (1.89 → 3.58 → 6.34 ms, i.e. 1.89× at K5 and 3.35× at K10) while wall time grows more slowly (1.46× and 2.41×) because the fixed per-tick overhead dominates. Wall growth does not exceed GPU growth at either K.
+
+These are measurements for this scene and host, not product budgets. The leaf is opt-in (`PPR_PBMPM_COST_DIAGNOSTIC=1`, `engine.tests.app.matter_cost_gpu`) and lies outside `matter_fast`; when the variable is unset it logs a line and returns early. In this harness an opt-in leaf that returns early is a *passing* test, so a plain run reports a pass and does not produce a CTest skip.
 
 ## A4 — operating-point criteria still open
 
-The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf. Until it exists, the K5 default must not be adopted on cost evidence alone.
+The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf, and the elastic/visco comparison recorded below uses a rotation-sensitive metric that cannot separate stretch from rotation. Until both exist, the K5 default must not be adopted on cost evidence alone.
 
 ## A4 — correctness matrix across K (Release)
 
@@ -204,19 +206,19 @@ All scenes hold 240 substeps (or the stated horizons), identical initialization 
 
 | Property | K=2 | K=5 | K=10 |
 |---|---|---|---|
-| Rest drift (256-row pool, no gravity) | displacement 0, 0 moved | 0, 0 moved | 0, 0 moved |
-| Compression decay (ρ=0.75) | err 1.67e-6 at s1/8/64 | same | same |
-| Elastic recovery (64-row patch, shear 3) | residual 3 → **9941** (s64) → 9986 | 3.31 → **9858** → 9972 | 3.72 → 1.9997 → 2.0001 |
-| Visco residual (same patch) | 2.64 → 3.36 → 2.92 | 2.90 → 1.98 → 2.00 | 2.98 → 1.98 → 2.00 |
+| Rest state (256-row pool, no gravity): final displacement, rows moved >1 cell | 0, 0 moved | 0, 0 moved | 0, 0 moved |
+| Density error on the measured row (ρ=0.75) | 1.67e-6 at s1/8/64 | same | same |
+| Elastic response (64-row patch, shear 3), `max \|F − I\|` | 3 → **9941** (s64) → 9986 | 3.31 → **9858** → 9972 | 3.72 → 1.9997 → 2.0001 |
+| Visco response (same patch), `max \|F − I\|` | 2.64 → 3.36 → 2.92 | 2.90 → 1.98 → 2.00 | 2.98 → 1.98 → 2.00 |
 | Granular settling (8×16 column) | top 17.79, bottom 5.20 | top 20.42, bottom 5.58 | top 21.44, bottom 5.70 |
 
 ### Findings
 
-1. **Elastic shear does not recover at any K, and diverges at K=2 and K=5.** A free elastic patch held at shear 3.0 under zero gravity reaches the singular-value clamp (`Σ ≈ 1e4`) by substep 64 at K2/K5; at K10 it settles at `|F − I| ≈ 2.0`, i.e. it retains the deformation instead of recovering. This is pre-existing ported behaviour (the gain-based relaxation is not an energy-minimising solve), not a schedule regression: K=2 is the current production default and shows the worst value. It means **Elastic must not be admitted to the game before its constitutive response is addressed** (B1's scope), and it is not evidence against or for any K.
-2. **Liquid and granular behaviour is K-insensitive for the measured observables.** Rest drift is exactly zero at every K; compression error converges within one substep at every K; sand settling differs in top height (17.8 / 20.4 / 21.4) but keeps its inventory and remains bounded, which is a physical-refinement difference rather than a defect.
-3. **Visco behaves consistently**: the shear clamp removes the elastic divergence and the retained deformation settles near 2.0 at every K.
-4. **Compression decay is instantaneous at every K** (25 % error gone after one substep). That is consistent with the stiffness of the current liquid feedback, and is worth revisiting when B2 replaces the liquid model.
+1. **The elastic measurement does not establish elastic recovery either way.** The recorded metric is `max |F − I|`, which cannot distinguish stretch from rotation: `F = −I` is a 180° rotation with zero stretch yet scores 2, so K10's ≈2.0 may be full recovery up to a rigid rotation rather than retained deformation. The K2/K5 values (9941–9986 and 9858–9972) sit under the singular-value clamp ceiling (`Σ ≈ 1e4`) and are consistent with clamp-limited amplification, not with unbounded divergence. What the numbers show is clamp-limited amplification at K2/K5 and a bounded response at K10. Elastic recovery is therefore **undetermined**: it requires measured singular values, `FᵀF − I`, determinant, clamp activation and rigid-alignment shape error. The scene is a prestressed free patch, not a load/unload experiment, so it measures no recovery from an applied load, and nothing "holds" the shear (the earlier "held shear" wording is withdrawn). This remains pre-existing ported behaviour, not a schedule regression, and it is not evidence for or against any K. **Elastic must not be admitted to the game before its constitutive response is determined** (B1's scope).
+2. **Rest and compression are unchanged across the measured K, but the sand comparison is neither K-insensitive nor a refinement result.** At rest every K ends with zero final displacement and zero rows moved by more than one cell, and the ρ=0.75 density error on the measured row is 1.67e-6 at substeps 1, 8 and 64. Those are the exact observables: a final displacement plus a one-cell movement count, not accumulated position drift, and a single-row density error, not occupied-volume recovery. Sand settling differs in top height by ~20 % between K2 (17.79) and K10 (21.44), which is too large to call K-insensitive and cannot be called a physical-refinement difference without kinetic settling and support measurements.
+3. **Visco is clamped at every K, with different final residuals.** The shear clamp bounds the response at K5 and K10, where the retained `max |F − I|` settles near 2.0 (1.98 → 2.00); K2's final residual is instead 2.92, so the ≈2.0 plateau is not common to every K. The rotation-sensitive metric caveat in finding 1 applies here too.
+4. **The single-row compression error is gone after one substep at every K** (25 % error → 1.67e-6). That is a one-row density measurement, not evidence that occupied volume recovered, and it is consistent with the stiffness of the current liquid feedback; it is worth revisiting when B2 replaces the liquid model.
 
 ### Operating-point ruling
 
-**Keep K = 2 as the default.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows; the measured correctness differences do not justify that cost, and the only K-sensitive behaviour found (elastic shear) is a constitutive defect that no K fixes. K5/K10 remain admitted and covered by `matter_schedule_gpu`, so the choice is cheap to revisit once B1/B2 change the material set. Do not switch the default on cost evidence alone, and do not treat K10's elastic bound as a fix.
+**Retain K = 2 as the default pending completion of baseline acceptance.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows, and the current evidence does not justify switching to K5. K2 is not a verified acceptable baseline: its correctness side is precisely what baseline acceptance has still to establish, and the metric used here leaves the elastic and visco responses undetermined. K5/K10 remain admitted and covered by `matter_schedule_gpu`, so the choice is cheap to revisit once B1/B2 change the material set. Do not switch the default on cost evidence alone, and do not treat K10's bounded elastic response as a fix.

@@ -302,22 +302,12 @@ bool deformationOperandsUsable(Particle p, uint row) {
 // produced-state backstop
 // ------------------------------------------------------------------
 
-// checkedEncode rejects |value * fixedPointMultiplier| at or beyond 2^31, so a
-// produced value outside that domain has no usable scatter contribution.
-bool encodableStepValue(float value) {
-    float scaled = value * float(g_parameters.fixedPointMultiplier);
-    return isfinite(scaled) && scaled > -2147483648.0 && scaled < 2147483648.0;
-}
-
 // A constitutive coefficient product can overflow even when every admitted
-// operand was finite, so the produced step is bounded before the scatter consumes
-// it: the deformation displacement is field 8 and a liquid density (finite,
-// positive, invertible) is field 12. Values are not clamped or repaired.
+// operand was finite. Check the produced D itself for finiteness (field 8),
+// leaving encodability to the actual weighted scatter operands. A liquid density
+// must be finite, positive and invertible (field 12). No value is repaired.
 bool producedStateUsable(Particle p, uint row) {
-    if (!encodableStepValue(p.deformationDisplacement.c0x) ||
-        !encodableStepValue(p.deformationDisplacement.c0y) ||
-        !encodableStepValue(p.deformationDisplacement.c1x) ||
-        !encodableStepValue(p.deformationDisplacement.c1y)) {
+    if (!finiteMatrix(p.deformationDisplacement)) {
         recordError(8u, 0xffffffffu, 8u, row);
         return false;
     }

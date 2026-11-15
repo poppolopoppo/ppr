@@ -6144,7 +6144,8 @@ namespace pP::tests::detail::MatterGpu {
             PPR_TEST_ASSERT(not solver.prepareReplacement({&witness.m_particle, 1u}, {}, solver.accounting().m_epoch));
             solver.publishReplacement();
 
-            PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u));
+            const u64 committed_epoch = solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not solver.submitResidentTick(committed_epoch, 1u, 2u));
             PPR_TEST_ASSERT(not solver.drain());
 
             ConstitutiveObservation observation;
@@ -6174,6 +6175,15 @@ namespace pP::tests::detail::MatterGpu {
                 observation.m_particle = failure.m_particle;
 
                 PPR_TEST_ASSERT(not solver.discardTick());
+
+                PPR_TEST_ASSERT(solver.accounting().m_epoch == committed_epoch);
+                PPR_TEST_ASSERT(not solver.beginSnapshot(committed_epoch));
+                PPR_TEST_ASSERT(not solver.drain());
+                const auto captured = solver.pollSnapshot();
+                PPR_TEST_ASSERT(captured and captured->has_value());
+                PPR_TEST_ASSERT((**captured).m_particles.size() == 1u);
+                PPR_TEST_ASSERT(
+                    std::memcmp(&(**captured).m_particles[0u], &witness.m_particle, sizeof(GpuParticle)) == 0);
             }
 
             observations.push_back(observation);
@@ -6353,6 +6363,18 @@ namespace pP::tests::detail::MatterGpu {
             witnesses.push_back({"control_sand_zero_deviatoric_history", particle, 0xffff'ffffu});
         }
 
+        // Antisymmetric D survives liquid viscosity and has zero trace. Its raw
+        // 1024 components exceed 2^31 / 1e7, but mass 1e-8 and the quadratic
+        // stencil weights (corner 1/64) keep every momentum contribution tiny.
+        // Encoded mass is zero at every node, so the next gather is zero under
+        // the source tiny-mass rule and the complete K2 tick must publish.
+        {
+            GpuParticle particle = source(ESourceMaterial::liquid);
+            particle.m_deformation_displacement = {0.0f, 1024.0f, -1024.0f, 0.0f};
+            particle.m_mass = 1.0e-8f;
+            witnesses.push_back({"control_large_finite_D_small_weighted_mass", particle, 0xffff'ffffu});
+        }
+
         // Every case is one complete resident K2 tick over a single row, so the
         // evidence is the production rejection path, not a helper microgate.
         const auto observations = observeConstitutiveWitnesses(fixture.m_solver, witnesses);
@@ -6413,18 +6435,21 @@ namespace pP::tests::detail::MatterGpu {
         // surface), not the amplitude of coefficient products or of the state
         // they act on. Plasticity 41 leaves yieldSurface = exp(-40) = 4.25e-18,
         // which is admitted, and a huge but finite liquid relaxation admits a
-        // coefficient product that only the produced-state backstop can reject.
+        // coefficient product whose actual scatter operands cannot be encoded.
         GpuParameters profile = fixture.m_solver.profile();
         profile.m_plasticity = 41.0f;
         profile.m_liquid_relaxation = 1.0e30f;
         const float yield_surface = std::exp(1.0f - profile.m_plasticity);
         // Density 0.5 makes the liquid relaxation alpha 0.5, so the produced
-        // displacement is 1e30 * 0.5 and its fixed-point encoding 5e36, far past
-        // the encodable 2^31.
+        // D is 1e30 * 0.5. At the left centre node, weight 3/32 and
+        // offset -1 produce momentum -3/32 * mass * D, far past 2^31
+        // after scaling. D itself is finite and has no encoding requirement.
         const float produced_displacement = profile.m_liquid_relaxation * 0.5f;
+        const float scatter_momentum = (3.0f / 32.0f) * restParticle().m_mass * produced_displacement;
 
         PPR_TEST_ASSERT(std::isfinite(yield_surface) and yield_surface > 0.0f);
-        PPR_TEST_ASSERT(produced_displacement * static_cast<float>(profile.m_fixed_point_multiplier) > 2147483648.0f);
+        PPR_TEST_ASSERT(std::isfinite(produced_displacement));
+        PPR_TEST_ASSERT(scatter_momentum * static_cast<float>(profile.m_fixed_point_multiplier) > 2147483648.0f);
 
         GpuSolver solver;
         PPR_TEST_ASSERT(not solver.initialize(
@@ -6446,17 +6471,6 @@ namespace pP::tests::detail::MatterGpu {
             witnesses.push_back({"visco_plastic_quotient_overflow", particle, 16u});
         }
 
-        // A density of 0.5 makes the liquid relaxation alpha 0.5, so the admitted
-        // relaxation 1e30 produces a displacement far outside the fixed-point
-        // encodable range. The produced-state backstop reports the deformation
-        // displacement, field 8, before the scatter converts it.
-        {
-            GpuParticle particle = restParticle();
-            particle.m_material = static_cast<float>(ESourceMaterial::liquid);
-            particle.m_liquid_density = 0.5f;
-            witnesses.push_back({"liquid_coefficient_product_overflow", particle, 8u});
-        }
-
         // Control: identity leaves the elastic difference exactly zero, so the
         // same admitted profile publishes finite state without a witness.
         {
@@ -6468,6 +6482,27 @@ namespace pP::tests::detail::MatterGpu {
         const auto observations = observeConstitutiveWitnesses(solver, witnesses);
         logConstitutiveWitnesses(_, observations);
         assertConstitutiveWitnesses(observations);
+
+        // checkedEncode rejects the nonzero off-centre momentum with flag 2
+        // and returns zero before budget reservation. One row cannot exhaust
+        // the mass budget; neither the finite D nor density warrants flag 8.
+        GpuParticle particle = restParticle();
+        particle.m_material = static_cast<float>(ESourceMaterial::liquid);
+        particle.m_liquid_density = 0.5f;
+        const std::array<ConstitutiveWitness, 1u> conversion_case{{
+            {"liquid_coefficient_product_overflow", particle, 0u},
+        }};
+        const auto conversion = observeConstitutiveWitnesses(solver, conversion_case);
+        logConstitutiveWitnesses(_, conversion);
+
+        const auto &rejected = conversion.front();
+        PPR_TEST_ASSERT(not rejected.m_published);
+        PPR_TEST_ASSERT(rejected.m_cause == std::errc::result_out_of_range);
+        PPR_TEST_ASSERT((rejected.m_flags & 2u) == 2u);
+        PPR_TEST_ASSERT((rejected.m_flags & (4u | 8u)) == 0u);
+        PPR_TEST_ASSERT(rejected.m_claimed == 1u and rejected.m_node == 0xffff'ffffu);
+        PPR_TEST_ASSERT(rejected.m_field == 0u or rejected.m_field == 1u);
+        PPR_TEST_ASSERT(rejected.m_particle == 0u);
     };
 
     // ------------------------------------------------------------------

@@ -165,9 +165,8 @@ same way as field12, so a positive subnormal density does not depend on the
 device flushing it to zero. Group barriers, the other rows and the kernel's
 remaining work are unaffected. Deliberate upstream limiting stays legal: the
 singular-value clamps, `clamp(abs(df), 0.1, ...)` and the guardian only ever see
-finite operands, and no clamped value is re-inspected. After the step, the value
-the scatter consumes is bounded in the fixed-point conversion's own domain: a
-produced `deformationDisplacement` outside it rejects the row as field8 and a
+finite operands, and no clamped value is re-inspected. After the step, a
+nonfinite produced `deformationDisplacement` rejects the row as field8 and a
 nonfinite, nonpositive or noninvertible liquid density as field12. That backstop
 is what catches a coefficient product that overflows although every admitted
 operand stayed finite, and a rejected row contributes nothing to the grid.
@@ -185,11 +184,18 @@ instead: resident-tick admission returns `invalid_argument` unless
 least one, elasticity ratio, liquid/elastic relaxation and liquid viscosity are
 finite, the friction angle lies in `[0, 90)` so `sin` and `3 - sin` stay usable,
 and `exp(1 - plasticity)` is finite and positive. Admission bounds that domain,
-not coefficient amplitudes; the produced-state backstop covers the rest. The
+not coefficient amplitudes; produced-state and scatter checks cover the rest. The
 objective-volume gather only forms `1/volume` when the node has support, so an
 empty reciprocal is an explicit no-feedback branch rather than an infinity the
 comparison happens to discard. No error word, semantic field, binding or wire
 record is added.
+
+Encodability is enforced on the actual scatter operands, including
+`weight * mass * (displacement + D * offset)`, by checked conversion and the
+absolute-sum budgets; finite raw `D` has no fixed-point bound. Adapter guards
+precede their dependent operations: finite `deltaGamma` precedes the sand branch,
+the norm check precedes its division, the finite yield reciprocal precedes visco
+clamp bounds, and valid `newJ` precedes `J / newJ`.
 
 Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
 uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,
