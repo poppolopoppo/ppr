@@ -157,13 +157,13 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
 # leaf: 3 terrain + 9 contact + 12 material + 10 grid + 3 constitutive + 4
-# resident + 3 schedule + 1 cost + 1 correctness = 46 `app/matter_gpu` leaves, and
-# the resident list also holds one `app/matter_runtime_gpu` token. The cost and
-# correctness leaves keep their own entries outside `matter_fast`, below. The two
-# whole-grid terrain leaves are
-# separated from the rest of the contact geometry because their joint worst
-# observed bound co-resident with the contact set was 267.62 s (89 % of 300 s).
-# The material list measures 880 characters; it is split away from the
+# resident + 3 schedule + 1 cost + 1 correctness + 1 precision = 47
+# `app/matter_gpu` leaves, and the resident list also holds one
+# `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
+# their own entries outside `matter_fast`, below. The two whole-grid terrain
+# leaves are separated from the rest of the contact geometry because their joint
+# worst observed bound co-resident with the contact set was 267.62 s (89 % of
+# 300 s). The material list measures 880 characters; it is split away from the
 # constitutive and schedule lists to stay inside the 1024-character string domain
 # the CLI filter enforces.
 set(ppr_matter_terrain_filter "app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact,app/matter_gpu/transport_exit_repair_is_bounded_and_a_no_op_when_certified")
@@ -270,6 +270,34 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation
 )
 
+# Absolute-FP32 / fixed-point precision characterization (A2): one liquid row per
+# case at four absolute coordinates cross three physical speeds, three normalized
+# masses and two subcell phases, plus a K=2 schedule control and a 4-row affine
+# shear control. Masses 1, 0.01, 0.001 avoid initial node-support cutoff trips
+# at both seeded phases. Zero gravity, no terrain, shapes, brush or volume feedback.
+# Single rows report deviation from ideal ballistic transport under repeated
+# quantized transfers and an effective per-substep mean-transport loss. Profile
+# headers report weighted initial-scatter speed floors and half-ULP speed limits.
+# Shear-field moments report end-to-end liquid decay (constitutive relaxation at
+# every stage, pressure relaxation, quantization and absolute-position rounding),
+# not total APIC angular momentum or isolated transfer retention. Frozen is a
+# reported flag, never a failure. Opt-in through `PPR_PBMPM_COST_DIAGNOSTIC=1`, outside
+# `matter_fast` for the same reason as the A4 evidence entries, and bounded by the
+# 120 s contract: 148 reports over ~35k single-row substeps (72 cells at the
+# 1-substep horizon, 72 at 480), i.e. ~670k dispatches. The A4 correctness leaf
+# measured ~3k single-row substeps in 4.45 s Release including two device/shader
+# initializations, so the full matrix is expected in the tens of seconds; the
+# measurement lane records the actual value.
+set(ppr_matter_precision_filter "app/matter_gpu/resident_precision_and_quantization_diagnostic")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_precision_gpu
+    FILTER "${ppr_matter_precision_filter}"
+    RESOURCE_LOCK gpu
+    TIMEOUT 120
+    LABELS unit engine app gpu_validation
+)
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_resident_gpu
     FILTER "${ppr_matter_resident_filter}"
@@ -287,6 +315,7 @@ unset(ppr_matter_constitutive_filter)
 unset(ppr_matter_schedule_filter)
 unset(ppr_matter_cost_filter)
 unset(ppr_matter_correctness_filter)
+unset(ppr_matter_precision_filter)
 unset(ppr_matter_resident_filter)
 
 # Numeric adapters need no device. Actual-domain pending physics owns a separate

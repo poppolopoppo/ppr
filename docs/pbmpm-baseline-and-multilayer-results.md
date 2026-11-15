@@ -1,7 +1,7 @@
 # PB-MPM baseline and multi-layer results
 
 **Plan:** [PB-MPM baseline correction and multi-layer plan](../../.opencode/plan/2026-11-15-pbmpm-baseline-and-multilayer.md)
-**Status:** Phase A in progress. A0 complete; A1–A6 pending.
+**Status:** Phase A in progress. A0, A2 (constitutive and precision), A3 and A4 complete; A1 stage 1 complete with stage 2 unbuilt; A5 blocked pending a plan-owner decision; A6 pending.
 **Identity:** branch `pbmpm/phase-a` in worktree `/home/bek/.local/share/opencode/worktree/4bb70a/pbmpm-phase-a`, base `61df61b954dc804fdf571e10ee42222e6be7fbbd`. Solver, matter, shader and game-factory sources are identical to the planning pin `07b9801ca3fc0b8792978eea42dbbd631560d9d7`; later commits in this checkout are renderer/lighting work.
 
 ## Host and configuration
@@ -87,7 +87,7 @@ No test was removed. The census found no entry whose contract is proven elsewher
 ## Open items
 
 - A zero-particle tick dispatches zero-size compute groups (validation error) and completes without a particle snapshot; this pre-existing issue is independent of K and should be rejected at admission or handled explicitly.
-- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator), A2's precision diagnostic, and A3's checkpoint persistence are not started or incomplete; see the sections below.
+- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator) is not started. A2 precision is characterized but its supported-motion-range question remains open; A5 is blocked on a plan-owner decision. See the sections below.
 - D3D12/Windows verification is unavailable on this host and remains an unrun gate.
 - Only the Debug/ASan/validation configuration has been measured; Release timing and cost evidence is pending.
 
@@ -274,3 +274,47 @@ Cost re-measured (non-exclusive GPU): K2 5.91 ms, K5 8.39 ms (1.42×), K10 13.59
 This decision does not establish baseline acceptance or erase the measured caveats: K5 costs 1.42× K2 in the non-exclusive re-measurement; the same brush load produces 16× less applied distortion at K10 than K2 (not a 16× K5 result); K5 activates the first-step integration clamp on 10 rows; and sand is qualitatively different across K. These remain unresolved model questions, not demonstrated improvements, and Elastic admission still requires its constitutive response to be understood.
 
 Follow-up: re-derive the liquid relaxation constant for K5 instead of inheriting the K2 stability tuning, and investigate the first-step clamp activation. This default change leaves liquidRelaxation, elasticRelaxation, sampling, units and the fixed-point multiplier unchanged. Build and runtime validation of the default change remain with the orchestrator.
+
+## A2 — precision and quantization characterization
+
+**Measurement:** 148 reports in one Release (`clang-rel`) run, 31.2 s total, K = 5 with a K = 2 control, zero gravity, brush and contacts, volume feedback off.
+
+| Dimension | Values |
+|---|---|
+| Coordinates (cells) | 6.5 / 512.5 / 1024.5 / 4096.5 |
+| Subcell phase | 0, 0.5 |
+| Speed (m/s) | 0.001 / 0.01 / 0.1 |
+| Normalized mass | 1 / 0.01 / 0.0001 |
+| Horizon (substeps) | 1, 480 |
+
+Rows are single particles or affine patches with no contacts, so the measurement isolates transfer precision from constitutive and contact behaviour. Release is deliberate: the Debug/validation configuration's arithmetic is not the configuration these limits will be quoted for.
+
+### Findings
+
+1. **Fixed-point dissipation is cumulative transfer quantization, not a unit error.** One substep reproduces 99.6 % of the seeded displacement, which proves the cell and m/s conversion is correct. Repeated quantized transfers then compound: a 0.1 m/s, unit-mass particle travels 0.1004 cells against an ideal 0.3000 over 480 substeps. Each of the 480 quantized P2G/G2P round trips truncates again, so the loss is in the transfer, not in the initial encoding.
+
+2. **Absolute FP32 positions freeze positive increments below half a position ULP.** The ULP of a position near 512.5 cells is `6.1e-5` cells, near 1024.5 cells `1.22e-4`, and near 4096.5 cells `4.88e-4`; those correspond to roughly 0.0049 / 0.0098 / 0.039 m/s. The observed freeze follows those thresholds: mass 1 at 0.001 m/s moves at coordinate 6.5 but freezes at 512.5; at 0.01 m/s it moves at 512.5 but freezes at 1024.5; at 4096.5 it stays frozen while still reporting nonzero displacement. 102 of 146 single-particle rows froze. The cause is absolute-world FP32 storage, so the reachable slow-motion range shrinks as the world coordinate grows.
+
+3. **Initial P2G scatter has a velocity floor that depends on weight and particle mass.** Node momentum encodes as `trunc(M·w·m·d)` with 2D weights up to 0.5625 (centre node) and 0.375 (halfway node), so the floor is `1.6e-5/(w·m)` m/s — `2.8e-5/m` for the centre weight and `4.3e-5/m` for the halfway weight. At normalized mass `1e-4` every tested speed is below that floor.
+
+4. **The smallest-mass row also crosses the node mass support cutoff.** That case reaches `mass < 1e-5` at a corner node (`1.6e-6`), so its result measures the scatter floor and the support cutoff together, not the two loss channels in isolation. The fixture was corrected and the combined effect is recorded as such rather than attributed to either channel alone.
+
+5. **The affine result is end-to-end liquid shear decay, not APIC retention.** A symmetric shear decays to zero over 480 substeps. Because every stage runs its constitutive relaxation, the correct reading is the total liquid shear decay of the update. It is not a measurement of affine particle-grid retention: the earlier `(1−viscosity)^N` reference was an unjustified model for this pipeline, and the metric was renamed to say what it measures.
+
+### Limits to carry forward
+
+- These are engine limitations to record, not production fixes to make in A6.
+- The leaf asserts no motion magnitude; a green exit code establishes that the structure runs and stays finite, not that motion is correct.
+- The supported motion range remains an **open question**: slow motion below the half-ULP floor is lost, and quantization costs about 0.4 % per substep at 0.1 m/s. Neither limit is characterized as acceptable for any gameplay range yet.
+
+## A5 — sand history derivation
+
+`docs/pbmpm-sand-history-derivation.md` is the A5 gate artifact. Its conclusions, in the terms it states them:
+
+- The candidate conserves the `Σ log σ + H` ledger on the unclipped domain; the identity holds in every return branch, but only for that constitutive return.
+- Dissipativity needs explicit constitutive assumptions: `μ > 0`, `K₂ > 0`, `c ≥ 0`, `H ≥ 0`, and the Hencky energy with no extra stored energy in the history. It is not unconditional, and negative imported history breaks it.
+- `elasticityRatio` is not justified as a modulus ratio. In `constraint` it is a blend weight between a singular-value target and the determinant-normalized target, not a measured `λ/μ`; the yield coefficient needs an explicit or calibrated value instead.
+- The `logJp == 0` constraint branch interacts: for every `t < 0` output the clamp necessarily changes at least one singular value, so the ledger cannot be assumed unchanged across the combined constraint/return step.
+- Implementation is **blocked pending a plan-owner decision** on the yield coefficient (effective 2D versus true plane strain, friction calibration, and the modulus ratio or calibrated `c`) and on the physical meaning and admissible domain of `H`.
+
+No A5 code was written: the artifact is analysis only, with no shader, host, test or build change.

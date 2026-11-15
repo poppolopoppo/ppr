@@ -2503,6 +2503,469 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // resident absolute-FP32 and fixed-point precision characterization
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (resident_precision_and_quantization_diagnostic) {
+        // Opt-in evidence, not a gate: the repeated-use gate carries no measurement
+        // work, and an absent switch reports an explicit skip so a reader never
+        // mistakes it for evidence.
+        const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            _.log(std::format("RESIDENT-PRECISION skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1"));
+            return;
+        }
+
+        // Case matrix, measured in full and therefore not reduced. Four absolute
+        // coordinates cross three requested physical speeds, three normalized
+        // masses and two subcell phases; each axis bounds one loss channel:
+        //   coordinate - the absolute-FP32 position ULP at the row's magnitude;
+        //   speed      - the per-substep translation against that ULP;
+        //   mass       - the fixed-point momentum quantum 1 / multiplier relative
+        //                to mass * displacement in the gather/scatter ratio;
+        //   phase      - node centre (0) versus midway between node centres (0.5).
+        // At initial scatter the smallest mass keeps every contributing node's
+        // quantized mass above the 1e-5 support guard: the minimum 2D weight is
+        // 1/64 at centre (0.001/64 = 1.5625e-5), or 1/16 halfway. Subsequent
+        // motion changes the weights; these bounds describe the seeded phases.
+        constexpr double kCellMetres = 1.0 / 3.0; // plan fixed cell size dx = 1/3 m
+        constexpr float kInteriorY = 16.5f;
+        constexpr std::array<float, 4u> kCoordinates{6.5f, 512.5f, 1024.5f, 4096.5f};
+        constexpr std::array<double, 3u> kSpeeds{0.001, 0.01, 0.1};
+        constexpr std::array<float, 3u> kMasses{1.0f, 0.01f, 0.001f};
+        constexpr std::array<float, 2u> kPhases{0.0f, 0.5f};
+        // One physical second at dt = 1/480 is 480 substeps, and the production
+        // batch is kGameSubsteps = 8 substeps, so the long horizon is 60 whole
+        // K=5 batches. The widest coordinate plus its phase and the longest
+        // translation stay inside the guardian interval [3, width - 4].
+        constexpr u32 kLongSubsteps = 480u;
+        constexpr u32 kBatchSubsteps = kGameSubsteps;
+        constexpr u32 kGridWidth = 4104u;
+        constexpr u32 kGridHeight = 40u;
+        static_assert(kLongSubsteps % kBatchSubsteps == 0u);
+        static_assert(4096.5 + 0.5 + 0.3 < static_cast<double>(kGridWidth) - 4.0);
+
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        // Zero gravity, no terrain, no shapes, no brush and no grid-volume
+        // feedback: single rows characterize repeated quantized transport; the
+        // shear patch also includes liquid constitutive and pressure relaxation.
+        fixture.initialize(false, kGridWidth, kGridHeight, false, nullptr, 0.0f);
+
+        const GpuParameters profile = fixture.m_solver.profile();
+        PPR_TEST_ASSERT(profile.m_gravity_strength == 0.0f);
+        PPR_TEST_ASSERT(profile.m_use_grid_volume_for_liquid == 0u);
+        PPR_TEST_ASSERT(profile.m_shape_count == 0u);
+        const double dt = static_cast<double>(profile.m_delta_time);
+        const double multiplier = static_cast<double>(profile.m_fixed_point_multiplier);
+        PPR_TEST_ASSERT(dt > 0.0 and multiplier >= 1.0);
+
+        // One complete batch: submit, drain, classify and publish. The collected
+        // status must be publishable and the failure record empty, so a rejected
+        // or partial batch is never reported as a measurement.
+        const auto submit_batch = [](Fixture &fixture, const u32 iterations, const u32 substeps) {
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, substeps, iterations));
+
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            PPR_TEST_ASSERT(fixture.m_solver.failure().m_flags == 0u);
+
+            fixture.m_solver.publishTick();
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+        };
+        const auto load = [](Fixture &fixture, const std::span<const GpuParticle> rows) {
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(rows, {}, fixture.m_solver.accounting().m_epoch));
+            fixture.m_solver.publishReplacement();
+        };
+        // Whole complete batches only; the single readback happens after the last
+        // batch, so the horizon stays the only snapshot in the measurement.
+        const auto advance = [&](Fixture &fixture, const u32 iterations, const u32 substeps) {
+            PPR_TEST_ASSERT(substeps != 0u);
+            u32 remaining = substeps;
+            while (remaining > kBatchSubsteps) {
+                submit_batch(fixture, iterations, kBatchSubsteps);
+                remaining -= kBatchSubsteps;
+            }
+
+            submit_batch(fixture, iterations, remaining);
+            return fixture.snapshot();
+        };
+        const auto inventory = [](const std::span<const GpuParticle> rows) {
+            std::array<double, 2u> totals{};
+            for (const auto &row: rows) {
+                totals[0u] += static_cast<double>(row.m_mass);
+                totals[1u] += static_cast<double>(row.m_volume);
+            }
+
+            return totals;
+        };
+        const auto assert_finite = [](const std::span<const GpuParticle> rows) {
+            for (const auto &row: rows) {
+                for (const float value: std::bit_cast<std::array<float, 22u>>(row))
+                    PPR_TEST_ASSERT(std::isfinite(value));
+            }
+        };
+
+        // Independent double-precision reference, from the profile constants and
+        // the plan cell size, not from the shader's expression. The solver stores
+        // the candidate displacement in cells and integrates
+        // `position.x += displacement.x` once per substep, so a requested physical
+        // speed v predicts
+        //
+        //   displacement_per_substep_cells = v * dt / h
+        //   expected_cells(N)              = N * v * dt / h
+        //   expected_metres(N)             = N * v * dt
+        //
+        // with h = 1/3 m and dt read from the profile. This reference applies
+        // neither the fixed-point encode (step 1 / multiplier cells) nor FP32
+        // position addition, so both losses appear as measured - expected. The
+        // production encode truncates toward zero (`int(value * multiplier)`), so
+        // the residual carries a directed bias on top of a nearest-rounding half
+        // quantum.
+        const auto expected_cells = [dt](const double speed, const u32 substeps) {
+            return static_cast<double>(substeps) * speed * dt / kCellMetres;
+        };
+        const auto position_ulp = [](const float coordinate) {
+            return static_cast<double>(std::nextafter(coordinate, std::numeric_limits<float>::infinity())) -
+                   static_cast<double>(coordinate);
+        };
+
+        // The seeded candidate displacement is the requested speed's per-substep
+        // translation in cells. It is the only initial motion the row carries; the
+        // solver re-derives it from the fixed-point grid every substep.
+        const auto make_row = [&](const float x, const float y, const float mass, const double speed) {
+            auto row = restParticle();
+            row.m_position_x = x;
+            row.m_position_y = y;
+            row.m_material = static_cast<float>(ESourceMaterial::liquid);
+            row.m_mass = mass;
+            row.m_volume = 1.0f;
+            row.m_liquid_density = 1.0f;
+            row.m_log_jp = 0.0f;
+            row.m_displacement_x = static_cast<float>(expected_cells(speed, 1u));
+            row.m_displacement_y = 0.0f;
+            return row;
+        };
+
+        struct HorizonMeasurement {
+            double m_measured_cells{}, m_expected_cells{}, m_represented_cells{};
+        };
+        u32 reported_cases = 0u;
+        const auto report_single = [&](const float coordinate, const float phase, const double speed, const float mass,
+                                       const u32 iterations, const u32 substeps,
+                                       const std::span<const GpuParticle> initial,
+                                       const std::span<const GpuParticle> state, const double one_step_cells) {
+            PPR_TEST_ASSERT(initial.size() == 1u and state.size() == 1u);
+            assert_finite(state);
+            PPR_TEST_ASSERT(inventory(state) == inventory(initial));
+
+            const double expected = expected_cells(speed, substeps);
+            PPR_TEST_ASSERT(expected > 0.0);
+            const double initial_x = static_cast<double>(initial[0u].m_position_x);
+            const double measured = static_cast<double>(state[0u].m_position_x) - initial_x;
+            const double represented = std::hypot(
+                static_cast<double>(state[0u].m_displacement_x), static_cast<double>(state[0u].m_displacement_y));
+            const double ulp = position_ulp(initial[0u].m_position_x);
+            const double mass_value = static_cast<double>(initial[0u].m_mass);
+            // Retained candidate-displacement momentum m * d, the quantity the
+            // fixed-point scatter accumulates per substep.
+            const double momentum_initial = mass_value * static_cast<double>(initial[0u].m_displacement_x);
+            const double momentum_final = mass_value * static_cast<double>(state[0u].m_displacement_x);
+            const double drift = momentum_initial != 0.0
+                                     ? std::abs(momentum_final - momentum_initial) / std::abs(momentum_initial)
+                                     : 0.0;
+            const auto totals = inventory(state);
+            const bool frozen = measured == 0.0;
+
+            // Deviation from ideal ballistic transport, not a unit conversion.
+            // The effective cumulative loss compares mean transport per substep
+            // with the independently restarted one-step measurement. It is not
+            // an instantaneous velocity-decay estimate. Undefined baselines and
+            // the one-step horizon report NaN rather than an invented zero loss.
+            const double ballistic_fraction = measured / expected;
+            const double effective_loss = substeps > 1u and one_step_cells > 0.0 and measured >= 0.0
+                                              ? 1.0 - std::pow(
+                                                          measured / (static_cast<double>(substeps) * one_step_cells),
+                                                          1.0 / static_cast<double>(substeps - 1u))
+                                              : std::numeric_limits<double>::quiet_NaN();
+
+            std::fprintf(
+                stdout,
+                "PRECISION-QUANTIZATION scene=single coordinate_cells=%.9g phase=%.9g speed_m_s=%.9g mass=%.9g "
+                "substeps=%u iterations=%u expected_cells=%.9g expected_m=%.9g measured_cells=%.9g "
+                "measured_m=%.9g represented_cells=%.9g represented_m=%.9g position_ulp_cells=%.9g "
+                "position_ulp_m=%.9g quantization_residual_quanta=%.9g momentum_initial=%.9g "
+                "momentum_final=%.9g momentum_drift_relative=%.9g inventory_mass=%.9g inventory_volume=%.9g "
+                "ballistic_transport_fraction=%.9g ballistic_deviation_relative=%.9g "
+                "effective_mean_transport_loss_per_substep=%.9g frozen=%u\n",
+                static_cast<double>(coordinate), static_cast<double>(phase), speed, static_cast<double>(mass),
+                static_cast<unsigned>(substeps), static_cast<unsigned>(iterations), expected, expected * kCellMetres,
+                measured, measured * kCellMetres, represented, represented * kCellMetres, ulp, ulp * kCellMetres,
+                (measured - expected) * multiplier, momentum_initial, momentum_final, drift, totals[0u], totals[1u],
+                ballistic_fraction, ballistic_fraction - 1.0, effective_loss, frozen ? 1u : 0u);
+            std::fflush(stdout);
+
+            ++reported_cases;
+            return HorizonMeasurement{measured, expected, represented};
+        };
+
+        // Affine control geometry: a 2 x 1 cell patch centred on the widest
+        // coordinate, carrying the symmetric shear field u(r) = L r with
+        // L = [[0, s], [s, 0]] about the patch centre. Per-particle d is the field
+        // at that particle and the retained affine term is D = L. The reported
+        // shear-field moment is not total APIC angular momentum. The patch is
+        // deliberately not square: cross(r, L r) =
+        // s (x^2 - y^2), which has one sign over this patch because |x| = 1 against
+        // |y| = 0.5, so a shear with zero vorticity still produces a nonzero signed
+        // moment; a square patch would cancel it identically.
+        constexpr float kAffineCentreX = 4096.5f;
+        constexpr float kAffineCentreY = kInteriorY;
+        constexpr float kAffineMass = 1.0f;
+        constexpr double kShearRate = 6.25e-4;
+        constexpr std::array<std::array<float, 2u>, 4u> kAffineOffsets{
+            {{-1.0f, -0.5f}, {1.0f, -0.5f}, {-1.0f, 0.5f}, {1.0f, 0.5f}}};
+        const auto patch_centre = [](const std::span<const GpuParticle> rows) {
+            std::array<double, 3u> centre{}; // mass, then mass-weighted x and y
+            for (const auto &row: rows) {
+                const double mass = static_cast<double>(row.m_mass);
+                centre[0u] += mass;
+                centre[1u] += mass * static_cast<double>(row.m_position_x);
+                centre[2u] += mass * static_cast<double>(row.m_position_y);
+            }
+
+            PPR_TEST_ASSERT(centre[0u] > 0.0);
+            centre[1u] /= centre[0u];
+            centre[2u] /= centre[0u];
+            return centre;
+        };
+        // sum m * cross(r, M r) about the patch centre, signed and unsigned.
+        // `retained` selects the row's own deformation displacement D; otherwise
+        // the declared field L is the reference, evaluated on the same measured
+        // geometry. Because the 2 x 1 patch gives the shear's cross term one sign,
+        // both totals describe the field moment; the reference is the undepleted
+        // declared field on measured geometry, not a transfer-retention prediction.
+        const auto affine_moment = [&](const std::span<const GpuParticle> rows, const bool retained) {
+            const auto centre = patch_centre(rows);
+            std::array<double, 2u> moment{};
+            for (const auto &row: rows) {
+                const double x = static_cast<double>(row.m_position_x) - centre[1u];
+                const double y = static_cast<double>(row.m_position_y) - centre[2u];
+                const auto &field = row.m_deformation_displacement;
+                const double c0x = retained ? static_cast<double>(field.m_c0x) : 0.0;
+                const double c0y = retained ? static_cast<double>(field.m_c0y) : kShearRate;
+                const double c1x = retained ? static_cast<double>(field.m_c1x) : kShearRate;
+                const double c1y = retained ? static_cast<double>(field.m_c1y) : 0.0;
+                const double cross = x * (c0y * x + c1y * y) - y * (c0x * x + c1x * y);
+                const double mass = static_cast<double>(row.m_mass);
+                moment[0u] += mass * cross;
+                moment[1u] += mass * std::abs(cross);
+            }
+
+            return moment;
+        };
+        const auto report_affine = [&](const u32 iterations, const u32 substeps,
+                                       const std::span<const GpuParticle> initial,
+                                       const std::span<const GpuParticle> state) {
+            PPR_TEST_ASSERT(state.size() == kAffineOffsets.size() and initial.size() == state.size());
+            assert_finite(state);
+            PPR_TEST_ASSERT(inventory(state) == inventory(initial));
+
+            const auto measured = affine_moment(state, true);
+            const auto reference = affine_moment(state, false);
+            PPR_TEST_ASSERT(reference[1u] > 0.0);
+
+            const auto initial_centre = patch_centre(initial);
+            const auto state_centre = patch_centre(state);
+            const double centre_drift = std::hypot(
+                state_centre[1u] - initial_centre[1u], state_centre[2u] - initial_centre[2u]);
+            const double retained_ratio = measured[1u] / reference[1u];
+            // End-to-end liquid shear decay includes constitutive relaxation at
+            // every stage, pressure relaxation, quantization and absolute-position
+            // rounding. This ratio does not attribute loss to APIC transfer.
+            const bool frozen = measured[1u] == 0.0;
+            const auto totals = inventory(state);
+
+            std::fprintf(
+                stdout,
+                "PRECISION-QUANTIZATION scene=affine_shear centre_cells=%.9g shear_rate_per_cell=%.9g "
+                "substeps=%u iterations=%u absolute_shear_field_moment_cells2=%.9g signed_shear_field_moment_cells2=%.9g "
+                "undepleted_shear_field_moment_cells2=%.9g absolute_shear_field_moment_m2_s=%.9g "
+                "end_to_end_shear_moment_ratio=%.9g centre_drift_cells=%.9g "
+                "inventory_mass=%.9g inventory_volume=%.9g frozen=%u\n",
+                static_cast<double>(kAffineCentreX), kShearRate, static_cast<unsigned>(substeps),
+                static_cast<unsigned>(iterations), measured[1u], measured[0u], reference[1u],
+                measured[1u] * kCellMetres * kCellMetres / dt, retained_ratio, centre_drift, totals[0u], totals[1u],
+                frozen ? 1u : 0u);
+            std::fflush(stdout);
+
+            ++reported_cases;
+        };
+
+        std::fprintf(
+            stdout,
+            "PRECISION-PROFILE grid=%ux%u cell_m=%.9g dt_s=%.9g fixed_point_multiplier=%.9g gravity_strength=0 "
+            "volume_channel=0 terrain=none shapes=0 brush=disabled batch_substeps=%u long_substeps=%u "
+            "schedule_k=%u control_k=%u\n",
+            static_cast<unsigned>(kGridWidth), static_cast<unsigned>(kGridHeight), kCellMetres, dt, multiplier,
+            static_cast<unsigned>(kBatchSubsteps), static_cast<unsigned>(kLongSubsteps),
+            static_cast<unsigned>(kDefaultIterations), static_cast<unsigned>(kSourceIterations));
+
+        // Initial scatter truncates weighted mass * displacement at 1/multiplier.
+        // Thus the first nonzero momentum quantum needs v >= h/(dt*multiplier*w*m),
+        // whose numerator is 1.6e-5 m/s for this profile. List each nonzero 2D
+        // weight, since the first supported node and the last differ substantially.
+        const double scatter_speed_numerator = kCellMetres / (dt * multiplier);
+        std::fprintf(
+            stdout, "PRECISION-PROFILE initial_scatter_speed_numerator_m_s=%.9g node_mass_cutoff=1e-5\n",
+            scatter_speed_numerator);
+        for (const float mass: kMasses) {
+            for (const float phase: kPhases) {
+                const std::array<double, 3u> weights = phase == 0.0f ? std::array{1.0 / 64.0, 3.0 / 32.0, 9.0 / 16.0}
+                                                                     : std::array{1.0 / 16.0, 3.0 / 8.0, 0.0};
+                for (const double weight: weights) {
+                    if (weight == 0.0)
+                        continue;
+
+                    std::fprintf(
+                        stdout,
+                        "PRECISION-PROFILE mass=%.9g phase=%.9g weight=%.9g initial_scatter_velocity_floor_m_s=%.9g\n",
+                        static_cast<double>(mass), static_cast<double>(phase), weight,
+                        scatter_speed_numerator / (weight * static_cast<double>(mass)));
+                }
+            }
+        }
+
+        // Below half an absolute-position ULP, a positive per-step increment
+        // rounds away; equality depends on tie-to-even. This is a local threshold,
+        // not a prediction after repeated transfers have depleted displacement.
+        for (const float coordinate: kCoordinates) {
+            for (const float phase: kPhases) {
+                std::fprintf(
+                    stdout, "PRECISION-PROFILE coordinate_cells=%.9g phase=%.9g half_ulp_speed_m_s=%.9g\n",
+                    static_cast<double>(coordinate), static_cast<double>(phase),
+                    0.5 * position_ulp(coordinate + phase) * kCellMetres / dt);
+            }
+        }
+
+        std::fflush(stdout);
+
+        // Representative case for the schedule control: widest coordinate, middle
+        // speed, unit mass, node-centre phase. It is also one cell of the matrix
+        // above, so its K=5 long-horizon measurement is captured there.
+        constexpr float kControlCoordinate = kCoordinates.back();
+        constexpr float kControlPhase = kPhases.front();
+        constexpr float kControlMass = kMasses.front();
+        constexpr double kControlSpeed = kSpeeds[1u];
+        HorizonMeasurement k5_control{};
+
+        for (const float coordinate: kCoordinates) {
+            for (const float phase: kPhases) {
+                for (const double speed: kSpeeds) {
+                    for (const float mass: kMasses) {
+                        const std::array<GpuParticle, 1u> initial{
+                            make_row(coordinate + phase, kInteriorY, mass, speed)};
+
+                        // Both horizons restart from identical published state: the
+                        // long horizon must be an integral number of whole batches.
+                        load(fixture, initial);
+                        const auto after_one = advance(fixture, kDefaultIterations, 1u);
+                        const auto one = report_single(
+                            coordinate, phase, speed, mass, kDefaultIterations, 1u, initial, after_one, 0.0);
+
+                        load(fixture, initial);
+                        const auto after_long = advance(fixture, kDefaultIterations, kLongSubsteps);
+                        const auto measurement = report_single(
+                            coordinate, phase, speed, mass, kDefaultIterations, kLongSubsteps, initial, after_long,
+                            one.m_measured_cells);
+                        const bool control_case = coordinate == kControlCoordinate and
+                                                  phase == kControlPhase and
+                                                  speed == kControlSpeed and
+                                                  mass == kControlMass;
+                        if (control_case)
+                            k5_control = measurement;
+                    }
+                }
+            }
+        }
+
+        {
+            // K=2 control on the same scene. The schedule changes the number of
+            // gather/scatter stages per substep, so an unchanged measurement here
+            // shows the reported loss is a representation limit and not a K=5
+            // artifact. Equality is not asserted; the difference is reported.
+            const std::array<GpuParticle, 1u> initial{
+                make_row(kControlCoordinate + kControlPhase, kInteriorY, kControlMass, kControlSpeed)};
+            load(fixture, initial);
+            const auto after_one = advance(fixture, kSourceIterations, 1u);
+            const auto one = report_single(
+                kControlCoordinate, kControlPhase, kControlSpeed, kControlMass, kSourceIterations, 1u, initial,
+                after_one, 0.0);
+
+            load(fixture, initial);
+            const auto after_long = advance(fixture, kSourceIterations, kLongSubsteps);
+            const auto k2_long = report_single(
+                kControlCoordinate, kControlPhase, kControlSpeed, kControlMass, kSourceIterations, kLongSubsteps,
+                initial, after_long, one.m_measured_cells);
+
+            const double delta_cells = k5_control.m_measured_cells - k2_long.m_measured_cells;
+            std::fprintf(
+                stdout,
+                "PRECISION-SCHEDULE-CONTROL coordinate_cells=%.9g phase=%.9g speed_m_s=%.9g mass=%.9g substeps=%u "
+                "k5_measured_cells=%.9g k2_measured_cells=%.9g delta_cells=%.9g delta_quanta=%.9g "
+                "k5_represented_cells=%.9g k2_represented_cells=%.9g\n",
+                static_cast<double>(kControlCoordinate), static_cast<double>(kControlPhase), kControlSpeed,
+                static_cast<double>(kControlMass), static_cast<unsigned>(kLongSubsteps), k5_control.m_measured_cells,
+                k2_long.m_measured_cells, delta_cells, delta_cells * multiplier, k5_control.m_represented_cells,
+                k2_long.m_represented_cells);
+            std::fflush(stdout);
+        }
+
+        {
+            Array<GpuParticle> patch;
+            patch.reserve(kAffineOffsets.size());
+            for (const auto &offset: kAffineOffsets) {
+                auto row = restParticle();
+                row.m_position_x = kAffineCentreX + offset[0u];
+                row.m_position_y = kAffineCentreY + offset[1u];
+                row.m_material = static_cast<float>(ESourceMaterial::liquid);
+                row.m_mass = kAffineMass;
+                row.m_volume = 1.0f;
+                row.m_liquid_density = 1.0f;
+                row.m_log_jp = 0.0f;
+                row.m_displacement_x = static_cast<float>(kShearRate * static_cast<double>(offset[1u]));
+                row.m_displacement_y = static_cast<float>(kShearRate * static_cast<double>(offset[0u]));
+                row.m_deformation_displacement = {
+                    0.0f, static_cast<float>(kShearRate), static_cast<float>(kShearRate), 0.0f};
+                patch.push_back(row);
+            }
+
+            load(fixture, patch);
+            const auto after_one = advance(fixture, kDefaultIterations, 1u);
+            report_affine(kDefaultIterations, 1u, patch, after_one);
+
+            load(fixture, patch);
+            const auto after_long = advance(fixture, kDefaultIterations, kLongSubsteps);
+            report_affine(kDefaultIterations, kLongSubsteps, patch, after_long);
+        }
+
+        // Structural acceptance only: every matrix cell, both horizons of the
+        // schedule control and both affine horizons published. No motion magnitude
+        // is asserted; the measured loss is reported as a limitation with numbers.
+        constexpr u32 kMatrixCells = static_cast<u32>(
+            kCoordinates.size() * kPhases.size() * kSpeeds.size() * kMasses.size());
+        PPR_TEST_ASSERT(reported_cases == kMatrixCells * 2u + 4u);
+        _.log(std::format("RESIDENT-PRECISION cases={} reports={}", kMatrixCells, reported_cases));
+    };
+
+    // ------------------------------------------------------------------
     // isolated liquid pressure recurrence diagnostic
     // ------------------------------------------------------------------
 
@@ -7012,6 +7475,7 @@ namespace pP::tests {
                 detail::MatterGpu::odd_even_schedule_preserves_sparse_sources,
                 detail::MatterGpu::iteration_count_gpu_cost_diagnostic,
                 detail::MatterGpu::iteration_count_correctness_diagnostic,
+                detail::MatterGpu::resident_precision_and_quantization_diagnostic,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
                 detail::MatterGpu::split_device_rows_pack_and_unpack_every_semantic_field_by_name,
                 detail::MatterGpu::lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input,
