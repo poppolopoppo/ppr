@@ -428,7 +428,7 @@ namespace pP::colony {
         // The reflected scalar ABI has no padding: sixteen profile words and
         // twenty-two particle words. Persist each numeric word little-endian.
         const auto &carried = checkpoint.m_current_matter;
-        const u64 matter_bytes = 116u + carried.m_particles.size() * 88u;
+        const u64 matter_bytes = 120u + carried.m_particles.size() * 88u;
 
         const u64 encoded_size = writer.m_bytes.size() + particle_bytes + matter_bytes + 8u + snapshot->size();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -445,6 +445,7 @@ namespace pP::colony {
         writer.u64value(carried.m_next_id);
         writer.real(carried.m_cell_metres);
         writer.real(carried.m_thickness_metres);
+        writer.u32value(carried.m_iterations);
         for (const u32 word: std::bit_cast<std::array<u32, 16u>>(carried.m_profile))
             writer.u32value(word);
 
@@ -483,7 +484,7 @@ namespace pP::colony {
         const auto version = reader.u32value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            CheckpointCodec, magic == kMagic and version == kWorldCheckpointVersion
+            CheckpointCodec, magic == kMagic and (version == 6u or version == kWorldCheckpointVersion)
                                  ? std::error_code{}
                                  : std::make_error_code(std::errc::protocol_not_supported));
         const bool full = reader.boolean();
@@ -529,6 +530,8 @@ namespace pP::colony {
         carried.m_next_id = reader.u64value();
         carried.m_cell_metres = reader.real();
         carried.m_thickness_metres = reader.real();
+        // Migration is independent of both the source and new-world defaults.
+        carried.m_iterations = version == 6u ? 2u : reader.u32value();
         std::array<u32, 16u> profile{};
         for (auto &word: profile)
             word = reader.u32value();
@@ -537,6 +540,10 @@ namespace pP::colony {
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, validateWorldMetric(descriptor.m_metric));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            CheckpointCodec, matter::isSupportedIterations(carried.m_iterations)
+                                 ? std::error_code{}
+                                 : std::make_error_code(std::errc::invalid_argument));
         if (carried.m_cell_metres != 1.0 / descriptor.m_metric.m_cells_per_metre or
             carried.m_thickness_metres != descriptor.m_metric.m_reference_thickness_m or
             carried.m_identity.m_world == 0u or

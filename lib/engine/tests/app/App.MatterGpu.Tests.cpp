@@ -2081,23 +2081,27 @@ namespace pP::tests::detail::MatterGpu {
         const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
         const std::string_view enabled = setting != nullptr ? setting : "0";
         PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
-        if (enabled != "1") {
-            _.log(std::format("ITERATION-CORRECTNESS skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1"));
+        const char *const base_setting = std::getenv("PPR_PBMPM_CORRECTNESS_K2_ONLY");
+        const std::string_view base_enabled = base_setting != nullptr ? base_setting : "0";
+        PPR_TEST_ASSERT(base_enabled == "0" or base_enabled == "1");
+        if (enabled != "1" and base_enabled != "1") {
+            _.log(
+                std::format(
+                    "ITERATION-CORRECTNESS skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1 or PPR_PBMPM_CORRECTNESS_K2_ONLY=1"));
             return;
         }
 
         constexpr u32 kGridEdge = 64u;
         constexpr u32 kHorizon = 240u;
-        constexpr std::array<u32, 3u> kCounts{2u, 5u, 10u};
-        // The deformable scenes hold a fixed *shear* rather than a volume-changing
-        // stretch. This profile's constraint relaxes D with gain 1.5 toward a target
-        // of `rotation * F^-1`, whose linearised diagonal mode has a |1.37| eigenvalue
-        // per stage, so a held diagonal stretch is not a bounded state over a
-        // 240-substep horizon; the volume-preserving shear converges to a bounded
-        // rotation instead. The magnitude 3.0 puts the major singular value (3.303)
-        // above the visco yield surface e = 2.718, so elastic and visco are
-        // guaranteed to diverge in the first integration rather than following
-        // identical arithmetic.
+        constexpr std::array<u32, 3u> all_counts{2u, 5u, 10u};
+        const std::span<const u32> kCounts{all_counts.data(), base_enabled == "1" ? 1u : all_counts.size()};
+        // K2_ONLY alone runs these identical scenes without enabling solver diagnostics.
+        // Source at authoring: 078f48a24559521b43b6750b6fe856f7b7547824 + this leaf edit.
+        // No numbers have yet been measured with these metrics. The measurement lane
+        // must record the measured commit and separately capture the pre-schedule base.
+
+        // The separate first-step relaxation fixture retains the historical shear
+        // for branch separation only. It is not the load/release experiment.
         constexpr float kShear = 3.0f;
 
         // Shared residents: every scene is loaded whole, run for whole substeps and
@@ -2106,10 +2110,11 @@ namespace pP::tests::detail::MatterGpu {
             PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(rows, {}, fixture.m_solver.accounting().m_epoch));
             fixture.m_solver.publishReplacement();
         };
-        const auto run = [](Fixture &fixture, const u32 iterations, const u32 substeps) {
+        const auto run = [](Fixture &fixture, const u32 iterations, const u32 substeps,
+                             const GpuRadialForce force = {}) {
             PPR_TEST_ASSERT(not fixture.m_solver.busy());
             const u64 epoch = fixture.m_solver.accounting().m_epoch;
-            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, substeps, iterations));
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, substeps, iterations, {}, 0u, force));
 
             PPR_TEST_ASSERT(not fixture.m_solver.drain());
 
@@ -2147,6 +2152,143 @@ namespace pP::tests::detail::MatterGpu {
             }
 
             return value;
+        };
+
+        // Independent double-precision eigenvalues of C=F^T F, not forkSvd.
+        // sigma_max=sqrt((C00+C11+hypot(C00-C11,2*C01))/2),
+        // sigma_min=abs(det(F))/sigma_max (zero when sigma_max is zero).
+        const auto singular_values = [](const double a, const double b, const double c, const double d) {
+            const double x = a * a + b * b, y = c * c + d * d, z = a * c + b * d;
+            const double high = std::sqrt(std::max(0.0, (x + y + std::hypot(x - y, 2.0 * z)) * 0.5));
+            return std::array<double, 2u>{high, high == 0.0 ? 0.0 : std::abs(a * d - b * c) / high};
+        };
+        const auto report = [&](Fixture &fixture, const char *const property, const u32 iterations,
+                                const char *const horizon, const u32 substeps,
+                                const std::span<const GpuParticle> initial, const std::span<const GpuParticle> before,
+                                const std::span<const GpuParticle> state) {
+            PPR_TEST_ASSERT(state.size() == initial.size() and before.size() == initial.size());
+            assert_finite(before);
+            assert_finite(state);
+            PPR_TEST_ASSERT(inventory(before) == inventory(initial));
+            PPR_TEST_ASSERT(inventory(state) == inventory(initial));
+
+            // Positional deformation is independent of the retained elastic F.
+            // Equal-row 2D Procrustes fit removes translation and proper rotation,
+            // but not scale, shear, reflection or particle rearrangement.
+            double initial_x = 0.0, initial_y = 0.0, current_x = 0.0, current_y = 0.0;
+            for (std::size_t row = 0u; row < state.size(); ++row) {
+                initial_x += static_cast<double>(initial[row].m_position_x);
+                initial_y += static_cast<double>(initial[row].m_position_y);
+                current_x += static_cast<double>(state[row].m_position_x);
+                current_y += static_cast<double>(state[row].m_position_y);
+            }
+
+            const double count = static_cast<double>(state.size());
+            initial_x /= count;
+            initial_y /= count;
+            current_x /= count;
+            current_y /= count;
+
+            double dot = 0.0, cross = 0.0, squared_norms = 0.0;
+            for (std::size_t row = 0u; row < state.size(); ++row) {
+                const double x = static_cast<double>(initial[row].m_position_x) - initial_x;
+                const double y = static_cast<double>(initial[row].m_position_y) - initial_y;
+                const double u = static_cast<double>(state[row].m_position_x) - current_x;
+                const double v = static_cast<double>(state[row].m_position_y) - current_y;
+                dot += x * u + y * v;
+                cross += x * v - y * u;
+                squared_norms += x * x + y * y + u * u + v * v;
+            }
+
+            const double aligned_position_rms = std::sqrt(
+                std::max(0.0, squared_norms - 2.0 * std::hypot(dot, cross)) / count);
+            const double dt = static_cast<double>(fixture.m_solver.profile().m_delta_time);
+            const double yield = std::exp(1.0 - static_cast<double>(fixture.m_solver.profile().m_plasticity));
+            double energy = 0.0, total_displacement = 0.0, position_offset = 0.0, stretch_max = 0.0;
+            u32 clamp_rows = 0u, yield_rows = 0u, sand_projection_rows = 0u;
+            for (std::size_t row = 0u; row < state.size(); ++row) {
+                const auto &p = state[row];
+                const auto &f = p.m_deformation_gradient;
+                const double a = static_cast<double>(f.m_c0x), b = static_cast<double>(f.m_c0y),
+                             c = static_cast<double>(f.m_c1x), d = static_cast<double>(f.m_c1y);
+                const auto sigma = singular_values(a, b, c, d);
+                const double c00 = a * a + b * b - 1.0, c11 = c * c + d * d - 1.0;
+                const double c01 = a * c + b * d;
+                const double stretch = std::max({std::abs(c00), std::abs(c11), std::abs(c01)});
+                // Recovery residual is ||F^T F-I||_F, not ||F-I|| or a positional
+                // rigid-fit error. It ignores rotations; det separately exposes reflections.
+                const double recovery = std::sqrt(c00 * c00 + c11 * c11 + 2.0 * c01 * c01);
+                stretch_max = std::max(stretch_max, stretch);
+
+                // D survives integration: reconstruct its trial (I+D)*F_previous
+                // from adjacent snapshots. Counts refer only to this sampled substep,
+                // not all clamp events during the intervening horizon. This independent
+                // double-precision classification can differ from shader FP32 exactly
+                // at a bound; it is not a GPU branch counter. Visco rescaling after
+                // yield means retained singular values alone cannot identify clamping.
+                const auto &g = before[row].m_deformation_gradient;
+                const auto &delta = p.m_deformation_displacement;
+                const double da = 1.0 + static_cast<double>(delta.m_c0x), db = static_cast<double>(delta.m_c0y);
+                const double dc = static_cast<double>(delta.m_c1x), dd = 1.0 + static_cast<double>(delta.m_c1y);
+                const double ta = da * static_cast<double>(g.m_c0x) + dc * static_cast<double>(g.m_c0y);
+                const double tb = db * static_cast<double>(g.m_c0x) + dd * static_cast<double>(g.m_c0y);
+                const double tc = da * static_cast<double>(g.m_c1x) + dc * static_cast<double>(g.m_c1y);
+                const double td = db * static_cast<double>(g.m_c1x) + dd * static_cast<double>(g.m_c1y);
+                const auto trial = singular_values(ta, tb, tc, td);
+                // forkSvd's second value is signed for inverted trial gradients.
+                const double signed_low = ta * td - tb * tc < 0.0 ? -trial[1u] : trial[1u];
+                const bool clamped = trial[0u] >= 1e4 or signed_low <= 0.1;
+                const double high = std::clamp(trial[0u], 0.1, 1e4);
+                const double low = std::clamp(signed_low, 0.1, 1e4);
+                const bool yielded = p.m_material == static_cast<float>(ESourceMaterial::visco) and
+                                     (high >= yield or low <= 1.0 / yield);
+                const double trace_e = std::log(high) + std::log(low) + static_cast<double>(before[row].m_log_jp);
+                const double deviator = std::hypot(std::log(high) - trace_e * 0.5, std::log(low) - trace_e * 0.5);
+                const double sin_phi = std::sin(
+                    static_cast<double>(fixture.m_solver.profile().m_friction_angle) / 180.0 * 3.14159);
+                const double alpha = std::sqrt(2.0 / 3.0) * 2.0 * sin_phi / (3.0 - sin_phi);
+                const bool sand_projected =
+                    p.m_material == static_cast<float>(ESourceMaterial::sand) and
+                    (trace_e >= 0.0 or
+                        deviator + (static_cast<double>(fixture.m_solver.profile().m_elasticity_ratio) + 1.0) *
+                                       trace_e *
+                                       alpha >
+                            0.0);
+                clamp_rows += clamped ? 1u : 0u;
+                yield_rows += yielded ? 1u : 0u;
+                sand_projection_rows += sand_projected ? 1u : 0u;
+
+                const double displacement = std::hypot(
+                    static_cast<double>(p.m_displacement_x), static_cast<double>(p.m_displacement_y));
+                const double kinetic = 0.5 * static_cast<double>(p.m_mass) * displacement * displacement / (dt * dt);
+                const double offset = std::hypot(
+                    static_cast<double>(p.m_position_x) - static_cast<double>(initial[row].m_position_x),
+                    static_cast<double>(p.m_position_y) - static_cast<double>(initial[row].m_position_y));
+                energy += kinetic;
+                total_displacement += displacement;
+                position_offset += offset;
+                std::fprintf(
+                    stdout,
+                    "ITERATION-CORRECTNESS property=%s k=%u horizon=%s substeps=%u row=%zu "
+                    "sigma_max=%.9g sigma_min=%.9g stretch_max=%.9g recovery_frobenius=%.9g det_f=%.9g "
+                    "rotation_sensitive_f_minus_i=%.9g integration_clamp=%u visco_yield_clamp=%u "
+                    "sand_projection=%u kinetic_energy=%.9g displacement_magnitude=%.9g position_offset=%.9g\n",
+                    property, iterations, horizon, substeps, row, sigma[0u], sigma[1u], stretch, recovery,
+                    a * d - b * c, std::max({std::abs(a - 1.0), std::abs(b), std::abs(c), std::abs(d - 1.0)}),
+                    clamped ? 1u : 0u, yielded ? 1u : 0u, sand_projected ? 1u : 0u, kinetic, displacement, offset);
+            }
+
+            const auto totals = inventory(state);
+            std::fprintf(
+                stdout,
+                "ITERATION-CORRECTNESS property=%s k=%u horizon=%s substeps=%u rows=%zu "
+                "stretch_max=%.9g integration_clamp_rows=%u visco_yield_clamp_rows=%u sand_projection_rows=%u "
+                "kinetic_energy=%.9g total_displacement_magnitude=%.9g total_position_offset=%.9g "
+                "aligned_position_rms=%.9g mass=%.9g volume=%.9g\n",
+                property, iterations, horizon, substeps, state.size(), stretch_max, clamp_rows, yield_rows,
+                sand_projection_rows, energy, total_displacement, position_offset, aligned_position_rms, totals[0u],
+                totals[1u]);
+            std::fflush(stdout);
         };
 
         {
@@ -2238,7 +2380,7 @@ namespace pP::tests::detail::MatterGpu {
                 std::fflush(stdout);
             }
 
-            // ---- elastic recovery vs visco residual: one sheared 8x8 patch each ----
+            // ---- first-step branch separation and solver-driven load/release ----
             const auto sheared_patch = [](const ESourceMaterial material, const float shear) {
                 Array<GpuParticle> patch;
                 patch.reserve(8u * 8u);
@@ -2258,45 +2400,51 @@ namespace pP::tests::detail::MatterGpu {
             const Array<GpuParticle> visco_scene = sheared_patch(ESourceMaterial::visco, kShear);
 
             for (const u32 iterations: kCounts) {
-                float residual[2u][3u]{};
+                float residual[2u]{};
                 const std::array<const Array<GpuParticle> *, 2u> scenes{&elastic_scene, &visco_scene};
-                const std::array<const char *, 2u> names{"elastic_recovery", "visco_residual"};
+                const std::array<const char *, 2u> names{"elastic_relaxation", "visco_relaxation"};
                 for (std::size_t scene = 0u; scene < scenes.size(); ++scene) {
                     load(fixture, *scenes[scene]);
                     const auto after_1 = run(fixture, iterations, 1u);
-                    const auto after_64 = run(fixture, iterations, 63u);
-                    const auto after_240 = run(fixture, iterations, 176u);
-                    PPR_TEST_ASSERT(
-                        after_1.size() == scenes[scene]->size() and
-                        after_64.size() == scenes[scene]->size() and
-                        after_240.size() == scenes[scene]->size());
-                    assert_finite(after_240);
-                    PPR_TEST_ASSERT(inventory(after_240) == inventory(*scenes[scene]));
-
-                    residual[scene][0u] = gradient_residual(after_1);
-                    residual[scene][1u] = gradient_residual(after_64);
-                    residual[scene][2u] = gradient_residual(after_240);
-                    const auto totals = inventory(after_240);
-                    std::fprintf(
-                        stdout,
-                        "ITERATION-CORRECTNESS property=%s k=%u substeps=%u rows=%u shear=%.9g residual_s1=%.9g "
-                        "residual_s64=%.9g residual_s240=%.9g mass=%.9g volume=%.9g\n",
-                        names[scene], static_cast<unsigned>(iterations), static_cast<unsigned>(kHorizon),
-                        static_cast<unsigned>(after_240.size()), static_cast<double>(kShear),
-                        static_cast<double>(residual[scene][0u]), static_cast<double>(residual[scene][1u]),
-                        static_cast<double>(residual[scene][2u]), totals[0u], totals[1u]);
-                    std::fflush(stdout);
+                    report(
+                        fixture, names[scene], iterations, "early_separation", 1u, *scenes[scene], *scenes[scene],
+                        after_1);
+                    residual[scene] = gradient_residual(after_1);
                 }
 
                 // Structural visco-vs-elastic check. The visco yield clamp binds on the
                 // first integration (3.303 > e = 2.718 on the major singular value)
                 // while the elastic branch has no such projection, so the two retained
                 // deformations must differ by more than 5 % of the larger one. This is
-                // a branch-identity claim, not a fidelity tolerance; the reported
-                // residuals at 64 and 240 substeps stay evidence only.
-                const float larger = std::max(residual[0u][0u], residual[1u][0u]);
+                // a branch-identity claim, not a recovery or fidelity tolerance.
+                const float larger = std::max(residual[0u], residual[1u]);
                 PPR_TEST_ASSERT(larger > 0.0f);
-                PPR_TEST_ASSERT(std::abs(residual[0u][0u] - residual[1u][0u]) > 0.05f * larger);
+                PPR_TEST_ASSERT(std::abs(residual[0u] - residual[1u]) > 0.05f * larger);
+
+                // Initially stress-free patch, loaded only through the resident
+                // integration force. Off-centre inward brush gives nonuniform load.
+                // 16 loaded substeps, then 224 force-free substeps; snapshots at
+                // 16 (load end), 128 (release mid), 240 (release end). No state reset
+                // on release. Acceleration is in cells/s^2; dt is the source dt.
+                constexpr GpuRadialForce brush{24.0f, 28.0f, 12.0f, -2400.0f};
+                const std::array<ESourceMaterial, 2u> materials{ESourceMaterial::elastic, ESourceMaterial::visco};
+                const std::array<const char *, 2u> load_names{"elastic_load_release", "visco_load_release"};
+                const std::array<const char *, 3u> horizons{"load_end", "release_mid", "release_end"};
+                constexpr std::array<u32, 3u> ends{16u, 128u, 240u};
+                for (std::size_t scene = 0u; scene < materials.size(); ++scene) {
+                    const auto initial = sheared_patch(materials[scene], 0.0f);
+                    load(fixture, initial);
+                    u32 elapsed = 0u;
+                    for (std::size_t horizon = 0u; horizon < ends.size(); ++horizon) {
+                        const GpuRadialForce force = horizon == 0u ? brush : GpuRadialForce{};
+                        const auto before = run(fixture, iterations, ends[horizon] - elapsed - 1u, force);
+                        const auto state = run(fixture, iterations, 1u, force);
+                        report(
+                            fixture, load_names[scene], iterations, horizons[horizon], ends[horizon], initial, before,
+                            state);
+                        elapsed = ends[horizon];
+                    }
+                }
             }
         }
 
@@ -2323,7 +2471,9 @@ namespace pP::tests::detail::MatterGpu {
 
             for (const u32 iterations: kCounts) {
                 load(fixture, column);
-                const auto state = run(fixture, iterations, kHorizon);
+                const auto before = run(fixture, iterations, kHorizon - 1u);
+                const auto state = run(fixture, iterations, 1u);
+                report(fixture, "granular_elastic_state", iterations, "settle_end", kHorizon, column, before, state);
                 PPR_TEST_ASSERT(state.size() == column.size());
                 assert_finite(state);
                 PPR_TEST_ASSERT(inventory(state) == inventory(column));

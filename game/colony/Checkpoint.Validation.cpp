@@ -7,6 +7,7 @@ import game.colony.buildings;
 import game.colony.pathfinding;
 import game.colony.metric;
 import engine.asset;
+import engine.matter;
 import std;
 namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(CheckpointValidation, info, none)
@@ -185,6 +186,9 @@ namespace pP::colony {
 
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, context ? context->error() : std::error_code{});
         PPR_RETURN_ERROR_ON_FAIL(CheckpointValidation, validateWorldMetric(descriptor.m_metric));
+        PPR_RETURN_ERROR_ON_FAIL(
+            CheckpointValidation,
+            matter::isSupportedIterations(checkpoint.m_current_matter.m_iterations) ? std::error_code{} : invalid);
         PPR_RETURN_ERROR_ON_FAIL(
             CheckpointValidation, descriptor.m_profile.size() <= asset::QualifiedName::reference_domain.m_max_length and
                                           descriptor.m_profile.find(':') != std::string::npos and

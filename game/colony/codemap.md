@@ -233,10 +233,15 @@ the committed revision manifest.
 
 
 `Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` /
-`Checkpoint.Validation.cpp` own mandatory current-state game envelope v6. It
+`Checkpoint.Validation.cpp` own mandatory current-state game envelope v7. It
 stores every scalar particle column (p/d/D/F/J/lambda/logJp/color/enabled), the
 fixed profile, physical ledger/gas/next ID, metric and durable publication/terrain
-epochs. Older envelopes fail with `protocol_not_supported`; decode never seeds
+epochs and the world-owned iteration schedule K∈{2,5,10}. The schedule is a
+little-endian u32 before the unchanged sixteen-word profile (120 fixed matter
+bytes instead of 116). v6 explicitly migrates to K2; versions before v6 fail with
+`protocol_not_supported`. Invalid schedules fail with `invalid_argument`, never
+clamping. Runtime admission retains K through world publication, append and
+replacement; every resident tick submits the saved schedule. Decode never seeds
 missing columns. Capture copies existing state, or explicitly initializes source
 defaults from the current physical ledger only for a never-materialized owner.
 This does not retroactively identify earlier CPU-only ticks as PB-MPM. Restore
@@ -280,7 +285,7 @@ Persistent matter is owned by Colony as `sim::MatterParticleState`. Generation s
 seed records once; checkpoint restoration uses saved records directly. Driver edit
 candidates operate on the same authored catalog while detached for CPU inspection.
 GPU-attached edits use the transactional emission/coverage policy above. Driver retains full current GPU fields/profile, durable epoch,
-stable physical records and gas while detached for worker capture. v6 capture
+stable physical records and gas while detached for worker capture. v7 capture
 never substitutes historical worldgen seeds for current state.
 Frame packets share translated changed particle chunks and complete material/normal
 and four-layer backdrop appearance; engine.app does not import simulation types.
@@ -295,7 +300,7 @@ remain intact. A separate final `erosion_passes` stage uses the prototype's
 unweighted eight-neighbor histogram including vacuum at 50% adoption, initially
 eight passes in shipped recipes. Generator version 8 conservatively rejects older identities at
 `validateWorldCheckpoint` before material-ID restoration, while retaining
-the mandatory v6 checkpoint envelope. See [worldgen authoring](../../docs/worldgen-content.md).
+the mandatory v7 checkpoint envelope. See [worldgen authoring](../../docs/worldgen-content.md).
 
 The presentation cache also captures the immutable open-surface profile once
 per world generation, evaluating the shared generation height helper at every
@@ -307,7 +312,7 @@ Frozen worldgen capture and smoke prepare grid cells through the same bounded
 boundaries may wait for GPU progress, then refresh completed fences before retry;
 they preserve captured content and do not add waits to ordinary game frames.
 
-Checkpoint v6 accepts only the current validated matter profile. Unsupported
+Checkpoint v7 (and migrated v6) accepts only the current validated matter profile. Unsupported
 liquid-relaxation values are rejected without rewriting carried solver state.
 
 Runtime maps carry an explicit edge (1024/2048/4096) through `ChunkGrid`,

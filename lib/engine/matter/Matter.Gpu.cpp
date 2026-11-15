@@ -36,7 +36,6 @@ namespace pP::matter {
         // Stage 0 bootstraps and writes the first grid state; every later stage
         // gathers, constrains and scatters, and only the last of them integrates.
         // All admitted counts share those two programs, so K stays a runtime value.
-        constexpr std::array<u32, 3u> kAdmittedIterations{2u, 5u, 10u};
         constexpr u32 kMaxIterations = kAdmittedIterations.back();
 
         rhi::BufferRange fullRange(rhi::IBuffer *const buffer) noexcept {
@@ -1141,7 +1140,7 @@ namespace pP::matter {
 
         // Admission precedes every allocation, root and encoding: an unsupported
         // schedule has no representation, so it is refused rather than clamped.
-        const bool admitted_schedule = std::ranges::find(kAdmittedIterations, iterations) != kAdmittedIterations.end();
+        const bool admitted_schedule = isSupportedIterations(iterations);
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, admitted_schedule and
                                substeps != 0u and

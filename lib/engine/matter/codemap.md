@@ -60,7 +60,10 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `submitResidentTick` copies committed to working and runs compact GPU discovery,
   count/allocate/insert and destination initialization plus one indirect fused
   dispatch per admitted stage; the admitted counts are K∈{2,5,10} and production
-  uses eight evolving dt1/480 substeps at K2. Stage0 bootstraps scatter without a
+  uses eight evolving dt1/480 substeps at the world's saved K (new worlds and
+  migrated v6 checkpoints default to K2). `isSupportedIterations` is the shared
+  admission predicate for solver submissions and game checkpoint/runtime state.
+  Stage0 bootstraps scatter without a
   particle gather; stages 1..K-2 gather, constrain and scatter; stage K-1 also
   integrates, so gravity, the game brush and the sand pressure impulse run exactly
   once per substep. The stage index and K travel in the runtime parameter row, so

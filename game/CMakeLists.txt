@@ -379,6 +379,15 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
+        NAME matter_schedule_restore_gpu
+        FILTER "game/checkpoint_gpu/saved_schedule_controls_restored_ticks_after_append_and_replacement"
+        LOOPS
+        TIMEOUT 180
+        RESOURCE_LOCK gpu
+        LABELS unit game gpu_validation matter_fast
+    )
+
+    ppr_add_test_entry(TARGET game.tests
         NAME matter_stall_gpu
         FILTER "game/checkpoint_gpu/terrain_position_rejection_freezes_matter_until_a_committed_mutation"
         LOOPS

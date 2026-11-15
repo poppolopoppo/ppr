@@ -13,9 +13,9 @@ export namespace pP::colony {
     // world checkpoint
     // ------------------------------------------------------------------
 
-    // Version 6 records the active map edge alongside complete PB-MPM columns.
-    // Earlier envelopes have different layouts and are rejected without migration.
-    inline constexpr u32 kWorldCheckpointVersion = 6u;
+    // Version 7 adds the world-owned iteration schedule. Version 6 migrates to
+    // K=2 explicitly; all earlier envelopes remain unsupported.
+    inline constexpr u32 kWorldCheckpointVersion = 7u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
 
     // ------------------------------------------------------------------
@@ -58,6 +58,7 @@ export namespace pP::colony {
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context = {});
     [[nodiscard]] Expected<Array<u8>> encodeWorldCheckpoint(
         const WorldCheckpoint &checkpoint, const ContentCatalog &catalog, const SharedContext &context = {});
+    /// Invalid schedules return invalid_argument; v6 explicitly restores K=2.
     [[nodiscard]] Expected<WorldCheckpoint> decodeWorldCheckpoint(
         std::span<const u8> bytes, const ContentCatalog &catalog, const SharedContext &context = {});
     /// Builds a fresh unpublished owner from saved cells; no terrain regeneration.

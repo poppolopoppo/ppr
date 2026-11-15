@@ -28,6 +28,11 @@ export namespace pP::matter {
     inline constexpr u32 kGridDispatchSize = 8u;
     inline constexpr u32 kSourceIterations = 2u;
     inline constexpr u32 kGameSubsteps = 8u;
+    inline constexpr std::array<u32, 3u> kAdmittedIterations{2u, 5u, 10u};
+
+    [[nodiscard]] constexpr bool isSupportedIterations(const u32 iterations) noexcept {
+        return std::ranges::find(kAdmittedIterations, iterations) != kAdmittedIterations.end();
+    }
 
     // ------------------------------------------------------------------
     // explicit GPU storage protocol

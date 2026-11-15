@@ -881,18 +881,18 @@ namespace pP::game::tests::detail::checkpoint {
     // named pack envelope and qualified profile wire contract
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (envelope_six_manifest_one_and_raw_snapshot_five_have_distinct_headers) {
+    PPR_UNIT_TEST (envelope_seven_manifest_one_and_raw_snapshot_five_have_distinct_headers) {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
         const auto checkpoint = editedCheckpoint(catalog);
-        PPR_TEST_ASSERT(kWorldCheckpointVersion == 6u and asset::Manifest::schema_version == 1u);
+        PPR_TEST_ASSERT(kWorldCheckpointVersion == 7u and asset::Manifest::schema_version == 1u);
         PPR_TEST_ASSERT(sim::kSnapshotVersion == 5u and checkpoint.m_descriptor.m_pack_schema_version == 1u);
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         PPR_TEST_ASSERT(encoded.has_value());
 
         constexpr std::array<u8, 25u> header{
-            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x06u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
+            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x07u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
             0x00u, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u};
         PPR_TEST_ASSERT(encoded->size() > header.size());
         PPR_TEST_ASSERT(std::ranges::equal(std::span{encoded->data(), header.size()}, header));
@@ -920,6 +920,70 @@ namespace pP::game::tests::detail::checkpoint {
         wrong_magic.front() ^= 1u;
         const auto unknown = decodeWorldCheckpoint(wrong_magic, catalog);
         PPR_TEST_ASSERT(not unknown and unknown.error() == std::errc::protocol_not_supported);
+    };
+
+    PPR_UNIT_TEST (saved_schedule_migrates_v6_and_rejects_invalid_counts_without_mutating_live_world) {
+        Fixture fixture;
+        const auto &catalog = *fixture.m_catalog;
+        auto checkpoint = editedCheckpoint(catalog);
+        checkpoint.m_current_matter.m_iterations = 5u;
+        const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
+        const auto raw = sim::save(checkpoint.m_snapshot);
+        PPR_TEST_ASSERT(encoded and raw);
+
+        // The codec has no legacy encoder. Reuse its entire encoded v6 body:
+        // v7 inserts only this u32 immediately before the unchanged profile.
+        const std::size_t schedule_offset =
+            encoded->size() - raw->size() - 8u - checkpoint.m_current_matter.m_particles.size() * 88u - 4u - 64u - 4u;
+        auto legacy = *encoded;
+        PPR_TEST_ASSERT(legacy.size() > 8u and schedule_offset <= legacy.size() - 4u);
+
+        legacy[8u] = 6u;
+        const auto schedule_begin = legacy.begin() + static_cast<std::ptrdiff_t>(schedule_offset);
+        legacy.erase(schedule_begin, schedule_begin + 4);
+
+        const auto migrated = decodeWorldCheckpoint(legacy, catalog);
+        PPR_TEST_ASSERT(migrated.has_value());
+        PPR_TEST_ASSERT(migrated->m_current_matter.m_iterations == 2u);
+        PPR_TEST_ASSERT(migrated->m_current_matter.m_records == checkpoint.m_current_matter.m_records);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 22u>>(migrated->m_current_matter.m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+
+        const auto upgraded = encodeWorldCheckpoint(*migrated, catalog);
+        PPR_TEST_ASSERT(upgraded and upgraded->size() == legacy.size() + 4u);
+        const auto upgraded_state = decodeWorldCheckpoint(*upgraded, catalog);
+        PPR_TEST_ASSERT(upgraded_state and upgraded_state->m_current_matter.m_iterations == 2u);
+
+        auto live = restoreWorldCheckpoint(fixture.m_catalog, checkpoint, 93u);
+        PPR_TEST_ASSERT(live.has_value());
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not (*live)->shutdown());
+        };
+
+        const auto before = captureWorldCheckpoint(**live, (*live)->preparedWorld()->generated());
+        PPR_TEST_ASSERT(before.has_value());
+        const auto before_bytes = encodeWorldCheckpoint(*before, catalog);
+        PPR_TEST_ASSERT(before_bytes.has_value());
+
+        for (const u32 iterations: {0u, 1u, 3u, 7u}) {
+            auto malformed = *encoded;
+            malformed[schedule_offset] = static_cast<u8>(iterations);
+            const auto decoded = decodeWorldCheckpoint(malformed, catalog);
+            PPR_TEST_ASSERT(not decoded and decoded.error() == std::errc::invalid_argument);
+
+            auto invalid = checkpoint;
+            invalid.m_current_matter.m_iterations = iterations;
+            PPR_TEST_ASSERT(validateWorldCheckpoint(invalid, catalog) == std::errc::invalid_argument);
+            const auto rejected = restoreWorldCheckpoint(fixture.m_catalog, std::move(invalid), 94u);
+            PPR_TEST_ASSERT(not rejected and rejected.error() == std::errc::invalid_argument);
+
+            const auto after = captureWorldCheckpoint(**live, (*live)->preparedWorld()->generated());
+            PPR_TEST_ASSERT(after.has_value());
+            const auto after_bytes = encodeWorldCheckpoint(*after, catalog);
+            PPR_TEST_ASSERT(after_bytes and *after_bytes == *before_bytes);
+            PPR_TEST_ASSERT((*live)->matterState()->m_iterations == 5u);
+        }
     };
 
     PPR_UNIT_TEST (selected_world_checkpoint_preserves_extent_and_rejects_mismatched_owners) {
@@ -1205,7 +1269,8 @@ namespace pP::game::tests {
                 current_wire_rejects_unsupported_liquid_relaxation,
                 malformed_identity_metric_counts_and_payload_are_rejected_before_restore,
                 checkpoint_blob_references_ranges_and_wire_counts_are_checked,
-                envelope_six_manifest_one_and_raw_snapshot_five_have_distinct_headers,
+                envelope_seven_manifest_one_and_raw_snapshot_five_have_distinct_headers,
+                saved_schedule_migrates_v6_and_rejects_invalid_counts_without_mutating_live_world,
                 qualified_world_profiles_round_trip_at_the_authoritative_name_limit,
                 selected_world_checkpoint_preserves_extent_and_rejects_mismatched_owners,
                 direct_restored_driver_rejects_matter_and_snapshot_extent_mismatch_before_publication,

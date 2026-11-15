@@ -413,7 +413,8 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(accounting.has_value());
             std::fprintf(
                 stderr,
-                "[checkpoint-gpu] G=4103 substeps=8 K=2 device_bytes=%llu readback_capacity=%llu owner=%zu/%zu\n",
+                "[checkpoint-gpu] G=%u substeps=8 K=%u device_bytes=%llu readback_capacity=%llu owner=%zu/%zu\n",
+                checkpoint.m_current_matter.m_profile.m_grid_width, checkpoint.m_current_matter.m_iterations,
                 static_cast<unsigned long long>(accounting->m_device_bytes),
                 static_cast<unsigned long long>(accounting->m_readback_capacity_bytes), sizeof(GpuOwner),
                 alignof(GpuOwner));
@@ -1225,6 +1226,96 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(
             driver.matterState()->m_identity.m_terrain_revision == original.m_identity.m_terrain_revision + 1u);
         PPR_TEST_ASSERT(not driver.takeEditRejection());
+    };
+
+    PPR_UNIT_TEST (saved_schedule_controls_restored_ticks_after_append_and_replacement) {
+        Fixture fixture{"schedule", "frontier", 1024u};
+        const auto &catalog = *fixture.m_catalog;
+
+        for (const u32 iterations: {2u, 5u, 10u}) {
+            auto checkpoint = editedCheckpoint(catalog);
+            checkpoint.m_current_matter.m_iterations = iterations;
+            auto bytes = encodeWorldCheckpoint(checkpoint, catalog);
+            PPR_TEST_ASSERT(bytes.has_value());
+
+            if (iterations == 2u) {
+                // The codec has no v6 writer: omit only v7's schedule word
+                // from its otherwise unchanged, codec-produced payload.
+                const auto raw = sim::save(checkpoint.m_snapshot);
+                PPR_TEST_ASSERT(raw.has_value());
+                const std::size_t offset = bytes->size() -
+                                           raw->size() -
+                                           8u -
+                                           checkpoint.m_current_matter.m_particles.size() * 88u -
+                                           4u -
+                                           64u -
+                                           4u;
+                PPR_TEST_ASSERT(bytes->size() > 8u and offset <= bytes->size() - 4u);
+
+                (*bytes)[8u] = 6u;
+                const auto schedule_begin = bytes->begin() + static_cast<std::ptrdiff_t>(offset);
+                bytes->erase(schedule_begin, schedule_begin + 4);
+            }
+
+            const auto saved = decodeWorldCheckpoint(*bytes, catalog);
+            PPR_TEST_ASSERT(saved and saved->m_current_matter.m_iterations == iterations);
+            PPR_TEST_ASSERT(saved->m_current_matter.m_records == checkpoint.m_current_matter.m_records);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 22u>>(saved->m_current_matter.m_particles[0u]) ==
+                std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+
+            GpuOwner owner;
+            owner.initialize();
+            owner.restore(fixture.m_catalog, *saved, 30u);
+            auto &driver = *owner.m_driver;
+
+            const auto tick = [&] {
+                PPR_TEST_ASSERT(driver.matterState()->m_iterations == iterations);
+                const auto before = owner.m_runtime.accounting();
+                PPR_TEST_ASSERT(before.has_value());
+
+                driver.setPaused(false);
+                owner.update(TimeSpan{std::chrono::seconds{1}} / 60u);
+                owner.completeTick();
+                driver.setPaused(true);
+
+                const auto after = owner.m_runtime.accounting();
+                PPR_TEST_ASSERT(after.has_value());
+                // Nine discovery dispatches per substep, then initialization
+                // and one fused dispatch per admitted iteration.
+                PPR_TEST_ASSERT(
+                    after->m_dispatches - before->m_dispatches == matter::kGameSubsteps * (9u + 2u * iterations));
+                PPR_TEST_ASSERT(driver.matterState()->m_iterations == iterations);
+            };
+
+            tick();
+
+            const auto original_id = driver.matterState()->m_records.front().m_id;
+            const auto water = catalog.findMaterial("water")->m_numeric_id;
+            PPR_TEST_ASSERT(not driver.requestParticleTool({20.0, 20.0, 1.0, 1u, water, EParticleToolKind::spawn}));
+            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(not driver.editPending() and driver.particleCount() == 2u);
+            tick();
+
+            PPR_TEST_ASSERT(not driver.requestParticleTool({20.0, 20.0, 1.0, 0u, 0u, EParticleToolKind::destroy}));
+            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(not driver.editPending() and driver.particleCount() == 1u);
+            PPR_TEST_ASSERT(driver.matterState()->m_records.front().m_id == original_id);
+            tick();
+
+            PPR_TEST_ASSERT(not driver.requestDig({127u, 40u}, 2u, 1u));
+            owner.update(TimeSpan{});
+            PPR_TEST_ASSERT(not driver.editPending() and driver.particleCount() == 3u);
+            tick();
+
+            const auto captured = captureWorldCheckpoint(driver, driver.preparedWorld()->generated());
+            PPR_TEST_ASSERT(captured and captured->m_current_matter.m_iterations == iterations);
+            const auto recoded = encodeWorldCheckpoint(*captured, catalog);
+            PPR_TEST_ASSERT(recoded.has_value());
+            const auto decoded = decodeWorldCheckpoint(*recoded, catalog);
+            PPR_TEST_ASSERT(decoded and decoded->m_current_matter.m_iterations == iterations);
+            PPR_TEST_ASSERT(decoded->m_current_matter.m_records == captured->m_current_matter.m_records);
+        }
     };
 
     PPR_UNIT_TEST (identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick) {
@@ -3390,6 +3481,7 @@ namespace pP::game::tests {
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::particle_occupied_wall_order_is_rejected_then_succeeds_after_evolution,
             detail::checkpoint::identically_restored_attached_owners_preserve_columns_and_resume_the_same_tick,
+            detail::checkpoint::saved_schedule_controls_restored_ticks_after_append_and_replacement,
             detail::checkpoint::dug_sand_sustains_sixty_runtime_ticks_on_shared_terrain,
             detail::checkpoint::frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks,
             detail::checkpoint::frontier_seed_42_liquids_stay_stable_past_prior_explosion,

@@ -280,7 +280,8 @@ namespace pP::colony {
     std::error_code validateMatterState(
         const MatterState &state, const std::span<const sim::GenerationMaterial> materials, const double h,
         const double thickness, const float gravity_y) {
-        if (state.m_cell_metres != h or
+        if (not matter::isSupportedIterations(state.m_iterations) or
+            state.m_cell_metres != h or
             state.m_thickness_metres != thickness or
             state.m_identity.m_world == 0u or
             state.m_identity.m_terrain_revision == 0u or
@@ -715,6 +716,7 @@ namespace pP::colony {
         MatterIdentity m_identity{};
         MatterIdentity m_prepared_identity{};
         std::error_code m_submit_error{};
+        u32 m_iterations{2u}, m_prepared_iterations{2u};
         bool m_submitted{};
         bool m_ready{};
         bool m_append_prepared{}, m_append_ready{};
@@ -969,7 +971,8 @@ namespace pP::colony {
         }
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GameMatter, sim::isSupportedWorldEdge(source.m_world_edge) and
+            GameMatter, matter::isSupportedIterations(source.m_iterations) and
+                                sim::isSupportedWorldEdge(source.m_world_edge) and
                                 source.m_profile.m_grid_width == source.m_world_edge + 7u and
                                 source.m_profile.m_grid_height == source.m_world_edge + 7u
                             ? std::error_code{}
@@ -1018,6 +1021,7 @@ namespace pP::colony {
             state->m_prepared_metadata = std::move(*prepared_metadata);
             state->m_prepared_ledger = std::move(ledger);
             state->m_prepared_identity = source.m_identity;
+            state->m_prepared_iterations = source.m_iterations;
             return {};
         });
     }
@@ -1041,6 +1045,7 @@ namespace pP::colony {
             state->m_active_metadata = std::move(state->m_prepared_metadata);
             state->m_active_ledger = std::move(state->m_prepared_ledger);
             state->m_identity = identity;
+            state->m_iterations = state->m_prepared_iterations;
             return {};
         });
     }
@@ -1098,8 +1103,8 @@ namespace pP::colony {
             state->m_submitted = true;
             state->m_ready = false;
             state->m_submit_error = state->m_active->submitResidentTick(
-                state->m_active->accounting().m_epoch, matter::kGameSubsteps, matter::kSourceIterations, bodies,
-                body_count, force);
+                state->m_active->accounting().m_epoch, matter::kGameSubsteps, state->m_iterations, bodies, body_count,
+                force);
             // An unsuccessful queue submit may still execute. Keep the
             // attempted batch frozen until explicit completion/discard.
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_submit_error);
@@ -1316,15 +1321,17 @@ namespace pP::colony {
         const double cell = candidate.m_cell_metres;
         const u32 terrain_edge = candidate.m_world_edge + 1u;
         const auto profile = candidate.m_profile;
+        const u32 iterations = candidate.m_iterations;
         const u32 moving_count = static_cast<u32>(candidate.m_particles.size());
         return enqueue(
-            [state, source, target, retained_count, cell, terrain_edge, profile, moving_count, replace, terrain_edit,
-                uploaded = std::move(uploaded), metadata = std::move(metadata), ledger = std::move(ledger),
-                terrain = std::move(terrain)]() -> std::error_code {
+            [state, source, target, retained_count, cell, terrain_edge, profile, iterations, moving_count, replace,
+                terrain_edit, uploaded = std::move(uploaded), metadata = std::move(metadata),
+                ledger = std::move(ledger), terrain = std::move(terrain)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
                                         state->m_identity == source and
+                                        state->m_iterations == iterations and
                                         state->m_active->profile().m_grid_width == terrain_edge + 6u and
                                         state->m_active->profile().m_grid_height == terrain_edge + 6u and
                                         state->m_active->profile().m_particle_count == retained_count
