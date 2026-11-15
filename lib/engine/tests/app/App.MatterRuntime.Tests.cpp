@@ -927,7 +927,12 @@ namespace pP::tests::detail::MatterAdapter {
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, candidate, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_replace));
-        std::ignore = success(runtime.beginPollEdit(candidate.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto candidate_ready = success(runtime.beginPollEdit(candidate.m_identity));
+        PPR_TEST_ASSERT(candidate_ready.m_readback and candidate_ready.m_readback->m_source == candidate.m_identity);
+
         auto replaced = success(runtime.beginPublishEdit(candidate.m_identity));
         PPR_TEST_ASSERT(replaced.m_view and replaced.m_view->m_metadata);
         PPR_TEST_ASSERT(replaced.m_view->m_metadata != published.m_view->m_metadata);
@@ -971,7 +976,12 @@ namespace pP::tests::detail::MatterAdapter {
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, appended, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_append));
-        std::ignore = success(runtime.beginPollEdit(appended.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto appended_ready = success(runtime.beginPollEdit(appended.m_identity));
+        PPR_TEST_ASSERT(appended_ready.m_readback and appended_ready.m_readback->m_source == appended.m_identity);
+
         auto appended_view = success(runtime.beginPublishEdit(appended.m_identity));
         PPR_TEST_ASSERT(appended_view.m_view and appended_view.m_view->m_metadata);
         PPR_TEST_ASSERT(appended_view.m_view->m_metadata->m_version > replaced.m_view->m_metadata->m_version);
@@ -997,7 +1007,12 @@ namespace pP::tests::detail::MatterAdapter {
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, reordered, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_replace));
-        std::ignore = success(runtime.beginPollEdit(reordered.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto reordered_ready = success(runtime.beginPollEdit(reordered.m_identity));
+        PPR_TEST_ASSERT(reordered_ready.m_readback and reordered_ready.m_readback->m_source == reordered.m_identity);
+
         auto reordered_view = success(runtime.beginPublishEdit(reordered.m_identity));
         PPR_TEST_ASSERT(reordered_view.m_view and reordered_view.m_view->m_metadata);
         PPR_TEST_ASSERT(not appended_view.m_view->current());

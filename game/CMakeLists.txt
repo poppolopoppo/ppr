@@ -432,10 +432,10 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks"
         LOOPS
         RESOURCE_LOCK gpu
-        # Measured 591.47 s on 2026-11-12; the former 600 s ceiling left a
-        # 1.4% margin and timed out once without any assertion failure. The
-        # 900 s ceiling keeps an honest margin; assertions are unchanged.
-        TIMEOUT 900
+        # Measured 2286.84 s under the K=5 new-world schedule; the former 900 s
+        # ceiling timed out without any assertion failure. The 2750 s ceiling
+        # keeps a 20% margin; assertions are unchanged.
+        TIMEOUT 2750
         LABELS unit game gpu_validation matter_long
     )
     ppr_add_test_entry(TARGET game.tests
@@ -443,7 +443,10 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/frontier_seed_42_liquids_stay_stable_past_prior_explosion"
         LOOPS
         RESOURCE_LOCK gpu
-        TIMEOUT 300
+        # Measured 304.84 s under the K=5 new-world schedule, past the former
+        # 300 s ceiling; the 370 s ceiling keeps a 21% margin and assertions
+        # are unchanged.
+        TIMEOUT 370
         LABELS unit game gpu_validation matter_long
     )
 
