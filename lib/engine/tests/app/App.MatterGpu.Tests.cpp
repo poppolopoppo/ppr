@@ -2071,6 +2071,288 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // iteration-count correctness evidence (opt-in, not a contract yet)
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (iteration_count_correctness_diagnostic) {
+        // Opt-in evidence, not a gate: the repeated-use gate carries no measurement
+        // work, and an absent switch reports an explicit skip so nobody mistakes it
+        // for evidence.
+        const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            _.log(std::format("ITERATION-CORRECTNESS skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1"));
+            return;
+        }
+
+        constexpr u32 kGridEdge = 64u;
+        constexpr u32 kHorizon = 240u;
+        constexpr std::array<u32, 3u> kCounts{2u, 5u, 10u};
+        // The deformable scenes hold a fixed *shear* rather than a volume-changing
+        // stretch. This profile's constraint relaxes D with gain 1.5 toward a target
+        // of `rotation * F^-1`, whose linearised diagonal mode has a |1.37| eigenvalue
+        // per stage, so a held diagonal stretch is not a bounded state over a
+        // 240-substep horizon; the volume-preserving shear converges to a bounded
+        // rotation instead. The magnitude 3.0 puts the major singular value (3.303)
+        // above the visco yield surface e = 2.718, so elastic and visco are
+        // guaranteed to diverge in the first integration rather than following
+        // identical arithmetic.
+        constexpr float kShear = 3.0f;
+
+        // Shared residents: every scene is loaded whole, run for whole substeps and
+        // read back through the real resident path. No scene depends on K.
+        const auto load = [](Fixture &fixture, const std::span<const GpuParticle> rows) {
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(rows, {}, fixture.m_solver.accounting().m_epoch));
+            fixture.m_solver.publishReplacement();
+        };
+        const auto run = [](Fixture &fixture, const u32 iterations, const u32 substeps) {
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, substeps, iterations));
+
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            fixture.m_solver.publishTick();
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+
+            return fixture.snapshot();
+        };
+        const auto inventory = [](const std::span<const GpuParticle> rows) {
+            std::array<double, 2u> totals{};
+            for (const auto &row: rows) {
+                totals[0u] += static_cast<double>(row.m_mass);
+                totals[1u] += static_cast<double>(row.m_volume);
+            }
+
+            return totals;
+        };
+        const auto assert_finite = [](const std::span<const GpuParticle> rows) {
+            for (const auto &row: rows) {
+                for (const float value: std::bit_cast<std::array<float, 22u>>(row)) {
+                    PPR_TEST_ASSERT(std::isfinite(value));
+                }
+            }
+        };
+        const auto gradient_residual = [](const std::span<const GpuParticle> rows) {
+            float value = 0.0f;
+            for (const auto &row: rows) {
+                const auto &gradient = row.m_deformation_gradient;
+                value = std::max(
+                    {value, std::abs(gradient.m_c0x - 1.0f), std::abs(gradient.m_c0y), std::abs(gradient.m_c1x),
+                        std::abs(gradient.m_c1y - 1.0f)});
+            }
+
+            return value;
+        };
+
+        {
+            // Zero-gravity fixture: rest, compression, elastic and visco scenes.
+            Fixture fixture;
+            PPR_DEFER {
+                fixture.shutdown();
+            };
+            fixture.initialize(true, kGridEdge, kGridEdge, false, nullptr, 0.0f);
+            PPR_TEST_ASSERT(fixture.m_solver.profile().m_gravity_strength == 0.0f);
+
+            // ---- rest drift: 16x16 unit-spacing liquid pool at density 1 ----
+            Array<GpuParticle> pool;
+            pool.reserve(16u * 16u);
+            for (u32 row = 0u; row < 16u * 16u; ++row) {
+                auto particle = restParticle();
+                particle.m_position_x = 24.5f + static_cast<float>(row % 16u);
+                particle.m_position_y = 24.5f + static_cast<float>(row / 16u);
+                particle.m_material = static_cast<float>(ESourceMaterial::liquid);
+                particle.m_liquid_density = 1.0f;
+                particle.m_log_jp = 0.0f;
+                pool.push_back(particle);
+            }
+
+            for (const u32 iterations: kCounts) {
+                load(fixture, pool);
+                const auto state = run(fixture, iterations, kHorizon);
+                PPR_TEST_ASSERT(state.size() == pool.size());
+                assert_finite(state);
+                PPR_TEST_ASSERT(inventory(state) == inventory(pool));
+
+                float max_displacement = 0.0f, density_min = std::numeric_limits<float>::max(), density_max = 0.0f;
+                u32 moved = 0u;
+                for (std::size_t row = 0u; row < state.size(); ++row) {
+                    max_displacement = std::max(
+                        {max_displacement, std::abs(state[row].m_displacement_x),
+                            std::abs(state[row].m_displacement_y)});
+                    density_min = std::min(density_min, state[row].m_liquid_density);
+                    density_max = std::max(density_max, state[row].m_liquid_density);
+                    if (std::abs(state[row].m_position_x - pool[row].m_position_x) > 1.0f or
+                        std::abs(state[row].m_position_y - pool[row].m_position_y) > 1.0f) {
+                        ++moved;
+                    }
+                }
+
+                const auto totals = inventory(state);
+                std::fprintf(
+                    stdout,
+                    "ITERATION-CORRECTNESS property=rest_drift k=%u substeps=%u rows=%u max_displacement=%.9g "
+                    "moved_rows=%u density_min=%.9g density_max=%.9g mass=%.9g volume=%.9g\n",
+                    static_cast<unsigned>(iterations), static_cast<unsigned>(kHorizon),
+                    static_cast<unsigned>(state.size()), static_cast<double>(max_displacement),
+                    static_cast<unsigned>(moved), static_cast<double>(density_min), static_cast<double>(density_max),
+                    totals[0u], totals[1u]);
+                std::fflush(stdout);
+            }
+
+            // ---- compression decay: one liquid row at density 0.75 ----
+            auto compressed = restParticle();
+            compressed.m_position_x = 32.5f;
+            compressed.m_position_y = 32.5f;
+            compressed.m_material = static_cast<float>(ESourceMaterial::liquid);
+            compressed.m_liquid_density = 0.75f;
+            compressed.m_log_jp = 0.0f;
+            const std::array<GpuParticle, 1u> compressed_scene{compressed};
+
+            for (const u32 iterations: kCounts) {
+                load(fixture, compressed_scene);
+                const auto after_1 = run(fixture, iterations, 1u);
+                const auto after_8 = run(fixture, iterations, 7u);
+                const auto after_64 = run(fixture, iterations, 56u);
+                PPR_TEST_ASSERT(after_1.size() == 1u and after_8.size() == 1u and after_64.size() == 1u);
+                assert_finite(after_64);
+                PPR_TEST_ASSERT(inventory(after_64) == inventory(compressed_scene));
+
+                const float error_1 = std::abs(after_1[0u].m_liquid_density - 1.0f);
+                const float error_8 = std::abs(after_8[0u].m_liquid_density - 1.0f);
+                const float error_64 = std::abs(after_64[0u].m_liquid_density - 1.0f);
+                const auto totals = inventory(after_64);
+                std::fprintf(
+                    stdout,
+                    "ITERATION-CORRECTNESS property=compression_decay k=%u substeps=%u rows=1 density=%.9g "
+                    "density_error_s1=%.9g density_error_s8=%.9g density_error_s64=%.9g density_s64=%.9g "
+                    "mass=%.9g volume=%.9g\n",
+                    static_cast<unsigned>(iterations), static_cast<unsigned>(kHorizon),
+                    static_cast<double>(compressed.m_liquid_density), static_cast<double>(error_1),
+                    static_cast<double>(error_8), static_cast<double>(error_64),
+                    static_cast<double>(after_64[0u].m_liquid_density), totals[0u], totals[1u]);
+                std::fflush(stdout);
+            }
+
+            // ---- elastic recovery vs visco residual: one sheared 8x8 patch each ----
+            const auto sheared_patch = [](const ESourceMaterial material, const float shear) {
+                Array<GpuParticle> patch;
+                patch.reserve(8u * 8u);
+                for (u32 row = 0u; row < 8u * 8u; ++row) {
+                    auto particle = restParticle();
+                    particle.m_position_x = 24.5f + static_cast<float>(row % 8u);
+                    particle.m_position_y = 24.5f + static_cast<float>(row / 8u);
+                    particle.m_material = static_cast<float>(material);
+                    particle.m_log_jp = 0.0f;
+                    particle.m_deformation_gradient = {1.0f, 0.0f, shear, 1.0f};
+                    patch.push_back(particle);
+                }
+
+                return patch;
+            };
+            const Array<GpuParticle> elastic_scene = sheared_patch(ESourceMaterial::elastic, kShear);
+            const Array<GpuParticle> visco_scene = sheared_patch(ESourceMaterial::visco, kShear);
+
+            for (const u32 iterations: kCounts) {
+                float residual[2u][3u]{};
+                const std::array<const Array<GpuParticle> *, 2u> scenes{&elastic_scene, &visco_scene};
+                const std::array<const char *, 2u> names{"elastic_recovery", "visco_residual"};
+                for (std::size_t scene = 0u; scene < scenes.size(); ++scene) {
+                    load(fixture, *scenes[scene]);
+                    const auto after_1 = run(fixture, iterations, 1u);
+                    const auto after_64 = run(fixture, iterations, 63u);
+                    const auto after_240 = run(fixture, iterations, 176u);
+                    PPR_TEST_ASSERT(
+                        after_1.size() == scenes[scene]->size() and
+                        after_64.size() == scenes[scene]->size() and
+                        after_240.size() == scenes[scene]->size());
+                    assert_finite(after_240);
+                    PPR_TEST_ASSERT(inventory(after_240) == inventory(*scenes[scene]));
+
+                    residual[scene][0u] = gradient_residual(after_1);
+                    residual[scene][1u] = gradient_residual(after_64);
+                    residual[scene][2u] = gradient_residual(after_240);
+                    const auto totals = inventory(after_240);
+                    std::fprintf(
+                        stdout,
+                        "ITERATION-CORRECTNESS property=%s k=%u substeps=%u rows=%u shear=%.9g residual_s1=%.9g "
+                        "residual_s64=%.9g residual_s240=%.9g mass=%.9g volume=%.9g\n",
+                        names[scene], static_cast<unsigned>(iterations), static_cast<unsigned>(kHorizon),
+                        static_cast<unsigned>(after_240.size()), static_cast<double>(kShear),
+                        static_cast<double>(residual[scene][0u]), static_cast<double>(residual[scene][1u]),
+                        static_cast<double>(residual[scene][2u]), totals[0u], totals[1u]);
+                    std::fflush(stdout);
+                }
+
+                // Structural visco-vs-elastic check. The visco yield clamp binds on the
+                // first integration (3.303 > e = 2.718 on the major singular value)
+                // while the elastic branch has no such projection, so the two retained
+                // deformations must differ by more than 5 % of the larger one. This is
+                // a branch-identity claim, not a fidelity tolerance; the reported
+                // residuals at 64 and 240 substeps stay evidence only.
+                const float larger = std::max(residual[0u][0u], residual[1u][0u]);
+                PPR_TEST_ASSERT(larger > 0.0f);
+                PPR_TEST_ASSERT(std::abs(residual[0u][0u] - residual[1u][0u]) > 0.05f * larger);
+            }
+        }
+
+        {
+            // Gravity fixture: the granular column settles against the guardian floor.
+            Fixture fixture;
+            PPR_DEFER {
+                fixture.shutdown();
+            };
+            fixture.initialize(true, kGridEdge, kGridEdge, false, nullptr, 2.5f);
+            PPR_TEST_ASSERT(fixture.m_solver.profile().m_gravity_strength > 0.0f);
+
+            // ---- granular settling: 8 wide x 16 tall sand column ----
+            Array<GpuParticle> column;
+            column.reserve(8u * 16u);
+            for (u32 row = 0u; row < 8u * 16u; ++row) {
+                auto particle = restParticle();
+                particle.m_position_x = 28.5f + static_cast<float>(row % 8u);
+                particle.m_position_y = 20.5f + static_cast<float>(row / 8u);
+                particle.m_material = static_cast<float>(ESourceMaterial::sand);
+                particle.m_log_jp = 0.0f;
+                column.push_back(particle);
+            }
+
+            for (const u32 iterations: kCounts) {
+                load(fixture, column);
+                const auto state = run(fixture, iterations, kHorizon);
+                PPR_TEST_ASSERT(state.size() == column.size());
+                assert_finite(state);
+                PPR_TEST_ASSERT(inventory(state) == inventory(column));
+
+                float top = -std::numeric_limits<float>::max(), bottom = std::numeric_limits<float>::max();
+                u32 moved = 0u;
+                for (std::size_t row = 0u; row < state.size(); ++row) {
+                    top = std::max(top, state[row].m_position_y);
+                    bottom = std::min(bottom, state[row].m_position_y);
+                    if (std::abs(state[row].m_position_x - column[row].m_position_x) > 1.0f or
+                        std::abs(state[row].m_position_y - column[row].m_position_y) > 1.0f) {
+                        ++moved;
+                    }
+                }
+
+                const auto totals = inventory(state);
+                std::fprintf(
+                    stdout,
+                    "ITERATION-CORRECTNESS property=granular_settling k=%u substeps=%u rows=%u top_height=%.9g "
+                    "bottom_height=%.9g moved_rows=%u mass=%.9g volume=%.9g\n",
+                    static_cast<unsigned>(iterations), static_cast<unsigned>(kHorizon),
+                    static_cast<unsigned>(state.size()), static_cast<double>(top), static_cast<double>(bottom),
+                    static_cast<unsigned>(moved), totals[0u], totals[1u]);
+                std::fflush(stdout);
+            }
+        }
+    };
+
+    // ------------------------------------------------------------------
     // isolated liquid pressure recurrence diagnostic
     // ------------------------------------------------------------------
 
@@ -6544,6 +6826,7 @@ namespace pP::tests {
                 detail::MatterGpu::iteration_roles_integrate_once_per_substep,
                 detail::MatterGpu::odd_even_schedule_preserves_sparse_sources,
                 detail::MatterGpu::iteration_count_gpu_cost_diagnostic,
+                detail::MatterGpu::iteration_count_correctness_diagnostic,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
                 detail::MatterGpu::split_device_rows_pack_and_unpack_every_semantic_field_by_name,
                 detail::MatterGpu::lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input,

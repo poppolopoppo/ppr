@@ -197,3 +197,26 @@ These are measurements for this scene and host, not product budgets. The leaf is
 ## A4 — operating-point criteria still open
 
 The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf. Until it exists, the K5 default must not be adopted on cost evidence alone.
+
+## A4 — correctness matrix across K (Release)
+
+All scenes hold 240 substeps (or the stated horizons), identical initialization per K, exact inventory conservation asserted (mass/volume unchanged for every scene and K). Values are evidence, not contracts.
+
+| Property | K=2 | K=5 | K=10 |
+|---|---|---|---|
+| Rest drift (256-row pool, no gravity) | displacement 0, 0 moved | 0, 0 moved | 0, 0 moved |
+| Compression decay (ρ=0.75) | err 1.67e-6 at s1/8/64 | same | same |
+| Elastic recovery (64-row patch, shear 3) | residual 3 → **9941** (s64) → 9986 | 3.31 → **9858** → 9972 | 3.72 → 1.9997 → 2.0001 |
+| Visco residual (same patch) | 2.64 → 3.36 → 2.92 | 2.90 → 1.98 → 2.00 | 2.98 → 1.98 → 2.00 |
+| Granular settling (8×16 column) | top 17.79, bottom 5.20 | top 20.42, bottom 5.58 | top 21.44, bottom 5.70 |
+
+### Findings
+
+1. **Elastic shear does not recover at any K, and diverges at K=2 and K=5.** A free elastic patch held at shear 3.0 under zero gravity reaches the singular-value clamp (`Σ ≈ 1e4`) by substep 64 at K2/K5; at K10 it settles at `|F − I| ≈ 2.0`, i.e. it retains the deformation instead of recovering. This is pre-existing ported behaviour (the gain-based relaxation is not an energy-minimising solve), not a schedule regression: K=2 is the current production default and shows the worst value. It means **Elastic must not be admitted to the game before its constitutive response is addressed** (B1's scope), and it is not evidence against or for any K.
+2. **Liquid and granular behaviour is K-insensitive for the measured observables.** Rest drift is exactly zero at every K; compression error converges within one substep at every K; sand settling differs in top height (17.8 / 20.4 / 21.4) but keeps its inventory and remains bounded, which is a physical-refinement difference rather than a defect.
+3. **Visco behaves consistently**: the shear clamp removes the elastic divergence and the retained deformation settles near 2.0 at every K.
+4. **Compression decay is instantaneous at every K** (25 % error gone after one substep). That is consistent with the stiffness of the current liquid feedback, and is worth revisiting when B2 replaces the liquid model.
+
+### Operating-point ruling
+
+**Keep K = 2 as the default.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows; the measured correctness differences do not justify that cost, and the only K-sensitive behaviour found (elastic shear) is a constitutive defect that no K fixes. K5/K10 remain admitted and covered by `matter_schedule_gpu`, so the choice is cheap to revisit once B1/B2 change the material set. Do not switch the default on cost evidence alone, and do not treat K10's elastic bound as a fix.
