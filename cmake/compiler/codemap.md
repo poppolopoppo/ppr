@@ -45,15 +45,19 @@ GCC is rejected at configure time: it rejects `-stdlib=libc++` and cannot build 
   restores the previous minimal optimized image. `clang-rel-profile` inherits `clang-rel` (same codegen, its own
   tree, `PPR_LOGGING_LEVEL=EMPHASIS`) for CPU-sampling sessions.
   **Manifest preselection** (`../LibcxxModulesManifest.cmake`, included from root `CMakeLists.txt` before
-  `project()` and again here): version-agnostic `libc++.modules.json` probe (no pinned LLVM major),
-  `llvm-config --libdir`, `$LLVM_DIR`, and `clang --print-resource-dir` hints first, then well-known
-  versioned/multiarch fallbacks (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`);
-  `CMAKE_CXX_STDLIB_MODULES_JSON` is set only when the file exists, otherwise left unset for CMake default
-  lookup. The pre-`project()` pass exists because CMake probes for `libstdc++.modules.json` itself (only while
+  `project()` and again here). Selection contract: `CMAKE_CXX_STDLIB_MODULES_JSON` in the cache is user intent
+  (validated first, wins while it resolves, and this file never cache-writes it), while
+  `PPR_LIBCXX_MODULES_JSON` is the automatic selection it records (stability hint, re-validated every configure,
+  never user intent). After those come a version-agnostic `libc++.modules.json` probe (no pinned LLVM major) with
+  `llvm-config --libdir`, `$LLVM_DIR`, and `clang --print-resource-dir` hints, then the well-known
+  versioned/multiarch fallbacks (`llvm-22`/`llvm-20`, `x86_64-linux-gnu`, `llvm/lib`). A non-resolving override
+  warns and falls through to discovery; when nothing resolves, both cache entries are cleared before the status
+  line reports that `CMAKE_CXX_STDLIB_MODULES_JSON` is left unset for CMake's default lookup. The pre-`project()`
+  pass exists because CMake probes for `libstdc++.modules.json` itself (only while
   `CMAKE_CXX_STDLIB_MODULES_JSON` is unset), and GCC 16 ships that manifest: it would record libstdc++'s module
   source for this `-stdlib=libc++` build and every dependent module scan then fails with
   `'bits/stdc++.h' file not found`. The `Clang.cmake` inclusion is a no-op after that pass
-  (`PPR_LIBCXX_MANIFEST_DISCOVERED`), so the scan and its status message run once per configure;
+  (`PPR_LIBCXX_MANIFEST_DISCOVERED`), so the scan and its single status message run once per configure;
   **clang-cl** follows the MSVC-compatible branch when CMake sets `MSVC`; the dispatcher checks `MSVC` before compiler ID.
 - **GCC** is not supported and `GCC.cmake` was removed: `Compilers.cmake` fails configure for
   `CMAKE_CXX_COMPILER_ID=GNU` with the supported alternatives. The hidden `gcc-*` presets therefore fail fast

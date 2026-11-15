@@ -17,19 +17,32 @@ correction, not a scatter clamp or a change to the dense source oracle. Both
 production and oracle consume the supplied profile. See the isolated pressure
 and frontier5×7-dig regression tests.
 
-`solver.slang` has two production entry points, `fused0` and `fused1`,
-instantiating the same fused body with compile-time iteration0/1. Both retain
-the node contact/error stage and shared barriers; only the existing gather/
-integration selectors become compile-time constants. The host still encodes
-two immutable roots and two dispatches per substep. `sparse_grid.slang`
-discovers compact buckets/pages, counts and inserts rows, and initializes the
-destination through separately ordered GPU passes. Each substep constructs
-buckets from current enabled rows and dispatches fused iteration0 then iteration1 indirectly.
-Iteration0 bootstraps scatter without gathering; iteration1 gathers, integrates
-and scatters. The engine supports K2 only and rejects all other counts before
-GPU work. Production advances eight evolving dt=1/480 substeps per fixed tick;
-drawing does not advance simulation. Each fused dispatch owns its immutable
-selector and predicted-body-base constants through command completion.
+`solver.slang` has two production entry points, `fused0` and `fused1`. `fused0`
+is the stage-0 bootstrap and `fused1` serves every later stage, so both keep the
+node contact/error stage and the shared barriers while K stays a runtime count.
+The host encodes `substeps * K` immutable roots and one rooted dispatch per
+stage. `sparse_grid.slang` discovers compact buckets/pages, counts and inserts
+rows, and initializes the destination through separately ordered GPU passes.
+Each substep constructs buckets from current enabled rows, then dispatches
+stages0..K-1 indirectly. Stage0 bootstraps scatter without gathering; stages
+1..K-2 gather, constrain and scatter; stage K-1 additionally integrates, so
+gravity, the engine radial brush and the sand pressure impulse run exactly once
+per substep. The stage index and K travel in the runtime parameter row
+(`reserved0`, `reserved1`); the shader integrates when
+`reserved0 + 1 >= reserved1`. The engine admits K∈{2,5,10} and rejects every
+other count before any GPU work; production still submits the K2 default.
+Production advances eight evolving dt=1/480 substeps per fixed tick; drawing does
+not advance simulation. Each fused dispatch owns its immutable stage/K,
+ping-pong-side, source-generation and predicted-body-base constants through
+command completion.
+
+The two sparse payload/index sides strictly alternate per stage, so consecutive
+stages never write the side they read. The host, not stage parity, tracks the
+side the schedule finished on and that side's write generation: discovery
+republishes only the page set of the first stage's destination, and the side the
+previous substep finished on keeps the index and generation its reader names.
+An odd K therefore starts the next substep on the other side than the previous
+one, which parity arithmetic cannot express.
 
 `fork_core.slang` supplies shared64/32 storage access and selected-fork SVD,
 constraint and integration arithmetic. `types.slang` supplies scalar column
@@ -129,7 +142,8 @@ is added. The fork conformance path and `fork_core.slang` remain unchanged.
 
 The game radial brush is another explicit engine adapter, enabled only under
 `PBMPM_ENGINE_ADAPTERS`. A separate16-byte constant supplies centre, radius and
-signed acceleration in solver-cell units. Iteration1 adds
+signed acceleration in solver-cell units, and the host binds it only to the
+final stage's root. That stage adds
 `direction * (1 - distance/radius)^2 * acceleration * dt^2` to displacement
 beside gravity, before endpoint constraints. The exact centre receives no radial
 impulse. Zero acceleration bypasses this arithmetic; the independent source
@@ -139,25 +153,43 @@ Constitutive operands are admitted, not repaired. `solver.slang` checks the
 stored deformation gradient and the trial `(I + D) * F` immediately before the
 production `constraint` and `integration` calls. An unusable operand is a
 nonfinite matrix, a zero or nonfinite determinant, an unusable inverse (an
-overflowing reciprocal or inverse component) or a nonfinite SVD output; it
-rejects that particle alone through `recordError(8u, 0xffffffffu, field, row)`
-with field4 for the stored gradient and field8 for the trial deformation. Group
-barriers, the other rows and the kernel's remaining work are unaffected.
-Deliberate upstream limiting stays legal: the singular-value clamps,
-`clamp(abs(df), 0.1, ...)` and the guardian only ever see finite operands, and no
-clamped value is re-inspected. Inside the `PBMPM_ENGINE_ADAPTERS` blocks of
-`fork_core.slang` the sand history projection reports field17 when it would
-divide by a zero deviatoric norm, and the visco plastic state reports field16
-when `exp(1 - plasticity)`, `J` or `newJ` is nonfinite or zero at the point of
-use; either rejection restores that particle's step state and continues. The
-no-adapter conformance path keeps its original arithmetic and its preprocessed
-text is byte-identical. Profile constants whose derived operands cannot be
-finite are refused before any work instead: resident-tick admission returns
-`invalid_argument` unless `deltaTime > 0` with a finite `1/deltaTime`, the
-fixed-point multiplier is at least one, elasticity ratio, liquid/elastic
-relaxation and liquid viscosity are finite, the friction angle lies in `[0, 90)`
-so `sin` and `3 - sin` stay usable, and `exp(1 - plasticity)` is finite and
-positive. No error word, semantic field, binding or wire record is added.
+overflowing reciprocal or inverse component) or an overflowing decomposition
+radicand; it rejects that particle alone through
+`recordError(8u, 0xffffffffu, field, row)` with field4 for the stored gradient and
+field8 for the trial deformation. The radicand test evaluates the source
+decomposition's own `E*E + H*H` and `F*F + G*G` half-sum combinations instead of a
+conservative per-entry bound, so the accepted domain is exactly where `forkSvd`'s
+squares and both square roots stay finite (`diag(2e19, 1)` is admitted) and no
+decomposition is evaluated in the guard. A liquid's `1/density` is validated the
+same way as field12, so a positive subnormal density does not depend on the
+device flushing it to zero. Group barriers, the other rows and the kernel's
+remaining work are unaffected. Deliberate upstream limiting stays legal: the
+singular-value clamps, `clamp(abs(df), 0.1, ...)` and the guardian only ever see
+finite operands, and no clamped value is re-inspected. After the step, the value
+the scatter consumes is bounded in the fixed-point conversion's own domain: a
+produced `deformationDisplacement` outside it rejects the row as field8 and a
+nonfinite, nonpositive or noninvertible liquid density as field12. That backstop
+is what catches a coefficient product that overflows although every admitted
+operand stayed finite, and a rejected row contributes nothing to the grid.
+Inside the `PBMPM_ENGINE_ADAPTERS` blocks of `fork_core.slang` the sand history
+projection reports field17 when the deviatoric norm has no finite value (a huge
+but finite `logJp`) or when either projected exponent leaves the domain where
+`exp` is finite and positive, and the visco plastic state reports field16 when
+`exp(1 - plasticity)`, `J` or `newJ` is nonfinite or zero, or when the
+`J / newJ` quotient the step multiplies by overflows; either rejection restores
+that particle's step state and continues. The no-adapter conformance path keeps
+its original arithmetic and its preprocessed text is byte-identical. Profile
+constants whose derived operands cannot be finite are refused before any work
+instead: resident-tick admission returns `invalid_argument` unless
+`deltaTime > 0` with a finite `1/deltaTime`, the fixed-point multiplier is at
+least one, elasticity ratio, liquid/elastic relaxation and liquid viscosity are
+finite, the friction angle lies in `[0, 90)` so `sin` and `3 - sin` stay usable,
+and `exp(1 - plasticity)` is finite and positive. Admission bounds that domain,
+not coefficient amplitudes; the produced-state backstop covers the rest. The
+objective-volume gather only forms `1/volume` when the node has support, so an
+empty reciprocal is an explicit no-feedback branch rather than an infinity the
+comparison happens to discard. No error word, semantic field, binding or wire
+record is added.
 
 Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
 uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,

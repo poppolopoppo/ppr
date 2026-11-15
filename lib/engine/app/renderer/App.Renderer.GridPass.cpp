@@ -3685,9 +3685,12 @@ namespace pP {
         // actually bound; the frame's ownership bit is derived from this result.
         m_terrain_ownership_fallback_used = true;
 
-        const bool published = m_world.m_lighting and
-                               m_world.m_lighting->hasPublishedCells() and
-                               m_world.m_world_edge == WorldLightingPass::kWorldEdge;
+        // The frame's resolved-cell publication in force. The material and
+        // particle-surface bindings prefer the world-lighting publication whenever
+        // it holds cells, so the fixture publication is in force only when the
+        // world holds none.
+        const bool world_cells = m_world.m_lighting and m_world.m_lighting->hasPublishedCells();
+        const bool published = world_cells and m_world.m_world_edge == WorldLightingPass::kWorldEdge;
         const bool resolved = (m_test_resolved and m_test_fine_ch) or published;
         if (not resolved) {
             // No categorical publication: no ownership source either. Keep a
@@ -3698,21 +3701,32 @@ namespace pP {
         }
 
         availability = kFrameHasResolvedCells;
-        if (m_test_best_row) {
-            // A fixture publication that also supplies the winner grid owns
-            // particle cells exactly as a committed projection attempt does: the
-            // resolved cells above and this grid are the same published pair.
+        // Resolved cells and winners are one publication authority, so a fixture
+        // winner grid is the ownership authority only when this frame's resolved
+        // cells came from the same fixture publication. Pairing world-published
+        // cells with a fixture grid would mix two publications.
+        const bool fixture_cells = not world_cells and m_test_resolved and m_test_fine_ch;
+        if (fixture_cells and m_test_best_row) {
+            // Rebind every ownership field the root declares so none keeps an
+            // unrelated static binding: the winner grid is the fixture grid
+            // itself, while the Q16 fill has no fixture source and keeps the
+            // pass's zero fallback (the roots this path serves declare only the
+            // winner grid).
+            auto *const best_row = m_test_best_row.get();
             const rhi::ShaderCursor ownership = cursor["g_best_row"];
-            if (not ownership.isValid()) {
-                // A root that declares no winner grid reads no ownership, so it
-                // gains nothing from the bit; any other declared ownership field
-                // keeps its static zero binding.
-                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
-                return {};
+            if (ownership.isValid()) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass, ownership.setBinding(rhi::Binding(best_row, makeFullRange(best_row))));
             }
 
-            auto *const best_row = m_test_best_row.get();
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership.setBinding(rhi::Binding(best_row, makeFullRange(best_row))));
+            const rhi::ShaderCursor fill = cursor["g_cell_fill"];
+            if (fill.isValid()) {
+                auto *const fallback = m_lighting_fallback.get();
+                PPR_RETURN_ERROR_ON_FAIL(
+                    GridPass,
+                    fallback != nullptr ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, fill.setBinding(rhi::Binding(fallback, makeFullRange(fallback))));
+            }
 
             availability |= kFrameHasParticleOwnership;
             m_terrain_ownership_fallback_used = false;

@@ -249,29 +249,40 @@ bool usableInverse(SourceMatrix m) {
     return finiteMatrix(scale(matrix(m.c1y, -m.c0y, -m.c1x, m.c0x), reciprocal));
 }
 
-// forkSvd squares E,F,G,H, each a half-sum or half-difference of two gradient
-// entries, so a squared term is at most max_entry^2 and the radicand E^2 + H^2
-// (or F^2 + G^2) at most 2 * max_entry^2. At 1.3e19 that radicand is
-// 2 * 1.69e38 = 3.38e38, below FLT_MAX = 3.4028e38, so the squares and both
-// sqrts stay finite; a magnitude above it has no finite decomposition input.
+// forkSvd forms E=(c0x+c1y)/2, F=(c0x-c1y)/2, G=(c0y+c1x)/2, H=(c0y-c1x)/2 and
+// evaluates sqrt(E*E + H*H) and sqrt(F*F + G*G). Testing those two radicands
+// directly admits exactly the arithmetic domain where the squares and both
+// square roots stay finite, instead of a conservative per-entry box: diag(2e19,1)
+// is admitted because H and G are zero, while its source decomposition is finite.
 // Deliberate singular-value limiting happens after this point, on finite values,
 // so it is never re-inspected here.
-static const float kMaxDecompositionEntry = 1.3e19;
+bool usableRadicands(SourceMatrix m) {
+    float e = (m.c0x + m.c1y) * 0.5;
+    float f = (m.c0x - m.c1y) * 0.5;
+    float g = (m.c0y + m.c1x) * 0.5;
+    float h = (m.c0y - m.c1x) * 0.5;
 
-bool usableMagnitude(SourceMatrix m) {
-    float largest = max(max(abs(m.c0x), abs(m.c0y)), max(abs(m.c1x), abs(m.c1y)));
-    return largest < kMaxDecompositionEntry;
+    return isfinite(e * e + h * h) && isfinite(f * f + g * g);
 }
 
 bool usableDeformation(SourceMatrix m) {
-    return finiteMatrix(m) && usableMagnitude(m) && usableInverse(m);
+    return finiteMatrix(m) && usableRadicands(m) && usableInverse(m);
 }
 
 // Records the first unusable constitutive operand for this row and reports
 // whether the production constraint/integration may run. Stored F is field 4 and
-// the trial (I + D)F is field 8 of the validation record. Liquids read neither.
+// the trial (I + D)F is field 8 of the validation record; a liquid's density
+// reciprocal is field 12. The device may flush a subnormal density to zero, so
+// the reciprocal is validated explicitly rather than through that comparison.
 bool deformationOperandsUsable(Particle p, uint row) {
-    if (p.material == MaterialLiquid) return true;
+    if (p.material == MaterialLiquid) {
+        if (!isfinite(1.0 / p.liquidDensity)) {
+            recordError(8u, 0xffffffffu, 12u, row);
+            return false;
+        }
+
+        return true;
+    }
 
     if (!usableDeformation(p.deformationGradient)) {
         recordError(8u, 0xffffffffu, 4u, row);
@@ -281,6 +292,39 @@ bool deformationOperandsUsable(Particle p, uint row) {
     SourceMatrix trial = product(add(identity(), p.deformationDisplacement), p.deformationGradient);
     if (!usableDeformation(trial)) {
         recordError(8u, 0xffffffffu, 8u, row);
+        return false;
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------
+// produced-state backstop
+// ------------------------------------------------------------------
+
+// checkedEncode rejects |value * fixedPointMultiplier| at or beyond 2^31, so a
+// produced value outside that domain has no usable scatter contribution.
+bool encodableStepValue(float value) {
+    float scaled = value * float(g_parameters.fixedPointMultiplier);
+    return isfinite(scaled) && scaled > -2147483648.0 && scaled < 2147483648.0;
+}
+
+// A constitutive coefficient product can overflow even when every admitted
+// operand was finite, so the produced step is bounded before the scatter consumes
+// it: the deformation displacement is field 8 and a liquid density (finite,
+// positive, invertible) is field 12. Values are not clamped or repaired.
+bool producedStateUsable(Particle p, uint row) {
+    if (!encodableStepValue(p.deformationDisplacement.c0x) ||
+        !encodableStepValue(p.deformationDisplacement.c0y) ||
+        !encodableStepValue(p.deformationDisplacement.c1x) ||
+        !encodableStepValue(p.deformationDisplacement.c1y)) {
+        recordError(8u, 0xffffffffu, 8u, row);
+        return false;
+    }
+
+    if (p.material == MaterialLiquid &&
+        (!isfinite(p.liquidDensity) || p.liquidDensity <= 0.0 || !isfinite(1.0 / p.liquidDensity))) {
+        recordError(8u, 0xffffffffu, 12u, row);
         return false;
     }
 
@@ -331,12 +375,16 @@ void checkBootstrapGridCoverage(int2 node, uint key, int4 source, bool valid) {
 // ------------------------------------------------------------------
 // fused selected source stage; all lanes cross shared barriers on rejection
 // ------------------------------------------------------------------
-void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint3 group) {
+// The host encodes exactly two programs: the bootstrap entry runs stage 0 and
+// the gather entry every later stage, so K is a runtime count. The final stage
+// is the one whose index satisfies reserved0 + 1 >= reserved1, which keeps the
+// schedule bounded without a third entry point or per-K specialization.
+void fusedIteration<let FirstStage : bool, let Cooperative : bool>(uint lane,uint3 group) {
     uint groupIndex=sparseGroup(group);
     if (groupIndex>=g_sparseCounters[2]) return;
 
     for (uint i=lane;i<256;i+=64) {
-        if (Iteration != 0u) s_src[i]=0;
+        if (!FirstStage) s_src[i]=0;
         s_dst[i]=0;
         s_absolute[i]=0u; s_contributor[i]=0xffffffffu;
     }
@@ -349,13 +397,15 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
     uint key=0xffffffffu;
     bool valid=sparseFlatKey(node,key);
     bool bootstrap = false;
-    if (Iteration == 0u) bootstrap = bootstrapGridCertified();
+    if (FirstStage) bootstrap = bootstrapGridCertified();
 
     int4 source=int4(0);
     if (valid && (!bootstrap || (g_environment.hasTerrain != 0u && (g_environment.reserved & 1u) == 0u))) {
+        // This stage writes one ping-pong side and reads the other. The host
+        // tracks which side the schedule wrote last and names that side's
+        // generation, so no stage parity is implied here.
         bool sourceA=g_sparse.destinationA==0u;
-        uint generation=sourceA ? g_sparse.sourceGeneration : g_sparse.generation;
-        source=sparseSource(key,sourceA,generation);
+        source=sparseSource(key,sourceA,g_sparse.sourceGeneration);
     }
 
     // The certificate depends only on uniform constants/body rows. Every lane
@@ -365,7 +415,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
     } else {
         float2 sandDisplacement = float2(0.0);
         float4 state;
-        if (Iteration == 0u) state = contactGridState<Cooperative>(node, key, source, valid);
+        if (FirstStage) state = contactGridState<Cooperative>(node, key, source, valid);
         else state = projectGridContacts<Cooperative, true>(node, key, source, valid, sandDisplacement);
         if (valid) {
             float2 d=state.xy;
@@ -374,7 +424,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
             s_src[tile+1]=checkedEncodeNode(d.y,key,1u);
             s_src[tile+2]=checkedEncodeNode(mass,key,2u);
             s_src[tile+3]=checkedEncodeNode(decodeWord(source.w),key,3u);
-            if (Iteration != 0u) {
+            if (!FirstStage) {
                 // Reuse exact source quantization unless terrain friction made
                 // the sand candidate distinct. No extra error or rounding path
                 // enters sand-free or frictionless execution.
@@ -386,7 +436,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
                         decodeWord(checkedEncodeNode(sandDisplacement.y, key, 1u)));
                 }
             }
-        } else if (Iteration != 0u) {
+        } else if (!FirstStage) {
             s_sandVelocity[lane] = float2(0.0);
         }
     }
@@ -398,7 +448,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
         Particle p=loadParticle(row);
         float2 oldPosition=float2(p.positionX,p.positionY);
         Weights weights=quadraticWeights(oldPosition);
-        if (Iteration!=0) {
+        if (!FirstStage) {
             SourceMatrix B=zeroMatrix();
             float2 d=float2(0); float volume=0;
             for (int i=0;i<3;++i) {
@@ -425,13 +475,21 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
 
             float referenceVolume = volume;
             if (g_parameters.useGridVolumeForLiquid!=0) {
-                volume=1.0/volume;
-                if (volume<1.0) p.liquidDensity=lerp(p.liquidDensity,volume,0.1);
+                // Quantization can leave zero support at this node. An empty
+                // reciprocal would otherwise be an accidental infinity that the
+                // comparison happens to discard; with no support there is no
+                // objective-volume feedback and the density stays unchanged.
+                if (volume > 0.0) {
+                    volume=1.0/volume;
+                    if (volume<1.0) p.liquidDensity=lerp(p.liquidDensity,volume,0.1);
+                }
             }
             p.deformationDisplacement=scale(B,4.0); p.displacementX=d.x; p.displacementY=d.y;
-            if (Iteration==1) {
-                // Unusable constitutive operands are a per-particle rejection:
-                // no integration, no engine pressure feedback, no early return.
+            if (g_parameters.reserved0 + 1u >= g_parameters.reserved1) {
+                // Integration carries gravity and external acceleration, so it
+                // runs exactly once per substep: on the final stage. Unusable
+                // constitutive operands are a per-particle rejection: no
+                // integration, no engine pressure feedback, no early return.
                 if (deformationOperandsUsable(p,row)) {
                     p=integration(p,row);
                     // Like retained gravity translation, pressure acts through the
@@ -443,26 +501,32 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
         }
 
         Particle updated=p;
-        if (deformationOperandsUsable(p,row)) updated=constraint(p);
-        for (int i=0;i<3;++i) {
-            for (int j=0;j<3;++j) {
-                float weight=weights.w[i].x*weights.w[j].y;
-                int2 neighbour=weights.base+int2(i,j), localNeighbour=neighbour-origin;
-                if (any(localNeighbour<0) || any(localNeighbour>=8)) {
-                    uint invalidKey=uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x);
-                    recordError(128u,invalidKey,0xffffffffu,row);
-                    continue;
-                }
+        bool scatterable=deformationOperandsUsable(p,row);
+        if (scatterable) {
+            updated=constraint(p);
+            scatterable=producedStateUsable(updated,row);
+        }
+        if (scatterable) {
+            for (int i=0;i<3;++i) {
+                for (int j=0;j<3;++j) {
+                    float weight=weights.w[i].x*weights.w[j].y;
+                    int2 neighbour=weights.base+int2(i,j), localNeighbour=neighbour-origin;
+                    if (any(localNeighbour<0) || any(localNeighbour>=8)) {
+                        uint invalidKey=uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x);
+                        recordError(128u,invalidKey,0xffffffffu,row);
+                        continue;
+                    }
 
-                uint at=(uint(localNeighbour.y)*8+uint(localNeighbour.x))*4;
-                uint globalAt=(uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x))*4;
-                float weightedMass=weight*updated.mass;
-                float2 momentum=weightedMass*(float2(updated.displacementX,updated.displacementY)+
-                    transform(updated.deformationDisplacement,float2(neighbour)-oldPosition+0.5));
-                scatterChecked(at,globalAt,momentum.x,row,0);
-                scatterChecked(at+1,globalAt+1,momentum.y,row,1);
-                scatterChecked(at+2,globalAt+2,weightedMass,row,2);
-                if (g_parameters.useGridVolumeForLiquid!=0) scatterChecked(at+3,globalAt+3,updated.volume*weight,row,3);
+                    uint at=(uint(localNeighbour.y)*8+uint(localNeighbour.x))*4;
+                    uint globalAt=(uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x))*4;
+                    float weightedMass=weight*updated.mass;
+                    float2 momentum=weightedMass*(float2(updated.displacementX,updated.displacementY)+
+                        transform(updated.deformationDisplacement,float2(neighbour)-oldPosition+0.5));
+                    scatterChecked(at,globalAt,momentum.x,row,0);
+                    scatterChecked(at+1,globalAt+1,momentum.y,row,1);
+                    scatterChecked(at+2,globalAt+2,weightedMass,row,2);
+                    if (g_parameters.useGridVolumeForLiquid!=0) scatterChecked(at+3,globalAt+3,updated.volume*weight,row,3);
+                }
             }
         }
     }
@@ -489,28 +553,28 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
 }
 
 // ------------------------------------------------------------------
-// fixed K2 iteration entries
+// two runtime-parameterised stage entries
 // ------------------------------------------------------------------
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused0(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<0u, false>(lane,group);
+    fusedIteration<true, false>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused1(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<1u, false>(lane,group);
+    fusedIteration<false, false>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused0Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<0u, true>(lane,group);
+    fusedIteration<true, true>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused1Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<1u, true>(lane,group);
+    fusedIteration<false, true>(lane,group);
 }

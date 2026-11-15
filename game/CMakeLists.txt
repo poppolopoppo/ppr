@@ -304,7 +304,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # loop. The two worldgen preview replay/crop leaves dominate that budget
     # and own a separate entry; the remaining preview widget leaf stays here.
     ppr_add_test_entry(TARGET game.tests
-        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu,game/lighting_lab/"
+        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu,game/lighting_lab,game/checkpoint"
         LOOPS
         TIMEOUT 600
         LABELS unit game cpu
@@ -326,6 +326,15 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # `matter_long` holds long-horizon stability and runs at phase-end/delivery.
     # Every retained simulation correctness entry belongs to one of the two;
     # moving an entry to `matter_long` does not weaken it.
+
+    # Checkpoint CPU contracts are mandatory for the simulation gates; measured 11.8 s per loop (120 s ceiling).
+    ppr_add_test_entry(TARGET game.tests
+        NAME checkpoint_cpu
+        FILTER "game/checkpoint/"
+        LOOPS
+        TIMEOUT 120
+        LABELS unit game cpu matter_fast
+    )
 
     # Each full-domain lifecycle witness has its own device lock and existing
     # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.

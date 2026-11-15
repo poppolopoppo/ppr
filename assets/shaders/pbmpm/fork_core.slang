@@ -143,6 +143,12 @@ Particle constraint(Particle p) {
     return p;
 }
 
+#ifdef PBMPM_ENGINE_ADAPTERS
+// exp() keeps the sand projection's singular value finite and normal between
+// these arguments: exp(88) = 1.65e38 < FLT_MAX and exp(-87) = 1.6e-38 > 0.
+static const float kMinSandExponent = -87.0;
+static const float kMaxSandExponent = 88.0;
+#endif
 Particle integration(Particle p, uint row) {
     if (p.material == MaterialLiquid) {
         p.liquidDensity *= trace(p.deformationDisplacement) + 1.0;
@@ -172,9 +178,16 @@ Particle integration(Particle p, uint row) {
                 float deltaGamma = frobenius + (g_parameters.elasticityRatio + 1.0) * traceE * alpha;
                 if (deltaGamma > 0.0) {
 #ifdef PBMPM_ENGINE_ADAPTERS
-                    // The projection divides by the deviatoric norm here; zero has
-                    // no admitted direction, so reject the derived operand.
-                    if (frobenius == 0.0) {
+                    // The projection divides by the deviatoric norm and then
+                    // exponentiates that ratio. A huge but finite logJp makes
+                    // length() overflow, and an out-of-domain exponent has no
+                    // finite positive exp(); both are rejected here.
+                    float projectedX = eDiag.x - deltaGamma / frobenius * (eDiag.x - traceE * 0.5);
+                    float projectedY = eDiag.y - deltaGamma / frobenius * (eDiag.y - traceE * 0.5);
+                    if (!isfinite(frobenius) || frobenius == 0.0 ||
+                        !isfinite(projectedX) || !isfinite(projectedY) ||
+                        projectedX < kMinSandExponent || projectedX > kMaxSandExponent ||
+                        projectedY < kMinSandExponent || projectedY > kMaxSandExponent) {
                         p.deformationGradient = stepGradient;
                         p.logJp = stepLogJp;
                         recordError(8u, 0xffffffffu, 17u, row);
@@ -199,7 +212,12 @@ Particle integration(Particle p, uint row) {
             decomposition.Sigma = clamp(decomposition.Sigma, float2(1.0 / yieldSurface), float2(yieldSurface));
             float newJ = decomposition.Sigma.x * decomposition.Sigma.y;
 #ifdef PBMPM_ENGINE_ADAPTERS
-            if (!isfinite(newJ) || newJ == 0.0) {
+            // The plastic step multiplies by sqrt(J / newJ). Profile admission
+            // bounds yieldSurface, but the quotient itself can still overflow for
+            // an admitted profile (for example plasticity 41 leaves newJ ~ 1.8e-35
+            // while trial singular values give J ~ 1e8), so it is validated here.
+            float plasticQuotient = J / newJ;
+            if (!isfinite(newJ) || newJ == 0.0 || !isfinite(plasticQuotient)) {
                 p.deformationGradient = stepGradient;
                 recordError(8u, 0xffffffffu, 16u, row);
                 return p;

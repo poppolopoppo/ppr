@@ -1618,7 +1618,8 @@ export namespace pP {
         // declares the Q16 fill, such as the particle prepare rank invocation,
         // binds that through the same authority). A stale attempt or no
         // publication binds the zero fallbacks and leaves bit 1 clear; a fixture
-        // publication reaches bit 1 only through the tests-only winner-grid seam.
+        // publication reaches bit 1 only through the tests-only winner-grid seam,
+        // and only while the fixture resolved cells are the publication in force.
         [[nodiscard]] std::error_code bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability);
 
         // Reclaims deferred pipelines/roots at or below `completed`.

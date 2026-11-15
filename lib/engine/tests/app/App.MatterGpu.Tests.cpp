@@ -123,8 +123,31 @@ namespace pP::tests::detail::MatterGpu {
             return snapshot();
         }
 
-        void finishOneSubstep() {
-            PPR_TEST_ASSERT(not m_solver.submitResidentTick(m_solver.accounting().m_epoch, 1u, 2u));
+        /// Publishes one collected tick and reads it back, without the frozen
+        /// inspection probe publishSnapshot makes. That probe deliberately calls
+        /// beginSnapshot while the tick is still pending, so the solver logs an
+        /// expected device_or_resource_busy at every call; a leaf using this
+        /// helper instead emits no such line, and every busy observation it would
+        /// make is a sequencing defect rather than expected output.
+        Array<GpuParticle> publishCompletedTick() {
+            const u64 epoch = m_solver.accounting().m_epoch;
+            // Complete but unpublished: the collected status proves pollTick ran,
+            // and busy() proves nothing published or cancelled it in between.
+            PPR_TEST_ASSERT(m_solver.busy());
+            PPR_TEST_ASSERT(m_solver.accounting().m_last_readback_bytes == 6u * sizeof(u32));
+
+            m_solver.publishTick();
+            PPR_TEST_ASSERT(m_solver.accounting().m_epoch == epoch + 1u);
+            PPR_TEST_ASSERT(not m_solver.busy());
+
+            return snapshot();
+        }
+
+        void finishOneSubstep(const u32 iterations = kSourceIterations) {
+            // A submitted batch owns the solver until it is published, so prove the
+            // previous one was drained, polled and published before submitting.
+            PPR_TEST_ASSERT(not m_solver.busy());
+            PPR_TEST_ASSERT(not m_solver.submitResidentTick(m_solver.accounting().m_epoch, 1u, iterations));
 
             PPR_TEST_ASSERT(not m_solver.drain());
 
@@ -879,8 +902,8 @@ namespace pP::tests::detail::MatterGpu {
             return result;
         }
 
-        void discover(rhi::ICommandEncoder &encoder) {
-            PPR_TEST_ASSERT(not m_storage.discover(encoder, *m_hot, *m_cold, m_profile, m_roots));
+        void discover(rhi::ICommandEncoder &encoder, const bool first_destination_a = false) {
+            PPR_TEST_ASSERT(not m_storage.discover(encoder, *m_hot, *m_cold, m_profile, first_destination_a, m_roots));
         }
 
         void seedDense(rhi::ICommandEncoder &encoder, const std::span<const u32> dense) {
@@ -1291,6 +1314,7 @@ namespace pP::tests::detail::MatterGpu {
             harness.run([&](rhi::ICommandEncoder &encoder) {
                 PPR_TEST_ASSERT(not harness.m_storage.beginTick(encoder, 2u));
                 harness.discover(encoder);
+                const u32 first_generation = harness.m_storage.constants().m_generation;
                 PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, false, harness.m_roots));
                 PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, true, harness.m_roots));
                 poison(encoder, *buffers.m_payload[0u], 0x13579bdfu);
@@ -1299,12 +1323,11 @@ namespace pP::tests::detail::MatterGpu {
                 particle.m_position_y = 3.5f;
                 harness.rows({&particle, 1u});
                 harness.discover(encoder);
-                const auto old_generation = harness.m_storage.constants().m_source_generation;
-                harness.probe(encoder, witnesses, true, old_generation);
+                harness.probe(encoder, witnesses, true, first_generation);
                 previous_source = harness.m_results;
                 PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, false, harness.m_roots));
                 PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, true, harness.m_roots));
-                harness.probe(encoder, witnesses, true, harness.m_storage.constants().m_source_generation);
+                harness.probe(encoder, witnesses, true, harness.m_storage.constants().m_generation);
             });
             const auto previous = harness.read(*previous_source);
             const auto current = harness.read(*harness.m_results);
@@ -1575,7 +1598,7 @@ namespace pP::tests::detail::MatterGpu {
             fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
             fixture.m_solver.profile(), &clock));
         const auto created = observed.inspectTimingForTest();
-        PPR_TEST_ASSERT(created.m_query_count == 44u and created.m_completed_samples == 0u);
+        PPR_TEST_ASSERT(created.m_query_count == 172u and created.m_completed_samples == 0u);
         PPR_TEST_ASSERT(not created.m_error);
 
         const auto particle = restParticle();
@@ -4227,7 +4250,11 @@ namespace pP::tests::detail::MatterGpu {
         }
     };
 
-    PPR_UNIT_TEST (k2_only_rejects_other_counts_before_work) {
+    // ------------------------------------------------------------------
+    // admitted iteration schedule
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (supported_iteration_counts_validate_before_work) {
         Fixture fixture;
         PPR_DEFER {
             fixture.shutdown();
@@ -4237,7 +4264,7 @@ namespace pP::tests::detail::MatterGpu {
         fixture.replace({&particle, 1u});
         const GpuAccounting before = fixture.m_solver.accounting();
 
-        for (const u32 iterations: {0u, 1u, 3u}) {
+        for (const u32 iterations: {0u, 1u, 3u, 4u, std::numeric_limits<u32>::max()}) {
             PPR_TEST_ASSERT(
                 fixture.m_solver.submitResidentTick(before.m_epoch, 1u, iterations) == std::errc::invalid_argument);
             PPR_TEST_ASSERT(not fixture.m_solver.busy());
@@ -4247,7 +4274,311 @@ namespace pP::tests::detail::MatterGpu {
 
         const auto unchanged = fixture.snapshot();
         PPR_TEST_ASSERT(unchanged.size() == 1u);
-        PPR_TEST_ASSERT(std::memcmp(unchanged.data(), &particle, sizeof(particle)) == 0);
+        PPR_TEST_ASSERT(std::memcmp(unchanged.data(), &particle, sizeof(GpuParticle)) == 0);
+
+        for (const u32 iterations: {2u, 5u, 10u}) {
+            // Each admitted count owns one complete submit -> drain -> poll ->
+            // publish sequence; nothing is submitted while the previous tick is
+            // still pending.
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            const u64 dispatches = fixture.m_solver.accounting().m_dispatches;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 1u, iterations));
+
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            // Nine maintenance dispatches around discovery, then one destination
+            // initialization and one fused dispatch per stage.
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_dispatches - dispatches == 9u + 2u * iterations);
+
+            const auto state = fixture.publishCompletedTick();
+            PPR_TEST_ASSERT(state.size() == 1u);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+        }
+    };
+
+    PPR_UNIT_TEST (iteration_roles_integrate_once_per_substep) {
+        // The observable integration contract is one *gravity step* per substep,
+        // not an exact delta: a substep's published displacement is the gathered
+        // grid displacement plus that one step, and the gather reconstructs the
+        // previous displacement through the fixed-point transfer. Momentum and
+        // mass cross the grid as int(value * 1e7), so a stage moves the
+        // reconstructed velocity by at most one count per contributing node:
+        // with unit mass and dyadic quadratic weights (1/16, 1/8, 1/4) the mass
+        // word is exact, so the weighted error of the nine-node stencil is at most
+        // 9 / (mass * 1e7) = 9e-7 per stage, i.e. 0.26 % of this profile's
+        // |gravity| = 3.472e-4. A K stage substep re-encodes at most K-1 = 9
+        // gather stages, so the coherent worst case is 2.3 % of |gravity|.
+        // 5 % therefore leaves a 2x margin over the transfer's own quantization
+        // while staying 20x away from two integrations (2 * gravity) and further
+        // from K of them, which is the only failure this leaf must catch.
+        constexpr float kOneIntegrationFraction = 0.05f;
+
+        // Per-substep allowance for one committed deformation-gradient component,
+        // derived beside its use below: 9 stencil nodes * 9 gather re-encodes *
+        // 1/(mass * 1e7) = 8.1e-6, rounded up to 1e-5.
+        constexpr float kOneGradientStepBound = 1.0e-5f;
+
+        // Relative allowance for one committed plastic-history halving: the additive
+        // deviatoric term is below 5e-7 while these histories are 1, 0.5 and 0.25,
+        // so 1e-4 * previous keeps 50-200x margin. Derived beside its use below.
+        constexpr float kOnePlasticHistoryFraction = 1.0e-4f;
+
+        const auto gravity_after_one_step = [](const GpuParameters &profile) {
+            return -static_cast<float>(profile.m_grid_height) *
+                   profile.m_gravity_strength *
+                   profile.m_delta_time *
+                   profile.m_delta_time;
+        };
+
+        {
+            Fixture fixture;
+            PPR_DEFER {
+                fixture.shutdown();
+            };
+            fixture.initialize(false);
+            const GpuParameters profile = fixture.m_solver.profile();
+            const float gravity = gravity_after_one_step(profile);
+            PPR_TEST_ASSERT(gravity < 0.0f);
+
+            // One liquid and one sand row, far enough apart that neither particle's
+            // stencil reaches the other: every stage reconstructs only its own state.
+            std::array<GpuParticle, 2u> particles{};
+            particles[0u] = restParticle();
+            particles[1u] = restParticle();
+            particles[1u].m_position_x = 20.5f;
+            particles[1u].m_material = static_cast<float>(ESourceMaterial::sand);
+            particles[1u].m_log_jp = 1.0f;
+
+            for (const u32 iterations: {2u, 5u, 10u}) {
+                fixture.replace(particles);
+                float previous_displacement_y = particles[0u].m_displacement_y;
+                float previous_log_jp = particles[1u].m_log_jp;
+
+                for (u32 substep = 1u; substep <= 3u; ++substep) {
+                    fixture.finishOneSubstep(iterations);
+                    const auto state = fixture.publishCompletedTick();
+                    PPR_TEST_ASSERT(state.size() == particles.size());
+                    for (const auto &row: state) {
+                        const auto scalars = std::bit_cast<std::array<float, 22u>>(row);
+                        for (const float value: scalars) {
+                            PPR_TEST_ASSERT(std::isfinite(value));
+                        }
+                    }
+
+                    // Gravity enters only through integration: exactly one step per
+                    // substep, whatever K is. Extra integrations would multiply the
+                    // step, and a substep that never integrated would leave it out.
+                    const float step = state[0u].m_displacement_y - previous_displacement_y;
+                    const float step_ratio = std::abs(step - gravity) / std::abs(gravity);
+                    const float cumulative_ratio = std::abs(
+                                                       state[0u].m_displacement_y -
+                                                       static_cast<float>(substep) * gravity) /
+                                                   (static_cast<float>(substep) * std::abs(gravity));
+
+                    // The sand row's committed gradient is written by integration as
+                    // the polar factor of (I + D)F, and D is the gathered deformation
+                    // displacement, so F carries the transfer's own quantization and
+                    // cannot stay bit-exactly identity. One gather moves a
+                    // reconstructed component by at most 9/(mass * 1e7) = 9e-7 (nine
+                    // stencil nodes, one count each, unit mass); a K-stage substep
+                    // re-encodes at most K-1 = 9 gathers, so one substep allows
+                    // 9 * 9e-7 = 8.1e-6. The polar remainder survives the next
+                    // substep, so substep n allows n times that allowance; 1e-5 per
+                    // substep keeps a 1.2x margin over 8.1e-6, while a per-stage
+                    // integration loop would exceed it by the K-1 = 9 factor
+                    // (7.3e-5 in the first substep alone).
+                    const auto &sand_gradient = state[1u].m_deformation_gradient;
+                    const float gradient_deviation = std::max(
+                        {std::abs(sand_gradient.m_c0x - 1.0f), std::abs(sand_gradient.m_c0y),
+                            std::abs(sand_gradient.m_c1x), std::abs(sand_gradient.m_c1y - 1.0f)});
+                    const float gradient_bound = static_cast<float>(substep) * kOneGradientStepBound;
+
+                    // Sand commits its plastic history once per substep: integration
+                    // computes traceE = sum(log Sigma) + logJp and stores 0.5 * traceE,
+                    // so the committed value is half the previous one plus half the
+                    // deviatoric term. While F was bit-exactly identity both log
+                    // singular values were exactly zero; with the transfer noise above
+                    // F deviates by O(1e-7) per component, so each log singular value
+                    // is O(1e-7), their sum stays below 1e-6 and the additive term
+                    // below 5e-7. A relative allowance of 1e-4 * previous (1e-4 down to
+                    // 2.5e-5 across these three substeps) is 50-200x that bound, while
+                    // a per-stage integration loop would halve the whole history at
+                    // every stage (previous / 2^(K-1)), leaving this allowance already
+                    // in the first substep for K > 2.
+                    const float log_jp = state[1u].m_log_jp;
+                    const float log_jp_difference = log_jp - previous_log_jp * 0.5f;
+                    const float log_jp_allowance = previous_log_jp * kOnePlasticHistoryFraction;
+
+                    _.log(
+                        std::format(
+                            "PBMPM-SCHEDULE K={} substep={} gravity={:.9g} displacement_y={:.9g} "
+                            "delta_displacement_y={:.9g} step_ratio={:.6g} cumulative_ratio={:.6g} "
+                            "gradient_deviation={:.6g} gradient_bound={:.6g} log_jp={:.9g} "
+                            "previous_log_jp={:.9g} log_jp_difference={:.6g} log_jp_allowance={:.6g}",
+                            iterations, substep, gravity, state[0u].m_displacement_y, step, step_ratio,
+                            cumulative_ratio, gradient_deviation, gradient_bound, log_jp, previous_log_jp,
+                            log_jp_difference, log_jp_allowance));
+                    PPR_TEST_ASSERT(step_ratio <= kOneIntegrationFraction);
+                    PPR_TEST_ASSERT(cumulative_ratio <= kOneIntegrationFraction);
+                    PPR_TEST_ASSERT(gradient_deviation <= gradient_bound);
+                    PPR_TEST_ASSERT(std::abs(log_jp_difference) <= log_jp_allowance);
+
+                    // One halving per substep, never a frozen or reversed history.
+                    PPR_TEST_ASSERT(log_jp < previous_log_jp);
+
+                    PPR_TEST_ASSERT(state[0u].m_displacement_x == 0.0f);
+                    PPR_TEST_ASSERT(state[0u].m_position_x == particles[0u].m_position_x);
+
+                    previous_displacement_y = state[0u].m_displacement_y;
+                    previous_log_jp = log_jp;
+                }
+            }
+        }
+
+        {
+            // Zero-force translation: no gravity and no brush, so no stage may
+            // inject acceleration or advance the plastic history.
+            Fixture fixture;
+            PPR_DEFER {
+                fixture.shutdown();
+            };
+            fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+            PPR_TEST_ASSERT(fixture.m_solver.profile().m_gravity_strength == 0.0f);
+            const GpuParticle particle = restParticle();
+
+            for (const u32 iterations: {2u, 5u, 10u}) {
+                fixture.replace({&particle, 1u});
+
+                for (u32 substep = 1u; substep <= 2u; ++substep) {
+                    fixture.finishOneSubstep(iterations);
+                    const auto state = fixture.publishCompletedTick();
+                    PPR_TEST_ASSERT(state.size() == 1u);
+                    PPR_TEST_ASSERT(
+                        std::bit_cast<std::array<float, 22u>>(state[0u]) ==
+                        std::bit_cast<std::array<float, 22u>>(particle));
+                }
+            }
+        }
+    };
+
+    PPR_UNIT_TEST (odd_even_schedule_preserves_sparse_sources) {
+        // Same contract as iteration_roles_integrate_once_per_substep: one gravity
+        // step per substep, measured as a fraction of gravity because the fixed-
+        // point transfer's own quantization (at most 9e-7 per stage, 2.3 % of
+        // |gravity| for a K=10 substep) is not an integration count. 5 % separates
+        // n steps from n/2 or n/4 steps by a wide margin in either direction.
+        constexpr float kOneIntegrationFraction = 0.05f;
+
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false);
+        const GpuParameters profile = fixture.m_solver.profile();
+        const float gravity = -static_cast<float>(profile.m_grid_height) *
+                              profile.m_gravity_strength *
+                              profile.m_delta_time *
+                              profile.m_delta_time;
+        PPR_TEST_ASSERT(gravity < 0.0f);
+
+        const GpuParticle particle = restParticle();
+        const auto runTick = [&](const u32 substeps, const u32 iterations) {
+            // One unbroken sequence: a pending tick owns the solver until it is
+            // published, so prove that before submitting the next batch.
+            PPR_TEST_ASSERT(not fixture.m_solver.busy());
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, substeps, iterations));
+
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+            return fixture.publishCompletedTick();
+        };
+
+        for (const u32 iterations: {2u, 5u, 10u}) {
+            for (const u32 substeps: {1u, 2u, 8u}) {
+                fixture.replace({&particle, 1u});
+                const auto first = runTick(substeps, iterations);
+                PPR_TEST_ASSERT(first.size() == 1u);
+                const auto scalars = std::bit_cast<std::array<float, 22u>>(first[0u]);
+                for (const float value: scalars) {
+                    PPR_TEST_ASSERT(std::isfinite(value));
+                }
+
+                // Every substep after the first reconstructs the state the
+                // previous substep wrote, on whichever side K parity left it, so
+                // n substeps must carry n gravity steps and not fewer.
+                const float expected = static_cast<float>(substeps) * gravity;
+                const float ratio = std::abs(first[0u].m_displacement_y - expected) / std::abs(expected);
+                _.log(
+                    std::format(
+                        "PBMPM-SCHEDULE-SOURCE K={} substeps={} gravity={:.9g} displacement_y={:.9g} "
+                        "expected={:.9g} cumulative_ratio={:.6g}",
+                        iterations, substeps, gravity, first[0u].m_displacement_y, expected, ratio));
+                PPR_TEST_ASSERT(ratio <= kOneIntegrationFraction);
+                PPR_TEST_ASSERT(first[0u].m_displacement_x == 0.0f);
+
+                // The same seed and schedule on the same backend reproduce the row
+                // exactly, so no side carries state across ticks.
+                fixture.replace({&particle, 1u});
+                const auto second = runTick(substeps, iterations);
+                PPR_TEST_ASSERT(second.size() == first.size());
+                PPR_TEST_ASSERT(std::memcmp(second.data(), first.data(), first.size() * sizeof(GpuParticle)) == 0);
+            }
+        }
+
+        // The side the schedule finished on is not republished, so its index and
+        // payload stay readable at the generation it was written with. Poisoning
+        // the next substep's destination proves that read cannot consume it.
+        {
+            SparseHarness harness{fixture, 4u};
+            const auto &buffers = harness.m_storage.buffers();
+            const GpuParticle row = restParticle();
+            harness.rows({&row, 1u});
+
+            Array<u32> dense(18u * 18u * 4u);
+            for (u32 word = 0u; word < dense.size(); ++word) {
+                dense[word] = word * 4u + 1u;
+            }
+
+            const std::array<std::array<i32, 2u>, 2u> nodes{{{3, 3}, {6, 6}}};
+            u32 first_generation{};
+            harness.run([&](rhi::ICommandEncoder &encoder) {
+                PPR_TEST_ASSERT(not harness.m_storage.beginTick(encoder, 2u));
+                harness.discover(encoder, false);
+                first_generation = harness.m_storage.constants().m_generation;
+                PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, false, harness.m_roots));
+                harness.seedDense(encoder, dense);
+                PPR_TEST_ASSERT(not harness.m_storage.initializeDestination(encoder, true, harness.m_roots));
+
+                Array<u32> poison(buffers.m_payload[0u]->getDesc().size / sizeof(u32), 0x13579bdfu);
+                encoder.setBufferState(buffers.m_payload[0u], rhi::ResourceState::CopyDestination);
+                PPR_TEST_ASSERT(not make_error_code(encoder.uploadBufferData(
+                    buffers.m_payload[0u], 0u, buffers.m_payload[0u]->getDesc().size, poison.data())));
+                encoder.setBufferState(buffers.m_payload[0u], rhi::ResourceState::UnorderedAccess);
+                encoder.globalBarrier();
+
+                // Substep two finished on B and its first stage therefore writes A.
+                harness.discover(encoder, true);
+                harness.probe(encoder, nodes, false, first_generation);
+            });
+
+            const auto observed = harness.read(*harness.m_results);
+            for (std::size_t index = 0u; index < nodes.size(); ++index) {
+                const u32 flat = static_cast<u32>(nodes[index][1u] * 18 + nodes[index][0u]);
+                PPR_TEST_ASSERT(observed[index * 13u + 9u] == 1u);
+                PPR_TEST_ASSERT(observed[index * 13u + 5u] == dense[flat * 4u]);
+                PPR_TEST_ASSERT(observed[index * 13u + 10u] == dense[flat * 4u + 1u]);
+                PPR_TEST_ASSERT(observed[index * 13u + 11u] == dense[flat * 4u + 2u]);
+                PPR_TEST_ASSERT(observed[index * 13u + 12u] == dense[flat * 4u + 3u]);
+            }
+        }
     };
 
     PPR_UNIT_TEST (guardian_blocks_normal_and_halves_tangent_analytically) {
@@ -5247,6 +5578,93 @@ namespace pP::tests::detail::MatterGpu {
         bool m_finite{};
     };
 
+    /// One complete resident K2 tick per witness row. Every case is observed and
+    /// logged before anything is asserted, so one wrong case still reports all of
+    /// them; a published case also proves its state stayed finite.
+    std::vector<ConstitutiveObservation> observeConstitutiveWitnesses(
+        GpuSolver &solver, const std::span<const ConstitutiveWitness> witnesses) {
+        std::vector<ConstitutiveObservation> observations;
+        observations.reserve(witnesses.size());
+        for (const ConstitutiveWitness &witness: witnesses) {
+            PPR_TEST_ASSERT(not solver.prepareReplacement({&witness.m_particle, 1u}, {}, solver.accounting().m_epoch));
+            solver.publishReplacement();
+
+            PPR_TEST_ASSERT(not solver.submitResidentTick(solver.accounting().m_epoch, 1u, 2u));
+            PPR_TEST_ASSERT(not solver.drain());
+
+            ConstitutiveObservation observation;
+            observation.m_name = witness.m_name;
+            observation.m_expected_field = witness.m_field;
+            const auto outcome = solver.pollTick();
+            if (outcome) {
+                observation.m_published = true;
+                observation.m_flags = solver.failure().m_flags;
+                solver.publishTick();
+
+                PPR_TEST_ASSERT(not solver.beginSnapshot(solver.accounting().m_epoch));
+                PPR_TEST_ASSERT(not solver.drain());
+                const auto captured = solver.pollSnapshot();
+                PPR_TEST_ASSERT(captured and captured->has_value());
+                PPR_TEST_ASSERT((**captured).m_particles.size() == 1u);
+                observation.m_finite = std::ranges::all_of(
+                    std::bit_cast<std::array<float, 22u>>((**captured).m_particles[0u]),
+                    [](const float field) { return std::isfinite(field); });
+            } else {
+                const GpuFailure &failure = solver.failure();
+                observation.m_cause = outcome.error();
+                observation.m_flags = failure.m_flags;
+                observation.m_claimed = failure.m_claimed;
+                observation.m_node = failure.m_node;
+                observation.m_field = failure.m_field;
+                observation.m_particle = failure.m_particle;
+
+                PPR_TEST_ASSERT(not solver.discardTick());
+            }
+
+            observations.push_back(observation);
+        }
+
+        return observations;
+    }
+
+    void logConstitutiveWitnesses(UnitTest::IRun &_, const std::span<const ConstitutiveObservation> observations) {
+        for (const ConstitutiveObservation &observation: observations) {
+            _.log(
+                std::format(
+                    "CONSTITUTIVE-WITNESS case={} expected_field={} published={} finite={} cause={} flags={} "
+                    "claimed={} node={} field={} particle={}",
+                    observation.m_name, observation.m_expected_field, observation.m_published, observation.m_finite,
+                    observation.m_cause.value(), observation.m_flags, observation.m_claimed, observation.m_node,
+                    observation.m_field, observation.m_particle));
+        }
+    }
+
+    /// A witness case is one fatal per-particle verdict in the existing validation
+    /// slot: the guard's flag 8 carries the witness field and row, and the
+    /// downstream fixed-point conversion (flag 2) never produced the failure. The
+    /// union may also carry flag 128, a pre-existing independent stencil-key or
+    /// budget condition that solver.slang and sparse_grid.slang record for their
+    /// own invalidity causes; that bit says nothing about constitutive validity,
+    /// so the pair below, not the whole union, is the accurate contract.
+    void assertConstitutiveWitnesses(const std::span<const ConstitutiveObservation> observations) {
+        for (const ConstitutiveObservation &observation: observations) {
+            if (observation.m_expected_field == 0xffff'ffffu) {
+                PPR_TEST_ASSERT(observation.m_published and observation.m_finite);
+                PPR_TEST_ASSERT(observation.m_flags == 0u);
+                continue;
+            }
+
+            PPR_TEST_ASSERT(not observation.m_published);
+            PPR_TEST_ASSERT(observation.m_cause == std::errc::result_out_of_range);
+            PPR_TEST_ASSERT((observation.m_flags & 8u) == 8u);
+            PPR_TEST_ASSERT((observation.m_flags & 2u) == 0u);
+            PPR_TEST_ASSERT(observation.m_claimed == 1u);
+            PPR_TEST_ASSERT(observation.m_node == 0xffff'ffffu);
+            PPR_TEST_ASSERT(observation.m_field == observation.m_expected_field);
+            PPR_TEST_ASSERT(observation.m_particle == 0u);
+        }
+    }
+
     PPR_UNIT_TEST (constitutive_invalid_operands_do_not_enter_unsafe_operations) {
         Fixture fixture;
         PPR_DEFER {
@@ -5275,12 +5693,15 @@ namespace pP::tests::detail::MatterGpu {
 
         std::vector<ConstitutiveWitness> witnesses;
 
-        // (a) Regression coverage for the pre-existing liquid-density criterion,
-        // not a new guard: `invalidParticleField` returns slot 12 for
-        // `liquidDensity <= 0` (types.slang), and both `sparseParticle`
-        // (sparse_grid.slang) and `validParticle` (solver.slang) report it through
+        // (a) Regression coverage plus the explicit liquid reciprocal guard:
+        // `invalidParticleField` returns slot 12 for `liquidDensity <= 0`
+        // (types.slang), and both `sparseParticle` (sparse_grid.slang) and
+        // `validParticle` (solver.slang) report it through
         // `recordError(8u, 0xffffffffu, field, row)`. The stored 1e-39f is a
-        // subnormal, so the device's flush-to-zero comparison already reads zero.
+        // subnormal, so a device that flushes it would take that positivity path;
+        // on a device that preserves it, `deformationOperandsUsable` rejects the
+        // non-finite `1/density` with the same field 12. Neither path depends on
+        // flush-to-zero.
         {
             GpuParticle particle = source(ESourceMaterial::liquid);
             particle.m_liquid_density = 1.0e-39f;
@@ -5310,26 +5731,37 @@ namespace pP::tests::detail::MatterGpu {
             witnesses.push_back({"trial_singular_deformation", particle, 8u});
         }
 
-        // (e) The determinant is exactly one and its reciprocal is finite, but the
-        // stored magnitude 1e20 exceeds the decomposition-intermediate bound
-        // (1.3e19), where squared half-sums would pass FLT_MAX. The rejection is
-        // the magnitude bound, still reported as the stored gradient, field 4.
+        // (e) The determinant is exactly one and its reciprocal is finite, but
+        // the source radicands overflow: E = F = 5e19 squares past FLT_MAX while
+        // the entries themselves stay finite. Reported as the stored gradient.
         {
             GpuParticle particle = elastic();
             particle.m_deformation_gradient = {1.0e20f, 0.0f, 0.0f, 1.0e-20f};
             witnesses.push_back({"svd_intermediate_overflow", particle, 4u});
         }
 
-        // (f) The determinant 1e-30 and its reciprocal are finite, while the
-        // inverse component 1e10/1e-30 overflows.
+        // (f) The determinant -1e-30 and its reciprocal are finite in normal
+        // range, while the inverse component a/det = 1e19/-1e-30 overflows. All
+        // four entries are normal numbers or exact zero, so no flush-to-zero can
+        // turn this into a different (singular) case.
         {
             GpuParticle particle = elastic();
-            particle.m_deformation_gradient = {1.0e10f, 0.0f, 0.0f, 1.0e-40f};
+            particle.m_deformation_gradient = {1.0e19f, 1.0e-15f, 1.0e-15f, 0.0f};
             witnesses.push_back({"inverse_component_overflow", particle, 4u});
         }
 
         // (g) The visco yield exponential is a profile constant, so its domain is
         // rejected at resident-tick admission below rather than per particle.
+
+        // (h) A finite but huge plastic history makes the sand deviatoric norm
+        // overflow before the projection divides: traceE = -1e30 and eHat = 5e29
+        // per component, so length() has no finite value. The sand guard reports
+        // the history operand, field 17.
+        {
+            GpuParticle particle = source(ESourceMaterial::sand);
+            particle.m_log_jp = -1.0e30f;
+            witnesses.push_back({"sand_norm_overflow", particle, 17u});
+        }
 
         // Controls: identity, a rotation, moderate compression and a stored
         // gradient whose singular values 0.05 fall below the admitted clamp
@@ -5368,80 +5800,9 @@ namespace pP::tests::detail::MatterGpu {
 
         // Every case is one complete resident K2 tick over a single row, so the
         // evidence is the production rejection path, not a helper microgate.
-        std::vector<ConstitutiveObservation> observations;
-        observations.reserve(witnesses.size());
-        for (const ConstitutiveWitness &witness: witnesses) {
-            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
-                {&witness.m_particle, 1u}, {}, fixture.m_solver.accounting().m_epoch));
-            fixture.m_solver.publishReplacement();
-
-            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(fixture.m_solver.accounting().m_epoch, 1u, 2u));
-            PPR_TEST_ASSERT(not fixture.m_solver.drain());
-
-            ConstitutiveObservation observation;
-            observation.m_name = witness.m_name;
-            observation.m_expected_field = witness.m_field;
-            const auto outcome = fixture.m_solver.pollTick();
-            if (outcome) {
-                observation.m_published = true;
-                observation.m_flags = fixture.m_solver.failure().m_flags;
-                fixture.m_solver.publishTick();
-
-                const auto rows = fixture.snapshot();
-                PPR_TEST_ASSERT(rows.size() == 1u);
-                observation.m_finite = std::ranges::all_of(
-                    std::bit_cast<std::array<float, 22u>>(rows[0u]),
-                    [](const float field) { return std::isfinite(field); });
-            } else {
-                const GpuFailure &failure = fixture.m_solver.failure();
-                observation.m_cause = outcome.error();
-                observation.m_flags = failure.m_flags;
-                observation.m_claimed = failure.m_claimed;
-                observation.m_node = failure.m_node;
-                observation.m_field = failure.m_field;
-                observation.m_particle = failure.m_particle;
-
-                PPR_TEST_ASSERT(not fixture.m_solver.discardTick());
-            }
-
-            observations.push_back(observation);
-        }
-
-        for (const ConstitutiveObservation &observation: observations) {
-            _.log(
-                std::format(
-                    "CONSTITUTIVE-WITNESS case={} expected_field={} published={} finite={} cause={} flags={} "
-                    "claimed={} node={} field={} particle={}",
-                    observation.m_name, observation.m_expected_field, observation.m_published, observation.m_finite,
-                    observation.m_cause.value(), observation.m_flags, observation.m_claimed, observation.m_node,
-                    observation.m_field, observation.m_particle));
-        }
-
-        for (const ConstitutiveObservation &observation: observations) {
-            if (observation.m_expected_field == 0xffff'ffffu) {
-                PPR_TEST_ASSERT(observation.m_published and observation.m_finite);
-                PPR_TEST_ASSERT(observation.m_flags == 0u);
-                continue;
-            }
-
-            // A constitutive rejection is one fatal per-particle verdict in the
-            // existing validation slot: the guard's flag 8 carries the witness
-            // field and row, and the downstream fixed-point conversion (flag 2)
-            // never produced this failure. The reported union may also carry flag
-            // 128, a pre-existing independent stencil-key/budget condition that
-            // solver.slang and sparse_grid.slang record for their own invalidity
-            // causes; that bit says nothing about constitutive validity, so the
-            // pair below, not the whole union, is the accurate contract: the
-            // guard rejected the particle, not the conversion.
-            PPR_TEST_ASSERT(not observation.m_published);
-            PPR_TEST_ASSERT(observation.m_cause == std::errc::result_out_of_range);
-            PPR_TEST_ASSERT((observation.m_flags & 8u) == 8u);
-            PPR_TEST_ASSERT((observation.m_flags & 2u) == 0u);
-            PPR_TEST_ASSERT(observation.m_claimed == 1u);
-            PPR_TEST_ASSERT(observation.m_node == 0xffff'ffffu);
-            PPR_TEST_ASSERT(observation.m_field == observation.m_expected_field);
-            PPR_TEST_ASSERT(observation.m_particle == 0u);
-        }
+        const auto observations = observeConstitutiveWitnesses(fixture.m_solver, witnesses);
+        logConstitutiveWitnesses(_, observations);
+        assertConstitutiveWitnesses(observations);
 
         // The visco yield exponential is derived from profile constants, so an
         // unusable domain is refused at resident-tick admission: exp(1 -
@@ -5483,6 +5844,78 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // derived-operand overflow survives admission, so the state guards catch it
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (constitutive_derived_operand_overflow_rejects_state) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+
+        // Admission bounds the derived *domain* (a finite, positive yield
+        // surface), not the amplitude of coefficient products or of the state
+        // they act on. Plasticity 41 leaves yieldSurface = exp(-40) = 4.25e-18,
+        // which is admitted, and a huge but finite liquid relaxation admits a
+        // coefficient product that only the produced-state backstop can reject.
+        GpuParameters profile = fixture.m_solver.profile();
+        profile.m_plasticity = 41.0f;
+        profile.m_liquid_relaxation = 1.0e30f;
+        const float yield_surface = std::exp(1.0f - profile.m_plasticity);
+        // Density 0.5 makes the liquid relaxation alpha 0.5, so the produced
+        // displacement is 1e30 * 0.5 and its fixed-point encoding 5e36, far past
+        // the encodable 2^31.
+        const float produced_displacement = profile.m_liquid_relaxation * 0.5f;
+
+        PPR_TEST_ASSERT(std::isfinite(yield_surface) and yield_surface > 0.0f);
+        PPR_TEST_ASSERT(produced_displacement * static_cast<float>(profile.m_fixed_point_multiplier) > 2147483648.0f);
+
+        GpuSolver solver;
+        PPR_TEST_ASSERT(not solver.initialize(
+            fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+            profile));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not solver.shutdown());
+        };
+
+        std::vector<ConstitutiveWitness> witnesses;
+
+        // Trial singular values 1e4 give J = 1e8, while the admitted yield surface
+        // clamps both components to 4.25e-18 and newJ to 1.8e-35, so the quotient
+        // J / newJ overflows before sqrt. The visco plastic-state guard reports 16.
+        {
+            GpuParticle particle = restParticle();
+            particle.m_material = static_cast<float>(ESourceMaterial::visco);
+            particle.m_deformation_gradient = {1.0e4f, 0.0f, 0.0f, 1.0e4f};
+            witnesses.push_back({"visco_plastic_quotient_overflow", particle, 16u});
+        }
+
+        // A density of 0.5 makes the liquid relaxation alpha 0.5, so the admitted
+        // relaxation 1e30 produces a displacement far outside the fixed-point
+        // encodable range. The produced-state backstop reports the deformation
+        // displacement, field 8, before the scatter converts it.
+        {
+            GpuParticle particle = restParticle();
+            particle.m_material = static_cast<float>(ESourceMaterial::liquid);
+            particle.m_liquid_density = 0.5f;
+            witnesses.push_back({"liquid_coefficient_product_overflow", particle, 8u});
+        }
+
+        // Control: identity leaves the elastic difference exactly zero, so the
+        // same admitted profile publishes finite state without a witness.
+        {
+            GpuParticle particle = restParticle();
+            particle.m_material = static_cast<float>(ESourceMaterial::elastic);
+            witnesses.push_back({"control_identity_under_admitted_profile", particle, 0xffff'ffffu});
+        }
+
+        const auto observations = observeConstitutiveWitnesses(solver, witnesses);
+        logConstitutiveWitnesses(_, observations);
+        assertConstitutiveWitnesses(observations);
+    };
+
+    // ------------------------------------------------------------------
     // mixed-batch constitutive rejection is transactional
     // ------------------------------------------------------------------
 
@@ -5503,8 +5936,11 @@ namespace pP::tests::detail::MatterGpu {
         };
 
         // Rows 0-2 share the 6-cell bucket tile at (1,1) and rows 3-5 share the
-        // neighbouring tile at (2,2), so one submission spans two workgroups
-        // while each group mixes an admissible row with unusable rows.
+        // neighbouring tile at (2,2), so one submission spans two workgroups.
+        // Every row is admissible to sparse discovery (finite fields, positive
+        // density, in-grid position), so both workgroups really form with valid
+        // and unusable rows together and the rejection happens inside the fused
+        // stage instead of before group construction.
         std::vector<GpuParticle> rows;
 
         GpuParticle identity = elastic();
@@ -5523,11 +5959,14 @@ namespace pP::tests::detail::MatterGpu {
         liquid.m_position_y = 7.5f;
         rows.push_back(liquid);
 
-        GpuParticle overflow = restParticle();
-        overflow.m_position_x = 12.5f;
-        overflow.m_position_y = 12.5f;
-        overflow.m_liquid_density = 1.0e-39f;
-        rows.push_back(overflow);
+        // Normal-range entries: det -1e-30 and 1/det -1e30 are finite while the
+        // inverse component a/det = -1e49 overflows, with no subnormal component
+        // that flush-to-zero could turn into a different (singular) case.
+        GpuParticle inverseOverflow = elastic();
+        inverseOverflow.m_position_x = 12.5f;
+        inverseOverflow.m_position_y = 12.5f;
+        inverseOverflow.m_deformation_gradient = {1.0e19f, 1.0e-15f, 1.0e-15f, 0.0f};
+        rows.push_back(inverseOverflow);
 
         GpuParticle rotation = elastic();
         rotation.m_position_x = 13.5f;
@@ -5543,12 +5982,13 @@ namespace pP::tests::detail::MatterGpu {
 
         const u32 row_count = static_cast<u32>(rows.size());
 
-        // Rows 0, 2 and 4 are admissible; the witnesses are 4, 12 and 8. The
-        // first-error latch may name any rejected row, never an admissible one.
+        // Rows 0, 2 and 4 are admissible; rows 1, 3 and 5 are not, with witnesses
+        // 4, 4 and 8. The first-error latch may name any rejected row, never an
+        // admissible one.
         const auto witness = [](const u32 row) {
             switch (row) {
                 case 1u: return 4u;
-                case 3u: return 12u;
+                case 3u: return 4u;
                 case 5u: return 8u;
                 default: return 0xffff'ffffu;
             }
@@ -5734,6 +6174,10 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(
             not make_error_code(device.readBuffer(probe_buffer, 0u, words.size() * sizeof(float), words.data())));
 
+        // A non-finite probe word would silently keep every accumulator below at
+        // its previous value, so the raw stencil output is checked first.
+        PPR_TEST_ASSERT(std::ranges::all_of(words, [](const float value) { return std::isfinite(value); }));
+
         // Test-local affine field and analytic moment reference. The weights are
         // the production stencil; every identity below is evaluated in double.
         constexpr double kMomentTolerance = 2.0e-6;
@@ -5823,7 +6267,9 @@ namespace pP::tests {
                 detail::MatterGpu::sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,
                 detail::MatterGpu::evolved_liquid_pool_has_no_interior_render_holes,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
-                detail::MatterGpu::k2_only_rejects_other_counts_before_work,
+                detail::MatterGpu::supported_iteration_counts_validate_before_work,
+                detail::MatterGpu::iteration_roles_integrate_once_per_substep,
+                detail::MatterGpu::odd_even_schedule_preserves_sparse_sources,
                 detail::MatterGpu::guardian_blocks_normal_and_halves_tangent_analytically,
                 detail::MatterGpu::split_device_rows_pack_and_unpack_every_semantic_field_by_name,
                 detail::MatterGpu::lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input,
@@ -5846,6 +6292,7 @@ namespace pP::tests {
                 detail::MatterGpu::predicted_body_slices_select_distinct_substep_rows,
                 detail::MatterGpu::device_peak_footprint_for_dual_grid_ownership,
                 detail::MatterGpu::constitutive_invalid_operands_do_not_enter_unsafe_operations,
+                detail::MatterGpu::constitutive_derived_operand_overflow_rejects_state,
                 detail::MatterGpu::constitutive_rejection_preserves_committed_epoch_and_rows,
                 detail::MatterGpu::quadratic_transfer_reproduces_affine_fields_and_moments,
             });

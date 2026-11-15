@@ -25,7 +25,8 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `Matter.Gpu.cppm` / `.cpp` (`:gpu`): sole move-only `GpuSolver` owner. Devices with
   `WaveOps` select `fused0Wave`/`fused1Wave`; other devices retain `fused0`/`fused1`.
   These entries compile through injected `IShaderService` from one generic body
-  with compile-time iteration and cooperation; `:gpu.sparse` owns maintenance
+  with compile-time first-stage and cooperation selectors; the final-stage
+  decision and K are runtime values in the parameter row. `:gpu.sparse` owns maintenance
   pipelines, sparse maps, two payload pools, one budget pool and first-error resources. Every
   particle binding is the `g_hot`/`g_cold` row pair; the solver never sees the
   88-byte semantic record on the device.
@@ -57,18 +58,25 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
   after donor retirement; private malformed/foreign-device donor injection
   remains source-reviewed rather than exercised through a new test seam.
 - `submitResidentTick` copies committed to working and runs compact GPU discovery,
-  count/allocate/insert and destination initialization plus two indirect fused
-  dispatches per substep. K2 is the only admitted count;
-  production uses eight evolving dt1/480 substeps. Iteration0 bootstraps scatter;
-  iteration1 gathers and integrates. Each fused dispatch owns immutable selector
-  and body-base constants through fence completion; its root belongs to the
-  matching iteration-specific program. Fused0 omits unused numerical node preparation
+  count/allocate/insert and destination initialization plus one indirect fused
+  dispatch per admitted stage; the admitted counts are K∈{2,5,10} and production
+  uses eight evolving dt1/480 substeps at K2. Stage0 bootstraps scatter without a
+  particle gather; stages 1..K-2 gather, constrain and scatter; stage K-1 also
+  integrates, so gravity, the game brush and the sand pressure impulse run exactly
+  once per substep. The stage index and K travel in the runtime parameter row, so
+  only two programs exist and the shader selects the final stage by comparing
+  them. Each fused dispatch owns immutable stage/K, destination-side,
+  source-generation and body-base constants through fence completion; its root
+  belongs to the program that stage uses. Fused0 omits unused numerical node preparation
   when a uniform finite-arithmetic certificate covers zero or one bounded box.
   Its coverage-only check uses a boundary-existence bit published with validated terrain;
   other collider/constants cases retain the original converged contact/error path.
-  Fused1 retains full node preparation. Previous sparse A survives
-  iteration0; current A is remapped only before iteration1. Destination pages and
-  their one shared budget are initialized explicitly. Sparse capacity joins the
+  Fused1 retains full node preparation. The two sparse payload/index sides
+  alternate per stage, and the host tracks the side and write generation the
+  schedule finished on rather than deriving them from stage parity: discovery
+  republishes only the first stage's destination page set, so the side the
+  preceding substep wrote stays readable at its own generation. Destination pages
+  and their one shared budget are initialized explicitly. Sparse capacity joins the
   prepared replacement transaction independently of spare Hot/Cold capacity.
   `pollTick` collects only the six-word error status.
 - The caller validates dependent state before `publishTick`; discard preserves
@@ -95,8 +103,8 @@ accepted adaptations and the exact stage mapping are in its README/license.
 All four source material branches, F/SVD/plasticity, static rotated boxes and
 circles, tiny-mass threshold, post-contact re-encoding, volume feedback and
 source integration/guardian safeguards are ported. Game radial forces use a
-separate 16-byte scalar constant, captured by immutable iteration-1 roots. The
-signed acceleration has squared radial falloff and enters displacement through
+separate 16-byte scalar constant bound only to the final stage's immutable root.
+The signed acceleration has squared radial falloff and enters displacement through
 dt²; zero acceleration skips the added arithmetic. Browser control ownership
 is not imported into the solver.
 
@@ -209,7 +217,7 @@ use the same resident execution path. The completion coverage/retirement ledger
 is in `out/diagnostics/gpu-authoritative-20261020/completion-20261021/`;
 current integrated execution remains a separate validation gate.
 
-The default liquid relaxation is1 for the admitted K2 integration schedule. The
+The default liquid relaxation is1 for the production K2 integration schedule. The
 selected fork defaults to1.5 and the historical EA pin to2, which has an
 amplifying isolated density/affine-pressure mode; shader arithmetic and
 fixed-point overflow checks are unchanged. Regression coverage asserts

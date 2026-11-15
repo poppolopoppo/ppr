@@ -1,21 +1,34 @@
 # ------------------------------------------------------------------
 # libc++ modules manifest preselection
 # ------------------------------------------------------------------
-# CMake's `import std` support asks the compiler for
-# `libstdc++.modules.json` while `project()` runs, whenever
-# CMAKE_CXX_STDLIB_MODULES_JSON is still unset. GCC 16 ships that manifest, so
-# a fresh configure of this libc++ build (cmake/compiler/Clang.cmake applies
-# -stdlib=libc++) recorded libstdc++'s module source, and every dependent
-# module scan then failed with "'bits/stdc++.h' file not found" because the
-# libstdc++ headers are not on the libc++ include path.
+# CMake's `import std` support asks the compiler for `libstdc++.modules.json`
+# while `project()` runs, whenever CMAKE_CXX_STDLIB_MODULES_JSON is still unset.
+# GCC 16 ships that manifest, so a fresh configure of this libc++ build
+# (cmake/compiler/Clang.cmake applies -stdlib=libc++) recorded libstdc++'s
+# module source, and every dependent module scan then failed with
+# "'bits/stdc++.h' file not found" because the libstdc++ headers are not on the
+# libc++ include path. Selecting the libc++ manifest here, before `project()`,
+# makes CMake skip that probe.
 #
-# Selecting the libc++ manifest here, before `project()`, makes CMake skip that
-# probe. The file is included from root CMakeLists.txt before `project()` and
-# again from cmake/compiler/Clang.cmake after it; the second pass only
-# re-asserts the selection, so the scan and its status message stay
-# single-sourced and appear exactly once per configure.
+# The file is included from root CMakeLists.txt before `project()` and again
+# from cmake/compiler/Clang.cmake after it; the second pass only re-asserts the
+# selection, so the scan and its status message appear once per configure.
+#
+# Two variables carry the selection, and the split is the contract:
+#   CMAKE_CXX_STDLIB_MODULES_JSON  user intent. Only a cache entry (from `-D`,
+#     a preset, or CMakeCache.txt) counts; this file never cache-writes that
+#     variable, so a stale automatic selection cannot masquerade as an explicit
+#     choice.
+#   PPR_LIBCXX_MODULES_JSON  the automatic selection recorded by this file. It
+#     is a stability hint for the next configure, always re-validated before
+#     use, and never treated as user intent.
+# Precedence: a resolving CMAKE_CXX_STDLIB_MODULES_JSON override, then the
+# recorded automatic selection, then the compiler/llvm-config/resource-dir
+# hints, then the well-known fallback paths.
 if(PPR_LIBCXX_MANIFEST_DISCOVERED)
-    if(PPR_LIBCXX_MODULES_JSON)
+    # Post-`project()` pass: re-assert the pre-`project()` selection without
+    # repeating the scan or its status message.
+    if(NOT CMAKE_CXX_STDLIB_MODULES_JSON AND PPR_LIBCXX_MODULES_JSON)
         set(CMAKE_CXX_STDLIB_MODULES_JSON "${PPR_LIBCXX_MODULES_JSON}")
     endif()
     return()
@@ -91,6 +104,30 @@ function(ppr_libcxx_manifest_resolves manifest result_var)
     set(${result_var} "${_resolves}" PARENT_SCOPE)
 endfunction()
 
+# An explicit cache entry is user intent: it wins while the manifest it names
+# resolves. A non-resolving override is reported and dropped instead of being
+# kept as a broken path, and discovery then decides.
+set(PPR_LIBCXX_SELECTED_MANIFEST "")
+if(DEFINED CACHE{CMAKE_CXX_STDLIB_MODULES_JSON})
+    set(_ppr_libcxx_override "${CMAKE_CXX_STDLIB_MODULES_JSON}")
+
+    if(_ppr_libcxx_override)
+        ppr_libcxx_manifest_resolves("${_ppr_libcxx_override}" _ppr_libcxx_override_resolves)
+        if(_ppr_libcxx_override_resolves)
+            set(PPR_LIBCXX_SELECTED_MANIFEST "${_ppr_libcxx_override}")
+        else()
+            message(WARNING "Ignoring CMAKE_CXX_STDLIB_MODULES_JSON='${_ppr_libcxx_override}': the file "
+                    "is missing or declares a module source that does not exist; falling back to "
+                    "libc++ manifest discovery.")
+            unset(CMAKE_CXX_STDLIB_MODULES_JSON CACHE)
+            unset(CMAKE_CXX_STDLIB_MODULES_JSON)
+        endif()
+        unset(_ppr_libcxx_override_resolves)
+    endif()
+
+    unset(_ppr_libcxx_override)
+endif()
+
 # Locate the libc++ modules manifest without pinning an LLVM major version.
 # Ask the compiler for its own manifest first, then probe llvm-config,
 # LLVM_DIR, and the compiler resource dir, then fall back to well-known
@@ -138,8 +175,8 @@ if(CMAKE_CXX_COMPILER)
     unset(PPR_CLANG_RESOURCE_DIR)
 endif()
 
-# An existing override or cached selection is tried first so a working choice
-# stays stable, but it is only kept when it still resolves.
+# The recorded automatic selection is tried first so a working choice stays
+# stable, but it is only kept when it still resolves.
 set(PPR_LIBCXX_MANIFEST_CANDIDATES)
 if(PPR_LIBCXX_MODULES_JSON)
     list(APPEND PPR_LIBCXX_MANIFEST_CANDIDATES "${PPR_LIBCXX_MODULES_JSON}")
@@ -168,14 +205,36 @@ foreach(_candidate IN LISTS PPR_LIBCXX_MANIFEST_CANDIDATES)
     endif()
 endforeach()
 
+# The automatic scan result is recorded only in PPR_LIBCXX_MODULES_JSON, never
+# as a CMAKE_CXX_STDLIB_MODULES_JSON cache entry, which is reserved for user
+# intent. Recording it keeps the next configure from probing again.
 if(PPR_LIBCXX_MODULES_JSON)
     get_filename_component(PPR_LIBCXX_MODULES_JSON "${PPR_LIBCXX_MODULES_JSON}" ABSOLUTE)
     set(PPR_LIBCXX_MODULES_JSON "${PPR_LIBCXX_MODULES_JSON}" CACHE FILEPATH "libc++ modules manifest" FORCE)
-    set(CMAKE_CXX_STDLIB_MODULES_JSON "${PPR_LIBCXX_MODULES_JSON}")
+endif()
+
+if(PPR_LIBCXX_SELECTED_MANIFEST)
+    get_filename_component(PPR_LIBCXX_SELECTED_MANIFEST "${PPR_LIBCXX_SELECTED_MANIFEST}" ABSOLUTE)
+elseif(PPR_LIBCXX_MODULES_JSON)
+    set(PPR_LIBCXX_SELECTED_MANIFEST "${PPR_LIBCXX_MODULES_JSON}")
+endif()
+
+if(PPR_LIBCXX_SELECTED_MANIFEST)
+    set(CMAKE_CXX_STDLIB_MODULES_JSON "${PPR_LIBCXX_SELECTED_MANIFEST}")
     message(STATUS "Using libc++ modules manifest: ${CMAKE_CXX_STDLIB_MODULES_JSON}")
 else()
-    message(STATUS "libc++.modules.json not found; leaving CMAKE_CXX_STDLIB_MODULES_JSON unset (CMake will use its default lookup)")
+    # No candidate resolved. Clear the effective value and both cached
+    # selections before reporting, so neither CMake's probe nor the next
+    # configure can consume a stale manifest path.
+    unset(CMAKE_CXX_STDLIB_MODULES_JSON)
+    unset(CMAKE_CXX_STDLIB_MODULES_JSON CACHE)
+    unset(PPR_LIBCXX_MODULES_JSON CACHE)
+    set(PPR_LIBCXX_MODULES_JSON "")
+
+    message(STATUS "No resolvable libc++.modules.json manifest found; leaving "
+            "CMAKE_CXX_STDLIB_MODULES_JSON unset for CMake's default lookup")
 endif()
+unset(PPR_LIBCXX_SELECTED_MANIFEST)
 unset(PPR_LIBCXX_MANIFEST_CANDIDATES)
 unset(PPR_LIBCXX_COMPILER_MANIFEST)
 unset(PPR_LIBCXX_MODULES_JSON_HINTS)

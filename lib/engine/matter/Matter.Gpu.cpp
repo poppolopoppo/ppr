@@ -33,6 +33,11 @@ namespace pP::matter {
         constexpr u32 kTerrainFinalPositionField = 6u;
         constexpr std::array<const char *, 2u> kEntries{"fused0", "fused1"};
         constexpr std::array<const char *, 2u> kWaveEntries{"fused0Wave", "fused1Wave"};
+        // Stage 0 bootstraps and writes the first grid state; every later stage
+        // gathers, constrains and scatters, and only the last of them integrates.
+        // All admitted counts share those two programs, so K stays a runtime value.
+        constexpr std::array<u32, 3u> kAdmittedIterations{2u, 5u, 10u};
+        constexpr u32 kMaxIterations = kAdmittedIterations.back();
 
         rhi::BufferRange fullRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
@@ -160,17 +165,19 @@ namespace pP::matter {
     // ------------------------------------------------------------------
 
     namespace {
-        constexpr u32 kTimingQueries = 44u;
-        constexpr std::array<const char *, 8u> kTimingStages{
-            "particle_copy", "source_metadata_reset", "sparse_discovery", "initialize_b_and_budget", "fused0",
-            "remap_a_and_budget", "fused1", "status_copy"};
+        // One discovery mark plus an initialize/fused pair per stage, in each of
+        // kGameSubsteps substeps, plus the four tick-scope marks.
+        constexpr u32 kTimingQueries = kGameSubsteps * (2u * kMaxIterations + 1u) + 4u;
+        constexpr std::array<const char *, 6u> kTimingStages{
+            "particle_copy", "source_metadata_reset", "sparse_discovery", "initialize_destination", "fused",
+            "status_copy"};
 
         struct TickTimingRecord {
             std::array<u64, kTimingStages.size()> m_ticks{};
             TimePoint m_submit_begin{}, m_submit_end{}, m_first_poll{}, m_last_pending{}, m_ready{}, m_previous_poll{};
             TimeSpan m_poll_work{}, m_max_poll_gap{};
             u64 m_epoch{}, m_signal{}, m_first_gpu{}, m_last_gpu{}, m_polls{};
-            u32 m_substeps{}, m_particles{};
+            u32 m_substeps{}, m_iterations{}, m_particles{};
             bool m_host_drain{};
         };
 
@@ -288,13 +295,19 @@ namespace pP::matter {
                 record.m_last_gpu = m_ticks[m_expected - 1u];
                 record.m_ticks[0u] = m_ticks[1u] - m_ticks[0u];
                 record.m_ticks[1u] = m_ticks[2u] - m_ticks[1u];
+                // Marks per substep: discovery, then one initialize/fused pair per
+                // stage. Both stage kinds accumulate across the whole schedule.
+                const u32 marks_per_substep = 2u * record.m_iterations + 1u;
                 for (u32 substep = 0u; substep < record.m_substeps; ++substep) {
-                    for (u32 stage = 0u; stage < 5u; ++stage) {
-                        const u32 at = 3u + substep * 5u + stage;
-                        record.m_ticks[stage + 2u] += m_ticks[at] - m_ticks[at - 1u];
+                    const u32 base = 3u + substep * marks_per_substep;
+                    record.m_ticks[2u] += m_ticks[base] - m_ticks[base - 1u];
+                    for (u32 stage = 0u; stage < record.m_iterations; ++stage) {
+                        const u32 at = base + 1u + 2u * stage;
+                        record.m_ticks[3u] += m_ticks[at] - m_ticks[at - 1u];
+                        record.m_ticks[4u] += m_ticks[at + 1u] - m_ticks[at];
                     }
                 }
-                record.m_ticks[7u] = m_ticks[m_expected - 1u] - m_ticks[m_expected - 2u];
+                record.m_ticks[5u] = m_ticks[m_expected - 1u] - m_ticks[m_expected - 2u];
 
                 if (m_samples == 0u) {
                     m_first_submit = record.m_submit_begin;
@@ -317,7 +330,9 @@ namespace pP::matter {
                 m_pending = {};
             }
 
-            void begin(rhi::ICommandEncoder &encoder, const u64 epoch, const u32 substeps, const u32 particles) {
+            void begin(
+                rhi::ICommandEncoder &encoder, const u64 epoch, const u32 substeps, const u32 iterations,
+                const u32 particles) {
                 m_recording = false;
                 if (m_error)
                     return;
@@ -325,12 +340,12 @@ namespace pP::matter {
                     ++m_skipped;
                     return;
                 }
-                if (substeps > kGameSubsteps) {
+                if (substeps > kGameSubsteps or iterations > kMaxIterations) {
                     fail(std::make_error_code(std::errc::not_supported));
                     return;
                 }
 
-                m_expected = 5u * substeps + 4u;
+                m_expected = substeps * (2u * iterations + 1u) + 4u;
                 const auto error = make_error_code(m_queries->reset(0u, m_expected));
                 if (error) {
                     fail(error);
@@ -340,6 +355,7 @@ namespace pP::matter {
                 m_pending = {};
                 m_pending.m_epoch = epoch;
                 m_pending.m_substeps = substeps;
+                m_pending.m_iterations = iterations;
                 m_pending.m_particles = particles;
                 m_written = 0u;
                 m_recording = true;
@@ -410,8 +426,9 @@ namespace pP::matter {
                     PPR_LOG(
                         MatterGpu, emphasis, "GPU tick timing last fence observation",
                         {{"epoch", last.m_epoch}, {"signal", last.m_signal}, {"substeps", last.m_substeps},
-                            {"particles", last.m_particles}, {"first_gpu_ticks", last.m_first_gpu},
-                            {"last_gpu_ticks", last.m_last_gpu}, {"completed_after_host_drain", last.m_host_drain},
+                            {"iterations", last.m_iterations}, {"particles", last.m_particles},
+                            {"first_gpu_ticks", last.m_first_gpu}, {"last_gpu_ticks", last.m_last_gpu},
+                            {"completed_after_host_drain", last.m_host_drain},
                             {"submit_begin_ms", milliseconds(last.m_submit_begin - m_origin)},
                             {"submit_end_ms", milliseconds(last.m_submit_end - m_origin)},
                             {"first_poll_ms", milliseconds(last.m_first_poll - m_origin)},
@@ -459,6 +476,7 @@ namespace pP::matter {
         u64 m_snapshot_signal{};
         u64 m_replacement_signal{};
         u32 m_substep{};
+        u32 m_iterations{};
         bool m_inflight{};
         bool m_complete{};
         bool m_valid{};
@@ -482,23 +500,26 @@ namespace pP::matter {
         }
 
         std::error_code bindAndDispatch(
-            rhi::ICommandEncoder &encoder, const u32 iteration, const GpuRadialForce &force) {
-            Kernel &kernel = m_kernels[iteration];
-            const u32 dispatch_index = m_substep * 2u + iteration;
+            rhi::ICommandEncoder &encoder, const u32 stage, const bool destination_a, const u32 source_generation,
+            const GpuRadialForce &force) {
+            Kernel &kernel = m_kernels[stage == 0u ? 0u : 1u];
+            const u32 dispatch_index = m_substep * m_iterations + stage;
             rhi::IShaderObject *const root = m_dispatch_roots[dispatch_index].get();
             rhi::ShaderCursor cursor{root};
             rhi::ShaderCursor parameters{};
             GpuParameters constants = m_profile;
-            constants.m_reserved0 = iteration;
+            constants.m_reserved0 = stage;
+            constants.m_reserved1 = m_iterations;
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_parameters"].getDereferenced(parameters));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&constants, sizeof(constants)));
 
-            if (iteration == 1u) {
+            if (stage + 1u == m_iterations) {
+                // External acceleration exists only where integration does.
                 PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_radial_force"].getDereferenced(parameters));
                 PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&force, sizeof(force)));
             }
 
-            const auto sparse = m_particles.m_sparse.constants(iteration != 0u);
+            const auto sparse = m_particles.m_sparse.constants(destination_a, source_generation);
             const auto &buffers = m_particles.m_sparse.buffers();
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_sparse"].getDereferenced(parameters));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&sparse, sizeof(sparse)));
@@ -1117,10 +1138,14 @@ namespace pP::matter {
             expected_epoch == state.m_accounting.m_epoch and expected_epoch != std::numeric_limits<u64>::max()
                 ? std::error_code{}
                 : std::make_error_code(std::errc::state_not_recoverable));
+
+        // Admission precedes every allocation, root and encoding: an unsupported
+        // schedule has no representation, so it is refused rather than clamped.
+        const bool admitted_schedule = std::ranges::find(kAdmittedIterations, iterations) != kAdmittedIterations.end();
         PPR_RETURN_ERROR_ON_FAIL(
-            MatterGpu, substeps != 0u and
-                               iterations == kSourceIterations and
-                               substeps <= std::numeric_limits<u32>::max() / 2u and
+            MatterGpu, admitted_schedule and
+                               substeps != 0u and
+                               static_cast<u64>(substeps) * iterations <= std::numeric_limits<u32>::max() and
                                state.m_next_signal != std::numeric_limits<u64>::max()
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
@@ -1183,20 +1208,23 @@ namespace pP::matter {
                            : std::make_error_code(std::errc::value_too_large));
 
         Array<rhi::ComPtr<rhi::IShaderObject>> dispatch_roots;
-        dispatch_roots.resize(static_cast<std::size_t>(substeps) * 2u);
+        dispatch_roots.resize(static_cast<std::size_t>(substeps) * iterations);
 
         for (std::size_t index = 0u; index < dispatch_roots.size(); ++index) {
+            // Roots are substep-major and stage-minor, matching the encode order.
+            const std::size_t stage = index % iterations;
             PPR_RETURN_ERROR_ON_FAIL(
                 MatterGpu, state.m_device->createRootShaderObject(
-                               state.m_kernels[index % 2u].m_program, dispatch_roots[index].writeRef()));
+                               state.m_kernels[stage == 0u ? 0u : 1u].m_program, dispatch_roots[index].writeRef()));
         }
 
-        // Every fused dispatch owns immutable selector/body-base constants.
+        // Every fused dispatch owns immutable stage/selector/body-base constants.
         state.m_dispatch_roots = std::move(dispatch_roots);
-        PPR_ASSERT(state.m_dispatch_roots.size() == static_cast<std::size_t>(substeps) * 2u);
+        PPR_ASSERT(state.m_dispatch_roots.size() == static_cast<std::size_t>(substeps) * iterations);
 
         state.m_boundaries.m_body_count = body_count;
         state.m_accounting.m_substeps = substeps;
+        state.m_iterations = iterations;
 
         const hal::ProfileScope scope{"Matter.Gpu.EncodeTick"};
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
@@ -1228,7 +1256,7 @@ namespace pP::matter {
                         }
                     }
 
-                    timing->begin(*encoder, expected_epoch, substeps, state.m_profile.m_particle_count);
+                    timing->begin(*encoder, expected_epoch, substeps, iterations, state.m_profile.m_particle_count);
                 }
 
                 encoder->setBufferState(state.m_particles.m_committed_hot, rhi::ResourceState::CopySource);
@@ -1275,6 +1303,12 @@ namespace pP::matter {
                 if (timing)
                     timing->mark(*encoder);
 
+                // Ping-pong bookkeeping, owned here rather than inferred from stage
+                // parity: a side name plus the generation its payload was written
+                // with. A tick starts logically empty, so no side is readable.
+                bool source_a = true;
+                u32 source_generation = 0u;
+
                 for (u32 substep = 0u; substep < substeps; ++substep) {
                     encoder->pushDebugGroup("PBMPM.Substep", {});
                     PPR_DEFER {
@@ -1288,31 +1322,44 @@ namespace pP::matter {
                             encoder->popDebugGroup();
                         };
 
+                        // The first stage writes the side opposite the one the
+                        // schedule finished on, so only that side's page set is
+                        // republished and the side just read keeps its index.
                         PPR_RETURN_ERROR_ON_FAIL(
-                            MatterGpu, state.m_particles.m_sparse.discover(
-                                           *encoder, *state.m_particles.m_working_hot,
-                                           *state.m_particles.m_working_cold, state.m_profile, state.m_dispatch_roots));
+                            MatterGpu,
+                            state.m_particles.m_sparse.discover(
+                                *encoder, *state.m_particles.m_working_hot, *state.m_particles.m_working_cold,
+                                state.m_profile, not source_a, state.m_dispatch_roots));
                         state.m_accounting.m_dispatches += 9u;
                         if (timing)
                             timing->mark(*encoder);
                     }
 
-                    for (u32 iteration = 0u; iteration < 2u; ++iteration) {
+                    for (u32 stage = 0u; stage < iterations; ++stage) {
+                        const bool destination_a = not source_a;
                         PPR_RETURN_ERROR_ON_FAIL(
                             MatterGpu, state.m_particles.m_sparse.initializeDestination(
-                                           *encoder, iteration != 0u, state.m_dispatch_roots));
+                                           *encoder, destination_a, state.m_dispatch_roots));
                         ++state.m_accounting.m_dispatches;
                         if (timing)
                             timing->mark(*encoder);
 
-                        encoder->pushDebugGroup(iteration == 0u ? "PBMPM.Fused0" : "PBMPM.Fused1", {});
+                        std::array<char, 24u> label{};
+                        *std::format_to_n(label.data(), label.size() - 1u, "PBMPM.Fused{}", stage).out = '\0';
+                        encoder->pushDebugGroup(label.data(), {});
                         PPR_DEFER {
                             encoder->popDebugGroup();
                         };
 
-                        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.bindAndDispatch(*encoder, iteration, force));
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            MatterGpu, state.bindAndDispatch(*encoder, stage, destination_a, source_generation, force));
                         if (timing)
                             timing->mark(*encoder);
+
+                        // The next stage reads the side this stage wrote, at this
+                        // substep's write generation.
+                        source_a = destination_a;
+                        source_generation = state.m_particles.m_sparse.constants().m_generation;
                     }
                 }
 
