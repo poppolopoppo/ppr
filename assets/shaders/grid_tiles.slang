@@ -2236,7 +2236,7 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
 // screen-space particle surface: label selection, attributes, composite
 // ------------------------------------------------------------------
 // One reconstruction method for the admitted phases (rev. 4 section 9, rev. 5
-// radius). Per rendered frame and phase bundle:
+// radius, rev. 7 world-space smoothing). Per rendered frame and phase bundle:
 //
 //   1. label selection   L = R32Uint winning material, Z = D32Float minimum
 //                        eligible rho^2. Blend off, strict Less, depth writes.
@@ -2244,18 +2244,23 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
 //                        G = (sum w*unit normal.xyz, sum w*alpha)
 //                        One/One/Add on every channel, no depth attachment,
 //                        foreign-label and terrain rejection per splat.
-//   3. composite         categorical four-tap reconstruction of Q/G with the
-//                        analytic quotient derivative of D, one deferred
-//                        response evaluation per surviving scene sample.
+//   3. smoothing         two separable tiled label-masked Gaussian passes,
+//                        sigma = 0.15 world cell, +/-3 sigma, horizontal into
+//                        one scratch L/Q/G bundle and vertical into the next.
+//   4. composite         categorical four-tap reconstruction of the FILTERED
+//                        L/Q/G with the analytic quotient derivative of D, one
+//                        deferred response evaluation per surviving sample.
 //
 // The kernel, quadrature and contour mathematics live in
-// grid_particle_density.slang. There is no filter, no history, no blur and no
-// hardware resolve before the existing reconstruction; D is a linear HDR scalar
-// and the attributes are linear reflectance/normal sums throughout.
+// grid_particle_density.slang. There is no temporal history, no blur of lit
+// colour and no hardware resolve before the reconstruction; D is a linear HDR
+// scalar and the attributes are linear reflectance/normal sums throughout.
 
 // The winning label of the current frame's selection pass, one texel per raster
 // pixel. Never sampled with a filter: the composite integer-loads exactly four
-// taps, so a material id is never interpolated.
+// taps, so a material id is never interpolated. Outside the smoothing passes
+// these three resources are the ACCUMULATION field; the smoothing entries read
+// them (and their own scratch bundles) and the composite reads the final bundle.
 Texture2D<uint> g_particle_label;
 // Q = weighted base reflectance + density; G = weighted normal + alpha. Both are
 // read by integer tap, never filtered, so the composite reconstructs exactly the
@@ -2629,6 +2634,227 @@ float4 fragmentParticleSurfaceComposite(ParticleSurfaceCompositeVertexOutput inp
 // Both liquid classes draw this one program: the class is the pipeline's depth
 // state only, and each draw rejects the samples the other class owns through the
 // lane's composite-class constant. There is no class-specific shading code.
+
+// ------------------------------------------------------------------
+// world-space surface smoothing: two separable tiled passes
+// ------------------------------------------------------------------
+// The reconstruction influence is a Gaussian of sigma world cells, truncated at
+// +/-3 sigma and clamped by the shared tile's widest halo. Both the width and the
+// tap count are world-sized: the per-axis scale is this frame's own raster
+// pixels-per-cell, so a closer camera grows the kernel in samples and a coarse
+// one shrinks it. That is the whole point of the revision - a pixel-fixed stencil
+// silently changes the world width with the zoom.
+//
+// Two passes, in this order: horizontal writes scratch bundle A from the
+// accumulation field, vertical reads A and writes the final bundle B. Every
+// output texel loads a 16x16 logical tile plus a one-axis halo into shared memory
+// (no subgroup intrinsic, so the shape is portable), filters from shared and
+// writes exactly one output texel. One group barrier per pass.
+//
+// The mask is categorical and shared by both passes, so the sequential result is
+// deterministic: a tap contributes only when its label equals the mask label.
+// Air contributes zero but keeps its weight in the denominator, so the contour
+// may extend into vacuum; a foreign nonempty label leaves numerator AND
+// denominator, so two materials never bleed and a border never opens a black
+// seam. Terrain is never renormalised through: a terrain-blocked source texel is
+// loaded as the empty texel, which is exactly the rule's zero-numerator,
+// kept-weight treatment, and a blocked OUTPUT texel emits the empty texel.
+static const float kParticleSurfaceSmoothingSigma=0.15;
+// Logical outputs per group edge. One output per thread: 256 threads per group.
+static const uint kParticleSurfaceFilterTile=16u;
+// Widest loaded halo along the filtered axis. 16 + 2*8 source texels of 36 bytes
+// (uint label + two float4) is 18,432 shared bytes, the design's bound. A wider
+// required halo is reported by the host and truncated here, never silently
+// claimed as the same smoothing width.
+static const uint kParticleSurfaceFilterMaxHalo=8u;
+static const uint kParticleSurfaceFilterColumns=kParticleSurfaceFilterTile+2u*kParticleSurfaceFilterMaxHalo;
+
+struct ParticleSurfaceFilterFrame {
+    // Raster samples per world native cell for this frame.
+    float m_samples_per_cell;
+    // The smoothing sigma in world native cells (kParticleSurfaceSmoothingSigma).
+    float m_sigma_cell;
+    // Loaded halo per axis, in raster samples.
+    uint m_halo;
+    uint m_pad;
+    // The field's raster extent.
+    uint m_extent_x;
+    uint m_extent_y;
+    uint m_pad2;
+    uint m_pad3;
+};
+ConstantBuffer<ParticleSurfaceFilterFrame> g_particle_filter;
+
+// One axis of the separable pair. Both programs declare the same names and each
+// entry keeps only what it uses, so the horizontal program binds the accumulation
+// field and the vertical program binds the horizontal scratch bundle.
+Texture2D<uint> g_particle_filter_source_label;
+Texture2D<float4> g_particle_filter_source_base;
+Texture2D<float4> g_particle_filter_source_normal;
+RWTexture2D<uint> g_particle_filter_target_label;
+RWTexture2D<float4> g_particle_filter_target_base;
+RWTexture2D<float4> g_particle_filter_target_normal;
+
+// The loaded tile, flat with a runtime row stride: `row` is the non-halo axis and
+// `column` runs -halo..tile+halo along the filtered one. 36 bytes per source
+// texel.
+groupshared uint s_filter_label[kParticleSurfaceFilterTile*kParticleSurfaceFilterColumns];
+groupshared float4 s_filter_base[kParticleSurfaceFilterTile*kParticleSurfaceFilterColumns];
+groupshared float4 s_filter_normal[kParticleSurfaceFilterTile*kParticleSurfaceFilterColumns];
+// The raw Gaussian taps for this frame's scale, evaluated once per group in world
+// cells. They are NOT normalized: each output divides by the sum of the weights
+// it actually admitted, which is the shared denominator of every channel and of
+// the categorical renormalization at a border.
+groupshared float s_filter_weight[2u*kParticleSurfaceFilterMaxHalo+1u];
+
+// World-plane native-cell position of one raster texel: the same mapping the
+// composite and the background use, so the terrain predicate answers about the
+// same plane point the field describes.
+float2 particleSurfaceFilterFine(uint2 texel) {
+    float2 extent=float2(g_particle_filter.m_extent_x,g_particle_filter.m_extent_y);
+    float2 uv=(float2(texel)+0.5)/extent;
+    return backgroundWorldAt(uv,g_grid_frame.m_inverse_view_projection)/g_grid_frame.m_cell_size_m;
+}
+
+// One axis of the separable filter. `horizontal` selects which axis carries the
+// halo. Everything else - the tile shape, the tap weights, the label mask, the
+// terrain rule and the output contract - is shared, so the two passes are the same
+// operator applied twice.
+void particleSurfaceFilterTile(uint3 thread:SV_GroupThreadID,uint3 group:SV_GroupID,bool horizontal) {
+    // The extreme group edge and a degenerate frame are the only guards needed:
+    // halo, stride and the extent are read once so the two entry points cannot
+    // disagree about the kernel they are applying.
+    uint halo=min(g_particle_filter.m_halo,kParticleSurfaceFilterMaxHalo);
+    uint stride=kParticleSurfaceFilterTile+2u*halo;
+    uint2 extent=uint2(g_particle_filter.m_extent_x,g_particle_filter.m_extent_y);
+    uint2 origin=uint2(group.x,group.y)*kParticleSurfaceFilterTile;
+    uint2 local=uint2(thread.x,thread.y);
+    uint lanes=kParticleSurfaceFilterTile*kParticleSurfaceFilterTile;
+    uint lane=thread.y*kParticleSurfaceFilterTile+thread.x;
+
+    // One lane per tap evaluates the exponential in WORLD CELLS; every output of
+    // the group reuses the table. The scale guard only keeps a degenerate frame
+    // from dividing by zero.
+    if (lane<2u*halo+1u) {
+        float cells=float(int(lane)-int(halo))/max(g_particle_filter.m_samples_per_cell,1.0e-6);
+        float width=cells/g_particle_filter.m_sigma_cell;
+        s_filter_weight[lane]=exp(-0.5*width*width);
+    }
+
+    // Cooperative load of the 16 x (16 + 2*halo) source tile. Out of bounds is
+    // air, never a replicated edge texel.
+    uint count=kParticleSurfaceFilterTile*stride;
+    for (uint index=lane;index<count;index+=lanes) {
+        uint row=index/stride;
+        uint column=index%stride;
+        int2 texel=horizontal
+            ? int2(int(origin.x)+int(column)-int(halo),int(origin.y)+int(row))
+            : int2(int(origin.x)+int(row),int(origin.y)+int(column)-int(halo));
+
+        uint label=0u;
+        float4 base=float4(0.0),normal=float4(0.0);
+        if (all(texel>=int2(0))&&all(texel<int2(int(extent.x),int(extent.y)))) {
+            uint2 inside=uint2(texel);
+            label=g_particle_filter_source_label.Load(int3(int2(inside),0));
+            base=g_particle_filter_source_base.Load(int3(int2(inside),0));
+            normal=g_particle_filter_source_normal.Load(int3(int2(inside),0));
+            // A terrain-blocked source texel loads as the empty texel: zero
+            // numerator, weight still in the denominator, exactly the specified
+            // treatment of a blocked tap (including a blocked foreign one).
+            if (terrainExcludesDensity(particleSurfaceFilterFine(inside))) {
+                label=0u;
+                base=float4(0.0);
+                normal=float4(0.0);
+            }
+        }
+
+        uint slot=row*stride+column;
+        s_filter_label[slot]=label;
+        s_filter_base[slot]=base;
+        s_filter_normal[slot]=normal;
+    }
+
+    // Every lane reaches the barrier, including the whole out-of-range edge group.
+    GroupMemoryBarrierWithGroupSync();
+
+    uint2 texel=origin+local;
+    if (texel.x>=extent.x||texel.y>=extent.y) return;
+
+    // A terrain-blocked output is empty: the filter never paints over opaque
+    // terrain, and the next pass then reads it as air.
+    if (terrainExcludesDensity(particleSurfaceFilterFine(texel))) {
+        g_particle_filter_target_label[texel]=0u;
+        g_particle_filter_target_base[texel]=float4(0.0);
+        g_particle_filter_target_normal[texel]=float4(0.0);
+        return;
+    }
+
+    uint row=horizontal ? local.y : local.x;
+    int centre=int(row*stride+halo+(horizontal ? local.x : local.y));
+
+    // The mask label. A nonempty centre keeps its own label, so the output can
+    // never acquire a foreign material's attributes. An empty centre adopts the
+    // nearest nonzero tap label (ties: smaller unsigned label, then the smaller
+    // signed offset), which is the deterministic halo rule of BOTH passes; its
+    // only effect is to let an existing surface extend into air, never to create
+    // density on its own and never selected by density.
+    uint mask=s_filter_label[centre];
+    if (mask==0u) {
+        for (uint distance=1u;distance<=halo;++distance) {
+            uint negative=s_filter_label[centre-int(distance)];
+            uint positive=s_filter_label[centre+int(distance)];
+            if (negative==0u&&positive==0u) continue;
+            if (negative==0u) { mask=positive; break; }
+            if (positive==0u) { mask=negative; break; }
+            mask=negative<=positive ? negative : positive;
+            break;
+        }
+    }
+
+    if (mask==0u) {
+        g_particle_filter_target_label[texel]=0u;
+        g_particle_filter_target_base[texel]=float4(0.0);
+        g_particle_filter_target_normal[texel]=float4(0.0);
+        return;
+    }
+
+    // Coherent masked accumulation over offsets -halo..halo. Q.rgb, Q.a, G.rgb and
+    // G.a all use these weights and this one denominator, so the attributes stay
+    // premultiplied and the composite's ratio is unchanged by filtering.
+    float4 base=float4(0.0),normal=float4(0.0);
+    float denominator=0.0;
+    for (uint tap=0u;tap<2u*halo+1u;++tap) {
+        int neighbour=centre+int(tap)-int(halo);
+        uint label=s_filter_label[neighbour];
+        if (label!=0u&&label!=mask) continue;
+
+        float weight=s_filter_weight[tap];
+        denominator+=weight;
+        if (label==mask) {
+            base+=weight*s_filter_base[neighbour];
+            normal+=weight*s_filter_normal[neighbour];
+        }
+    }
+
+    float inverse=denominator>0.0 ? 1.0/denominator : 0.0;
+    g_particle_filter_target_label[texel]=mask;
+    g_particle_filter_target_base[texel]=base*inverse;
+    g_particle_filter_target_normal[texel]=normal*inverse;
+}
+
+// Horizontal: halo along x, accumulation field in, first scratch bundle out.
+[shader("compute")]
+[numthreads(16,16,1)]
+void smoothParticleSurfaceHorizontal(uint3 thread:SV_GroupThreadID,uint3 group:SV_GroupID) {
+    particleSurfaceFilterTile(thread,group,true);
+}
+
+// Vertical: halo along y, first scratch bundle in, final field out.
+[shader("compute")]
+[numthreads(16,16,1)]
+void smoothParticleSurfaceVertical(uint3 thread:SV_GroupThreadID,uint3 group:SV_GroupID) {
+    particleSurfaceFilterTile(thread,group,false);
+}
 
 // ------------------------------------------------------------------
 // isolated qualification probe for the actual material palette ABI

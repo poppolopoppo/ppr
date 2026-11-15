@@ -4829,9 +4829,14 @@ namespace pP {
         m_particle_surface_composite_opaque_pipeline.reset();
         m_particle_surface_composite_optical_key.reset();
         m_particle_surface_composite_optical_pipeline.reset();
+        m_particle_surface_filter_horizontal = {};
+        m_particle_surface_filter_vertical = {};
+        m_particle_surface_filter_required_halo = 0u;
         m_particle_surface_slots = {};
         m_particle_surface_slot = 0u;
         m_particle_surface_pixel_world = 0.0f;
+        m_particle_surface_filter_samples_per_cell = 0.0f;
+        m_particle_surface_filter_halo = 0u;
         m_particle_surface_encoded = false;
         m_particle_surface_ready = false;
         m_world.m_particle_surface = {};

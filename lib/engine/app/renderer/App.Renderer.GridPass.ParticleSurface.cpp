@@ -24,13 +24,18 @@ namespace pP {
     //                    eligible rho^2. No blend, strict Less, depth writes.
     //   accumulation     Q = (sum w*base.rgb, sum w), G = (sum w*normal.xyz,
     //                    sum w*alpha). One/One/Add, no depth attachment.
-    //   composite        one categorical four-tap reconstruction and one deferred
-    //                    response evaluation per surviving scene sample, drawn at
-    //                    each admitted class's existing depth/blend slot.
+    //   smoothing        two separable tiled label-masked Gaussian dispatches at
+    //                    sigma = 0.15 world cell (+/-3 sigma), horizontal into a
+    //                    scratch L/Q/G bundle and vertical into the final field.
+    //   composite        one categorical four-tap reconstruction of the FILTERED
+    //                    field and one deferred response evaluation per surviving
+    //                    scene sample, drawn at each admitted class's existing
+    //                    depth/blend slot.
     //
-    // There is no filter, no density history, no dirty-tile cache, no readback and
-    // no temporal smoothing. Every target clears to its exact empty value every
-    // rendered frame.
+    // There is no temporal history, no dirty-tile cache and no readback. Every
+    // target clears to its exact empty value every rendered frame, and the two
+    // scratch bundles are rewritten by the filter every rendered frame, so a held
+    // publication with an unchanged camera reproduces the field bit for bit.
 
     namespace {
         rhi::BufferRange particleSurfaceRange(rhi::IBuffer *const buffer) noexcept {
@@ -48,6 +53,60 @@ namespace pP {
         static_assert(sizeof(ParticleSurfaceConstants) == 16u and alignof(ParticleSurfaceConstants) == 4u);
         static_assert(PPR_OFFSETOF(ParticleSurfaceConstants, m_phase_mask) == 4u);
         static_assert(PPR_OFFSETOF(ParticleSurfaceConstants, m_composite_class) == 8u);
+
+        // CPU mirror of grid_tiles.slang's ParticleSurfaceFilterFrame, the second
+        // reflected contract of the surface lane. It carries this frame's own
+        // zoom, not a fixed pixel width, so the smoothing is world-sized.
+        struct ParticleSurfaceFilterConstants {
+            float m_samples_per_cell{};
+            float m_sigma_cell{};
+            u32 m_halo{};
+            u32 m_pad{};
+            u32 m_extent_x{};
+            u32 m_extent_y{};
+            u32 m_pad2{};
+            u32 m_pad3{};
+        };
+        static_assert(sizeof(ParticleSurfaceFilterConstants) == 32u and alignof(ParticleSurfaceFilterConstants) == 4u);
+        static_assert(PPR_OFFSETOF(ParticleSurfaceFilterConstants, m_sigma_cell) == 4u);
+        static_assert(PPR_OFFSETOF(ParticleSurfaceFilterConstants, m_halo) == 8u);
+        static_assert(PPR_OFFSETOF(ParticleSurfaceFilterConstants, m_extent_x) == 16u);
+
+        // grid_tiles.slang kParticleSurfaceSmoothingSigma and
+        // kParticleSurfaceFilterMaxHalo. The sigma is the design's one admitted
+        // smoothing scale in world native cells; the halo bound is what one 16x16
+        // group's shared tile can load (18,432 bytes at the widest halo), so a
+        // wider requirement is reported rather than silently truncated.
+        constexpr float kParticleSurfaceSmoothingSigma{0.15f};
+        constexpr u32 kParticleSurfaceFilterMaxHalo{8u};
+        constexpr u32 kParticleSurfaceFilterTile{16u};
+
+        // Raster samples per world native cell at the camera's drawing plane. The
+        // smoothing sigma and its tap count are both derived from it, so the world
+        // width of the filter is constant across the zoom range.
+        float particleSurfaceSamplesPerCell(const float cell_size_m, const float pixel_world) noexcept {
+            if (not (cell_size_m > 0.0f) or not (pixel_world > 0.0f)) {
+                return 0.0f;
+            }
+
+            const float samples = cell_size_m / pixel_world;
+            return std::isfinite(samples) ? samples : 0.0f;
+        }
+
+        // ceil(3*sigma*samples_per_cell), unclamped: the diagnostic and the
+        // constant block both compare it against the shared tile's bound.
+        u32 particleSurfaceRequiredHalo(const float samples_per_cell) noexcept {
+            if (not (samples_per_cell > 0.0f)) {
+                return 0u;
+            }
+
+            const float required = std::ceil(3.0f * kParticleSurfaceSmoothingSigma * samples_per_cell);
+            if (not std::isfinite(required) or required <= 0.0f) {
+                return 0u;
+            }
+
+            return static_cast<u32>(std::min(required, 4096.0f));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -140,7 +199,9 @@ namespace pP {
                               slot.m_base and
                               slot.m_base_view and
                               slot.m_normal and
-                              slot.m_normal_view;
+                              slot.m_normal_view and
+                              slot.m_horizontal.complete() and
+                              slot.m_vertical.complete();
         if (complete and slot.m_width == width and slot.m_height == height) {
             return {};
         }
@@ -187,6 +248,40 @@ namespace pP {
         desc.label = "grid particle surface normal+alpha (G)";
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_normal.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_normal->getDefaultView(bundle.m_normal_view.writeRef()));
+
+        // The two separable smoothing bundles at the same raster size. Each is one
+        // 4-byte label plus two RGBA16F sums per texel (20 bytes/texel, 40 bytes of
+        // added scratch per slot); the horizontal pass writes the first and the
+        // vertical pass reads it and writes the second, so neither is filtered in
+        // place and no dispatch reads the buffer it writes.
+        const auto create_bundle = [&](const char *const label, ParticleSurfaceBundle &into) -> std::error_code {
+            rhi::TextureDesc scratch{};
+            scratch.type = rhi::TextureType::Texture2D;
+            scratch.size = {.width = width, .height = height, .depth = 1u};
+            scratch.arrayLength = 1u;
+            scratch.mipCount = 1u;
+            scratch.memoryType = rhi::MemoryType::DeviceLocal;
+            scratch.usage = static_cast<rhi::TextureUsage>(
+                static_cast<u32>(rhi::TextureUsage::ShaderResource) |
+                static_cast<u32>(rhi::TextureUsage::UnorderedAccess));
+            scratch.defaultState = rhi::ResourceState::ShaderResource;
+            scratch.label = label;
+
+            scratch.format = rhi::Format::R32Uint;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(scratch, nullptr, into.m_label.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, into.m_label->getDefaultView(into.m_label_view.writeRef()));
+
+            scratch.format = rhi::Format::RGBA16Float;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(scratch, nullptr, into.m_base.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, into.m_base->getDefaultView(into.m_base_view.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(scratch, nullptr, into.m_normal.writeRef()));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, into.m_normal->getDefaultView(into.m_normal_view.writeRef()));
+            return {};
+        };
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create_bundle("grid particle surface smoothing scratch (horizontal)", bundle.m_horizontal));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create_bundle("grid particle surface smoothing scratch (vertical)", bundle.m_vertical));
 
         // Publish: the old bundle (if any) is released here, after every new
         // member exists. The slot's completion value belongs to the slot, not to
@@ -290,6 +385,38 @@ namespace pP {
                 GridPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
         }
 
+        // The smoothing constant block is the lane's second reflected contract: a
+        // widened block or a reordered word must fail creation here instead of
+        // misreading the zoom, the halo or the field extent.
+        slang::TypeLayoutReflection *filter_frame{};
+        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_particle_filter") {
+                filter_frame = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, filter_frame != nullptr and filter_frame->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) ==
+                                                      sizeof(ParticleSurfaceFilterConstants)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        for (const auto &[name, offset]: std::array<std::pair<const char *, u32>, 4u>{
+                 std::pair{"m_samples_per_cell", 0u}, {"m_sigma_cell", 4u}, {"m_halo", 8u}, {"m_extent_x", 16u}}) {
+            bool matched = false;
+            for (unsigned index = 0u; index < filter_frame->getFieldCount(); ++index) {
+                auto *const field = filter_frame->getFieldByIndex(index);
+                if (std::string_view{field->getName()} == name) {
+                    matched = field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == offset;
+                    break;
+                }
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, matched ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        }
+
         const auto create = [&](const char *const vertex, const char *const fragment,
                                 rhi::ComPtr<rhi::IShaderProgram> &program) -> std::error_code {
             shader::ComPtr<slang::IEntryPoint> vertex_ep, fragment_ep;
@@ -321,6 +448,39 @@ namespace pP {
             GridPass, create(
                           "vertexParticleSurfaceComposite", "fragmentParticleSurfaceComposite",
                           m_particle_surface_composite_program));
+
+        // The two separable smoothing passes. Each is its own compute program with
+        // its own pipeline and one root per ring slot: a root's bindings are
+        // authored once per frame, so the two dispatches cannot share one root even
+        // though they run the same source template.
+        const auto create_filter = [&](const char *const entry, ParticleSurfaceFilterProgram &into) -> std::error_code {
+            shader::ComPtr<slang::IEntryPoint> point;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, module->findEntryPointByName(entry, point.writeRef()));
+            slang::IComponentType *entries[] = {point.get()};
+            rhi::ShaderProgramDesc desc{};
+            desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+            desc.slangGlobalScope = module.get();
+            desc.slangEntryPoints = entries;
+            desc.slangEntryPointCount = 1u;
+            shader::Diagnose diagnostics;
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, device.createShaderProgram(desc, into.m_program.writeRef(), diagnostics.writeRef()));
+
+            rhi::ComputePipelineDesc pipeline{};
+            pipeline.program = into.m_program;
+            pipeline.label = entry;
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createComputePipeline(pipeline, into.m_pipeline.writeRef()));
+
+            for (auto &root: into.m_roots) {
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createRootShaderObject(into.m_program, root.writeRef()));
+            }
+
+            return {};
+        };
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create_filter("smoothParticleSurfaceHorizontal", m_particle_surface_filter_horizontal));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, create_filter("smoothParticleSurfaceVertical", m_particle_surface_filter_vertical));
         return {};
     }
 
@@ -624,9 +784,117 @@ namespace pP {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 2u);
         }
 
-        // Q/G are read by both composites; the label stays readable.
+        // Q/G are read by the smoothing pass; the label stays readable.
         state(slot.m_base.get(), rhi::ResourceState::ShaderResource);
         state(slot.m_normal.get(), rhi::ResourceState::ShaderResource);
+
+        // --- smoothing: horizontal into scratch, vertical into the field ----
+        // The field is filtered over its own target extent, not the frame's
+        // scissor: the composite reconstructs every raster texel, and texels the
+        // accumulation never visited hold the exact empty value, so filtering them
+        // is a defined no-op rather than a truncated halo.
+        ParticleSurfaceBundle accumulation_field{};
+        accumulation_field.m_label = slot.m_label;
+        accumulation_field.m_label_view = slot.m_label_view;
+        accumulation_field.m_base = slot.m_base;
+        accumulation_field.m_base_view = slot.m_base_view;
+        accumulation_field.m_normal = slot.m_normal;
+        accumulation_field.m_normal_view = slot.m_normal_view;
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, encodeParticleSurfaceFilter_(
+                          context, m_particle_surface_filter_horizontal, slot_index, accumulation_field,
+                          slot.m_horizontal, slot.m_width, slot.m_height, m_particle_surface_filter_samples_per_cell,
+                          m_particle_surface_filter_halo));
+        if (m_particle_timing_queries) {
+            context.m_encoder.writeTimestamp(m_particle_timing_queries, 5u);
+        }
+
+        // The horizontal scratch is complete before the vertical pass reads it.
+        context.m_encoder.globalBarrier();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, encodeParticleSurfaceFilter_(
+                          context, m_particle_surface_filter_vertical, slot_index, slot.m_horizontal, slot.m_vertical,
+                          slot.m_width, slot.m_height, m_particle_surface_filter_samples_per_cell,
+                          m_particle_surface_filter_halo));
+        if (m_particle_timing_queries) {
+            context.m_encoder.writeTimestamp(m_particle_timing_queries, 6u);
+        }
+
+        context.m_encoder.globalBarrier();
+        state(slot.m_vertical.m_label.get(), rhi::ResourceState::ShaderResource);
+        state(slot.m_vertical.m_base.get(), rhi::ResourceState::ShaderResource);
+        state(slot.m_vertical.m_normal.get(), rhi::ResourceState::ShaderResource);
+        return {};
+    }
+
+    std::error_code GridPass::encodeParticleSurfaceFilter_(
+        const PreRenderContext &context, ParticleSurfaceFilterProgram &program, const u32 slot_index,
+        const ParticleSurfaceBundle &source, ParticleSurfaceBundle &target, const u32 width, const u32 height,
+        const float samples_per_cell, const u32 halo) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, program.m_pipeline and
+                              program.m_roots[slot_index] and
+                              source.complete() and
+                              target.complete() and
+                              width != 0u and
+                              height != 0u
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::state_not_recoverable));
+
+        // One root per program and ring slot, authored here: the two dispatches
+        // bind different bundles, so they cannot share a root.
+        auto *const root = program.m_roots[slot_index].get();
+        rhi::ShaderCursor cursor{root};
+        u32 availability{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindParticleSurfaceInputs_(context.m_device, cursor, availability));
+        rhi::ShaderCursor frame_cursor{};
+        const rhi::ShaderCursor frame_field = cursor["g_grid_frame"];
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, frame_field.isValid() ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, frame_field.getDereferenced(frame_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, uploadFrameConstants_(frame_cursor, availability));
+
+        ParticleSurfaceFilterConstants constants{};
+        constants.m_samples_per_cell = samples_per_cell;
+        constants.m_sigma_cell = kParticleSurfaceSmoothingSigma;
+        constants.m_halo = std::min(halo, kParticleSurfaceFilterMaxHalo);
+        constants.m_extent_x = width;
+        constants.m_extent_y = height;
+        rhi::ShaderCursor filter_cursor{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_filter"].getDereferenced(filter_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, filter_cursor.setData(&constants, sizeof(constants)));
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_source_label"].setBinding(rhi::Binding(source.m_label_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_source_base"].setBinding(rhi::Binding(source.m_base_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_source_normal"].setBinding(rhi::Binding(source.m_normal_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_target_label"].setBinding(rhi::Binding(target.m_label_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_target_base"].setBinding(rhi::Binding(target.m_base_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_filter_target_normal"].setBinding(rhi::Binding(target.m_normal_view)));
+
+        constexpr rhi::SubresourceRange whole{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
+        context.m_encoder.setTextureState(source.m_label.get(), whole, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(source.m_base.get(), whole, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(source.m_normal.get(), whole, rhi::ResourceState::ShaderResource);
+        context.m_encoder.setTextureState(target.m_label.get(), whole, rhi::ResourceState::UnorderedAccess);
+        context.m_encoder.setTextureState(target.m_base.get(), whole, rhi::ResourceState::UnorderedAccess);
+        context.m_encoder.setTextureState(target.m_normal.get(), whole, rhi::ResourceState::UnorderedAccess);
+
+        auto *const pass = context.m_encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->bindPipeline(program.m_pipeline, root);
+        pass->dispatchCompute(
+            (width + kParticleSurfaceFilterTile - 1u) / kParticleSurfaceFilterTile,
+            (height + kParticleSurfaceFilterTile - 1u) / kParticleSurfaceFilterTile, 1u);
+        pass->end();
+
+        ++m_dispatch_commands;
         return {};
     }
 
@@ -676,9 +944,34 @@ namespace pP {
 
         m_particle_surface_pixel_world = particleSurfacePixelWorld_(camera);
 
-        // Labelled selection, then same-label attributes: both clear their exact
-        // empty value every rendered frame, so an empty lane contributes nothing
-        // instead of last frame's field.
+        // This frame's smoothing scale: sigma is a world width, so the tap count is
+        // derived from the camera's own pixels-per-cell every frame. A truncated
+        // requirement is reported on the transition (the release log level compiles
+        // the record out, so the comparison, not the record, is what keeps this
+        // state meaningful).
+        m_particle_surface_filter_samples_per_cell = particleSurfaceSamplesPerCell(
+            m_world.m_cell_size_m, m_particle_surface_pixel_world);
+        const u32 required_halo = particleSurfaceRequiredHalo(m_particle_surface_filter_samples_per_cell);
+        m_particle_surface_filter_halo = std::min(required_halo, kParticleSurfaceFilterMaxHalo);
+        if (required_halo != m_particle_surface_filter_required_halo) [[unlikely]] {
+            if (required_halo > kParticleSurfaceFilterMaxHalo) {
+                PPR_LOG(
+                    GridPass, warning, "particle surface smoothing truncated by the shared tile",
+                    {
+                        {"required_halo", required_halo},
+                        {"loaded_halo", m_particle_surface_filter_halo},
+                        {"samples_per_cell", m_particle_surface_filter_samples_per_cell},
+                        {"sigma_samples", kParticleSurfaceSmoothingSigma * m_particle_surface_filter_samples_per_cell},
+                    });
+            }
+
+            m_particle_surface_filter_required_halo = required_halo;
+        }
+
+        // Labelled selection, then same-label attributes, then the two separable
+        // smoothing passes: the accumulation targets clear their exact empty value
+        // every rendered frame and both scratch bundles are rewritten, so an empty
+        // lane contributes nothing instead of last frame's field.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeParticleSurfacePasses_(context, slot, selected, viewport, scissor));
 
         m_particle_surface_encoded = true;
@@ -741,14 +1034,18 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_surface"].getDereferenced(lane_cursor));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, lane_cursor.setData(&constants, sizeof(constants)));
 
+        // The composite reconstructs the SMOOTHED field: the vertical pass's
+        // bundle, never the accumulation targets and never a scratch image.
         const auto &slot = m_particle_surface_slots[m_particle_surface_slot];
         PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, slot.m_label_view and slot.m_base_view and slot.m_normal_view
-                          ? std::error_code{}
-                          : std::make_error_code(std::errc::state_not_recoverable));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_label"].setBinding(rhi::Binding(slot.m_label_view)));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_base"].setBinding(rhi::Binding(slot.m_base_view)));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_normal"].setBinding(rhi::Binding(slot.m_normal_view)));
+            GridPass,
+            slot.m_vertical.complete() ? std::error_code{} : std::make_error_code(std::errc::state_not_recoverable));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_label"].setBinding(rhi::Binding(slot.m_vertical.m_label_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_base"].setBinding(rhi::Binding(slot.m_vertical.m_base_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_particle_normal"].setBinding(rhi::Binding(slot.m_vertical.m_normal_view)));
 
         context.m_pass.setRenderState(
             {.viewports = {context.m_viewport},

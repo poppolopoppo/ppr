@@ -3539,6 +3539,38 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == lane_fields[index].second);
         }
 
+        // The smoothing pass's second constant block: the frame's own zoom, the
+        // clamped halo and the field extent. It is a scalar-only block (no
+        // fixed-size array), so its layout is exactly eight 4-byte words.
+        slang::TypeLayoutReflection *filter_layout = nullptr;
+        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_particle_filter") {
+                filter_layout = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(filter_layout != nullptr);
+        PPR_TEST_ASSERT(filter_layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 32u);
+        constexpr std::array<std::pair<const char *, u32>, 8u> filter_fields{{
+            {"m_samples_per_cell", 0u},
+            {"m_sigma_cell", 4u},
+            {"m_halo", 8u},
+            {"m_pad", 12u},
+            {"m_extent_x", 16u},
+            {"m_extent_y", 20u},
+            {"m_pad2", 24u},
+            {"m_pad3", 28u},
+        }};
+        PPR_TEST_ASSERT(filter_layout->getFieldCount() == static_cast<unsigned>(filter_fields.size()));
+        for (u32 index = 0u; index < filter_fields.size(); ++index) {
+            auto *const field = filter_layout->getFieldByIndex(index);
+            PPR_TEST_ASSERT(field != nullptr);
+            PPR_TEST_ASSERT(std::string_view{field->getName()} == filter_fields[index].first);
+            PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == filter_fields[index].second);
+        }
+
         // The contour cues now read one shared stored axis: the prepare pass owns
         // g_orientation_previous/g_orientation_current and the draw owns
         // g_particle_orientation. The Q16 fill grid is no longer a draw input, so
@@ -6104,6 +6136,188 @@ namespace pP::tests::detail::WorldLightingMaterial {
         return density;
     }
 
+    // ------------------------------------------------------------------
+    // the documented world-space smoothing operator, evaluated on the CPU
+    // ------------------------------------------------------------------
+    // grid_tiles.slang's two smoothing entries are a separable label-masked
+    // Gaussian: sigma = 0.15 world cell truncated at +/-3 sigma, the per-axis tap
+    // count taken from the frame's own raster samples-per-cell, air keeping its
+    // weight in the denominator and a foreign nonempty label leaving it. These
+    // helpers restate that operator exactly, so a probe compares the GPU's two
+    // shared-memory passes against the specification instead of a golden image.
+    inline constexpr double kSurfaceFilterSigma = 0.15;
+
+    [[nodiscard]] std::vector<double> surfaceFilterWeights(const double samples_per_cell, const u32 halo) {
+        std::vector<double> weights(2u * halo + 1u, 0.0);
+        for (u32 tap = 0u; tap < weights.size(); ++tap) {
+            // The exponential is evaluated in WORLD CELLS, exactly as the shader:
+            // a raster offset divided by samples per cell, then by sigma.
+            const double cells = (double(tap) - double(halo)) / samples_per_cell;
+            const double ratio = cells / kSurfaceFilterSigma;
+            weights[tap] = std::exp(-0.5 * ratio * ratio);
+        }
+
+        return weights;
+    }
+
+    // One axis of the pair. Offsets outside the field are air, never a replicated
+    // edge texel. The centre keeps its own label; an empty centre adopts the
+    // nearest nonzero tap label (ties: smaller label, then the smaller signed
+    // offset), which is the deterministic halo rule both passes share.
+    [[nodiscard]] std::vector<SurfaceTexel> surfaceFilterAxis(
+        const std::vector<SurfaceTexel> &field, const u32 raster, const double samples_per_cell, const u32 halo,
+        const bool horizontal) {
+        const std::vector<double> weights = surfaceFilterWeights(samples_per_cell, halo);
+        const auto at = [&](const int x, const int y) -> const SurfaceTexel * {
+            if (x < 0 or y < 0 or x >= int(raster) or y >= int(raster)) {
+                return nullptr;
+            }
+
+            return &field[std::size_t(y) * raster + std::size_t(x)];
+        };
+
+        std::vector<SurfaceTexel> out(field.size());
+        for (u32 y = 0u; y < raster; ++y) {
+            for (u32 x = 0u; x < raster; ++x) {
+                const auto tap_at = [&](const int offset) {
+                    return horizontal ? at(int(x) + offset, int(y)) : at(int(x), int(y) + offset);
+                };
+                u32 mask = at(int(x), int(y))->m_label;
+                if (mask == 0u) {
+                    for (u32 distance = 1u; distance <= halo; ++distance) {
+                        const SurfaceTexel *const negative = tap_at(-int(distance));
+                        const SurfaceTexel *const positive = tap_at(int(distance));
+                        const u32 negative_label = negative != nullptr ? negative->m_label : 0u;
+                        const u32 positive_label = positive != nullptr ? positive->m_label : 0u;
+                        if (negative_label == 0u and positive_label == 0u)
+                            continue;
+                        if (negative_label == 0u) {
+                            mask = positive_label;
+                            break;
+                        }
+                        if (positive_label == 0u) {
+                            mask = negative_label;
+                            break;
+                        }
+
+                        mask = negative_label <= positive_label ? negative_label : positive_label;
+                        break;
+                    }
+                }
+
+                SurfaceTexel &result = out[std::size_t(y) * raster + x];
+                if (mask == 0u)
+                    continue;
+
+                double denominator = 0.0;
+                std::array<double, 4u> sum{};
+                for (u32 tap = 0u; tap < weights.size(); ++tap) {
+                    const SurfaceTexel *const neighbour = tap_at(int(tap) - int(halo));
+                    const u32 label = neighbour != nullptr ? neighbour->m_label : 0u;
+                    if (label != 0u and label != mask)
+                        continue;
+
+                    denominator += weights[tap];
+                    if (label == mask) {
+                        sum[0u] += weights[tap] * neighbour->m_base.x;
+                        sum[1u] += weights[tap] * neighbour->m_base.y;
+                        sum[2u] += weights[tap] * neighbour->m_base.z;
+                        sum[3u] += weights[tap] * neighbour->m_density;
+                    }
+                }
+
+                const double inverse = denominator > 0.0 ? 1.0 / denominator : 0.0;
+                result.m_label = mask;
+                result.m_base = Double3{sum[0u] * inverse, sum[1u] * inverse, sum[2u] * inverse};
+                result.m_density = sum[3u] * inverse;
+            }
+        }
+
+        return out;
+    }
+
+    // Both passes in the shipped order: horizontal, then vertical over the
+    // horizontal result INCLUDING its extended labels.
+    [[nodiscard]] std::vector<SurfaceTexel> surfaceFilterField(
+        const std::vector<SurfaceTexel> &field, const u32 raster, const double samples_per_cell, const u32 halo) {
+        return surfaceFilterAxis(
+            surfaceFilterAxis(field, raster, samples_per_cell, halo, true), raster, samples_per_cell, halo, false);
+    }
+
+    // The half-plane neutral rest lattice of the design's geometric model:
+    // particles at (i*s, -j*s) for integer i and j >= 0, so the row at y = 0 is the
+    // free surface. Every particle keeps the retained profile and reference area, so
+    // a wider spacing IS the design's "+10 % dilation": the same particles occupy
+    // 1.21 times the area and the bulk mean falls to V/s^2 = .82645 at s = .55.
+    [[nodiscard]] double neutralLatticeDensity(
+        const double x, const double y, const double spacing, const double radius) noexcept {
+        const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+        const double support = kDensitySurfaceRadiusScale * radius;
+        double density = 0.0;
+        for (int row = 0; row < 3; ++row) {
+            const int centre = static_cast<int>(std::floor(x / spacing));
+            for (int column = centre - 3; column <= centre + 3; ++column) {
+                density += densityWeight(
+                    {(x - double(column) * spacing) / support, (y + double(row) * spacing) / support}, neutral);
+            }
+        }
+
+        return density;
+    }
+
+    // The same lattice after the documented separable filter, with this frame's own
+    // tap count: out-of-support taps carry zero density and still contribute their
+    // weight, exactly like air.
+    [[nodiscard]] double filteredLatticeDensity(
+        const double x, const double y, const double spacing, const double radius, const double samples_per_cell,
+        const u32 halo) noexcept {
+        const std::vector<double> weights = surfaceFilterWeights(samples_per_cell, halo);
+        double numerator = 0.0;
+        double denominator = 0.0;
+        for (u32 row = 0u; row < weights.size(); ++row) {
+            for (u32 column = 0u; column < weights.size(); ++column) {
+                const double weight = weights[row] * weights[column];
+                denominator += weight;
+                numerator += weight * neutralLatticeDensity(
+                                          x + (double(column) - double(halo)) / samples_per_cell,
+                                          y - (double(row) - double(halo)) / samples_per_cell, spacing, radius);
+            }
+        }
+
+        return denominator > 0.0 ? numerator / denominator : 0.0;
+    }
+
+    // Peak-to-valley height of the outer D = theta contour over one lattice period,
+    // sampled 256 times, which is the discrete-shift reference the design states its
+    // .006/.016-cell targets in (revision 7 "7-E", 1080/span64 row).
+    [[nodiscard]] double latticeContourAmplitude(
+        const double spacing, const double samples_per_cell, const u32 halo, const double radius) {
+        constexpr u32 kSamples = 256u;
+        double minimum = 1.0e30;
+        double maximum = -1.0e30;
+        for (u32 sample = 0u; sample < kSamples; ++sample) {
+            const double x = spacing * double(sample) / double(kSamples);
+            // The unfiltered contour sits at .379 cell and the filter can only move
+            // it outward, so [.25, 1] brackets every case measured here.
+            double low = 0.25;
+            double high = 1.0;
+            for (u32 step = 0u; step < 32u; ++step) {
+                const double middle = 0.5 * (low + high);
+                if (filteredLatticeDensity(x, middle, spacing, radius, samples_per_cell, halo) > kDensityThreshold) {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+
+            const double height = 0.5 * (low + high);
+            minimum = (std::min) (minimum, height);
+            maximum = (std::max) (maximum, height);
+        }
+
+        return maximum - minimum;
+    }
+
     PPR_UNIT_TEST (particle_flow_cue_stretches_the_major_axis_only) {
         // Appearance probe for the retained flow cue: the drawn shape stretches
         // along the stored orientation axis by at most k = 1.5, the minor semi-axis
@@ -8512,11 +8726,22 @@ namespace pP::tests::detail::WorldLightingMaterial {
         std::vector<u32> m_label{}; // L per raster texel
         std::vector<std::array<float, 4u>> m_base{}; // Q per raster texel
         std::vector<std::array<float, 4u>> m_normal_alpha{}; // G per raster texel
+        // The SMOOTHED field the composite reconstructs, read beside the
+        // accumulation field so a probe can compare before and after the filter.
+        std::vector<float> m_filtered_density{};
+        std::vector<u32> m_filtered_label{};
+        std::vector<std::array<float, 4u>> m_filtered_base{};
+        std::vector<std::array<float, 4u>> m_filtered_normal_alpha{};
         std::vector<float> m_composite{}; // premultiplied RGBA per composite pixel
         u32 m_raster{};
         u32 m_phase_mask{};
         u32 m_class_mask{};
         float m_pixel_world{};
+        // The smoothing scale the frame actually used: its own raster samples per
+        // world native cell and the loaded halo (the shared tile's clamped tap
+        // count per axis).
+        float m_samples_per_cell{};
+        u32 m_halo{};
     };
 
     [[nodiscard]] DensityFrameResult readDensityFrame(
@@ -8527,7 +8752,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
         result.m_phase_mask = targets.m_phase_mask;
         result.m_class_mask = targets.m_class_mask;
         result.m_pixel_world = targets.m_pixel_world;
+        result.m_samples_per_cell = targets.m_samples_per_cell;
+        result.m_halo = targets.m_halo;
         PPR_TEST_ASSERT(targets.m_label != nullptr and targets.m_base != nullptr and targets.m_normal != nullptr);
+        PPR_TEST_ASSERT(
+            targets.m_filtered_label != nullptr and
+            targets.m_filtered_base != nullptr and
+            targets.m_filtered_normal != nullptr);
 
         const TextureReadback label = readTexture(device, *targets.m_label);
         result.m_label.resize(std::size_t{raster} * raster);
@@ -8558,6 +8789,24 @@ namespace pP::tests::detail::WorldLightingMaterial {
         result.m_density.resize(std::size_t{raster} * raster);
         for (std::size_t texel = 0u; texel < result.m_density.size(); ++texel) {
             result.m_density[texel] = result.m_base[texel][3u];
+        }
+
+        // The smoothed bundle: the same three images after both passes.
+        const TextureReadback filtered_label = readTexture(device, *targets.m_filtered_label);
+        result.m_filtered_label.resize(std::size_t{raster} * raster);
+        for (u32 y = 0u; y < raster; ++y) {
+            for (u32 x = 0u; x < raster; ++x) {
+                const auto *const words = reinterpret_cast<const u32 *>(
+                    filtered_label.m_bytes.data() + std::size_t{y} * filtered_label.m_row_pitch + std::size_t{x} * 4u);
+                result.m_filtered_label[std::size_t{y} * raster + x] = *words;
+            }
+        }
+
+        read_half4(*targets.m_filtered_base, result.m_filtered_base);
+        read_half4(*targets.m_filtered_normal, result.m_filtered_normal_alpha);
+        result.m_filtered_density.resize(std::size_t{raster} * raster);
+        for (std::size_t texel = 0u; texel < result.m_filtered_density.size(); ++texel) {
+            result.m_filtered_density[texel] = result.m_filtered_base[texel][3u];
         }
 
         const TextureReadback composite_readback = readTexture(device, composite);
@@ -8618,6 +8867,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         GridStagedFrame stage{};
         stage.m_world_edge = WorldLightingPass::kWorldEdge;
         stage.m_cell_size_m = 1.0f;
+        // A cohort that names a texture it did not stage is a fixture defect: the
+        // stage's admission gate rejects it with nothing but the gate's source line.
+        // Name the offending reference here instead. 0xffffffff means "no texture".
+        for (const DensityMaterialSpec &material: spec.m_materials) {
+            const auto staged = [&spec](
+                                    const u32 index) { return index == 0xffff'ffffu or index < spec.m_images.size(); };
+            PPR_TEST_ASSERT(staged(material.m_albedo_image) and staged(material.m_normal_image));
+        }
+
         for (const u32 material: material_ids) {
             GridTerrainVisual visual{};
             visual.m_material_id = material;
@@ -8722,7 +8980,50 @@ namespace pP::tests::detail::WorldLightingMaterial {
         view.m_terrain_revision = 1u;
         view.m_joint_tick = 1u;
         stage.m_gpu_particles = view;
-        PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
+        // The stage's admission gate logs only its own source line, so a rejected
+        // fixture is undiagnosable from the failure alone. Report the code plus the
+        // whole staged inventory first, then assert.
+        const std::error_code staged_frame = grid.applyStagedFrame(stage);
+        if (staged_frame) {
+            std::string record = std::format(
+                "WORLD_LIGHTING_MATERIAL density_stage_rejected code={} category={} message={} visuals={} "
+                "images={} tiles={} rows={} background={} cell_m={:.6f} edge={} boundary={}",
+                staged_frame.value(), staged_frame.category().name(), staged_frame.message(),
+                stage.m_terrain_visuals.size(), stage.m_terrain_images.size(), stage.m_tiles.size(), count,
+                stage.m_has_background, double(stage.m_cell_size_m), stage.m_world_edge, stage.m_boundary_material_id);
+            for (const GridTerrainVisual &visual: stage.m_terrain_visuals) {
+                record += std::format(
+                    " visual[id={} flags={} albedo={} normal={} period={:.4f} metallic={:.4f} roughness={:.4f} "
+                    "opacity={:.4f} ior={:.4f} normal_scale={:.4f} refraction={:.4f} emissive=({:.4f},{:.4f},{:.4f}) "
+                    "strength={:.4f} transport={}]",
+                    visual.m_material_id, visual.m_surface_flags, visual.m_texture_index, visual.m_normal_texture_index,
+                    double(visual.m_texture_period_m), double(visual.m_metallic), double(visual.m_roughness),
+                    double(visual.m_opacity), double(visual.m_ior), double(visual.m_normal_scale),
+                    double(visual.m_refraction_depth_m), double(visual.m_emissive_rgb[0u]),
+                    double(visual.m_emissive_rgb[1u]), double(visual.m_emissive_rgb[2u]),
+                    double(visual.m_emissive_strength), visual.m_transport_model);
+            }
+
+            for (const image::ImageAsset &image: stage.m_terrain_images) {
+                record += std::format(
+                    " image[extent={}x{} mips={} format={} srgb={} block={} materialized={} bytes={}]", image.m_width,
+                    image.m_height, image.m_mip_count, static_cast<u32>(image.m_format), image.m_is_srgb,
+                    image.m_is_block, image.m_storage.isMaterialized(), image.m_storage.getBufferData().size());
+            }
+
+            for (const GridBackgroundLayer &layer: stage.m_background_layers) {
+                record += std::format(
+                    " layer[order={} texture={} rgba={:#x} period={:.4f} parallax={:.4f}]", layer.m_order,
+                    layer.m_texture_index, layer.m_color_rgba, double(layer.m_repeat_period_m),
+                    double(layer.m_parallax_factor));
+            }
+
+            // The helper has no test-log sink of its own (the harness gives `_` to the
+            // test body), so the record goes to the captured diagnostic stream.
+            std::println(std::cerr, "{}", record);
+        }
+
+        PPR_TEST_ASSERT(not staged_frame);
         PPR_TEST_ASSERT(not grid.applyGpuParticleView(view));
 
         CameraModel model{};
@@ -8951,6 +9252,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
         image::ImageAsset image{};
         image.m_width = size;
         image.m_height = size;
+        // The stage's admission gate requires a LINEAR normal map (a tangent-space
+        // RGB vector is not colour), and it reads the asset's own format rather than
+        // trusting a palette flag. State it explicitly instead of inheriting the
+        // default: a decoded or authored asset that arrives as rgba8_srgb must not be
+        // able to reach the gate as a silently different enumerator.
+        image.m_format = image::ENativeImageFormat::rgba8_linear;
+        image.m_is_srgb = false;
         image.m_storage = mem::SharedBuffer::clone(
             mem::SharedBufferView{reinterpret_cast<const std::byte *>(pixels.data()), pixels.size()});
         image.m_subresources.push_back(
@@ -9790,6 +10098,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const auto frames = runDensityCohort(cohort, 1u);
         PPR_TEST_ASSERT(frames.size() == 1u);
         const auto &frame = frames[0];
+        // The composite reconstructs the SMOOTHED field, so the model below must
+        // read the same bundle: labels, density and attributes all come from the
+        // vertical pass's output, never from the accumulation targets.
         const auto texel = [&](const int ix, const int iy) {
             SurfaceTexel value{};
             if (ix < 0 or iy < 0 or ix >= int(frame.m_raster) or iy >= int(frame.m_raster)) {
@@ -9797,11 +10108,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
 
             const std::size_t index = std::size_t(iy) * frame.m_raster + std::size_t(ix);
-            value.m_label = frame.m_label[index];
+            value.m_label = frame.m_filtered_label[index];
             value.m_base = Double3{
-                double(frame.m_base[index][0u]), double(frame.m_base[index][1u]), double(frame.m_base[index][2u])};
-            value.m_density = double(frame.m_base[index][3u]);
-            value.m_alpha = double(frame.m_normal_alpha[index][3u]);
+                double(frame.m_filtered_base[index][0u]), double(frame.m_filtered_base[index][1u]),
+                double(frame.m_filtered_base[index][2u])};
+            value.m_density = double(frame.m_filtered_base[index][3u]);
+            value.m_alpha = double(frame.m_filtered_normal_alpha[index][3u]);
             return value;
         };
         const auto coverage_at = [&](const double sx, const double sy) -> double {
@@ -10042,6 +10354,428 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "WORLD_LIGHTING_MATERIAL particle_density_hold rows=5 density_pixels={} direct_pixels={}",
                 held[0].m_density.size(), direct_frames[0].m_composite.size()));
     };
+
+    // ------------------------------------------------------------------
+    // world-space surface smoothing GPU probes
+    // ------------------------------------------------------------------
+    // Span 64 at the design's raster scale: 540 raster pixels across 64 cells is
+    // 8.4375 samples per cell, so sigma is 1.265625 samples and the loaded halo is
+    // ceil(3 sigma) = 4 (the design's n = 4 / K = 9 row). Every probe below places
+    // its geometry at this scale unless it says otherwise.
+    inline constexpr double kSpan64SamplesPerCell = 540.0 / 64.0;
+    inline constexpr double kSpan220SamplesPerCell = 540.0 / 220.0;
+    inline constexpr u32 kSpan64Halo = 4u;
+
+    PPR_UNIT_TEST (particle_surface_filter_matches_the_documented_operator) {
+        // The two smoothing entries must implement the documented operator, not an
+        // approximation of it: sigma = .15 world cell, halo = ceil(3 sigma * samples
+        // per cell), a tap only at the mask label, air keeping its weight and a
+        // foreign nonempty label leaving the denominator. The cohort exercises both
+        // branches at once - two liquids of one admitted class touching at .9 cell,
+        // and an isolated droplet whose surface has to extend into air - and the CPU
+        // restatement of the operator runs over the SAME read-back accumulation field
+        // the dispatches consumed, so nothing but the filter arithmetic differs.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 material_a = 11u;
+        constexpr u32 material_b = 12u;
+        constexpr u32 tint_a = 0xc080'40ffu;
+        constexpr u32 tint_b = 0x40c0'80ffu;
+
+        DensityCohortSpec cohort{};
+        cohort.m_raster = 256u;
+        cohort.m_world_extent_m = static_cast<float>(256.0 / kSpan64SamplesPerCell);
+        cohort.m_materials = {
+            DensityMaterialSpec{.m_material = material_a, .m_color_rgba = tint_a},
+            DensityMaterialSpec{.m_material = material_b, .m_color_rgba = tint_b},
+        };
+        cohort.m_particles = {
+            DensityParticleSpec{.m_x_m = 10.0, .m_y_m = 15.0, .m_radius_m = radius_m, .m_material = material_a},
+            DensityParticleSpec{.m_x_m = 10.9, .m_y_m = 15.0, .m_radius_m = radius_m, .m_material = material_b},
+            DensityParticleSpec{.m_x_m = 22.0, .m_y_m = 15.0, .m_radius_m = radius_m, .m_material = material_a},
+        };
+
+        const auto frames = runDensityCohort(cohort, 1u);
+        PPR_TEST_ASSERT(frames.size() == 1u);
+        const auto &frame = frames[0];
+        // The frame used the design's own kernel parameters for this zoom.
+        PPR_TEST_ASSERT(std::abs(double(frame.m_samples_per_cell) - kSpan64SamplesPerCell) <= 1.0e-3);
+        PPR_TEST_ASSERT(frame.m_halo == kSpan64Halo);
+
+        std::vector<SurfaceTexel> accumulation(std::size_t{frame.m_raster} * frame.m_raster);
+        for (std::size_t texel = 0u; texel < accumulation.size(); ++texel) {
+            accumulation[texel].m_label = frame.m_label[texel];
+            accumulation[texel].m_base = Double3{
+                double(frame.m_base[texel][0u]), double(frame.m_base[texel][1u]), double(frame.m_base[texel][2u])};
+            accumulation[texel].m_density = double(frame.m_base[texel][3u]);
+        }
+
+        const std::vector<SurfaceTexel> predicted = surfaceFilterField(
+            accumulation, frame.m_raster, kSpan64SamplesPerCell, frame.m_halo);
+
+        const Double3 ratio_a = diagnosticTintCpu(tint_a);
+        const Double3 ratio_b = diagnosticTintCpu(tint_b);
+        PPR_TEST_ASSERT(std::abs(ratio_a.x - ratio_b.x) > 0.1);
+
+        u32 labelled = 0u;
+        u32 extended = 0u;
+        std::vector<std::string> offenders;
+        for (std::size_t texel = 0u; texel < predicted.size(); ++texel) {
+            const SurfaceTexel &expected = predicted[texel];
+            // The mask is an integer rule, so the two implementations must agree
+            // exactly, including the extended labels the halo rule writes into air.
+            PPR_TEST_ASSERT(frame.m_filtered_label[texel] == expected.m_label);
+            if (expected.m_label != 0u) {
+                ++labelled;
+                if (frame.m_label[texel] == 0u)
+                    ++extended;
+            }
+
+            const double actual_density = double(frame.m_filtered_base[texel][3u]);
+            if (std::abs(actual_density - expected.m_density) > 5.0e-3 * expected.m_density + 2.0e-4) {
+                if (offenders.size() < 4u) {
+                    offenders.push_back(
+                        std::format(
+                            " ({},{})L={} D={:.6f} cpu={:.6f}", texel % frame.m_raster, texel / frame.m_raster,
+                            frame.m_filtered_label[texel], actual_density, expected.m_density));
+                }
+            }
+
+            PPR_TEST_ASSERT(std::abs(actual_density - expected.m_density) <= 5.0e-3 * expected.m_density + 2.0e-4);
+            const std::array<double, 3u> expected_base{expected.m_base.x, expected.m_base.y, expected.m_base.z};
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                PPR_TEST_ASSERT(
+                    std::abs(double(frame.m_filtered_base[texel][channel]) - expected_base[channel]) <=
+                    5.0e-3 * std::abs(expected_base[channel]) + 2.0e-4);
+            }
+
+            // No bleed: a filtered texel's attribute ratio is ITS OWN label's
+            // authored tint, so no foreign tap reached the numerator. Both tints are
+            // distinct, so a blended numerator cannot pass. The ratio is independent
+            // of the tap weights because every tap of one label carries one albedo.
+            if (actual_density > 1.0e-2 and
+                (frame.m_filtered_label[texel] == material_a or frame.m_filtered_label[texel] == material_b)) {
+                const bool first = frame.m_filtered_label[texel] == material_a;
+                const std::array<double, 3u> expected_ratio{
+                    first ? ratio_a.x : ratio_b.x, first ? ratio_a.y : ratio_b.y, first ? ratio_a.z : ratio_b.z};
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    PPR_TEST_ASSERT(
+                        std::abs(
+                            double(frame.m_filtered_base[texel][channel]) / actual_density - expected_ratio[channel]) <=
+                        6.0e-3);
+                }
+            }
+        }
+
+        // Both branches of the mask actually ran: a labelled interior exists and the
+        // filter extended labels into texels the accumulation left empty.
+        PPR_TEST_ASSERT(labelled > 100u);
+        PPR_TEST_ASSERT(extended > 0u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_filter_operator labelled={} extended={} halo={} "
+                "samples_per_cell={:.5f} offenders={}",
+                labelled, extended, frame.m_halo, double(frame.m_samples_per_cell),
+                describeAttributeOffenders(offenders)));
+    };
+
+    PPR_UNIT_TEST (particle_surface_filter_bridges_the_reference_gap_and_keeps_the_detached_pair) {
+        // The revision's headline requirement. Two neutral same-label particles at
+        // s = .90 cell have an initial contour gap of .141467 cell and must become one
+        // contour after the .15-cell filter; the s = 1.00 reference pair (gap
+        // .241467 cell) must stay detached. The design's discrete-shift evaluation
+        // puts the span64 axis contact limit at .9834/.9876 cell, so both cases sit on
+        // their intended side. Unfiltered, neither pair has any density at the saddle
+        // because 2R = .860924 cell is shorter than both separations - filtering is
+        // the only thing that can join them.
+        constexpr double radius_m = 0.28209479177387814;
+        // The saddle is placed exactly on a texel centre so the comparison is a
+        // reproducible raster phase instead of a favourable subpixel position.
+        constexpr double midpoint_x = (128.0 + 0.5) / kSpan64SamplesPerCell;
+
+        struct ReferencePair {
+            double m_raw{}; // accumulation density at the saddle texel
+            double m_filtered{}; // smoothed density at the saddle texel
+            double m_alpha{}; // resolved coverage of the saddle pixel
+            // Minimum resolved coverage along the pair axis from centre to centre:
+            // exactly the pixels a joined neck has to fill.
+            double m_axis_min{1.0};
+            u32 m_label{}; // smoothed label at the saddle
+        };
+
+        const auto run_pair = [&](const double spacing) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = 256u;
+            cohort.m_world_extent_m = static_cast<float>(256.0 / kSpan64SamplesPerCell);
+            cohort.m_particles = {
+                DensityParticleSpec{.m_x_m = midpoint_x - 0.5 * spacing, .m_y_m = 15.0, .m_radius_m = radius_m},
+                DensityParticleSpec{.m_x_m = midpoint_x + 0.5 * spacing, .m_y_m = 15.0, .m_radius_m = radius_m},
+            };
+            const auto frames = runDensityCohort(cohort, 1u);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+            const u32 x = 128u;
+            const auto y = static_cast<u32>(
+                std::floor((double(cohort.m_world_extent_m) - 15.0) / (1.0 / kSpan64SamplesPerCell)));
+            const std::size_t saddle = std::size_t{y} * frame.m_raster + x;
+            ReferencePair pair{};
+            pair.m_raw = double(frame.m_density[saddle]);
+            pair.m_filtered = double(frame.m_filtered_density[saddle]);
+            pair.m_alpha = double(frame.m_composite[saddle * 4u + 3u]);
+            pair.m_label = frame.m_filtered_label[saddle];
+            const auto first = static_cast<u32>(std::floor((midpoint_x - 0.5 * spacing) * kSpan64SamplesPerCell));
+            const auto last = static_cast<u32>(std::floor((midpoint_x + 0.5 * spacing) * kSpan64SamplesPerCell));
+            for (u32 axis_x = first; axis_x <= last and axis_x < frame.m_raster; ++axis_x) {
+                pair.m_axis_min = (std::min) (pair.m_axis_min,
+                    double(frame.m_composite[(std::size_t{y} * frame.m_raster + axis_x) * 4u + 3u]));
+            }
+
+            return pair;
+        };
+
+        const ReferencePair joined = run_pair(0.90);
+        const ReferencePair detached = run_pair(1.00);
+        // Log the state of both saddles BEFORE asserting: the interesting failure is a
+        // pair that sits within one contour band of theta, and the numbers that
+        // separate "bridged", "straddled" and "detached" are the field densities, the
+        // resolved coverages and the axis minimum.
+        const double saddle_x = midpoint_x;
+        const double saddle_y = 15.0;
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_filter_bridge saddle=({:.5f},{:.5f}) theta={:.6f} "
+                "joined=raw:{:.6f} filtered:{:.6f}({:.4f} theta) alpha:{:.4f} axis_min:{:.4f} label:{} "
+                "detached=raw:{:.6f} filtered:{:.6f}({:.4f} theta) alpha:{:.4f} axis_min:{:.4f} label:{}",
+                saddle_x, saddle_y, kDensityThreshold, joined.m_raw, joined.m_filtered,
+                joined.m_filtered / kDensityThreshold, joined.m_alpha, joined.m_axis_min, joined.m_label,
+                detached.m_raw, detached.m_filtered, detached.m_filtered / kDensityThreshold, detached.m_alpha,
+                detached.m_axis_min, detached.m_label));
+
+        // Neither pair's contour reaches the saddle before the filter: the compact
+        // support (2R = .860924 cell) is shorter than both separations, so the only
+        // density there is quadrature leakage far below theta.
+        PPR_TEST_ASSERT(joined.m_raw < 0.01 and detached.m_raw < 0.01);
+        // The .141-cell gap bridges: the saddle rises through theta. The discrete-shift
+        // reference puts the span64 axis contact limit at .98342 cell (design 7-E:
+        // .9834-.9876), so s = .90 is 1.515 theta at the saddle texel.
+        PPR_TEST_ASSERT(joined.m_filtered > kDensityThreshold);
+        // The intended detached pair stays detached in the FIELD: 1.00 cell is 1.7 %
+        // past the reference contact limit, so the saddle texel reads .954 theta (the
+        // exact pair axis reads .908 theta) and no contour reaches the midpoint.
+        PPR_TEST_ASSERT(detached.m_filtered < kDensityThreshold);
+
+        // Rendered criterion, derived from the contour operator rather than from an
+        // arbitrary alpha threshold: C = smoothstep(theta - w/2, theta + w/2, D) with
+        // w = |dD/dx| + |dD/dy| in density per raster pixel, so C = 1 exactly when
+        // D >= theta + w/2. At span64 one pixel is .1185 cell and the saddle density
+        // changes by ~.075 per pixel, so a saddle within one band of theta covers its
+        // pixel partially BY CONSTRUCTION: the theta contour crosses that pixel. The
+        // invariant that separates a bridge from a pinch is therefore connection at
+        // full coverage, which is what a joined neck must provide.
+        PPR_TEST_ASSERT(joined.m_axis_min > 0.99 and joined.m_alpha > 0.99);
+        PPR_TEST_ASSERT(detached.m_axis_min < 0.99 and detached.m_alpha < 0.99);
+        // The two references must also stay distinguishable, not merely on one side of
+        // a threshold: the detached saddle is materially less covered than the bridge.
+        PPR_TEST_ASSERT(detached.m_alpha < joined.m_alpha);
+        // Both saddles carry the pair's own label, so the coverage above is the pair's
+        // and not another material's.
+        PPR_TEST_ASSERT(joined.m_label != 0u and detached.m_label == joined.m_label);
+    };
+
+    PPR_UNIT_TEST (particle_surface_filter_keeps_the_isolated_droplet_growth_bounded) {
+        // Design 7-E: the specified discrete stencil grows the neutral isolated
+        // contour radius by at most 9.12 % at 1080/span64, so the accepted bound is
+        // 9.5 % there. The same table already refutes a strict bound at span220 (the
+        // droplet is under two raster pixels across), so that case is recorded.
+        constexpr double radius_m = 0.28209479177387814;
+
+        // The D = theta crossing along one axis, linearly interpolated between the two
+        // texels that bracket it: a growth of .3 texels is resolvable this way even
+        // though the raster itself stores one value per texel.
+        const auto crossing = [](const std::vector<float> &density, const u32 raster, const u32 cx, const u32 cy,
+                                  const int dx, const int dy) {
+            const auto value = [&](const int x, const int y) {
+                return double(density[std::size_t(y) * raster + std::size_t(x)]);
+            };
+            double previous = value(int(cx), int(cy));
+            for (u32 step = 1u; step < 64u; ++step) {
+                const int x = int(cx) + dx * int(step);
+                const int y = int(cy) + dy * int(step);
+                if (x < 0 or y < 0 or x >= int(raster) or y >= int(raster))
+                    break;
+                const double current = value(x, y);
+                if (current < kDensityThreshold) {
+                    const double gap = previous - kDensityThreshold;
+                    const double drop = previous - current;
+                    return double(step) - 1.0 + (drop > 0.0 ? gap / drop : 0.5);
+                }
+
+                previous = current;
+            }
+
+            return 0.0;
+        };
+
+        const auto growth = [&](const double samples_per_cell) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = 256u;
+            cohort.m_world_extent_m = static_cast<float>(256.0 / samples_per_cell);
+            // Texel-centre aligned (reference x and image y both land on texel 128):
+            // the same raster phase for both fields.
+            const double centre_x = 128.5 / samples_per_cell;
+            const double centre_y = 127.5 / samples_per_cell;
+            cohort.m_particles.push_back(
+                DensityParticleSpec{.m_x_m = centre_x, .m_y_m = centre_y, .m_radius_m = radius_m});
+            const auto frames = runDensityCohort(cohort, 1u);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+            double before = 0.0;
+            double after = 0.0;
+            for (const std::array<int, 2u> &axis: {std::array<int, 2u>{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                before += crossing(frame.m_density, frame.m_raster, 128u, 128u, axis[0u], axis[1u]);
+                after += crossing(frame.m_filtered_density, frame.m_raster, 128u, 128u, axis[0u], axis[1u]);
+            }
+
+            PPR_TEST_ASSERT(before > 0.0);
+            // The droplet must survive the filter at all.
+            PPR_TEST_ASSERT(after / before > 0.5);
+            return std::array<double, 3u>{before * 0.25, after * 0.25, after / before - 1.0};
+        };
+
+        const auto span64 = growth(kSpan64SamplesPerCell);
+        const auto span220 = growth(kSpan220SamplesPerCell);
+        // The design's resolved-reference bound, applied only at span64.
+        PPR_TEST_ASSERT(span64[2u] <= 0.095);
+        // Span220 keeps the droplet alive; its growth is recorded, not asserted
+        // tightly: at 2.45 samples per cell the discrete stencil is anisotropic and
+        // the design's own table already exceeds a universal 10 % claim.
+        PPR_TEST_ASSERT(span220[2u] <= 0.05);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_filter_droplet span64=({:.4f}->{:.4f},{:+.2f}%) "
+                "span220=({:.4f}->{:.4f},{:+.2f}%)",
+                span64[0u], span64[1u], 100.0 * span64[2u], span220[0u], span220[1u], 100.0 * span220[2u]));
+    };
+
+    PPR_UNIT_TEST (particle_surface_filter_keeps_a_sheet_and_meets_the_reference_scallop) {
+        // (a) A one-particle-thick sheet - the thinnest body this field can express -
+        // must not erase under +/-3 sigma. Four same-label particles in a row at the
+        // rest spacing keep one continuous contour along the spine, including the
+        // midpoints where a single unfiltered neighbour carries the least weight.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 sheet_particles = 4u;
+        constexpr double sheet_spacing = 0.5;
+        DensityCohortSpec sheet{};
+        sheet.m_raster = 256u;
+        sheet.m_world_extent_m = static_cast<float>(256.0 / kSpan64SamplesPerCell);
+        const double sheet_start = 12.0;
+        for (u32 index = 0u; index < sheet_particles; ++index) {
+            sheet.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = sheet_start + sheet_spacing * double(index), .m_y_m = 15.0, .m_radius_m = radius_m});
+        }
+
+        const auto sheet_frames = runDensityCohort(sheet, 1u);
+        PPR_TEST_ASSERT(sheet_frames.size() == 1u);
+        const auto &sheet_frame = sheet_frames[0];
+        const auto sheet_y = static_cast<u32>(
+            std::floor((double(sheet.m_world_extent_m) - 15.0) / (1.0 / kSpan64SamplesPerCell)));
+        double spine_minimum = 1.0e30;
+        double spine_maximum = -1.0e30;
+        for (u32 step = 0u; step <= 32u; ++step) {
+            const double world_x = sheet_start + sheet_spacing * double(sheet_particles - 1u) * double(step) / 32.0;
+            const auto x = static_cast<u32>(std::floor(world_x * kSpan64SamplesPerCell));
+            const double density = double(
+                sheet_frame.m_filtered_density[std::size_t{sheet_y} * sheet_frame.m_raster + x]);
+            spine_minimum = (std::min) (spine_minimum, density);
+            spine_maximum = (std::max) (spine_maximum, density);
+        }
+
+        // Every spine sample is inside the drawn contour: the sheet is preserved, not
+        // merely present at its particle centres.
+        PPR_TEST_ASSERT(spine_minimum > kDensityThreshold);
+        PPR_TEST_ASSERT(spine_maximum > kDensityThreshold);
+        // And it survives into the rendered image along its whole length.
+        for (u32 step = 0u; step <= 8u; ++step) {
+            const double world_x = sheet_start + sheet_spacing * double(sheet_particles - 1u) * double(step) / 8.0;
+            const auto x = static_cast<u32>(std::floor(world_x * kSpan64SamplesPerCell));
+            PPR_TEST_ASSERT(
+                sheet_frame.m_composite[(std::size_t{sheet_y} * sheet_frame.m_raster + x) * 4u + 3u] > 0.5f);
+        }
+
+        // (b) The amplitude targets the revision is pinned to, evaluated as the
+        // design's own discrete-shift reference: 256 contour samples per period of
+        // the neutral half-plane lattice, at the span64 scale. The unfiltered pair is
+        // the model's own control (design section 1: .072189/.094361 cell at
+        // s = .50/.55).
+        const double rest_before = latticeContourAmplitude(0.50, kSpan64SamplesPerCell, 0u, radius_m);
+        const double dilated_before = latticeContourAmplitude(0.55, kSpan64SamplesPerCell, 0u, radius_m);
+        const double rest_after = latticeContourAmplitude(0.50, kSpan64SamplesPerCell, kSpan64Halo, radius_m);
+        const double dilated_after = latticeContourAmplitude(0.55, kSpan64SamplesPerCell, kSpan64Halo, radius_m);
+
+        PPR_TEST_ASSERT(std::abs(rest_before - 0.072189) <= 0.002);
+        PPR_TEST_ASSERT(std::abs(dilated_before - 0.094361) <= 0.002);
+        // The adopted targets: <= .006 cell at rest and <= .016 cell at 10 % dilation.
+        PPR_TEST_ASSERT(rest_after <= 0.006);
+        PPR_TEST_ASSERT(dilated_after <= 0.016);
+        PPR_TEST_ASSERT(rest_after < rest_before and dilated_after < dilated_before);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_filter_scallop sheet_min={:.6f} sheet_max={:.6f} "
+                "rest={:.6f}->{:.6f} dilated={:.6f}->{:.6f}",
+                spine_minimum, spine_maximum, rest_before, rest_after, dilated_before, dilated_after));
+    };
+
+    PPR_UNIT_TEST (particle_surface_filter_refilters_on_a_camera_change_and_holds_bit_identical) {
+        // The smoothed field is a view-dependent render product with no retained
+        // history: a held publication at an unchanged camera must reproduce it bit for
+        // bit, and a camera change must produce a genuinely re-filtered field.
+        constexpr double radius_m = 0.28209479177387814;
+        DensityCohortSpec cohort{};
+        cohort.m_raster = 256u;
+        cohort.m_world_extent_m = static_cast<float>(256.0 / kSpan64SamplesPerCell);
+        for (u32 index = 0u; index < 5u; ++index) {
+            cohort.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = 12.0 + 0.5 * double(index % 3u),
+                    .m_y_m = 14.0 + 0.5 * double(index / 3u),
+                    .m_radius_m = radius_m});
+        }
+
+        const auto held = runDensityCohort(cohort, 2u, true);
+        PPR_TEST_ASSERT(held.size() == 2u);
+        PPR_TEST_ASSERT(held[0].m_filtered_density.size() == held[1].m_filtered_density.size());
+        for (std::size_t texel = 0u; texel < held[0].m_filtered_density.size(); ++texel) {
+            PPR_TEST_ASSERT(held[0].m_filtered_density[texel] == held[1].m_filtered_density[texel]);
+            PPR_TEST_ASSERT(held[0].m_filtered_label[texel] == held[1].m_filtered_label[texel]);
+            for (u32 channel = 0u; channel < 4u; ++channel) {
+                PPR_TEST_ASSERT(held[0].m_filtered_base[texel][channel] == held[1].m_filtered_base[texel][channel]);
+            }
+        }
+
+        // A quarter-pixel camera move changes both the accumulation and the smoothed
+        // field; a retained image or a filter that only ran on new publications would
+        // leave the second identical.
+        DensityCohortSpec shifted = cohort;
+        shifted.m_camera_offset_px = 0.25;
+        const auto moved = runDensityCohort(shifted, 1u);
+        PPR_TEST_ASSERT(moved.size() == 1u);
+        u32 accumulation_changed = 0u;
+        u32 filtered_changed = 0u;
+        for (std::size_t texel = 0u; texel < moved[0].m_filtered_density.size(); ++texel) {
+            if (moved[0].m_density[texel] != held[0].m_density[texel])
+                ++accumulation_changed;
+            if (moved[0].m_filtered_density[texel] != held[0].m_filtered_density[texel])
+                ++filtered_changed;
+        }
+
+        PPR_TEST_ASSERT(accumulation_changed > 0u);
+        PPR_TEST_ASSERT(filtered_changed > 0u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_filter_hold held_identical=1 accumulation_changed={} "
+                "filtered_changed={}",
+                accumulation_changed, filtered_changed));
+    };
 }
 
 namespace pP::tests {
@@ -10116,6 +10850,16 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_surface_two_classes_touch_at_one_owner_per_sample,
                 detail::WorldLightingMaterial::
                     particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere,
+                // Revision 7 world-space smoothing: the operator, the reference gap
+                // bridge, the droplet bound, sheet survival with the amplitude
+                // targets, and the held/re-filtered lifetime.
+                detail::WorldLightingMaterial::particle_surface_filter_matches_the_documented_operator,
+                detail::WorldLightingMaterial::
+                    particle_surface_filter_bridges_the_reference_gap_and_keeps_the_detached_pair,
+                detail::WorldLightingMaterial::particle_surface_filter_keeps_the_isolated_droplet_growth_bounded,
+                detail::WorldLightingMaterial::particle_surface_filter_keeps_a_sheet_and_meets_the_reference_scallop,
+                detail::WorldLightingMaterial::
+                    particle_surface_filter_refilters_on_a_camera_change_and_holds_bit_identical,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::held_publication_reculls_retained_rows_against_the_current_camera,
                 detail::WorldLightingMaterial::held_recull_keeps_global_ascending_ids_across_blocks,

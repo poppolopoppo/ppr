@@ -858,22 +858,34 @@ export namespace pP {
         }
 
         // Test-only surface target readback after the caller proves completion.
-        // No production path reads these textures on the CPU.
+        // No production path reads these textures on the CPU. The first four are
+        // the accumulation field (the operator the splat passes produce); the
+        // `m_filtered_*` trio is the smoothed field the composite actually
+        // reconstructs, so a probe can compare before and after the filter.
         struct ParticleSurfaceTargetsForTest {
             rhi::ITexture *m_label{};
             rhi::ITexture *m_depth{};
             rhi::ITexture *m_base{};
             rhi::ITexture *m_normal{};
+            rhi::ITexture *m_filtered_label{};
+            rhi::ITexture *m_filtered_base{};
+            rhi::ITexture *m_filtered_normal{};
             u32 m_phase_mask{};
             u32 m_class_mask{};
             float m_pixel_world{};
+            // Raster samples per world native cell and the loaded halo of the last
+            // encoded frame, so a probe can pin the tap count it is exercising.
+            float m_samples_per_cell{};
+            u32 m_halo{};
         };
         [[nodiscard]] ParticleSurfaceTargetsForTest particleSurfaceTargetsForTest() const noexcept {
             const ParticleSurfaceSlot &slot = m_particle_surface_slots[m_particle_surface_slot];
             return {
                 slot.m_label.get(), slot.m_depth.get(), slot.m_base.get(), slot.m_normal.get(),
+                slot.m_vertical.m_label.get(), slot.m_vertical.m_base.get(), slot.m_vertical.m_normal.get(),
                 m_world.m_particle_surface.m_phase_mask, m_world.m_particle_surface.m_class_mask,
-                m_particle_surface_pixel_world};
+                m_particle_surface_pixel_world, m_particle_surface_filter_samples_per_cell,
+                m_particle_surface_filter_halo};
         }
 
         // Convenience for single-pass callers (capture and fixtures): all three
@@ -1759,9 +1771,27 @@ export namespace pP {
             [[nodiscard]] bool operator==(const ParticleSurfaceLane &) const noexcept = default;
         };
 
+        // One L/Q/G bundle: the categorical label word plus the two premultiplied
+        // attribute sums, 20 bytes per raster texel. A slot holds three of them -
+        // the accumulation targets above and two smoothing scratch bundles - and
+        // the composite reads the last.
+        struct ParticleSurfaceBundle {
+            rhi::ComPtr<rhi::ITexture> m_label{};
+            rhi::ComPtr<rhi::ITextureView> m_label_view{};
+            rhi::ComPtr<rhi::ITexture> m_base{};
+            rhi::ComPtr<rhi::ITextureView> m_base_view{};
+            rhi::ComPtr<rhi::ITexture> m_normal{};
+            rhi::ComPtr<rhi::ITextureView> m_normal_view{};
+
+            [[nodiscard]] bool complete() const noexcept {
+                return m_label and m_label_view and m_base and m_base_view and m_normal and m_normal_view;
+            }
+        };
+
         // One completion-selected surface bundle: the selection label and depth,
-        // and the Q/G attribute pair. Replaced only after this slot's last reader
-        // completed; an in-flight bundle is never reused.
+        // the Q/G attribute pair and the two separable smoothing scratch bundles.
+        // Replaced only after this slot's last reader completed; an in-flight
+        // bundle is never reused.
         struct ParticleSurfaceSlot {
             rhi::ComPtr<rhi::ITexture> m_label{};
             rhi::ComPtr<rhi::ITextureView> m_label_view{};
@@ -1771,6 +1801,10 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_base_view{};
             rhi::ComPtr<rhi::ITexture> m_normal{};
             rhi::ComPtr<rhi::ITextureView> m_normal_view{};
+            // Horizontal-pass output, then the final filtered field the composite
+            // reconstructs. 40 bytes per raster texel of added scratch per slot.
+            ParticleSurfaceBundle m_horizontal{};
+            ParticleSurfaceBundle m_vertical{};
             FenceCompletionValue m_last_use{kFenceValueNone};
             u32 m_width{}, m_height{};
         };
@@ -1792,10 +1826,26 @@ export namespace pP {
         [[nodiscard]] std::error_code createParticleSurfacePrograms_(
             IShaderService &service, rhi::IDevice &device, const std::filesystem::path &content_dir);
         // The selection and accumulation passes rasterise the same prepared rows;
-        // this encodes both, in order, into the completion-selected slot.
+        // this encodes both, in order, then the two separable smoothing dispatches,
+        // into the completion-selected slot.
         [[nodiscard]] std::error_code encodeParticleSurfacePasses_(
             const PreRenderContext &context, ParticleSurfaceSlot &slot, u32 slot_index, const rhi::Viewport &viewport,
             const rhi::ScissorRect &scissor);
+        // One separable smoothing pass: its own program, compute pipeline and
+        // per-slot root objects, because a root's bindings are authored once per
+        // frame and the two passes bind different source/target bundles.
+        struct ParticleSurfaceFilterProgram {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kTileRingSize> m_roots{};
+        };
+        // Encodes one smoothing dispatch over the whole field extent: the group
+        // count covers every texel of `target`, and the pipeline's own tile halo is
+        // a constant of the program.
+        [[nodiscard]] std::error_code encodeParticleSurfaceFilter_(
+            const PreRenderContext &context, ParticleSurfaceFilterProgram &program, const u32 slot_index,
+            const ParticleSurfaceBundle &source, ParticleSurfaceBundle &target, const u32 width, const u32 height,
+            const float samples_per_cell, const u32 halo);
         // Ensures every shared owner the surface set can bind (contour/chunk-slot
         // maps, palette + source palette + texture inventory + boundary noise,
         // lighting fallback). Idempotent; the surface passes never depend on the
@@ -1838,11 +1888,26 @@ export namespace pP {
         std::optional<GridCachedPipeline> m_particle_surface_composite_opaque_pipeline{};
         std::optional<RenderPipelineKey> m_particle_surface_composite_optical_key{};
         std::optional<GridCachedPipeline> m_particle_surface_composite_optical_pipeline{};
+        // The separable smoothing pair. The horizontal pass reads the accumulation
+        // targets and writes m_horizontal; the vertical pass reads that and writes
+        // m_vertical, which is the field the composite reconstructs.
+        ParticleSurfaceFilterProgram m_particle_surface_filter_horizontal{};
+        ParticleSurfaceFilterProgram m_particle_surface_filter_vertical{};
+        // The unclamped ceil(3*sigma*samples_per_cell) of the last encoded frame,
+        // kept only so the truncation diagnostic fires on a transition instead of
+        // on every frame. The shared tile's bound is what it is compared against.
+        u32 m_particle_surface_filter_required_halo{};
         std::array<ParticleSurfaceSlot, kTileRingSize> m_particle_surface_slots{};
         // The slot this frame encoded. Recorded by notifyFrameSubmitted; a
         // definitely-unsubmitted frame never fences it.
         u32 m_particle_surface_slot{0u};
         float m_particle_surface_pixel_world{};
+        // This frame's smoothing scale, derived once in the preparation from the
+        // camera's pixel size and the world's cell size, and mirrored into the
+        // filter constant block: raster samples per native cell and the clamped
+        // tap halo.
+        float m_particle_surface_filter_samples_per_cell{};
+        u32 m_particle_surface_filter_halo{};
         bool m_particle_surface_encoded{};
         bool m_particle_surface_ready{};
 
