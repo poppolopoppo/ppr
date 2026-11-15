@@ -31,11 +31,17 @@ if(MSVC AND PPR_ENABLE_SANITIZER_ADDRESS)
     target_link_options(engine.tests.sim PRIVATE "/alternatename:?__tlregdtor@@YAHXZ=__tlregdtor")
 endif()
 
+# Gate contract: `matter_fast` is the repeated-use simulation gate (transaction
+# safety, transfer identities, scheduling, restore, inventory). `matter_long`
+# holds long-horizon stability and runs at phase-end/delivery. Every retained
+# simulation correctness entry belongs to one of the two; moving an entry to
+# `matter_long` does not weaken it.
+#
 # World-gen runs several full-grid (4096x4096) generate passes per suite run;
 # the debug build (Od+RTC+ASan) measures ~69s for the suite, so this timeout
 # keeps genuine margin over that reality instead of sitting near it.
 ppr_add_test_entry(TARGET engine.tests.sim
     LOOPS
     TIMEOUT 300
-    LABELS unit engine sim
+    LABELS unit engine sim matter_fast
 )

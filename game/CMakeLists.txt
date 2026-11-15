@@ -321,6 +321,12 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game cpu
     )
 
+    # Gate contract: `matter_fast` is the repeated-use simulation gate
+    # (transaction safety, transfer identities, scheduling, restore, inventory).
+    # `matter_long` holds long-horizon stability and runs at phase-end/delivery.
+    # Every retained simulation correctness entry belongs to one of the two;
+    # moving an entry to `matter_long` does not weaken it.
+
     # Each full-domain lifecycle witness has its own device lock and existing
     # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.
     ppr_add_test_entry(TARGET game.tests
@@ -329,7 +335,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME service_door_gpu
@@ -337,7 +343,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_edit_gpu
@@ -345,7 +351,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_coverage_gpu
@@ -353,7 +359,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_restore_gpu
@@ -361,7 +367,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_stall_gpu
@@ -369,7 +375,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     # Task 5 publication liveness: the device-free contract leaves, and the dug
@@ -381,7 +387,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/held_publication_carries_no_buffers_and_keeps_the_rest_of_the_payload,game/checkpoint_gpu/publication_hold_does_not_change_solver_or_presentation_storage"
         LOOPS
         TIMEOUT 120
-        LABELS unit game cpu
+        LABELS unit game cpu matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_publication_gpu
@@ -389,7 +395,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 450
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     ppr_add_test_entry(TARGET game.tests
@@ -398,7 +404,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     # Separate process budgets cover developer sanitizer startup for each
@@ -412,7 +418,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         # 1.4% margin and timed out once without any assertion failure. The
         # 900 s ceiling keeps an honest margin; assertions are unchanged.
         TIMEOUT 900
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_long
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_pressure_onset_gpu
@@ -420,7 +426,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 300
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_long
     )
 
     # Heavy worldgen preview leaves: exact-visible-draft sample replay/export

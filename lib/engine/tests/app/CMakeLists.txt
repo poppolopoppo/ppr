@@ -126,13 +126,19 @@ ppr_stage_assets(engine.tests.app shaders fonts lighting)
 # Transfer, contact, pool and dam continuations own exact leaves, excluded from that group.
 # Pinned-fork conformance uses its own exact group, leaving old workloads/deadlines intact.
 # The 300 s ceiling matches the existing matter device gates.
+#
+# Gate contract: `matter_fast` is the repeated-use simulation gate (transaction
+# safety, transfer identities, scheduling, restore, inventory). `matter_long`
+# holds long-horizon stability and runs at phase-end/delivery. Every retained
+# simulation correctness entry belongs to one of the two; moving an entry to
+# `matter_long` does not weaken it.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_fork_gpu
     FILTER "app/matter_fork"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapshot_preserve_full_state_without_feedback,app/matter_gpu/publication_validation_checks_every_scalar_and_matches_upload_admission,app/matter_gpu/resident_append_copies_the_current_prefix_and_uploads_only_new_rows,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot,app/matter_gpu/terrain_position_rejection_is_recoverable_and_other_verdicts_stay_fatal")
@@ -169,7 +175,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -178,7 +184,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -187,7 +193,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -196,7 +202,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -205,7 +211,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 unset(ppr_matter_terrain_filter)
@@ -221,7 +227,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     FILTER "app/matter_adapter"
     LOOPS
     TIMEOUT 120
-    LABELS unit engine app cpu
+    LABELS unit engine app cpu matter_fast
 )
 
 # Runtime lifecycle: the dedicated cold/reused acknowledgment leaf and the
@@ -242,7 +248,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -251,7 +257,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 unset(ppr_matter_runtime_filter)
@@ -263,7 +269,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 
