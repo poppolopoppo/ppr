@@ -86,9 +86,19 @@ No test was removed. The census found no entry whose contract is proven elsewher
 
 ## Open items
 
-- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator), A2's precision diagnostic, and A3–A6 are not started or incomplete; see the sections below.
+- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator), A2's precision diagnostic, and A3's checkpoint persistence are not started or incomplete; see the sections below.
 - D3D12/Windows verification is unavailable on this host and remains an unrun gate.
 - Only the Debug/ASan/validation configuration has been measured; Release timing and cost evidence is pending.
+
+## Mandatory gate budgets
+
+| Gate | Entries | Measured | Ceiling |
+|---|---:|---:|---:|
+| `matter_fast` | 23 | 291 s (21 entries, exclusive host) and 574.6 s (23 entries, concurrent-session GPU load) | **≤ 420 s exclusive** |
+| `matter_long` | 2 | 961 s (exclusive host) | **≤ 1200 s exclusive** |
+
+Ceilings are task-local repeated-use budgets for this reference host and Debug/validation configuration; they are not product budgets. A measurement taken while another session holds the GPU is recorded but does not establish the ceiling. Both gates are green at this source state.
+
 
 ## A1 — upstream reference harness (stage 1 complete)
 
@@ -126,3 +136,46 @@ Gates after this change: `matter_fast` 21/21 in 291 s.
 
 Build discipline learned here: a fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit disappeared when the identical committed sources were rebuilt, and the gate then passed. The build had been taken while an implementation lane was still editing `assets/shaders/pbmpm`; the staged shader tree did not match the linked binary. Builds must follow a quiescent lane.
 
+
+## A3 — complete iteration schedule
+
+K ∈ {2, 5, 10} now executes the upstream stage sequence instead of a hardwired two.
+
+| Stage | Program | Gather | Constraint + scatter | Integration |
+|---|---|---|---|---|
+| 0 | `fused0` | no (bootstrap) | yes | no |
+| 1 … K−2 | `fused1` | yes | yes | no |
+| K−1 | `fused1` | yes | yes | once (gravity, brush, sand pressure feedback) |
+
+The final-stage decision is the runtime predicate `reserved0 + 1 >= reserved1` (`reserved1 = K`); no third entry point exists and no per-K specialization is compiled. Admission rejects every count outside `{2,5,10}` before encoding, allocation or root creation.
+
+Sparse ping-pong is tracked explicitly by the host (`source_a` / `source_generation`) rather than inferred from parity, so odd K consumes the side actually written last. `SparseGridState::m_source_generation` was removed and `constants(destination_a, source_generation)` takes both from the caller.
+
+New shard `engine.tests.app.matter_schedule_gpu`:
+
+| Leaf | Contract |
+|---|---|
+| `supported_iteration_counts_validate_before_work` | 0/1/3/4/overflow reject with unchanged epoch, accounting and committed rows; 2/5/10 execute |
+| `iteration_roles_integrate_once_per_substep` | Integration runs once per substep for K = 2/5/10 (gravity band, sand gradient bound, sand history bound); zero-force rest row is bit-identical |
+| `odd_even_schedule_preserves_sparse_sources` | 1/2/8 substeps at K = 2/5/10; run-to-run determinism; a poisoned unused side is never consumed |
+
+Test-contract note: values that cross the fixed-point grid transfer cannot be asserted bit-exact. Gravity uses a 5 % band (transfer quantization ≤ 2.3 % at K = 10 and ≥ 20× below two integrations), sand `F` uses `substep · 1e-5` (from `9/(mass · 1e7)` per stencil), and sand `logJp` uses `1e-4 · previous` with strict decrease (deviatoric transfer noise < 1e-6). Each derivation is in-code and the observed value is logged before the assertion.
+
+## Review disposition
+
+An independent review returned REVISE on the A2 work. Every MUST FIX item was addressed or recorded:
+
+| Finding | Resolution |
+|---|---|
+| Derived operations still unsafe (visco quotient, sand norm/exponent, coefficient products) | Quotient/argument validation plus a produced-state encodability backstop before scatter; state-driven cases reach witnesses 16 and 17 |
+| Liquid and gather reciprocals unguarded | Explicit `1/density` validation; gather `1/volume` is an explicit zero-support branch |
+| Magnitude bound rejected usable operands | Replaced with the actual `E²+H²` / `F²+G²` radicand checks; `diag(2e19,1)` admitted, `diag(1e20,1e-20)` rejected |
+| Mixed-lane fixture never formed mixed workgroups | Rows now pass discovery and fail inside fused; inverse overflow uses normal-range components; probe finiteness asserted before aggregation |
+| Checkpoint CPU contracts outside every gate | New `game.tests.checkpoint_cpu` (19 leaves) in `matter_fast`; also fixed the pre-existing `game/lighting_lab/` exclude that ran 7 leaves twice |
+| Transient fast-gate failure assigned an unproven cause | Recorded below as unresolved |
+| A0 lacked explicit ceilings | Budgets table above |
+| Manifest override precedence ambiguous | Explicit user override versus automatic selection; single status line; stale automatic selection cleared on failure |
+
+### Unresolved incident
+
+After the constitutive-guard commit, one fast-gate run failed `app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot` with `device_or_resource_busy` from the append/publication path. A rebuild of the identical committed sources passed 3/3, and both gates have been green since. The cause is **not established**: the failing run's binary and staged shader identities were not captured, so the earlier "staged shader mismatch" explanation is withdrawn. It is retained as an unexplained transient until a reproduction provides identities.
