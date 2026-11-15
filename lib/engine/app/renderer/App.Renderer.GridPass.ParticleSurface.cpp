@@ -25,15 +25,16 @@ namespace pP {
     //   presence marker  M = RGBA16Unorm nearest liquid centre (pixel offset from
     //                    the texel centre) + its material, Z = nearest pixel
     //                    distance. No blend, strict Less, depth writes, one
-    //                    radius-2 candidate quad per admitted row.
+    //                    candidate quad of 1.7071 raster samples per admitted row.
     //   accumulation     Q = (sum w*base.rgb, sum w), G = (sum w*normal.xyz,
     //                    sum w*alpha). One/One/Add, no depth attachment.
     //   smoothing        two separable tiled label-masked Gaussian dispatches at
     //                    sigma = 0.15 world cell (+/-3 sigma), horizontal into a
     //                    scratch L/Q/G bundle and vertical into the final field.
     //   composite        one categorical four-tap reconstruction of the FILTERED
-    //                    field and one deferred response evaluation per surviving
-    //                    scene sample, drawn at each admitted class's existing
+    //                    field, a binary occupancy decision per scene sample
+    //                    (D > theta) and one deferred response evaluation per
+    //                    occupied sample, drawn at each admitted class's existing
     //                    depth/blend slot. Coverage is C = max(B, F): the physical
     //                    body B wins every tie, and F is the unfiltered presence
     //                    marker evaluated at each scene sample.
@@ -689,13 +690,13 @@ namespace pP {
         };
 
         // --- minimum-presence marker -----------------------------------
-        // One radius-2 candidate per admitted liquid row, over the same prepared
-        // instances and indirect arguments as the splat. The record is the NEAREST
-        // particle centre per raster texel under the same strict-Less/first-stable
-        // order the label uses, and it exists even where every quadrature point of
-        // that row lies outside its texel: that is exactly the far-zoom row the
-        // density field cannot express. Nothing here reads or writes the label, the
-        // density or the filtered bundle.
+        // One kParticleMarkerQuadRadius candidate per admitted liquid row, over the
+        // same prepared instances and indirect arguments as the splat. The record is
+        // the NEAREST particle centre per raster texel under the same
+        // strict-Less/first-stable order the label uses, and it exists even where
+        // every quadrature point of that row lies outside its texel: that is exactly
+        // the far-zoom row the density field cannot express. Nothing here reads or
+        // writes the label, the density or the filtered bundle.
         RenderPipelineSignature marker_signature{};
         marker_signature.m_color_formats[0] = rhi::Format::RGBA16Unorm;
         marker_signature.m_color_format_count = 1u;

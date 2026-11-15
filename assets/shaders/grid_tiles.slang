@@ -1607,9 +1607,9 @@ struct ParticleVertexOutput {
 // routed row is never drawn both directly and reconstructed.
 //
 // `minimum_extent` is a world-space floor on the quad's own half extent. The
-// presence marker passes its radius-2 bounds here, because at far zoom the
-// reconstruction support is narrower than the pixel the marker must still cover;
-// every other entry passes zero and keeps its exact previous geometry.
+// presence marker passes its kParticleMarkerQuadRadius bounds here, because at far
+// zoom the reconstruction support is narrower than the pixel the marker must still
+// cover; every other entry passes zero and keeps its exact previous geometry.
 ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface,uint phase_mask,float pad,
     float minimum_extent) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
@@ -2249,7 +2249,7 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
 //   1. marker            M = RGBA16Unorm nearest liquid centre (pixel offset from
 //                        the texel centre) + its material, Z = nearest pixel
 //                        distance. Blend off, strict Less, depth writes, one
-//                        radius-2 candidate quad per admitted row.
+//                        candidate quad of 1.7071 raster samples per admitted row.
 //   2. label selection   L = R32Uint winning material, Z = D32Float minimum
 //                        eligible rho^2. Blend off, strict Less, depth writes.
 //   3. accumulation      Q = (sum w*base.rgb, sum w) and
@@ -2260,15 +2260,19 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
 //                        sigma = 0.15 world cell, +/-3 sigma, horizontal into
 //                        one scratch L/Q/G bundle and vertical into the next.
 //   5. composite         categorical four-tap reconstruction of the FILTERED
-//                        L/Q/G with the analytic quotient derivative of D, one
-//                        deferred response evaluation per surviving sample, and
-//                        the union C = max(B, F) that keeps a particle visible
-//                        where the density field cannot resolve it.
+//                        L/Q/G, a BINARY occupancy decision per scene sample
+//                        (D > theta), one deferred response evaluation per
+//                        occupied sample, and the union C = max(B, F) that keeps
+//                        a particle visible where the density field cannot
+//                        resolve it.
 //
-// The kernel, quadrature and contour mathematics live in
+// The kernel, quadrature and occupancy mathematics live in
 // grid_particle_density.slang. There is no temporal history, no blur of lit
 // colour and no hardware resolve before the reconstruction; D is a linear HDR
-// scalar and the attributes are linear reflectance/normal sums throughout.
+// scalar and the attributes are linear reflectance/normal sums throughout. The
+// silhouette is antialiased by the four scene samples alone: the composite writes
+// one binary decision per sample and the reconstruction pass reads those samples
+// individually, so no per-sample coverage ramp pre-filters the edge.
 
 // The winning label of the current frame's selection pass, one texel per raster
 // pixel. Never sampled with a filter: the composite integer-loads exactly four
@@ -2311,11 +2315,12 @@ bool terrainExcludesDensity(float2 fine_position) {
 // minimum-presence marker selection
 // ------------------------------------------------------------------
 
-// One radius-2 candidate quad per admitted liquid row, over the same prepared
-// instances and indirect arguments the splat passes use. The geometry is the
-// shared splat quad with the marker's own screen-space floor, because the
-// reconstruction support is narrower than a pixel as soon as the field can no
-// longer resolve the row: a candidate must exist even where no density texel does.
+// One candidate quad of kParticleMarkerQuadRadius (1.7071) raster samples per
+// admitted liquid row, over the same prepared instances and indirect arguments the
+// splat passes use. The geometry is the shared splat quad with the marker's own
+// screen-space floor, because the reconstruction support is narrower than a pixel
+// as soon as the field can no longer resolve the row: a candidate must exist even
+// where no density texel does.
 [shader("vertex")]
 ParticleVertexOutput vertexParticleSurfaceMarker(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
     return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_phase_mask,
@@ -2679,7 +2684,10 @@ struct ParticleSurfaceMarker {
 // F at this sample, or zero when no candidate owns the pixel. The record is only
 // a candidate: it still belongs to the class and ownership rules the field uses,
 // so a marker never shades through the other composite and never paints a sample
-// the field already assigns to the other class.
+// the field already assigns to the other class. Both the stored offset and the
+// sample position are RESOLVED RASTER SAMPLES, the same unit as the marker radii,
+// so the distance needs no conversion here even though the design contract is
+// stated in content pixels.
 bool particleSurfaceMarkerAt(float2 uv,out ParticleSurfaceMarker result) {
     result=(ParticleSurfaceMarker)0;
 
@@ -2736,27 +2744,31 @@ VisibleSurfaceSample particleSurfaceMarkerSample(uint material) {
 }
 
 // One invocation per scene sample. The categorical reconstruction supplies D and
-// the same-label attribute means; the density threshold and its one-pixel
-// derivative width form B before any lighting. The presence marker F is unioned
-// once as C = max(B, F), and B wins an exact tie, so a resolved body keeps its own
-// coverage and attributes bit for bit and the marker only ever adds the presence a
-// vanished field cannot express. The winning sample's base, normal and alpha then
-// shade ONCE through the shared liquid response at this sample's real world
-// position and palette material, and the result is premultiplied exactly once. No
-// element texture, seed or UV is sampled here. The negligible-coverage floor
-// discards before lighting, which also suppresses the opaque class's plane-depth
-// write. The authoritative terrain exclusion is rechecked at the actual sample, so
-// interpolation can never paint fluid or a marker over opaque terrain.
+// the same-label attribute means; the density threshold alone decides B, so a
+// sample is either occupied or empty and never partially covered. The presence
+// marker F is unioned once as C = max(B, F), and B wins an exact tie, so a resolved
+// body keeps its own coverage and attributes bit for bit and the marker only ever
+// adds the presence a vanished field cannot express. The winning sample's base,
+// normal and alpha then shade ONCE through the shared liquid response at this
+// sample's real world position and palette material, and the result is
+// premultiplied exactly once. No element texture, seed or UV is sampled here. The
+// negligible-coverage floor discards before lighting, which also suppresses the
+// opaque class's plane-depth write, so a body sample writes depth on exactly the
+// same decision that made it occupied. The authoritative terrain exclusion is
+// rechecked at the actual sample, so interpolation can never paint fluid or a
+// marker over opaque terrain.
 // `uv` and `fine` are evaluated by the entry point: a sample-rate interpolation
 // must read the entry's own varyings, so it cannot be performed inside a helper.
 float4 particleSurfaceComposite(float2 uv,float2 fine,SamplerState.Handle g_sampler) {
     if (terrainExcludesDensity(fine)) discard;
 
+    // The quotient derivative is still reported by the reconstruction (its own
+    // categorical contract, pinned by its probe) but occupancy reads D alone.
     ParticleSurfaceReconstruction reconstruction;
     float derivative_x,derivative_y;
     const bool body=particleSurfaceReconstruct(uv,reconstruction,derivative_x,derivative_y);
     float coverage=body&&reconstruction.m_density>kParticleDensityEpsilon
-        ? particleDensityContour(reconstruction.m_density,derivative_x,derivative_y) : 0.0;
+        ? particleDensityOccupancy(reconstruction.m_density) : 0.0;
 
     ParticleSurfaceMarker marker;
     const bool marked=particleSurfaceMarkerAt(uv,marker);

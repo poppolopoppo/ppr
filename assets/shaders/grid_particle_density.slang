@@ -69,9 +69,9 @@ static const float kParticleDensityBandFraction = 1.0 - kParticleFalloffInnerFra
 // the old 5/6. This is a calibrated presentation-domain threshold, not exact
 // solver geometry.
 static const float kParticleDensityThreshold = 5.0 / 28.0;
-// Numerical divide and zero-gradient guard in density units, not a blur radius.
-// It guards both the empty-field mean (D <= this) and the contour width
-// (w_AA = max(|dD/dpx_x| + |dD/dpx_y|, this)).
+// Numerical divide guard in density units, not a blur radius and not a coverage
+// ramp width. It guards the empty-field mean (D <= this) and the attribute
+// denominator of the reconstruction.
 static const float kParticleDensityEpsilon = 1.0e-6;
 // Round-off closure of the support join, relative to R. A sample constructed
 // exactly at the support can arrive a few binary32 ulps inside it after the
@@ -142,16 +142,23 @@ float2 particleDensityQuadratureOffset(uint index) {
 }
 
 // ------------------------------------------------------------------
-// derivative-width contour
+// binary body occupancy
 // ------------------------------------------------------------------
-// C = smoothstep(theta - w_AA/2, theta + w_AA/2, D), the one-pixel
-// derivative-width contour of the accumulated density. `derivative_x` and
-// `derivative_y` are dD/dpx of the reconstructed field in density-pixel units.
-// The width floor is the zero-gradient guard; it is not a blur radius. C is
-// exactly 0 below the lower edge and exactly 1 above the upper edge.
-float particleDensityContour(float density,float derivative_x,float derivative_y) {
-    float width=max(abs(derivative_x)+abs(derivative_y),kParticleDensityEpsilon);
-    return smoothstep(kParticleDensityThreshold-0.5*width,kParticleDensityThreshold+0.5*width,density);
+// B = [D > theta]: the body OCCUPIES a scene sample when the reconstructed
+// density at that sample exceeds the retained threshold. There is no per-sample
+// ramp and no per-sample fractional coverage, so nothing here approximates an
+// output-pixel footprint. The silhouette's antialiasing is the existing MSAA
+// contract: the composite evaluates this decision at each of the four spatially
+// located scene samples, and the reconstruction pass reads those samples
+// individually (hable_temporal.slang g_scene.Load(pixel, sample)) to rebuild the
+// content-pixel lattice and filter the output footprint once.
+//
+// Occupancy and material opacity are separate factors: a transparent interior
+// stays transparent because the authored opacity is applied once after this
+// decision, never re-applied as coverage. An exact equality does not occupy; that
+// is measure-zero on a continuous field and needs no tie rule.
+float particleDensityOccupancy(float density) {
+    return density>kParticleDensityThreshold ? 1.0 : 0.0;
 }
 
 // ------------------------------------------------------------------
@@ -159,42 +166,58 @@ float particleDensityContour(float density,float derivative_x,float derivative_y
 // ------------------------------------------------------------------
 // Density is not presence. A particle whose reconstructed support is far below one
 // raster pixel loses every quadrature point to phase, so no label, no density and
-// therefore no contour can exist at any zoom beyond the sampled extinction. This
-// marker is the separate screen-space guarantee of design revision 8-B, unioned
+// therefore no occupied sample can exist at any zoom beyond the sampled extinction.
+// This marker is the separate screen-space guarantee of design revision 8-B, unioned
 // once with the physical field:
 //
 //   d = |x_sample_px - x_centre_px|
-//   F_p = clamp(2 - d, 0, 1)
+//   F_p = saturate((R - d) / (R - core))
 //   F = max_p F_p
 //   C = max(B, F)
 //
-// The constants are RESOLVED RASTER PIXELS, never world cells and never the field's
-// texel pitch: the dot is a presentation guarantee, so it must not shrink with the
-// zoom. F is 1 inside a 1-pixel radius, exactly .5 at 1.5 pixels and 0 at 2
-// pixels: a 2-pixel opaque diameter, a 3-pixel half-coverage diameter and a
-// 4-pixel outer diameter. F is never filtered, never enters Q.a and never changes
-// theta, R, A_2 or the label rule. The CPU mirror in App.WorldLighting.Material.
-// Tests.cpp pins these values.
-static const float kParticleMarkerCoreRadius = 1.0;
-static const float kParticleMarkerRadius = 2.0;
-// Half a raster pixel's diagonal. A candidate quad must still write the record of
+// UNITS. The design contract of revision 8-B is in CONTENT pixels, and this code
+// runs in RESOLVED RASTER SAMPLES: the composite is one decision per scene sample
+// at raster resolution (makePresentationGrid: resolved = ceil(window/P),
+// raster = ceil(resolved/2)), which the reconstruction then enlarges to the
+// content grid, so one raster sample is two content pixels in the padded grid.
+// Every radius below is therefore the content-pixel radius divided by that
+// factor, and the conversion is the only unit step:
+//
+//   opaque core  1.0 content px / 2 = 0.5 raster samples
+//   half coverage 1.5 content px / 2 = 0.75 raster samples  (F = .5)
+//   outer        2.0 content px / 2 = 1.0 raster samples    (F = 0)
+//
+// i.e. a 2-content-pixel opaque diameter, a 3-content-pixel half-coverage
+// diameter and a 4-content-pixel outer diameter, with a one-content-pixel radial
+// ramp. The dot is a presentation guarantee, so it must not shrink with the zoom
+// and is never expressed in world cells or the field's texel pitch. F is never
+// filtered, never enters Q.a and never changes theta, R, A_2 or the label rule.
+// The CPU mirror in App.WorldLighting.Material.Tests.cpp pins these values.
+static const float kParticleMarkerContentPixelsPerRasterSample = 2.0;
+static const float kParticleMarkerCoreRadius = 0.5;
+static const float kParticleMarkerRadius = 1.0;
+// Half a raster sample's diagonal. A candidate quad must still write the record of
 // a pixel whose CENTRE lies outside the coverage radius, because a scene sample of
 // that pixel can be inside it: the pixel's farthest interior point is sqrt(2)/2
 // away, so this is the exact bound that keeps every sample with F > 0 represented.
+// The reduced radius keeps the bound at 1.7071 raster samples, still inside the
+// record's representable +/-4-sample offset range.
 static const float kParticleMarkerQuadRadius = kParticleMarkerRadius+0.7071067811865476;
 // The winner record's distance channels are unorm, encoded as offset/8 + 0.5: the
-// representable centre offset is +/-4 pixels and the quantisation is 8/65535 =
-// 1.22e-4 pixel, eight times finer than the 1/1024 coverage error the selection
-// contract allows. A written record's offset is at most kParticleMarkerQuadRadius
-// by the fragment's own bound, so the range is never approached from inside.
+// representable centre offset is +/-4 raster samples and the quantisation is
+// 8/65535 = 1.22e-4 raster sample, eight times finer than the 1/1024 coverage
+// error the selection contract allows. A written record's offset is at most
+// kParticleMarkerQuadRadius by the fragment's own bound, so the range is never
+// approached from inside.
 static const float kParticleMarkerRecordScale = 8.0;
 // The record's third channel carries the winner's material id as m/65535, which
 // every 16-bit integer round-trips exactly through unorm. Zero is the empty record.
 static const float kParticleMarkerMaterialScale = 65535.0;
 
 // One linear ramp between the two pinned endpoints: F is 1 up to the opaque core,
-// falls one coverage unit per pixel and reaches 0 at the coverage radius, so it is
-// exactly .5 at 1.5 pixels (the design's half-coverage radius).
+// falls one coverage unit per CONTENT pixel - two per raster sample - and reaches
+// 0 at the coverage radius, so it is exactly .5 at 1.5 content pixels (the
+// design's half-coverage radius).
 float particleMarkerCoverage(float distance_px) {
     float span=max(kParticleMarkerRadius-kParticleMarkerCoreRadius,kParticleDensityEpsilon);
     return saturate((kParticleMarkerRadius-distance_px)/span);

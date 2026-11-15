@@ -5872,16 +5872,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
             (index & 2u) == 0u ? -kDensityQuadratureOffset : kDensityQuadratureOffset};
     }
 
-    // C = smoothstep(theta - w/2, theta + w/2, D), with the derivative width
-    // w_AA = max(|dD/dpx_x| + |dD/dpx_y|, 1e-6). Exact 0 below the lower edge and
-    // exact 1 above the upper edge.
-    [[nodiscard]] double densityContour(
-        const double density, const double derivative_x, const double derivative_y) noexcept {
-        const double width = (std::max) (std::abs(derivative_x) + std::abs(derivative_y), kDensityEpsilon);
-        const double lower = kDensityThreshold - 0.5 * width;
-        const double upper = kDensityThreshold + 0.5 * width;
-        const double t = std::clamp((density - lower) / (upper - lower), 0.0, 1.0);
-        return densityRamp(t);
+    // B = [D > theta]: binary body occupancy at one scene sample, restated from
+    // grid_particle_density.slang particleDensityOccupancy. There is no per-sample
+    // ramp, so a sample is occupied or it is not; a resolved pixel's alpha is the
+    // fraction of its covered samples times the material's own opacity, and the
+    // contour's spatial smoothness belongs to the reconstruction that consumes the
+    // individual samples.
+    [[nodiscard]] double densityOccupancy(const double density) noexcept {
+        return density > kDensityThreshold ? 1.0 : 0.0;
     }
 
     // One stored surface texel: the winning label plus the Q/G sums it owns. The
@@ -7896,10 +7894,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(crossing - kDensityThreshold) <= 1.0e-15);
         PPR_TEST_ASSERT(densityWeight({crossing_rho - 1.0e-6, 0.0}, neutral) > kDensityThreshold);
         PPR_TEST_ASSERT(densityWeight({crossing_rho + 1.0e-6, 0.0}, neutral) < kDensityThreshold);
-        PPR_TEST_ASSERT(densityContour(peak, 0.0, 0.0) == 1.0);
-        // Just outside the drawn contour the one-pixel band is still live, and the
-        // support beyond rho = 1 is exactly zero.
-        PPR_TEST_ASSERT(densityContour(densityWeight({0.95, 0.0}, neutral), 0.0, 0.0) == 0.0);
+        PPR_TEST_ASSERT(densityOccupancy(peak) == 1.0);
+        // The sample decision is binary and exact on both sides of theta: nothing
+        // in between, and the support beyond rho = 1 is exactly zero.
+        PPR_TEST_ASSERT(densityOccupancy(densityWeight({0.95, 0.0}, neutral)) == 0.0);
         PPR_TEST_ASSERT(densityWeight({1.0, 0.0}, neutral) == 0.0);
 
         // Half-peak is not theta: raising theta to that value would move the drawn
@@ -8098,15 +8096,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(junction > edge and edge > centre);
 
         // Every interior point has a nearest lattice corner within sqrt(.125), so
-        // that single contributor already bounds D from below. The bound exceeds
-        // theta, and the AA width that still saturates is 2*(bound - theta).
+        // that single contributor already bounds D from below. The bound's slack
+        // above theta is what keeps the interior's samples occupied with margin.
         const double nearest_offset = std::sqrt(0.125);
         const double nearest_rho = nearest_offset / (kDensitySurfaceRadiusScale * r_cells);
         const double interior_bound = kDensityAmplitude * densityRamp(std::clamp(3.0 * (1.0 - nearest_rho), 0.0, 1.0));
         PPR_TEST_ASSERT(std::abs(interior_bound - 0.339824607) <= 1.0e-9);
         PPR_TEST_ASSERT(interior_bound > kDensityThreshold);
-        PPR_TEST_ASSERT(std::abs(2.0 * (interior_bound - kDensityThreshold) - 0.322506357) <= 1.0e-9);
-        PPR_TEST_ASSERT(densityContour(interior_bound, 0.0, 0.0) == 1.0);
+        PPR_TEST_ASSERT(std::abs(interior_bound - kDensityThreshold - 0.1612531785) <= 1.0e-9);
+        PPR_TEST_ASSERT(densityOccupancy(interior_bound) == 1.0);
 
         // Area mean over one lattice cell is one: V / cell area = 0.25 / 0.25.
         constexpr u32 steps = 64u;
@@ -8437,7 +8435,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
             raw_normal.x * raw_normal.x + raw_normal.y * raw_normal.y + raw_normal.z * raw_normal.z);
         PPR_TEST_ASSERT(std::abs(reconstructed.m_normal.z - raw_normal.z / raw_length) <= 1.0e-15);
         PPR_TEST_ASSERT(std::abs(reconstructed.m_normal.x - raw_normal.x / raw_length) <= 1.0e-15);
-        // Mean alpha: 0.45, applied once by the composite as C*alpha.
+        // Mean alpha: 0.45, applied once by the composite as C*alpha. C is the
+        // union max(B, F); fractional C now comes only from the marker's own ramp
+        // (the body's B is binary), and this probe pins the premultiplication
+        // arithmetic for any C.
         PPR_TEST_ASSERT(std::abs(reconstructed.m_alpha - 0.45) <= 1.0e-15);
         constexpr double coverage = 0.8;
         const SurfaceComposite composite = densityComposite(reconstructed, reconstructed.m_base, coverage, true);
@@ -8654,7 +8655,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // A fully excluded splat contributes nothing, so its label can never be
         // selected (the selection has no eligible point and discards) and its
         // density can never be accumulated.
-        PPR_TEST_ASSERT(masked(all) == 0.0 and densityContour(masked(all), 0.0, 0.0) == 0.0);
+        PPR_TEST_ASSERT(masked(all) == 0.0 and densityOccupancy(masked(all)) == 0.0);
         // Two of four excluded keeps exactly half of the unmasked weight, which is
         // the same mask applied at two positions.
         PPR_TEST_ASSERT(std::abs(masked(std::array<bool, 4u>{true, true, false, false}) - 0.5 * w_offset) <= 1.0e-15);
@@ -8675,13 +8676,25 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // direct classes alone, then reads the density target and the composite back.
     // No new harness and no visual golden: every assertion below is numeric.
 
-    // grid_particle_density.slang's revision-8 minimum-presence marker, mirrored:
-    // a resolved RASTER PIXEL radius (never a world cell and never a field texel),
-    // the winner record's +/-8-pixel unorm offset range and its /65535 material
-    // encoding. A probe that reads the record back decodes it with these.
-    inline constexpr double kMarkerRadiusPx = 2.0;
-    inline constexpr double kMarkerHalfCoverageRadiusPx = 1.5;
-    inline constexpr double kMarkerCoreRadiusPx = 1.0;
+    // grid_particle_density.slang's minimum-presence marker, mirrored in the units
+    // the shader uses: RESOLVED RASTER SAMPLES. makePresentationGrid derives
+    // resolved = ceil(window/P) content pixels and raster = ceil(resolved/2), so one
+    // raster sample is two content pixels and the design contract - stated in
+    // CONTENT pixels - converts by that factor alone. The winner record's
+    // +/-8-sample unorm offset range and its /65535 material encoding are unchanged.
+    inline constexpr double kMarkerContentPixelsPerRasterSample = 2.0;
+    inline constexpr double kMarkerCoreRadiusContentPx = 1.0;
+    inline constexpr double kMarkerHalfCoverageRadiusContentPx = 1.5;
+    inline constexpr double kMarkerOuterRadiusContentPx = 2.0;
+    // 1.0 raster sample, 0.75 and 0.5: a 2-content-pixel opaque diameter, a
+    // 3-content-pixel half-coverage diameter and a 4-content-pixel outer diameter.
+    inline constexpr double kMarkerRadiusPx = kMarkerOuterRadiusContentPx / kMarkerContentPixelsPerRasterSample;
+    inline constexpr double kMarkerHalfCoverageRadiusPx = kMarkerHalfCoverageRadiusContentPx /
+                                                          kMarkerContentPixelsPerRasterSample;
+    inline constexpr double kMarkerCoreRadiusPx = kMarkerCoreRadiusContentPx / kMarkerContentPixelsPerRasterSample;
+    // kParticleMarkerQuadRadius: the coverage radius plus half a raster sample's
+    // diagonal, the exact bound that keeps every sample with F > 0 represented.
+    inline constexpr double kMarkerQuadRadiusPx = kMarkerRadiusPx + 0.7071067811865476;
     inline constexpr double kMarkerRecordScale = 8.0;
     inline constexpr double kMarkerMaterialScale = 65535.0;
 
@@ -8705,7 +8718,16 @@ namespace pP::tests::detail::WorldLightingMaterial {
         bool m_repeat{false};
         float m_texture_period_m{1.0f};
         float m_normal_scale{1.0f};
-        float3 m_emissive_rgb{};
+        // Authored emission per channel, as plain floats. A `float3` member would be
+        // an indeterminate read when a cohort omits the initializer: Mango's own
+        // camera header warns that "bare `{}` does not reliably zero simd vectors",
+        // so `float3 m_emissive_rgb{}` keeps whatever occupied those bytes. The stage
+        // range-checks these three channels (0..1), so an omitted initializer would
+        // fail staging at random, with only a generic invalid_argument to show. Plain
+        // floats default to exactly zero, so an omitted channel means authored black.
+        float m_emissive_r{};
+        float m_emissive_g{};
+        float m_emissive_b{};
         float m_emissive_strength{};
         u32 m_color_rgba{0x0000'ffffu};
     };
@@ -8913,6 +8935,28 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const auto staged = [&spec](
                                     const u32 index) { return index == 0xffff'ffffu or index < spec.m_images.size(); };
             PPR_TEST_ASSERT(staged(material.m_albedo_image) and staged(material.m_normal_image));
+
+            // The same reasoning for authored emission: the gate range-checks each
+            // channel to 0..1, so an out-of-range or non-finite spec is a fixture
+            // defect. Print the offender with its numbers before asserting.
+            const std::array<float, 3u> emissive{material.m_emissive_r, material.m_emissive_g, material.m_emissive_b};
+            bool emission_in_range = true;
+            for (const float channel: emissive) {
+                emission_in_range = emission_in_range and
+                                    std::isfinite(channel) and
+                                    channel >= 0.0f and
+                                    channel <= 1.0f;
+            }
+
+            if (not emission_in_range) {
+                std::println(
+                    std::cerr,
+                    "WORLD_LIGHTING_MATERIAL density_cohort_bad_emission material={} emissive=({},{},{}) "
+                    "strength={}",
+                    material.m_material, emissive[0u], emissive[1u], emissive[2u], material.m_emissive_strength);
+            }
+
+            PPR_TEST_ASSERT(emission_in_range);
         }
 
         for (const u32 material: material_ids) {
@@ -8939,9 +8983,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 visual.m_normal_texture_index = authored->m_normal_image;
                 visual.m_texture_period_m = authored->m_texture_period_m;
                 visual.m_normal_scale = authored->m_normal_scale;
-                visual.m_emissive_rgb[0u] = authored->m_emissive_rgb.x;
-                visual.m_emissive_rgb[1u] = authored->m_emissive_rgb.y;
-                visual.m_emissive_rgb[2u] = authored->m_emissive_rgb.z;
+                visual.m_emissive_rgb[0u] = authored->m_emissive_r;
+                visual.m_emissive_rgb[1u] = authored->m_emissive_g;
+                visual.m_emissive_rgb[2u] = authored->m_emissive_b;
                 visual.m_emissive_strength = authored->m_emissive_strength;
                 if (authored->m_repeat) {
                     visual.m_surface_flags |= kGridSurfaceTextureRepeat;
@@ -10090,7 +10134,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
             DensityCohortSpec cohort{};
             cohort.m_materials = {DensityMaterialSpec{
                 .m_material = 1u,
-                .m_emissive_rgb = emissive,
+                .m_emissive_r = emissive.x,
+                .m_emissive_g = emissive.y,
+                .m_emissive_b = emissive.z,
                 .m_emissive_strength = strength,
                 .m_color_rgba = 0x0000'0000u,
             }};
@@ -10117,10 +10163,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_surface_composite_uses_four_distinct_scene_samples) {
         // The composite is sample-rate: at each of the four standard 4x sample positions
-        // it reconstructs from the field at THAT position. The hardware resolve is the
-        // average of the four per-sample outputs, so the resolved alpha of a boundary
-        // pixel must match the average of the four reconstructed coverages and differ
-        // from the pixel-centre coverage.
+        // it reconstructs the field at THAT position and decides binary occupancy there.
+        // Production has no hardware resolve at all: the scene attachment is a 4x
+        // Texture2DMS without a resolve target and the reconstruction pass loads the
+        // individual samples (hable_temporal.slang g_scene.Load(pixel, sample)). This
+        // probe's own 1x resolve attachment is only the readback path, so the resolved
+        // alpha of a boundary pixel is the fraction of its four covered samples - a
+        // multiple of 1/4 for this opaque liquid - and differs from the pixel-centre
+        // decision.
         constexpr double radius_m = 0.28209479177387814;
         constexpr double spacing = 0.5;
         DensityCohortSpec cohort{};
@@ -10175,7 +10225,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 return 0.0;
             }
 
-            return densityContour(reconstructed.m_density, reconstructed.m_derivative_x, reconstructed.m_derivative_y);
+            return densityOccupancy(reconstructed.m_density);
         };
         constexpr std::array<std::array<double, 2u>, 4u> sample_positions{{
             {0.375, 0.125},
@@ -10213,16 +10263,23 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
         }
 
-        // The cohort must actually straddle a contour within its pixels, otherwise the
-        // four-sample test would be vacuous.
-        PPR_TEST_ASSERT(best_gap >= 0.05);
+        // The cohort must actually straddle the occupancy boundary within its pixels,
+        // otherwise the four-sample test would be vacuous: a binary sample pattern and a
+        // pixel-centre decision differ by at least one whole sample.
+        PPR_TEST_ASSERT(best_gap >= 0.25 - 1.0e-6);
+        // A resolved pixel's alpha is the covered-sample FRACTION times the material's
+        // opacity (1 here), so the boundary pixel takes 1, 2 or 3 of its 4 samples and
+        // its alpha is exactly that count / 4 -- no intermediate ramp value exists.
+        const double covered_samples = best_mean * 4.0;
+        PPR_TEST_ASSERT(std::abs(covered_samples - std::round(covered_samples)) <= 1.0e-6);
+        PPR_TEST_ASSERT(std::round(covered_samples) >= 1.0 and std::round(covered_samples) <= 3.0);
         PPR_TEST_ASSERT(std::abs(best_resolved - best_mean) <= 0.03);
         PPR_TEST_ASSERT(std::abs(best_resolved - best_centre) >= 0.02);
         _.log(
             std::format(
                 "WORLD_LIGHTING_MATERIAL particle_surface_sample_rate resolved={:.6f} mean4={:.6f} "
-                "centre={:.6f} gap={:.6f}",
-                best_resolved, best_mean, best_centre, best_gap));
+                "centre={:.6f} gap={:.6f} covered_samples={:.0f}",
+                best_resolved, best_mean, best_centre, best_gap, covered_samples));
     };
 
     PPR_UNIT_TEST (particle_surface_two_materials_of_one_class_hold_one_label_per_texel) {
@@ -10614,14 +10671,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // exact pair axis reads .908 theta) and no contour reaches the midpoint.
         PPR_TEST_ASSERT(detached.m_filtered < kDensityThreshold);
 
-        // Rendered criterion, derived from the contour operator rather than from an
-        // arbitrary alpha threshold: C = smoothstep(theta - w/2, theta + w/2, D) with
-        // w = |dD/dx| + |dD/dy| in density per raster pixel, so C = 1 exactly when
-        // D >= theta + w/2. At span64 one pixel is .1185 cell and the saddle density
-        // changes by ~.075 per pixel, so a saddle within one band of theta covers its
-        // pixel partially BY CONSTRUCTION: the theta contour crosses that pixel. The
-        // invariant that separates a bridge from a pinch is therefore connection at
-        // full coverage, which is what a joined neck must provide.
+        // Rendered criterion, derived from the occupancy operator rather than from an
+        // arbitrary alpha threshold: a sample is occupied iff D > theta, so a resolved
+        // pixel's alpha is the fraction of its four samples that clear theta and a
+        // joined neck must cover all four at every pixel along the pair axis. At
+        // span64 one pixel is .1185 cell and the saddle density changes by ~.075 per
+        // pixel, so a saddle within one sample spacing of theta may occupy only some
+        // of a pixel's samples: the invariant that separates a bridge from a pinch is
+        // therefore connection at full coverage, which is what a joined neck provides.
         PPR_TEST_ASSERT(joined.m_axis_min > 0.99 and joined.m_alpha > 0.99);
         PPR_TEST_ASSERT(detached.m_axis_min < 0.99 and detached.m_alpha < 0.99);
         // The two references must also stay distinguishable, not merely on one side of
@@ -10842,10 +10899,48 @@ namespace pP::tests::detail::WorldLightingMaterial {
         {0.125, 0.375},
     }};
 
+    // F at one distance in RASTER SAMPLES from the marker's centre, restated from
+    // grid_particle_density.slang particleMarkerCoverage: saturate((R - d)/(R - core))
+    // with R = 1.0 and core = 0.5 raster samples, i.e. the design's 2/3/4 content-pixel
+    // diameters converted by kMarkerContentPixelsPerRasterSample. Exactly 1 at the
+    // opaque core radius, exactly .5 at the half-coverage radius, exactly 0 at the
+    // coverage radius.
+    [[nodiscard]] double markerCoverageAtDistance(const double distance_px) {
+        const double span = kMarkerRadiusPx - kMarkerCoreRadiusPx;
+        return std::clamp((kMarkerRadiusPx - distance_px) / span, 0.0, 1.0);
+    }
+
+    // The analytic resolved PEAK of the marker at a known subpixel phase: the largest
+    // four-sample mean of F over the pixels around a particle that sits `offset_px`
+    // raster samples in -x from its containing pixel's centre (the fixture's +x camera
+    // shift moves the dot left). This is the closed form the subpixel probe measures,
+    // not a fitted value: 1.0 at the centred phase, .916146 at a quarter sample and
+    // .678459 at a half sample, with the profile's own worst phase (a pixel corner) at
+    // .455325. It also states the mechanism: a whole pixel reads 1 only while all four
+    // of its samples - a square of circumradius hypot(.125,.375) = .39528 raster
+    // samples about the pixel centre - stay inside the .5-raster-sample opaque core.
+    [[nodiscard]] double markerAnalyticPeak(const double offset_px) {
+        const double particle_x = -offset_px;
+        double peak = 0.0;
+        for (int pixel_y = -2; pixel_y <= 2; ++pixel_y) {
+            for (int pixel_x = -2; pixel_x <= 2; ++pixel_x) {
+                double sum = 0.0;
+                for (const auto &offset: kMarkerSampleOffsets) {
+                    sum += markerCoverageAtDistance(
+                        std::hypot(particle_x - (double(pixel_x) + offset[0u]), 0.0 - (double(pixel_y) + offset[1u])));
+                }
+
+                peak = (std::max) (peak, sum * 0.25);
+            }
+        }
+
+        return peak;
+    }
+
     // F at one scene sample of a pixel, restated from the read-back winner record:
-    // clamp(2 - d, 0, 1) with d measured from the stored nearest centre to the
-    // sample's own position inside that pixel. This is the shader's arithmetic, not
-    // a fitted approximation of it.
+    // the same profile, with d measured from the stored nearest centre to the
+    // sample's own position inside that pixel, both in raster samples. This is the
+    // shader's arithmetic, not a fitted approximation of it.
     [[nodiscard]] double markerCoverageAtSample(
         const DensityFrameResult &frame, const u32 x, const u32 y, const double offset_x, const double offset_y) {
         const std::array<double, 4u> &record = frame.m_marker[std::size_t{y} * frame.m_raster + x];
@@ -10855,7 +10950,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         const double dx = record[0u] - offset_x;
         const double dy = record[1u] - offset_y;
-        return std::clamp(kMarkerRadiusPx - std::sqrt(dx * dx + dy * dy), 0.0, 1.0);
+        return markerCoverageAtDistance(std::sqrt(dx * dx + dy * dy));
     }
 
     // Diagnostic record of the field at one span: every texel whose accumulation or
@@ -10895,16 +10990,17 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_surface_marker_keeps_an_isolated_particle_at_every_span) {
         // Revision 8-B: an unoccluded particle in the viewport interior keeps a
-        // radius-1 opaque disc and a diameter-3 half-coverage footprint at every
-        // zoom, because a separate unfiltered screen-space marker is unioned with the
+        // content-pixel dot - a 2-content-pixel opaque core, a 3-content-pixel
+        // half-coverage diameter and a 4-content-pixel outer diameter - at every zoom,
+        // because a separate unfiltered screen-space marker is unioned with the
         // physical body as C = max(B, F). Three references, all at the design's
         // 540-pixel raster and all named in samples per cell (540/S):
         //
-        //   span64   8.4375 px/cell: the filtered body is about 7 px across, so the
-        //            4-pixel marker sits inside it and must win NOWHERE, leaving the
-        //            composite the revision-7 image;
-        //   span220  2.4545 px/cell: the body is about 1.9 px across and the droplet
-        //            survives on its own label;
+        //   span64   8.4375 px/cell: the filtered body is about 7 raster samples
+        //            across, so the 2-raster-sample marker sits inside it and must win
+        //            NOWHERE, leaving the composite the revision-7 image;
+        //   span220  2.4545 px/cell: the body is about 1.9 raster samples across and
+        //            the droplet survives on its own label;
         //   span2048 0.263672 px/cell: the support is 0.1135 px and every quadrature
         //            point of the nearest texel is at rho = 2.203, so the field
         //            provably cannot represent the droplet at all and the marker is
@@ -10912,11 +11008,27 @@ namespace pP::tests::detail::WorldLightingMaterial {
         constexpr double radius_m = 0.28209479177387814;
         constexpr u32 raster = 256u;
 
-        // The design's three radii are one rule, not three tunables: the opaque core
-        // sits one pixel inside the coverage radius and the half-coverage radius one
-        // half pixel inside it.
-        PPR_TEST_ASSERT(kMarkerCoreRadiusPx == kMarkerRadiusPx - 1.0);
-        PPR_TEST_ASSERT(kMarkerHalfCoverageRadiusPx == kMarkerRadiusPx - 0.5);
+        // The design contract is in CONTENT pixels and the shader measures in RASTER
+        // samples, which the presentation grid makes exactly two content pixels each
+        // (resolved = ceil(window/P), raster = ceil(resolved/2)). The three radii are
+        // one rule - the opaque core one content pixel inside the coverage radius, the
+        // half-coverage radius half a content pixel inside it - and the conversion is
+        // the only free parameter.
+        PPR_TEST_ASSERT(kMarkerContentPixelsPerRasterSample == 2.0);
+        PPR_TEST_ASSERT(kMarkerCoreRadiusContentPx == kMarkerOuterRadiusContentPx - 1.0);
+        PPR_TEST_ASSERT(kMarkerHalfCoverageRadiusContentPx == kMarkerOuterRadiusContentPx - 0.5);
+        PPR_TEST_ASSERT(2.0 * kMarkerCoreRadiusContentPx == 2.0);
+        PPR_TEST_ASSERT(2.0 * kMarkerHalfCoverageRadiusContentPx == 3.0);
+        PPR_TEST_ASSERT(2.0 * kMarkerOuterRadiusContentPx == 4.0);
+        PPR_TEST_ASSERT(kMarkerCoreRadiusPx == 0.5 and kMarkerHalfCoverageRadiusPx == 0.75 and kMarkerRadiusPx == 1.0);
+        PPR_TEST_ASSERT(kMarkerQuadRadiusPx == kMarkerRadiusPx + 0.7071067811865476);
+        // The profile at those radii: exactly 1 at the 1-content-pixel opaque core,
+        // exactly .5 at the 1.5-content-pixel half-coverage radius and exactly 0 at the
+        // 2-content-pixel outer radius, with a one-content-pixel ramp.
+        PPR_TEST_ASSERT(markerCoverageAtDistance(kMarkerCoreRadiusPx) == 1.0);
+        PPR_TEST_ASSERT(std::abs(markerCoverageAtDistance(kMarkerHalfCoverageRadiusPx) - 0.5) <= 1.0e-15);
+        PPR_TEST_ASSERT(markerCoverageAtDistance(kMarkerRadiusPx) == 0.0);
+        PPR_TEST_ASSERT(markerCoverageAtDistance(2.0 * kMarkerRadiusPx) == 0.0);
 
         const auto run = [&](const double samples_per_cell) {
             DensityCohortSpec cohort{};
@@ -10951,8 +11063,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(std::hypot(record[0u], record[1u]) <= 0.5 + 1.0e-3);
             PPR_TEST_ASSERT(markerCoverageAtSample(frame, particle_x, particle_y, 0.0, 0.0) >= 1.0 - 1.0e-3);
 
-            // The body coverage B at one scene sample of one pixel, restated from
-            // the smoothed field the composite actually reconstructs.
+            // The binary body occupancy B at one scene sample of one pixel, restated
+            // from the smoothed field the composite actually reconstructs.
             const auto texel = [&](const int ix, const int iy) {
                 SurfaceTexel value{};
                 if (ix < 0 or iy < 0 or ix >= int(raster) or iy >= int(raster)) {
@@ -10985,8 +11097,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
                     return 0.0;
                 }
 
-                return densityContour(
-                    reconstructed.m_density, reconstructed.m_derivative_x, reconstructed.m_derivative_y);
+                return densityOccupancy(reconstructed.m_density);
             };
 
             double worst_marker_excess = -1.0;
@@ -11011,8 +11122,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
 
             // The marker never wins inside this body, and the resolved image is the
-            // revision-7 four-sample body coverage: max(B, F) == B here, so the union
-            // is bit-identical to the body alone.
+            // four-sample body occupancy: max(B, F) == B here, so the union is
+            // bit-identical to the body alone.
             PPR_TEST_ASSERT(worst_marker_excess <= 1.0e-9);
             PPR_TEST_ASSERT(worst_alpha_gap <= 2.0e-3);
             _.log(
@@ -11031,7 +11142,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const std::size_t centre = std::size_t{particle_y} * raster + particle_x;
 
             // The nearest pixel's record and its coverage at the pixel centre: the
-            // guarantee's own quantity (>= 2 - sqrt(2)/... = 1.0 after the clamp).
+            // guarantee's own quantity (a distance of at most .5 raster samples is
+            // inside the .5-raster-sample opaque core, so F == 1 there).
             const std::array<double, 4u> &record = frame.m_marker[centre];
             PPR_TEST_ASSERT(record[2u] == 1.0);
             const double offset = std::hypot(record[0u], record[1u]);
@@ -11039,22 +11151,40 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const double peak_marker = markerCoverageAtSample(frame, particle_x, particle_y, 0.0, 0.0);
             PPR_TEST_ASSERT(peak_marker >= 1.0 - 1.0e-3);
 
-            // The 3-pixel half-coverage axis footprint: the +/-1 pixel centres are
-            // inside the 1.5-px half-coverage radius and the +/-2 ones are outside
-            // the radius-2 support, so the F >= .5 footprint is exactly 3 px across.
-            // The record may still exist at +/-2 - the candidate quad reaches half a
-            // pixel further on purpose - but its coverage there is exactly zero.
-            for (const int axis: {0, 1}) {
-                for (const int direction: {-1, 1}) {
-                    const u32 near_x = u32(int(particle_x) + (axis == 0 ? direction : 0));
-                    const u32 near_y = u32(int(particle_y) + (axis == 1 ? direction : 0));
-                    PPR_TEST_ASSERT(markerCoverageAtSample(frame, near_x, near_y, 0.0, 0.0) >= 1.0 - 1.0e-3);
+            // The record field in the units the shader measures in. A raster texel
+            // holds a record exactly when its own centre is inside the candidate
+            // bound, its stored offset is that centre's distance to the particle (unorm
+            // quantum 8/65535), and F at that centre is the analytic profile of the
+            // SAME distance. A radius left in content pixels, or a missing /2, breaks
+            // the equality at every texel past the first.
+            const double centre_x = double(particle_x) + 0.5;
+            const double centre_y = double(particle_y) + 0.5;
+            double worst_record_gap = 0.0;
+            double worst_offset_gap = 0.0;
+            u32 records = 0u;
+            for (u32 y = particle_y - 4u; y <= particle_y + 4u; ++y) {
+                for (u32 x = particle_x - 4u; x <= particle_x + 4u; ++x) {
+                    const std::array<double, 4u> &here = frame.m_marker[std::size_t{y} * raster + x];
+                    const double distance = std::hypot(double(x) + 0.5 - centre_x, double(y) + 0.5 - centre_y);
+                    if (here[2u] <= 0.0) {
+                        PPR_TEST_ASSERT(distance > kMarkerQuadRadiusPx - 1.0e-3);
+                        continue;
+                    }
 
-                    const u32 far_x = u32(int(particle_x) + (axis == 0 ? 2 * direction : 0));
-                    const u32 far_y = u32(int(particle_y) + (axis == 1 ? 2 * direction : 0));
-                    PPR_TEST_ASSERT(markerCoverageAtSample(frame, far_x, far_y, 0.0, 0.0) <= 1.0e-3);
+                    ++records;
+                    PPR_TEST_ASSERT(distance <= kMarkerQuadRadiusPx + 1.0e-3);
+                    const double stored = std::hypot(here[0u], here[1u]);
+                    worst_offset_gap = (std::max) (worst_offset_gap, std::abs(stored - distance));
+                    worst_record_gap = (std::max) (worst_record_gap,
+                        std::abs(markerCoverageAtSample(frame, x, y, 0.0, 0.0) - markerCoverageAtDistance(distance)));
                 }
             }
+
+            // The candidate bound is a circle of 1.7071 raster samples, so exactly the
+            // 3x3 block of texel centres around the particle holds a record.
+            PPR_TEST_ASSERT(records == 9u);
+            PPR_TEST_ASSERT(worst_offset_gap <= 2.0e-3);
+            PPR_TEST_ASSERT(worst_record_gap <= 3.0e-3);
 
             u32 labelled = 0u;
             u32 covered = 0u;
@@ -11067,9 +11197,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 sum_alpha += double(frame.m_composite[pixel * 4u + 3u]);
             }
 
-            // The resolved dot along +x: the centre and its two neighbours are the
-            // 3-pixel half-coverage dot, and the 4th pixel is the bounded outer
-            // fringe the radius-2 disc adds.
+            // The resolved dot along +x in raster samples. The centre pixel is fully
+            // covered at THIS phase because all four of its samples sit at radius
+            // hypot(.125,.375) = .39528 raster samples from its centre, inside the
+            // .5-raster-sample opaque core, so each reaches F == 1. (A quarter-sample
+            // phase moves that worst sample to .53028 and the pixel reads .916146;
+            // the phase-independent floor is the subpixel probe's subject.) The +1
+            // sample pixel is the partial outer fringe and +2 samples - four content
+            // pixels - is already outside the outer radius.
             std::array<double, 3u> resolved_axis{};
             for (u32 step = 0u; step < 3u; ++step) {
                 resolved_axis[step] = double(
@@ -11079,11 +11214,11 @@ namespace pP::tests::detail::WorldLightingMaterial {
             _.log(
                 std::format(
                     "WORLD_LIGHTING_MATERIAL particle_surface_marker_span samples_per_cell={:.6f} span_cells={:.3f} "
-                    "centre_offset={:.5f} marker_peak={:.4f} resolved=({:.4f},{:.4f},{:.4f}) "
-                    "covered={} labelled={} alpha_sum={:.4f} {}",
+                    "centre_offset={:.5f} marker_peak={:.4f} resolved=({:.4f},{:.4f},{:.4f}) records={} "
+                    "record_gap={:.6f} offset_gap={:.6f} covered={} labelled={} alpha_sum={:.4f} {}",
                     samples_per_cell, 540.0 / samples_per_cell, offset, peak_marker, resolved_axis[0u],
-                    resolved_axis[1u], resolved_axis[2u], covered, labelled, sum_alpha,
-                    describeLabelledTexels(frame, 4u)));
+                    resolved_axis[1u], resolved_axis[2u], records, worst_record_gap, worst_offset_gap, covered,
+                    labelled, sum_alpha, describeLabelledTexels(frame, 4u)));
             return std::array<double, 6u>{
                 peak_marker, resolved_axis[0u], resolved_axis[1u], resolved_axis[2u], double(covered),
                 double(labelled)};
@@ -11129,15 +11264,33 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(labelled == 0u);
             PPR_TEST_ASSERT(peak_density == 0.0);
             PPR_TEST_ASSERT(far[0u] >= 1.0 - 1.0e-3);
-            // A 3-pixel half-coverage dot with a sub-quarter-alpha outer fringe, and
-            // a bounded footprint: never a missing particle and never a larger blob.
-            PPR_TEST_ASSERT(far[2u] >= 0.5);
-            PPR_TEST_ASSERT(far[3u] > 0.0 and far[3u] <= 0.25);
+            // The marker is the ONLY contributor here, so a resolved pixel's alpha is
+            // the mean of its four per-sample coverages of the one profile (the
+            // material is opaque, so opacity multiplies by one).
+            double worst_dot_gap = 0.0;
+            for (u32 y = 0u; y < raster; ++y) {
+                for (u32 x = 0u; x < raster; ++x) {
+                    double resolved = 0.0;
+                    for (const auto &offset: kMarkerSampleOffsets) {
+                        resolved += markerCoverageAtSample(frame, x, y, offset[0u], offset[1u]);
+                    }
+
+                    const double alpha = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
+                    worst_dot_gap = (std::max) (worst_dot_gap, std::abs(alpha - resolved * 0.25));
+                }
+            }
+
+            PPR_TEST_ASSERT(worst_dot_gap <= 2.0e-3);
+            // The resolved dot along +x: fully covered at the centre, a partial outer
+            // fringe at +1 raster sample (two content pixels) and nothing at +2 raster
+            // samples (four content pixels), never a larger blob.
+            PPR_TEST_ASSERT(far[2u] > 0.05 and far[2u] < 0.95);
+            PPR_TEST_ASSERT(far[3u] <= 1.0e-6);
             PPR_TEST_ASSERT(far[4u] >= 1.0 and far[4u] <= 25.0);
         }
 
         // Span220 keeps the droplet's own label: the marker only adds the fringe a
-        // 1.9-px body cannot cover, it does not replace the field.
+        // 1.9-sample body cannot cover, it does not replace the field.
         PPR_TEST_ASSERT(span220[5u] > 0.0);
         PPR_TEST_ASSERT(span64[5u] > 0.0);
     };
@@ -11204,12 +11357,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (particle_surface_marker_is_stable_under_subpixel_translation) {
         // A subpixel camera move must translate the dot, not make it appear and
-        // disappear: the resolved coverage is sample-rate AA of the same radius-2
-        // disc, so its integrated area is stable while its centroid follows the
-        // camera. The marker is recomputed from the camera like the field, and a held
-        // publication at an unchanged camera reproduces it bit for bit. The cohort is
-        // the same past-extinction far reference as the union probe, so every measured
-        // alpha belongs to the marker alone.
+        // disappear: the resolved coverage is the four-sample AA of the same
+        // 1-raster-sample (2-content-pixel) disc, so its integrated area is stable
+        // while its centroid follows the camera. The marker is recomputed from the
+        // camera like the field, and a held publication at an unchanged camera
+        // reproduces it bit for bit. The cohort is the same past-extinction far
+        // reference as the union probe, so every measured alpha belongs to the marker
+        // alone.
         constexpr double radius_m = 0.28209479177387814;
         constexpr u32 raster = 256u;
 
@@ -11255,12 +11409,25 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const auto base = run(0.0, 1u);
         PPR_TEST_ASSERT(base.size() == 1u);
         const auto base_measure = measure(base[0]);
-        // A radius-2 disc has a 4-pixel outer diameter and a 3-pixel half-coverage
-        // one; the integral of F over the plane is 8 pi / 3 = 8.377 px^2, so the
-        // resolved alpha of this AA'd dot sums to about 8.4.
+        // A 1-raster-sample (2-content-pixel) coverage radius with the 2:1 ramp
+        // profile integrates to 4 pi / 6 = 2 pi / 3 = 2.094 over the plane, but the
+        // 4-per-pixel sample lattice resolves it to 1.8213 / 1.8408 / 1.8603 at the
+        // three probed phases (a ~13% lattice undershoot, computed from the same
+        // profile), and the half-covered pixel count is 1 / 1 / 2. The windows below
+        // are those discrete values: they exclude both a vanished dot and a
+        // revision-8-sized one (~8.4 area, 3+ half-covered pixels).
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_marker_base area={:.6f} peak={:.6f} "
+                "half_covered={} centroid_x={:.4f} analytic_peak={:.6f}",
+                base_measure[0u], base_measure[1u], base_measure[2u], base_measure[3u], markerAnalyticPeak(0.0)));
+        // At the exactly centred phase all four samples of the pixel sit at
+        // .39528 raster samples from the particle, inside the .5-raster-sample opaque
+        // core, so every sample reads exactly 1 and the pixel resolves to 1. This is
+        // the one phase where alpha == 1 is a property of the contract.
         PPR_TEST_ASSERT(base_measure[1u] >= 1.0 - 1.0e-3);
-        PPR_TEST_ASSERT(base_measure[0u] >= 1.5 and base_measure[0u] <= 16.0);
-        PPR_TEST_ASSERT(base_measure[2u] >= 3.0 and base_measure[2u] <= 16.0);
+        PPR_TEST_ASSERT(base_measure[0u] >= 1.5 and base_measure[0u] <= 2.2);
+        PPR_TEST_ASSERT(base_measure[2u] >= 1.0 and base_measure[2u] <= 3.0);
 
         std::array<double, 3u> areas{};
         for (u32 step = 0u; step < 3u; ++step) {
@@ -11268,10 +11435,40 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const auto moved = step == 0u ? base : run(offset_px, 1u);
             PPR_TEST_ASSERT(moved.size() == 1u);
             const auto measured = measure(moved[0]);
-            // The dot never disappears and never doubles: the peak stays opaque and
-            // the half-covered pixel count stays bounded.
-            PPR_TEST_ASSERT(measured[1u] >= 1.0 - 1.0e-3);
-            PPR_TEST_ASSERT(measured[2u] >= 3.0 and measured[2u] <= 16.0);
+            const double analytic_peak = markerAnalyticPeak(offset_px);
+            // Logged before asserting: a drifting peak reports both sides.
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_marker_phase offset_px={:.3f} peak={:.6f} "
+                    "analytic_peak={:.6f} area={:.6f} half_covered={}",
+                    offset_px, measured[1u], analytic_peak, measured[0u], measured[2u]));
+            // A peak of 1 requires all FOUR samples of one pixel inside the
+            // 1-content-pixel (.5-raster-sample) opaque core. Those four samples form a
+            // square of circumradius hypot(.125,.375) = .39528 raster samples about the
+            // pixel centre, so the farthest one is already .39528 away and a
+            // displacement grows it by up to the full offset: a whole pixel saturates
+            // only while the particle stays within .10472 raster samples of a pixel
+            // centre (.13501 in the most favourable direction). It is therefore NOT a
+            // phase-independent property, and the previous "peak == 1 at every phase"
+            // assertion only held for the revision-8 dot, whose 1-raster-sample core
+            // still covered the farthest sample at the three phases this probe visits
+            // (.53028 at the half-sample phase). The phase-independent guarantees, both
+            // derived from the profile alone, are:
+            //   * the nearest sample is never farther than the 4x lattice's covering
+            //     radius, .39276 raster samples at a pixel corner, which is inside the
+            //     .5 raster sample core; that sample is fully covered, so the
+            //     containing pixel keeps alpha >= .25 and the dot never disappears;
+            //   * the profile's worst phase is the pixel corner, where the resolved
+            //     peak is exactly .455325, so no phase falls below .45.
+            // The exact resolved peak at each probed phase is pinned instead of a
+            // constant, so a radius, record or sample-offset regression still fails.
+            PPR_TEST_ASSERT(measured[1u] >= 0.45);
+            PPR_TEST_ASSERT(std::abs(measured[1u] - analytic_peak) <= 2.0e-3);
+            // The half-covered count is 1 / 1 / 2 at the three probed phases (only a
+            // pixel holding all four samples inside the core reaches .5 at the centred
+            // and quarter phases; the half-sample phase splits one full pixel across
+            // the two it straddles), so 3 is already a revision-8-sized blob.
+            PPR_TEST_ASSERT(measured[2u] >= 1.0 and measured[2u] <= 3.0);
             areas[step] = measured[0u];
 
             // The dot follows the camera: its alpha-weighted centroid moves by the
@@ -11279,16 +11476,19 @@ namespace pP::tests::detail::WorldLightingMaterial {
             // camera shift.
             if (step != 0u) {
                 const double moved_x = measured[3u] - base_measure[3u];
-                PPR_TEST_ASSERT(std::abs(std::abs(moved_x) - offset_px) <= 0.05);
-                PPR_TEST_ASSERT(std::abs(measured[4u] - base_measure[4u]) <= 0.05);
+                PPR_TEST_ASSERT(std::abs(std::abs(moved_x) - offset_px) <= 0.1);
+                PPR_TEST_ASSERT(std::abs(measured[4u] - base_measure[4u]) <= 0.1);
             }
         }
 
-        // No flicker between 2 and 3 px: the integrated coverage of the same disc is
-        // stable across the phases instead of alternating between two footprints.
+        // No flicker: the integrated coverage of the same disc is stable across the
+        // phases instead of alternating between two footprints. A dot 2 raster samples
+        // across is sampled by 2x2 pixels of the 4-per-pixel lattice, so its lattice
+        // sum varies more with phase than the wider revision-8 dot did; the window
+        // below is a no-flicker bound, not an exact area.
         const double smallest = (std::min) ({areas[0u], areas[1u], areas[2u]});
         const double largest = (std::max) ({areas[0u], areas[1u], areas[2u]});
-        PPR_TEST_ASSERT(largest <= smallest * 1.15);
+        PPR_TEST_ASSERT(largest <= smallest * 1.25);
 
         // Held publication, unchanged camera: the marker and the composite are
         // reproduced bit for bit; a camera move changes the record, so nothing is a

@@ -1752,11 +1752,13 @@ export namespace pP {
         static constexpr u32 kParticleSurfacePhaseLiquid{1u};
         // No admitted phase: every particle keeps its existing direct class.
         static constexpr u32 kParticleSurfaceNoPhase{0u};
-        // grid_particle_density.slang kParticleMarkerQuadRadius, in raster pixels.
-        // The particle cull margin uses it so a marker whose quad reaches into the
-        // viewport is never compacted away, and the marker vertex derives the same
-        // world extent from the frame's own pixel size.
-        static constexpr float kParticleMarkerQuadRadiusPixels{2.70710678f};
+        // grid_particle_density.slang kParticleMarkerQuadRadius, in raster
+        // samples: the marker's 1.0-raster-sample (2-content-pixel) coverage
+        // radius plus the half-pixel diagonal that keeps every sample with F > 0
+        // represented. The particle cull margin uses it so a marker whose quad
+        // reaches into the viewport is never compacted away, and the marker vertex
+        // derives the same world extent from the frame's own pixel size.
+        static constexpr float kParticleMarkerQuadRadiusPixels{1.70710678f};
 
         // The admitted surface phases and classes. Derived from the palette and
         // the publication's material inventory, never from a user selector or a
@@ -1893,7 +1895,8 @@ export namespace pP {
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_select_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_accumulate_program{};
         // The minimum-presence candidate program: the same prepared instances as
-        // the splat passes, a radius-2 quad and a winner record instead of a label.
+        // the splat passes, a kParticleMarkerQuadRadius quad and a winner record
+        // instead of a label.
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_marker_program{};
         // One composite program for both liquid classes: only the pipeline's
         // depth state and the lane's composite-class constant differ.

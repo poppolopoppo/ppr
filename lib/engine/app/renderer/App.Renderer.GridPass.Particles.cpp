@@ -616,7 +616,8 @@ namespace pP {
 
         // The guard is the marker's own candidate radius, not one density pixel: a
         // particle whose reconstructed support is far smaller than a pixel must
-        // still keep its radius-2 marker quad when that quad reaches the viewport.
+        // still keep its 1.7071-raster-sample marker quad when that quad reaches
+        // the viewport.
         key.m_guard = m_world.m_particle_surface.admitted()
                           ? kParticleMarkerQuadRadiusPixels * particleSurfacePixelWorld_(m_camera_view)
                           : 0.0f;
