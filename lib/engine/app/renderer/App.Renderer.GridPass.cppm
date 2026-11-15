@@ -810,9 +810,10 @@ export namespace pP {
         // ------------------------------------------------------------------
         // One reconstruction method for the admitted phases over the same
         // prepared rows and indirect arguments the direct classes use:
-        // a label selection pass (L + Z), an attribute accumulation pass (Q + G)
-        // and one per-scene-sample deferred composite per admitted class, all at
-        // the lane's existing depth class slot.
+        // a minimum-presence marker pass (nearest centre + material), a label
+        // selection pass (L + Z), an attribute accumulation pass (Q + G) and one
+        // per-scene-sample deferred composite per admitted class, all at the lane's
+        // existing depth class slot.
         //
         // Admission is the publication's phase mask, not one material id: EVERY
         // valid liquid material present in the publication (visible or not) is
@@ -861,7 +862,8 @@ export namespace pP {
         // No production path reads these textures on the CPU. The first four are
         // the accumulation field (the operator the splat passes produce); the
         // `m_filtered_*` trio is the smoothed field the composite actually
-        // reconstructs, so a probe can compare before and after the filter.
+        // reconstructs, so a probe can compare before and after the filter;
+        // `m_marker` is the minimum-presence winner record the composite unions in.
         struct ParticleSurfaceTargetsForTest {
             rhi::ITexture *m_label{};
             rhi::ITexture *m_depth{};
@@ -870,6 +872,7 @@ export namespace pP {
             rhi::ITexture *m_filtered_label{};
             rhi::ITexture *m_filtered_base{};
             rhi::ITexture *m_filtered_normal{};
+            rhi::ITexture *m_marker{};
             u32 m_phase_mask{};
             u32 m_class_mask{};
             float m_pixel_world{};
@@ -883,7 +886,7 @@ export namespace pP {
             return {
                 slot.m_label.get(), slot.m_depth.get(), slot.m_base.get(), slot.m_normal.get(),
                 slot.m_vertical.m_label.get(), slot.m_vertical.m_base.get(), slot.m_vertical.m_normal.get(),
-                m_world.m_particle_surface.m_phase_mask, m_world.m_particle_surface.m_class_mask,
+                slot.m_marker.get(), m_world.m_particle_surface.m_phase_mask, m_world.m_particle_surface.m_class_mask,
                 m_particle_surface_pixel_world, m_particle_surface_filter_samples_per_cell,
                 m_particle_surface_filter_halo};
         }
@@ -1749,6 +1752,11 @@ export namespace pP {
         static constexpr u32 kParticleSurfacePhaseLiquid{1u};
         // No admitted phase: every particle keeps its existing direct class.
         static constexpr u32 kParticleSurfaceNoPhase{0u};
+        // grid_particle_density.slang kParticleMarkerQuadRadius, in raster pixels.
+        // The particle cull margin uses it so a marker whose quad reaches into the
+        // viewport is never compacted away, and the marker vertex derives the same
+        // world extent from the frame's own pixel size.
+        static constexpr float kParticleMarkerQuadRadiusPixels{2.70710678f};
 
         // The admitted surface phases and classes. Derived from the palette and
         // the publication's material inventory, never from a user selector or a
@@ -1789,9 +1797,9 @@ export namespace pP {
         };
 
         // One completion-selected surface bundle: the selection label and depth,
-        // the Q/G attribute pair and the two separable smoothing scratch bundles.
-        // Replaced only after this slot's last reader completed; an in-flight
-        // bundle is never reused.
+        // the Q/G attribute pair, the marker winner record and the two separable
+        // smoothing scratch bundles. Replaced only after this slot's last reader
+        // completed; an in-flight bundle is never reused.
         struct ParticleSurfaceSlot {
             rhi::ComPtr<rhi::ITexture> m_label{};
             rhi::ComPtr<rhi::ITextureView> m_label_view{};
@@ -1801,6 +1809,13 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_base_view{};
             rhi::ComPtr<rhi::ITexture> m_normal{};
             rhi::ComPtr<rhi::ITextureView> m_normal_view{};
+            // The minimum-presence winner record the composite reads beside the
+            // filtered field: one RGBA16Unorm texel per raster pixel, 8 bytes. .xy
+            // is the nearest liquid particle's centre as an offset from the texel
+            // centre over +/-4 pixels, .z its material id as m/65535, .w unused.
+            // Rewritten by the marker pass every rendered frame.
+            rhi::ComPtr<rhi::ITexture> m_marker{};
+            rhi::ComPtr<rhi::ITextureView> m_marker_view{};
             // Horizontal-pass output, then the final filtered field the composite
             // reconstructs. 40 bytes per raster texel of added scratch per slot.
             ParticleSurfaceBundle m_horizontal{};
@@ -1861,10 +1876,10 @@ export namespace pP {
         // accumulation root never samples it.
         [[nodiscard]] std::error_code bindParticleSurfaceInputs_(
             rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
-        // The three surface pipeline states. Selection is an integer/no-blend
-        // strict-Less depth-writing pass, attributes are additive One/One on every
-        // channel with no depth, and the composite is premultiplied One/InvSrcAlpha
-        // against the scene plane depth.
+        // The three surface pipeline states. Selection (the label pass and the
+        // marker pass) is an integer/no-blend strict-Less depth-writing pass,
+        // attributes are additive One/One on every channel with no depth, and the
+        // composite is premultiplied One/InvSrcAlpha against the scene plane depth.
         enum class EParticleSurfacePipelineState : u8 {
             selection,
             attributes,
@@ -1877,11 +1892,16 @@ export namespace pP {
 
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_select_program{};
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_accumulate_program{};
+        // The minimum-presence candidate program: the same prepared instances as
+        // the splat passes, a radius-2 quad and a winner record instead of a label.
+        rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_marker_program{};
         // One composite program for both liquid classes: only the pipeline's
         // depth state and the lane's composite-class constant differ.
         rhi::ComPtr<rhi::IShaderProgram> m_particle_surface_composite_program{};
         std::optional<RenderPipelineKey> m_particle_surface_select_key{};
         std::optional<GridCachedPipeline> m_particle_surface_select_pipeline{};
+        std::optional<RenderPipelineKey> m_particle_surface_marker_key{};
+        std::optional<GridCachedPipeline> m_particle_surface_marker_pipeline{};
         std::optional<RenderPipelineKey> m_particle_surface_accumulate_key{};
         std::optional<GridCachedPipeline> m_particle_surface_accumulate_pipeline{};
         std::optional<RenderPipelineKey> m_particle_surface_composite_opaque_key{};

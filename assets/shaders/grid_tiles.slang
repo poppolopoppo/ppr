@@ -1605,7 +1605,13 @@ struct ParticleVertexOutput {
 // buffers its own entry reads. The direct entries pass false and keep their
 // byte-identical geometry, class rejection and admitted-phase exclusion: a
 // routed row is never drawn both directly and reconstructed.
-ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface,uint phase_mask,float pad) {
+//
+// `minimum_extent` is a world-space floor on the quad's own half extent. The
+// presence marker passes its radius-2 bounds here, because at far zoom the
+// reconstruction support is narrower than the pixel the marker must still cover;
+// every other entry passes zero and keeps its exact previous geometry.
+ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface,uint phase_mask,float pad,
+    float minimum_extent) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),
         float2(-1,-1),float2(1,1),float2(-1,1)};
     ParticleGpu particle=g_particles[instance];
@@ -1714,6 +1720,7 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
         ? particle.m_radius_m*(kParticleSurfaceRadiusScale*conic_support)+pad
         : (draw_class==kParticleDrawGas ? particle.m_radius_m*(64.0/62.0)
             : particle.m_radius_m*(kParticleSupportScale*stretch));
+    extent=max(extent,minimum_extent);
     float3 world=float3(particle.m_position,0)+(right*corners[vertex].x+up*corners[vertex].y)*extent;
     output.position=mul(float4(world,1),g_grid_frame.m_view_projection);
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
@@ -1734,7 +1741,7 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
 StructuredBuffer<uint> g_particle_ids;
 
 ParticleVertexOutput particleVertex(uint vertex,uint instance) {
-    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0);
+    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0,0.0);
 }
 
 [shader("vertex")]
@@ -2233,23 +2240,30 @@ GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint i
 }
 
 // ------------------------------------------------------------------
-// screen-space particle surface: label selection, attributes, composite
+// screen-space particle surface: marker, label selection, attributes, composite
 // ------------------------------------------------------------------
 // One reconstruction method for the admitted phases (rev. 4 section 9, rev. 5
-// radius, rev. 7 world-space smoothing). Per rendered frame and phase bundle:
+// radius, rev. 7 world-space smoothing, rev. 8 presence marker). Per rendered
+// frame and phase bundle:
 //
-//   1. label selection   L = R32Uint winning material, Z = D32Float minimum
+//   1. marker            M = RGBA16Unorm nearest liquid centre (pixel offset from
+//                        the texel centre) + its material, Z = nearest pixel
+//                        distance. Blend off, strict Less, depth writes, one
+//                        radius-2 candidate quad per admitted row.
+//   2. label selection   L = R32Uint winning material, Z = D32Float minimum
 //                        eligible rho^2. Blend off, strict Less, depth writes.
-//   2. accumulation      Q = (sum w*base.rgb, sum w) and
+//   3. accumulation      Q = (sum w*base.rgb, sum w) and
 //                        G = (sum w*unit normal.xyz, sum w*alpha)
 //                        One/One/Add on every channel, no depth attachment,
 //                        foreign-label and terrain rejection per splat.
-//   3. smoothing         two separable tiled label-masked Gaussian passes,
+//   4. smoothing         two separable tiled label-masked Gaussian passes,
 //                        sigma = 0.15 world cell, +/-3 sigma, horizontal into
 //                        one scratch L/Q/G bundle and vertical into the next.
-//   4. composite         categorical four-tap reconstruction of the FILTERED
+//   5. composite         categorical four-tap reconstruction of the FILTERED
 //                        L/Q/G with the analytic quotient derivative of D, one
-//                        deferred response evaluation per surviving sample.
+//                        deferred response evaluation per surviving sample, and
+//                        the union C = max(B, F) that keeps a particle visible
+//                        where the density field cannot resolve it.
 //
 // The kernel, quadrature and contour mathematics live in
 // grid_particle_density.slang. There is no temporal history, no blur of lit
@@ -2267,6 +2281,13 @@ Texture2D<uint> g_particle_label;
 // four texels it differentiates.
 Texture2D<float4> g_particle_base;
 Texture2D<float4> g_particle_normal;
+// The minimum-presence winner record of the current frame's marker pass, one
+// texel per raster pixel: .xy is the nearest liquid particle's screen-space
+// centre as an offset from THIS texel's centre in pixels (unorm, +/-4 px), .z is
+// that particle's palette material id (unorm /65535) and .w is unused. A zero
+// material is the empty record. The composite completes the distance with its own
+// sample position, so the marker is never a stored coverage value.
+Texture2D<float4> g_particle_marker;
 
 // The authoritative opaque-terrain exclusion at one world-plane position, shared
 // by the four splat quadrature points and the per-sample composite. A position is
@@ -2287,6 +2308,66 @@ bool terrainExcludesDensity(float2 fine_position) {
 }
 
 // ------------------------------------------------------------------
+// minimum-presence marker selection
+// ------------------------------------------------------------------
+
+// One radius-2 candidate quad per admitted liquid row, over the same prepared
+// instances and indirect arguments the splat passes use. The geometry is the
+// shared splat quad with the marker's own screen-space floor, because the
+// reconstruction support is narrower than a pixel as soon as the field can no
+// longer resolve the row: a candidate must exist even where no density texel does.
+[shader("vertex")]
+ParticleVertexOutput vertexParticleSurfaceMarker(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_phase_mask,
+        g_particle_surface.m_pixel_world,kParticleMarkerQuadRadius*g_particle_surface.m_pixel_world);
+}
+
+struct ParticleSurfaceMarkerOutput {
+    float4 m_record:SV_Target0;
+    // The nearest candidate wins, exactly like the label selection: the synthetic
+    // distance is the pixel distance to the particle centre, scaled by 1/4 so
+    // every in-quad distance stays strictly below the 1.0 clear value. An exact
+    // tie keeps the first stable instance the rasteriser delivers.
+    float m_depth:SV_Depth;
+};
+
+// One fragment per raster texel. It always writes the record: unlike the label
+// selection there is no eligibility test, because the marker's whole purpose is
+// the row whose quadrature points are all outside the texel. Terrain occlusion is
+// NOT tested here — the composite applies the same per-sample exclusion to the
+// marker that it applies to the field, so an occluded dot cannot cross an opaque
+// cell, and a marker never influences the label or the density.
+[shader("fragment")]
+ParticleSurfaceMarkerOutput fragmentParticleSurfaceMarker(ParticleVertexOutput input) {
+    ParticleSurfaceMarkerOutput output;
+    output.m_record=float4(0.0);
+    output.m_depth=1.0;
+
+    // The particle centre is the quad point whose local_m is zero. local_m is
+    // affine in the raster position over one candidate quad, so the two screen
+    // derivatives invert to the pixel offset of the centre from this fragment:
+    // local_m = [ddx(local_m) ddy(local_m)] * offset_px. The projection is a
+    // homography, so this is the exact first-order offset at this pixel and the
+    // same interpolation the splat fragment already differentiates.
+    float2 local_x=ddx(input.local_m);
+    float2 local_y=ddy(input.local_m);
+    float determinant=local_x.x*local_y.y-local_x.y*local_y.x;
+    if (!(abs(determinant)>0.0)) discard;
+
+    float2 offset=float2(local_y.y*input.local_m.x-local_y.x*input.local_m.y,
+        local_x.x*input.local_m.y-local_x.y*input.local_m.x)/determinant;
+    float distance_px=length(offset);
+    // Only a pixel whose CENTRE is inside the candidate radius can hold a sample
+    // with positive coverage, so nothing farther is recorded. That also keeps the
+    // unorm offset inside its +/-4-pixel range when the density support quad is the
+    // larger of the two.
+    if (!(distance_px<=kParticleMarkerQuadRadius)) discard;
+    output.m_record=float4(particleMarkerEncodeCentre(offset),particleMarkerEncodeMaterial(input.material),0.0);
+    output.m_depth=min(distance_px*0.25,kParticleDensityDepthCeiling);
+    return output;
+}
+
+// ------------------------------------------------------------------
 // label selection
 // ------------------------------------------------------------------
 
@@ -2296,7 +2377,7 @@ bool terrainExcludesDensity(float2 fine_position) {
 [shader("vertex")]
 ParticleVertexOutput vertexParticleSurfaceSplat(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
     return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_phase_mask,
-        g_particle_surface.m_pixel_world);
+        g_particle_surface.m_pixel_world,0.0);
 }
 
 // One fragment per raster texel. A candidate is eligible only if at least one of
@@ -2583,16 +2664,89 @@ bool particleSurfaceReconstruct(float2 uv,out ParticleSurfaceReconstruction resu
     return true;
 }
 
+// The presence marker of one scene sample: the nearest liquid particle's coverage
+// and the material that owns it, both read from the winner record at this sample's
+// own raster pixel. The stored centre is a pixel offset from that texel's centre,
+// so the sample's sub-pixel position completes the distance; nothing is filtered
+// and no coverage value is stored, which is what a half-resolution presence image
+// could not preserve.
+struct ParticleSurfaceMarker {
+    float m_coverage;
+    uint m_material;
+    float2 m_raster;
+};
+
+// F at this sample, or zero when no candidate owns the pixel. The record is only
+// a candidate: it still belongs to the class and ownership rules the field uses,
+// so a marker never shades through the other composite and never paints a sample
+// the field already assigns to the other class.
+bool particleSurfaceMarkerAt(float2 uv,out ParticleSurfaceMarker result) {
+    result=(ParticleSurfaceMarker)0;
+
+    uint width,height;
+    g_particle_marker.GetDimensions(width,height);
+    if (width==0u||height==0u) return false;
+
+    float2 raster=uv*float2(width,height);
+    if (any(raster<0.0)||any(raster>=float2(width,height))) return false;
+    int2 texel=int2(floor(raster));
+
+    float4 record=g_particle_marker.Load(int3(texel.x,texel.y,0));
+    uint material=particleMarkerDecodeMaterial(record.z);
+    if (material==0u) return false;
+
+    // The marker carries an id, never attributes: an id the palette does not carry
+    // and an id of the other class write nothing, exactly like the label rule.
+    GridVisual visual=g_terrain_visuals[min(material,65535u)];
+    if (visual.m_material_id!=material) return false;
+    if (particleSurfaceClass(material)!=g_particle_surface.m_composite_class) return false;
+    uint nearest=g_particle_label.Load(int3(texel.x,texel.y,0));
+    if (nearest!=0u&&particleSurfaceClass(nearest)!=g_particle_surface.m_composite_class) return false;
+
+    float2 sample_offset=raster-(float2(texel)+0.5);
+    float distance_px=length(particleMarkerDecodeCentre(record.xy)-sample_offset);
+    result.m_coverage=particleMarkerCoverage(distance_px);
+    result.m_material=material;
+    result.m_raster=raster;
+    return result.m_coverage>0.0;
+}
+
+// The marker's own material at a resolution the field cannot reach: the element's
+// mean authored reflectance, a flat facing normal and the palette's own opacity
+// rule. No element texture is sampled, because a dot whose geometry is a lower
+// bound on presence has no reliable surface to texture; its coverage is what the
+// marker guarantees, not its albedo. An optical material keeps its authored
+// opacity, so the dot can never become a fake opaque surface.
+VisibleSurfaceSample particleSurfaceMarkerSample(uint material) {
+    GridVisual visual=g_terrain_visuals[min(material,65535u)];
+    float4 tint=diagnosticTint(visual.m_color_rgba,1.0);
+    // The element's own mean authored albedo, so the dot carries the material's
+    // colour at subpixel scale. A record without a filtered mean (an untextured
+    // element) keeps its authored tint instead of shading the dot black.
+    float3 mean=float3(visual.m_filtered_mean_r,visual.m_filtered_mean_g,visual.m_filtered_mean_b);
+    if (!any(mean>0.0)) mean=float3(1.0);
+    VisibleSurfaceSample sample=(VisibleSurfaceSample)0;
+    sample.m_base=float4(tint.rgb*mean,1.0);
+    sample.m_normal=float3(0.0,0.0,1.0);
+    sample.m_thermal=float3(0.0);
+    sample.m_tint_alpha=tint.a;
+    sample.m_alpha=1.0;
+    sample.m_alpha_reconstructed=false;
+    return sample;
+}
+
 // One invocation per scene sample. The categorical reconstruction supplies D and
 // the same-label attribute means; the density threshold and its one-pixel
-// derivative width form C before any lighting. The reconstructed base, normal and
-// alpha then shade ONCE through the shared liquid response at this sample's real
-// world position and palette material, and the result is premultiplied exactly
-// once. No element texture, seed or UV is sampled here. The empty field and the
-// negligible-coverage floor discard before lighting, which also suppresses the
-// opaque class's plane-depth write. The authoritative terrain exclusion is
-// rechecked at the actual sample, so interpolation can never paint fluid over
-// opaque terrain.
+// derivative width form B before any lighting. The presence marker F is unioned
+// once as C = max(B, F), and B wins an exact tie, so a resolved body keeps its own
+// coverage and attributes bit for bit and the marker only ever adds the presence a
+// vanished field cannot express. The winning sample's base, normal and alpha then
+// shade ONCE through the shared liquid response at this sample's real world
+// position and palette material, and the result is premultiplied exactly once. No
+// element texture, seed or UV is sampled here. The negligible-coverage floor
+// discards before lighting, which also suppresses the opaque class's plane-depth
+// write. The authoritative terrain exclusion is rechecked at the actual sample, so
+// interpolation can never paint fluid or a marker over opaque terrain.
 // `uv` and `fine` are evaluated by the entry point: a sample-rate interpolation
 // must read the entry's own varyings, so it cannot be performed inside a helper.
 float4 particleSurfaceComposite(float2 uv,float2 fine,SamplerState.Handle g_sampler) {
@@ -2600,26 +2754,43 @@ float4 particleSurfaceComposite(float2 uv,float2 fine,SamplerState.Handle g_samp
 
     ParticleSurfaceReconstruction reconstruction;
     float derivative_x,derivative_y;
-    if (!particleSurfaceReconstruct(uv,reconstruction,derivative_x,derivative_y)) discard;
-    if (!(reconstruction.m_density>kParticleDensityEpsilon)) discard;
+    const bool body=particleSurfaceReconstruct(uv,reconstruction,derivative_x,derivative_y);
+    float coverage=body&&reconstruction.m_density>kParticleDensityEpsilon
+        ? particleDensityContour(reconstruction.m_density,derivative_x,derivative_y) : 0.0;
 
-    float coverage=particleDensityContour(reconstruction.m_density,derivative_x,derivative_y);
+    ParticleSurfaceMarker marker;
+    const bool marked=particleSurfaceMarkerAt(uv,marker);
+    const bool use_marker=marked&&marker.m_coverage>coverage;
+    if (use_marker) coverage=marker.m_coverage;
     if (!(coverage>kParticleCoverageFloor)) discard;
 
-    // The winning label supplied this sample's parameters; Q/G supplied the
-    // attributes. The mean alpha is already the authored opacity applied once, so
-    // the response must not re-derive it.
+    // The field's own attributes are the source whenever they belong to the winning
+    // particle: either the body won, or the marker won at a sample the field already
+    // resolves with that same material. Only a marker the field lost entirely falls
+    // back to the material's mean.
+    const bool resolved=!use_marker||(body&&reconstruction.m_material==marker.m_material);
     VisibleSurfaceSample sample=(VisibleSurfaceSample)0;
-    sample.m_base=float4(reconstruction.m_base,1.0);
-    sample.m_normal=reconstruction.m_normal;
-    sample.m_thermal=float3(0.0);
-    sample.m_tint_alpha=1.0;
-    sample.m_alpha=reconstruction.m_alpha;
-    sample.m_alpha_reconstructed=true;
-    VisibleSurfaceBackdrop backdrop={reconstruction.m_raster,float2(0.0),false,float3(0.0)};
+    uint material=reconstruction.m_material;
+    float2 raster=reconstruction.m_raster;
+    if (resolved) {
+        // The winning label supplied this sample's parameters; Q/G supplied the
+        // attributes. The mean alpha is already the authored opacity applied once,
+        // so the response must not re-derive it.
+        sample.m_base=float4(reconstruction.m_base,1.0);
+        sample.m_normal=reconstruction.m_normal;
+        sample.m_thermal=float3(0.0);
+        sample.m_tint_alpha=1.0;
+        sample.m_alpha=reconstruction.m_alpha;
+        sample.m_alpha_reconstructed=true;
+    } else {
+        material=marker.m_material;
+        raster=marker.m_raster;
+        sample=particleSurfaceMarkerSample(material);
+    }
+
+    VisibleSurfaceBackdrop backdrop={raster,float2(0.0),false,float3(0.0)};
     CH no_coefficients={};
-    float4 surface=visibleSurfaceResponse(
-        true,false,reconstruction.m_material,0u,fine,sample,no_coefficients,backdrop,g_sampler);
+    float4 surface=visibleSurfaceResponse(true,false,material,0u,fine,sample,no_coefficients,backdrop,g_sampler);
     return float4(coverage*surface.rgb*surface.a,coverage*surface.a);
 }
 

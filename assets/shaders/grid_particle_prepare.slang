@@ -509,7 +509,8 @@ bool visible(PresentationRow particle) {
     // conic support is at most 1.5 * 1.5259 r = 2.288923 r, so both stay inside
     // this shared 3.0625 r cull margin, which also covers the retained 1.5x flow
     // stretch at 3.000 r. When a surface phase is admitted, every row's margin
-    // grows by the one-density-pixel homogeneous guard: the guard is the same
+    // grows by the homogeneous guard of its minimum-presence marker quad (a few
+    // raster pixels in world units, supplied by the host): the guard is the same
     // term as expanding each cull plane by that distance, it never enlarges the
     // drawn support, and it is zero when no phase is routed.
     float radius=particle.radius*kParticleCullRadiusScale+g_particle_prepare.surfaceGuard*float(

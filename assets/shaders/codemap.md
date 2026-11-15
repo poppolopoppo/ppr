@@ -286,12 +286,14 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
 - `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`)
-  and the particle lanes: direct gas/solid classes plus the surface reconstruction's label selection
+  and the particle lanes: direct gas/solid classes plus the surface reconstruction's minimum-presence marker
+  (`vertexParticleSurfaceMarker` + `fragmentParticleSurfaceMarker`), label selection
   (`fragmentParticleSurfaceSelect`), attribute accumulation (`fragmentParticleSurfaceAccumulate`) and
   per-scene-sample deferred composite (`fragmentParticleSurfaceComposite`).
 - `grid_particle_density.slang` - include-only screen-space particle-surface mathematics: the revision-5 shared
   radius (R = 1.525948559 r), A_2 = 10/(7 pi) normalized anisotropic cubic sigmoid, retained 5/28 threshold,
-  squared-radius selection metric and derivative-width contour; constants and pure functions only, consumed by
+  squared-radius selection metric, derivative-width contour and the revision-8 minimum-presence marker
+  (F = clamp(2 - d_px, 0, 1) unioned as max(B, F)); constants and pure functions only, consumed by
   `grid_tiles.slang`.
 - `world_lighting_material.slang` - include-only visible CH diffuse/specular filters and material response.
 - `material_brdf_lut.slang` - one-time 64x128 RG16F isotropic VNDF/Smith integration entry and sampling helper.

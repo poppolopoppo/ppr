@@ -8675,6 +8675,16 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // direct classes alone, then reads the density target and the composite back.
     // No new harness and no visual golden: every assertion below is numeric.
 
+    // grid_particle_density.slang's revision-8 minimum-presence marker, mirrored:
+    // a resolved RASTER PIXEL radius (never a world cell and never a field texel),
+    // the winner record's +/-8-pixel unorm offset range and its /65535 material
+    // encoding. A probe that reads the record back decodes it with these.
+    inline constexpr double kMarkerRadiusPx = 2.0;
+    inline constexpr double kMarkerHalfCoverageRadiusPx = 1.5;
+    inline constexpr double kMarkerCoreRadiusPx = 1.0;
+    inline constexpr double kMarkerRecordScale = 8.0;
+    inline constexpr double kMarkerMaterialScale = 65535.0;
+
     struct DensityParticleSpec {
         double m_x_m{};
         double m_y_m{};
@@ -8732,6 +8742,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         std::vector<u32> m_filtered_label{};
         std::vector<std::array<float, 4u>> m_filtered_base{};
         std::vector<std::array<float, 4u>> m_filtered_normal_alpha{};
+        // The minimum-presence winner record per raster texel, DECODED: .xy is the
+        // nearest liquid particle's centre as an offset in pixels from that texel's
+        // centre, .z is its material id and .w is unused. Zero material is empty.
+        std::vector<std::array<double, 4u>> m_marker{};
         std::vector<float> m_composite{}; // premultiplied RGBA per composite pixel
         u32 m_raster{};
         u32 m_phase_mask{};
@@ -8807,6 +8821,31 @@ namespace pP::tests::detail::WorldLightingMaterial {
         result.m_filtered_density.resize(std::size_t{raster} * raster);
         for (std::size_t texel = 0u; texel < result.m_filtered_density.size(); ++texel) {
             result.m_filtered_density[texel] = result.m_filtered_base[texel][3u];
+        }
+
+        // The marker winner record: RGBA16 unorm, 8 bytes per raster texel. Decode
+        // both channels here so every probe speaks pixels and material ids instead
+        // of re-deriving the shader's encoding.
+        PPR_TEST_ASSERT(targets.m_marker != nullptr);
+        const TextureReadback marker_readback = readTexture(device, *targets.m_marker);
+        result.m_marker.resize(std::size_t{raster} * raster);
+        for (u32 y = 0u; y < raster; ++y) {
+            for (u32 x = 0u; x < raster; ++x) {
+                const auto *const words = reinterpret_cast<const u16 *>(
+                    marker_readback.m_bytes.data() +
+                    std::size_t{y} * marker_readback.m_row_pitch +
+                    std::size_t{x} * 8u);
+                const auto value = [&words](const u32 channel) {
+                    // Unorm16 -> [0,1]; the material channel's own scale is the same
+                    // 65535 the shader encodes with.
+                    return double(words[channel]) / 65535.0;
+                };
+                std::array<double, 4u> &record = result.m_marker[std::size_t{y} * raster + x];
+                record[0u] = (value(0u) - 0.5) * kMarkerRecordScale;
+                record[1u] = (value(1u) - 0.5) * kMarkerRecordScale;
+                record[2u] = std::floor(value(2u) * kMarkerMaterialScale + 0.5);
+                record[3u] = value(3u);
+            }
         }
 
         const TextureReadback composite_readback = readTexture(device, composite);
@@ -10362,8 +10401,20 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // 8.4375 samples per cell, so sigma is 1.265625 samples and the loaded halo is
     // ceil(3 sigma) = 4 (the design's n = 4 / K = 9 row). Every probe below places
     // its geometry at this scale unless it says otherwise.
+    //
+    // The unit is RASTER PIXELS PER WORLD CELL (`samples_per_cell`), never cells
+    // across the window: a span of S cells at this 540-pixel reference is 540/S.
+    // Passing the span itself as the scale builds 1/S pixels per cell - a window a
+    // fraction of a cell wide, i.e. the closest possible zoom rather than the
+    // farthest.
     inline constexpr double kSpan64SamplesPerCell = 540.0 / 64.0;
     inline constexpr double kSpan220SamplesPerCell = 540.0 / 220.0;
+    // The far reference: 540 px across 2048 cells is 0.263672 px/cell, so the shared
+    // support is 0.1135 px and the four quadrature points of the texel at the
+    // particle centre sit 0.948 cell away (rho = 2.203). The field is therefore
+    // extinguished outright; the sampled extinction boundary is 0.580771 px/cell,
+    // span 929.8, so this reference is 2.2x past it in rho.
+    inline constexpr double kSpan2048SamplesPerCell = 540.0 / 2048.0;
     inline constexpr u32 kSpan64Halo = 4u;
 
     PPR_UNIT_TEST (particle_surface_filter_matches_the_documented_operator) {
@@ -10776,6 +10827,495 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 "filtered_changed={}",
                 accumulation_changed, filtered_changed));
     };
+
+    // ------------------------------------------------------------------
+    // minimum-presence marker GPU probes
+    // ------------------------------------------------------------------
+    // The four standard 4x sample positions relative to a pixel's own centre, i.e.
+    // the shader's fragmentGridReactive table shifted by -0.5. The composite
+    // evaluates the marker at these positions, so a probe measuring the resolved
+    // dot must too.
+    inline constexpr std::array<std::array<double, 2u>, 4u> kMarkerSampleOffsets{{
+        {-0.125, -0.375},
+        {0.375, -0.125},
+        {-0.375, 0.125},
+        {0.125, 0.375},
+    }};
+
+    // F at one scene sample of a pixel, restated from the read-back winner record:
+    // clamp(2 - d, 0, 1) with d measured from the stored nearest centre to the
+    // sample's own position inside that pixel. This is the shader's arithmetic, not
+    // a fitted approximation of it.
+    [[nodiscard]] double markerCoverageAtSample(
+        const DensityFrameResult &frame, const u32 x, const u32 y, const double offset_x, const double offset_y) {
+        const std::array<double, 4u> &record = frame.m_marker[std::size_t{y} * frame.m_raster + x];
+        if (record[2u] <= 0.0) {
+            return 0.0;
+        }
+
+        const double dx = record[0u] - offset_x;
+        const double dy = record[1u] - offset_y;
+        return std::clamp(kMarkerRadiusPx - std::sqrt(dx * dx + dy * dy), 0.0, 1.0);
+    }
+
+    // Diagnostic record of the field at one span: every texel whose accumulation or
+    // filtered label is nonzero, listed up to `limit` with its label, its raw Q.a in
+    // both bundles and the marker record at the same texel. A span past the sampled
+    // extinction must report none; any entry here names the texel that still
+    // resolves the row instead of failing an anonymous count.
+    [[nodiscard]] std::string describeLabelledTexels(const DensityFrameResult &frame, const u32 limit) {
+        u32 total = 0u;
+        u32 listed = 0u;
+        std::string record;
+        for (u32 y = 0u; y < frame.m_raster; ++y) {
+            for (u32 x = 0u; x < frame.m_raster; ++x) {
+                const std::size_t index = std::size_t{y} * frame.m_raster + x;
+                if (frame.m_filtered_label[index] == 0u and frame.m_label[index] == 0u) {
+                    continue;
+                }
+
+                ++total;
+                if (listed >= limit) {
+                    continue;
+                }
+
+                ++listed;
+                std::array<double, 4u> record_here = frame.m_marker[index];
+                record += std::format(
+                    " [({},{}) label={} accumulated_label={} q_a={:.6f} filtered_q_a={:.6f} "
+                    "marker=({:.3f},{:.3f},material={})]",
+                    x, y, frame.m_filtered_label[index], frame.m_label[index], double(frame.m_density[index]),
+                    double(frame.m_filtered_density[index]), record_here[0u], record_here[1u],
+                    static_cast<u32>(record_here[2u]));
+            }
+        }
+
+        return std::format("labelled_texels={} listed={}{}", total, listed, record);
+    }
+
+    PPR_UNIT_TEST (particle_surface_marker_keeps_an_isolated_particle_at_every_span) {
+        // Revision 8-B: an unoccluded particle in the viewport interior keeps a
+        // radius-1 opaque disc and a diameter-3 half-coverage footprint at every
+        // zoom, because a separate unfiltered screen-space marker is unioned with the
+        // physical body as C = max(B, F). Three references, all at the design's
+        // 540-pixel raster and all named in samples per cell (540/S):
+        //
+        //   span64   8.4375 px/cell: the filtered body is about 7 px across, so the
+        //            4-pixel marker sits inside it and must win NOWHERE, leaving the
+        //            composite the revision-7 image;
+        //   span220  2.4545 px/cell: the body is about 1.9 px across and the droplet
+        //            survives on its own label;
+        //   span2048 0.263672 px/cell: the support is 0.1135 px and every quadrature
+        //            point of the nearest texel is at rho = 2.203, so the field
+        //            provably cannot represent the droplet at all and the marker is
+        //            the only thing that can.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 raster = 256u;
+
+        // The design's three radii are one rule, not three tunables: the opaque core
+        // sits one pixel inside the coverage radius and the half-coverage radius one
+        // half pixel inside it.
+        PPR_TEST_ASSERT(kMarkerCoreRadiusPx == kMarkerRadiusPx - 1.0);
+        PPR_TEST_ASSERT(kMarkerHalfCoverageRadiusPx == kMarkerRadiusPx - 0.5);
+
+        const auto run = [&](const double samples_per_cell) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = raster;
+            cohort.m_world_extent_m = static_cast<float>(double(raster) / samples_per_cell);
+            // One texel-centre phase: raster x = 128.5 and image row = 127.5 both put
+            // the particle exactly on a pixel centre, so the marker's distance field
+            // and the resolved image share one phase and the diameters below are not
+            // measuring the phase instead of the dot.
+            cohort.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = 128.5 / samples_per_cell,
+                    .m_y_m = (double(raster) - 127.5) / samples_per_cell,
+                    .m_radius_m = radius_m});
+            return runDensityCohort(cohort, 1u);
+        };
+
+        // The particle's own raster pixel, in image coordinates.
+        constexpr u32 particle_x = 128u;
+        constexpr u32 particle_y = 127u;
+
+        // --- span 64: a resolved body swallows the marker ----------------
+        {
+            const auto frames = run(kSpan64SamplesPerCell);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+
+            // The marker record exists at the particle's own texel (otherwise the
+            // "the marker changed nothing" result below would be vacuous).
+            const std::array<double, 4u> &record = frame.m_marker[std::size_t{particle_y} * raster + particle_x];
+            PPR_TEST_ASSERT(record[2u] == 1.0);
+            PPR_TEST_ASSERT(std::hypot(record[0u], record[1u]) <= 0.5 + 1.0e-3);
+            PPR_TEST_ASSERT(markerCoverageAtSample(frame, particle_x, particle_y, 0.0, 0.0) >= 1.0 - 1.0e-3);
+
+            // The body coverage B at one scene sample of one pixel, restated from
+            // the smoothed field the composite actually reconstructs.
+            const auto texel = [&](const int ix, const int iy) {
+                SurfaceTexel value{};
+                if (ix < 0 or iy < 0 or ix >= int(raster) or iy >= int(raster)) {
+                    return value;
+                }
+
+                const std::size_t index = std::size_t(iy) * frame.m_raster + std::size_t(ix);
+                value.m_label = frame.m_filtered_label[index];
+                value.m_base = Double3{
+                    double(frame.m_filtered_base[index][0u]), double(frame.m_filtered_base[index][1u]),
+                    double(frame.m_filtered_base[index][2u])};
+                value.m_density = double(frame.m_filtered_base[index][3u]);
+                value.m_alpha = double(frame.m_filtered_normal_alpha[index][3u]);
+                return value;
+            };
+            const auto body_at = [&](const double sx, const double sy) -> double {
+                const SurfaceTexel nearest = texel(int(std::floor(sx)), int(std::floor(sy)));
+                if (nearest.m_label == 0u) {
+                    return 0.0;
+                }
+
+                const int base_x = int(std::floor(sx - 0.5));
+                const int base_y = int(std::floor(sy - 0.5));
+                const std::array<SurfaceTexel, 4u> taps{
+                    texel(base_x, base_y), texel(base_x + 1, base_y), texel(base_x, base_y + 1),
+                    texel(base_x + 1, base_y + 1)};
+                const auto reconstructed = densityReconstruct(
+                    taps, nearest, sx - 0.5 - double(base_x), sy - 0.5 - double(base_y), false);
+                if (not reconstructed.m_valid) {
+                    return 0.0;
+                }
+
+                return densityContour(
+                    reconstructed.m_density, reconstructed.m_derivative_x, reconstructed.m_derivative_y);
+            };
+
+            double worst_marker_excess = -1.0;
+            double worst_alpha_gap = 0.0;
+            for (u32 y = 0u; y < raster; ++y) {
+                for (u32 x = 0u; x < raster; ++x) {
+                    double resolved_body = 0.0;
+                    for (const auto &offset: kMarkerSampleOffsets) {
+                        const double sample_x = double(x) + 0.5 + offset[0u];
+                        const double sample_y = double(y) + 0.5 + offset[1u];
+                        const double body = body_at(sample_x, sample_y);
+                        const double marker = markerCoverageAtSample(frame, x, y, offset[0u], offset[1u]);
+                        // B wins every tie, so ANY sample where the marker exceeds the
+                        // body would have changed the image.
+                        worst_marker_excess = (std::max) (worst_marker_excess, marker - body);
+                        resolved_body += body;
+                    }
+
+                    const double resolved = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
+                    worst_alpha_gap = (std::max) (worst_alpha_gap, std::abs(resolved - resolved_body * 0.25));
+                }
+            }
+
+            // The marker never wins inside this body, and the resolved image is the
+            // revision-7 four-sample body coverage: max(B, F) == B here, so the union
+            // is bit-identical to the body alone.
+            PPR_TEST_ASSERT(worst_marker_excess <= 1.0e-9);
+            PPR_TEST_ASSERT(worst_alpha_gap <= 2.0e-3);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_marker_body samples_per_cell={:.5f} "
+                    "marker_excess={:.9f} alpha_gap={:.6f} peak={:.4f}",
+                    kSpan64SamplesPerCell, worst_marker_excess, worst_alpha_gap,
+                    double(frame.m_composite[(std::size_t{particle_y} * raster + particle_x) * 4u + 3u])));
+        }
+
+        // --- span 64 / 220 / 2048: the same dot at every zoom -------------
+        const auto measure = [&](const double samples_per_cell) {
+            const auto frames = run(samples_per_cell);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+            const std::size_t centre = std::size_t{particle_y} * raster + particle_x;
+
+            // The nearest pixel's record and its coverage at the pixel centre: the
+            // guarantee's own quantity (>= 2 - sqrt(2)/... = 1.0 after the clamp).
+            const std::array<double, 4u> &record = frame.m_marker[centre];
+            PPR_TEST_ASSERT(record[2u] == 1.0);
+            const double offset = std::hypot(record[0u], record[1u]);
+            PPR_TEST_ASSERT(offset <= 0.5 + 1.0e-3);
+            const double peak_marker = markerCoverageAtSample(frame, particle_x, particle_y, 0.0, 0.0);
+            PPR_TEST_ASSERT(peak_marker >= 1.0 - 1.0e-3);
+
+            // The 3-pixel half-coverage axis footprint: the +/-1 pixel centres are
+            // inside the 1.5-px half-coverage radius and the +/-2 ones are outside
+            // the radius-2 support, so the F >= .5 footprint is exactly 3 px across.
+            // The record may still exist at +/-2 - the candidate quad reaches half a
+            // pixel further on purpose - but its coverage there is exactly zero.
+            for (const int axis: {0, 1}) {
+                for (const int direction: {-1, 1}) {
+                    const u32 near_x = u32(int(particle_x) + (axis == 0 ? direction : 0));
+                    const u32 near_y = u32(int(particle_y) + (axis == 1 ? direction : 0));
+                    PPR_TEST_ASSERT(markerCoverageAtSample(frame, near_x, near_y, 0.0, 0.0) >= 1.0 - 1.0e-3);
+
+                    const u32 far_x = u32(int(particle_x) + (axis == 0 ? 2 * direction : 0));
+                    const u32 far_y = u32(int(particle_y) + (axis == 1 ? 2 * direction : 0));
+                    PPR_TEST_ASSERT(markerCoverageAtSample(frame, far_x, far_y, 0.0, 0.0) <= 1.0e-3);
+                }
+            }
+
+            u32 labelled = 0u;
+            u32 covered = 0u;
+            double sum_alpha = 0.0;
+            for (u32 pixel = 0u; pixel < raster * raster; ++pixel) {
+                if (frame.m_label[pixel] != 0u)
+                    ++labelled;
+                if (frame.m_composite[pixel * 4u + 3u] > 0.0f)
+                    ++covered;
+                sum_alpha += double(frame.m_composite[pixel * 4u + 3u]);
+            }
+
+            // The resolved dot along +x: the centre and its two neighbours are the
+            // 3-pixel half-coverage dot, and the 4th pixel is the bounded outer
+            // fringe the radius-2 disc adds.
+            std::array<double, 3u> resolved_axis{};
+            for (u32 step = 0u; step < 3u; ++step) {
+                resolved_axis[step] = double(
+                    frame.m_composite[(std::size_t{particle_y} * raster + particle_x + step) * 4u + 3u]);
+            }
+
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_marker_span samples_per_cell={:.6f} span_cells={:.3f} "
+                    "centre_offset={:.5f} marker_peak={:.4f} resolved=({:.4f},{:.4f},{:.4f}) "
+                    "covered={} labelled={} alpha_sum={:.4f} {}",
+                    samples_per_cell, 540.0 / samples_per_cell, offset, peak_marker, resolved_axis[0u],
+                    resolved_axis[1u], resolved_axis[2u], covered, labelled, sum_alpha,
+                    describeLabelledTexels(frame, 4u)));
+            return std::array<double, 6u>{
+                peak_marker, resolved_axis[0u], resolved_axis[1u], resolved_axis[2u], double(covered),
+                double(labelled)};
+        };
+
+        const auto span64 = measure(kSpan64SamplesPerCell);
+        const auto span220 = measure(kSpan220SamplesPerCell);
+        const auto far = measure(kSpan2048SamplesPerCell);
+
+        // The nearest resolved pixel is fully covered at every zoom. This is the
+        // survival guarantee: at span2048 the density field is empty (asserted
+        // below), so only the marker can produce it.
+        for (const auto &measured: {span64, span220, far}) {
+            PPR_TEST_ASSERT(measured[1u] >= 1.0 - 1.0e-3);
+            PPR_TEST_ASSERT(measured[0u] >= 1.0 - 1.0e-3);
+        }
+
+        // At the far span the surface support is 0.1135 px and the nearest texel's
+        // quadrature points are 0.948 cell away (rho = 2.203): the field must be
+        // empty everywhere, including every label, so the dot is the marker alone.
+        // The labelled set is logged with its labels, its raw Q.a and the marker
+        // record at the same texel before it is asserted empty.
+        {
+            const auto frames = run(kSpan2048SamplesPerCell);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+            u32 labelled = 0u;
+            double peak_density = 0.0;
+            for (std::size_t texel_index = 0u; texel_index < frame.m_filtered_density.size(); ++texel_index) {
+                if (frame.m_filtered_label[texel_index] != 0u)
+                    ++labelled;
+                peak_density = (std::max) (peak_density, double(frame.m_filtered_density[texel_index]));
+            }
+
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_marker_far_field samples_per_cell={:.6f} "
+                    "span_cells={:.3f} support_px={:.4f} peak_filtered_density={:.9f} {}",
+                    kSpan2048SamplesPerCell, 540.0 / kSpan2048SamplesPerCell,
+                    kDensitySurfaceRadiusScale * radius_m / kSpan2048SamplesPerCell, peak_density,
+                    describeLabelledTexels(frame, 8u)));
+
+            PPR_TEST_ASSERT(labelled == 0u);
+            PPR_TEST_ASSERT(peak_density == 0.0);
+            PPR_TEST_ASSERT(far[0u] >= 1.0 - 1.0e-3);
+            // A 3-pixel half-coverage dot with a sub-quarter-alpha outer fringe, and
+            // a bounded footprint: never a missing particle and never a larger blob.
+            PPR_TEST_ASSERT(far[2u] >= 0.5);
+            PPR_TEST_ASSERT(far[3u] > 0.0 and far[3u] <= 0.25);
+            PPR_TEST_ASSERT(far[4u] >= 1.0 and far[4u] <= 25.0);
+        }
+
+        // Span220 keeps the droplet's own label: the marker only adds the fringe a
+        // 1.9-px body cannot cover, it does not replace the field.
+        PPR_TEST_ASSERT(span220[5u] > 0.0);
+        PPR_TEST_ASSERT(span64[5u] > 0.0);
+    };
+
+    PPR_UNIT_TEST (particle_surface_marker_is_a_union_and_never_a_second_draw) {
+        // "No double draw" in the union's own terms: two coincident liquid particles
+        // must produce ONE winner record and ONE coverage, because the marker is a
+        // winner selection and a max, never an additive layer.
+        //
+        // The cohort sits past the sampled extinction (0.263672 px/cell, rho = 2.203
+        // at the nearest quadrature point) on purpose: the density field SUMS every
+        // coincident row's weight, so at any resolving zoom the second particle
+        // legitimately doubles Q.a and the two cohorts differ through the body, not
+        // through the marker. Isolating the marker requires a field that contributes
+        // nothing at all - which is exactly the far-zoom case this increment exists
+        // for.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 raster = 256u;
+
+        const auto run = [&](const u32 count) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = raster;
+            cohort.m_world_extent_m = static_cast<float>(double(raster) / kSpan2048SamplesPerCell);
+            for (u32 index = 0u; index < count; ++index) {
+                cohort.m_particles.push_back(
+                    DensityParticleSpec{
+                        .m_x_m = 128.5 / kSpan2048SamplesPerCell,
+                        .m_y_m = (double(raster) - 127.5) / kSpan2048SamplesPerCell,
+                        .m_radius_m = radius_m});
+            }
+
+            return runDensityCohort(cohort, 1u);
+        };
+
+        const auto single = run(1u);
+        const auto doubled = run(2u);
+        PPR_TEST_ASSERT(single.size() == 1u and doubled.size() == 1u);
+        PPR_TEST_ASSERT(single[0].m_marker.size() == doubled[0].m_marker.size());
+        for (std::size_t texel_index = 0u; texel_index < single[0].m_marker.size(); ++texel_index) {
+            for (u32 channel = 0u; channel < 4u; ++channel) {
+                PPR_TEST_ASSERT(single[0].m_marker[texel_index][channel] == doubled[0].m_marker[texel_index][channel]);
+            }
+        }
+
+        // The resolved image is identical too: the second coincident candidate is
+        // occluded by the first at the same distance, so coverage never doubles.
+        PPR_TEST_ASSERT(single[0].m_composite.size() == doubled[0].m_composite.size());
+        u32 different = 0u;
+        for (std::size_t value = 0u; value < single[0].m_composite.size(); ++value) {
+            if (single[0].m_composite[value] != doubled[0].m_composite[value])
+                ++different;
+        }
+
+        PPR_TEST_ASSERT(different == 0u);
+        const std::size_t centre = std::size_t{127u} * raster + 128u;
+        PPR_TEST_ASSERT(double(doubled[0].m_composite[centre * 4u + 3u]) <= 1.0 + 1.0e-6);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_marker_union single_alpha={:.6f} double_alpha={:.6f} "
+                "different={}",
+                double(single[0].m_composite[centre * 4u + 3u]), double(doubled[0].m_composite[centre * 4u + 3u]),
+                different));
+    };
+
+    PPR_UNIT_TEST (particle_surface_marker_is_stable_under_subpixel_translation) {
+        // A subpixel camera move must translate the dot, not make it appear and
+        // disappear: the resolved coverage is sample-rate AA of the same radius-2
+        // disc, so its integrated area is stable while its centroid follows the
+        // camera. The marker is recomputed from the camera like the field, and a held
+        // publication at an unchanged camera reproduces it bit for bit. The cohort is
+        // the same past-extinction far reference as the union probe, so every measured
+        // alpha belongs to the marker alone.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 raster = 256u;
+
+        const auto run = [&](const double camera_offset_px, const u32 frames) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = raster;
+            cohort.m_world_extent_m = static_cast<float>(double(raster) / kSpan2048SamplesPerCell);
+            cohort.m_camera_offset_px = camera_offset_px;
+            cohort.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = 128.5 / kSpan2048SamplesPerCell,
+                    .m_y_m = (double(raster) - 127.5) / kSpan2048SamplesPerCell,
+                    .m_radius_m = radius_m});
+            return runDensityCohort(cohort, frames, frames > 1u);
+        };
+
+        // The dot's own measurements: integrated alpha, peak alpha, the count of
+        // half-covered pixels and the alpha-weighted centroid.
+        const auto measure = [&](const DensityFrameResult &frame) {
+            double area = 0.0;
+            double peak = 0.0;
+            double weight = 0.0;
+            double centroid_x = 0.0;
+            double centroid_y = 0.0;
+            u32 half_covered = 0u;
+            for (u32 y = 0u; y < raster; ++y) {
+                for (u32 x = 0u; x < raster; ++x) {
+                    const double alpha = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
+                    area += alpha;
+                    peak = (std::max) (peak, alpha);
+                    if (alpha >= 0.5)
+                        ++half_covered;
+                    weight += alpha;
+                    centroid_x += alpha * (double(x) + 0.5);
+                    centroid_y += alpha * (double(y) + 0.5);
+                }
+            }
+
+            PPR_TEST_ASSERT(weight > 0.0);
+            return std::array<double, 5u>{area, peak, double(half_covered), centroid_x / weight, centroid_y / weight};
+        };
+
+        const auto base = run(0.0, 1u);
+        PPR_TEST_ASSERT(base.size() == 1u);
+        const auto base_measure = measure(base[0]);
+        // A radius-2 disc has a 4-pixel outer diameter and a 3-pixel half-coverage
+        // one; the integral of F over the plane is 8 pi / 3 = 8.377 px^2, so the
+        // resolved alpha of this AA'd dot sums to about 8.4.
+        PPR_TEST_ASSERT(base_measure[1u] >= 1.0 - 1.0e-3);
+        PPR_TEST_ASSERT(base_measure[0u] >= 1.5 and base_measure[0u] <= 16.0);
+        PPR_TEST_ASSERT(base_measure[2u] >= 3.0 and base_measure[2u] <= 16.0);
+
+        std::array<double, 3u> areas{};
+        for (u32 step = 0u; step < 3u; ++step) {
+            const double offset_px = 0.25 * double(step);
+            const auto moved = step == 0u ? base : run(offset_px, 1u);
+            PPR_TEST_ASSERT(moved.size() == 1u);
+            const auto measured = measure(moved[0]);
+            // The dot never disappears and never doubles: the peak stays opaque and
+            // the half-covered pixel count stays bounded.
+            PPR_TEST_ASSERT(measured[1u] >= 1.0 - 1.0e-3);
+            PPR_TEST_ASSERT(measured[2u] >= 3.0 and measured[2u] <= 16.0);
+            areas[step] = measured[0u];
+
+            // The dot follows the camera: its alpha-weighted centroid moves by the
+            // same subpixel amount, in the fixture's own sign convention for a +x
+            // camera shift.
+            if (step != 0u) {
+                const double moved_x = measured[3u] - base_measure[3u];
+                PPR_TEST_ASSERT(std::abs(std::abs(moved_x) - offset_px) <= 0.05);
+                PPR_TEST_ASSERT(std::abs(measured[4u] - base_measure[4u]) <= 0.05);
+            }
+        }
+
+        // No flicker between 2 and 3 px: the integrated coverage of the same disc is
+        // stable across the phases instead of alternating between two footprints.
+        const double smallest = (std::min) ({areas[0u], areas[1u], areas[2u]});
+        const double largest = (std::max) ({areas[0u], areas[1u], areas[2u]});
+        PPR_TEST_ASSERT(largest <= smallest * 1.15);
+
+        // Held publication, unchanged camera: the marker and the composite are
+        // reproduced bit for bit; a camera move changes the record, so nothing is a
+        // retained presence image.
+        const auto held = run(0.0, 2u);
+        PPR_TEST_ASSERT(held.size() == 2u);
+        for (std::size_t texel_index = 0u; texel_index < held[0].m_marker.size(); ++texel_index) {
+            for (u32 channel = 0u; channel < 4u; ++channel) {
+                PPR_TEST_ASSERT(held[0].m_marker[texel_index][channel] == held[1].m_marker[texel_index][channel]);
+            }
+        }
+
+        const auto shifted_frames = run(0.25, 1u);
+        PPR_TEST_ASSERT(shifted_frames.size() == 1u);
+        u32 moved_texels = 0u;
+        for (std::size_t texel_index = 0u; texel_index < held[0].m_marker.size(); ++texel_index) {
+            if (held[0].m_marker[texel_index] != shifted_frames[0].m_marker[texel_index])
+                ++moved_texels;
+        }
+
+        PPR_TEST_ASSERT(moved_texels > 0u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_marker_subpixel areas=({:.4f},{:.4f},{:.4f}) "
+                "peak={:.4f} half_covered={} centroid_x={:.4f} moved_texels={}",
+                areas[0u], areas[1u], areas[2u], base_measure[1u], base_measure[2u], base_measure[3u], moved_texels));
+    };
 }
 
 namespace pP::tests {
@@ -10860,6 +11400,11 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_surface_filter_keeps_a_sheet_and_meets_the_reference_scallop,
                 detail::WorldLightingMaterial::
                     particle_surface_filter_refilters_on_a_camera_change_and_holds_bit_identical,
+                // Revision 8 minimum-presence marker: the survival guarantee at every
+                // span, the union that never double-draws, and its subpixel stability.
+                detail::WorldLightingMaterial::particle_surface_marker_keeps_an_isolated_particle_at_every_span,
+                detail::WorldLightingMaterial::particle_surface_marker_is_a_union_and_never_a_second_draw,
+                detail::WorldLightingMaterial::particle_surface_marker_is_stable_under_subpixel_translation,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,
                 detail::WorldLightingMaterial::held_publication_reculls_retained_rows_against_the_current_camera,
                 detail::WorldLightingMaterial::held_recull_keeps_global_ascending_ids_across_blocks,

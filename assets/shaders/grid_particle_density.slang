@@ -153,4 +153,69 @@ float particleDensityContour(float density,float derivative_x,float derivative_y
     float width=max(abs(derivative_x)+abs(derivative_y),kParticleDensityEpsilon);
     return smoothstep(kParticleDensityThreshold-0.5*width,kParticleDensityThreshold+0.5*width,density);
 }
+
+// ------------------------------------------------------------------
+// minimum-presence marker
+// ------------------------------------------------------------------
+// Density is not presence. A particle whose reconstructed support is far below one
+// raster pixel loses every quadrature point to phase, so no label, no density and
+// therefore no contour can exist at any zoom beyond the sampled extinction. This
+// marker is the separate screen-space guarantee of design revision 8-B, unioned
+// once with the physical field:
+//
+//   d = |x_sample_px - x_centre_px|
+//   F_p = clamp(2 - d, 0, 1)
+//   F = max_p F_p
+//   C = max(B, F)
+//
+// The constants are RESOLVED RASTER PIXELS, never world cells and never the field's
+// texel pitch: the dot is a presentation guarantee, so it must not shrink with the
+// zoom. F is 1 inside a 1-pixel radius, exactly .5 at 1.5 pixels and 0 at 2
+// pixels: a 2-pixel opaque diameter, a 3-pixel half-coverage diameter and a
+// 4-pixel outer diameter. F is never filtered, never enters Q.a and never changes
+// theta, R, A_2 or the label rule. The CPU mirror in App.WorldLighting.Material.
+// Tests.cpp pins these values.
+static const float kParticleMarkerCoreRadius = 1.0;
+static const float kParticleMarkerRadius = 2.0;
+// Half a raster pixel's diagonal. A candidate quad must still write the record of
+// a pixel whose CENTRE lies outside the coverage radius, because a scene sample of
+// that pixel can be inside it: the pixel's farthest interior point is sqrt(2)/2
+// away, so this is the exact bound that keeps every sample with F > 0 represented.
+static const float kParticleMarkerQuadRadius = kParticleMarkerRadius+0.7071067811865476;
+// The winner record's distance channels are unorm, encoded as offset/8 + 0.5: the
+// representable centre offset is +/-4 pixels and the quantisation is 8/65535 =
+// 1.22e-4 pixel, eight times finer than the 1/1024 coverage error the selection
+// contract allows. A written record's offset is at most kParticleMarkerQuadRadius
+// by the fragment's own bound, so the range is never approached from inside.
+static const float kParticleMarkerRecordScale = 8.0;
+// The record's third channel carries the winner's material id as m/65535, which
+// every 16-bit integer round-trips exactly through unorm. Zero is the empty record.
+static const float kParticleMarkerMaterialScale = 65535.0;
+
+// One linear ramp between the two pinned endpoints: F is 1 up to the opaque core,
+// falls one coverage unit per pixel and reaches 0 at the coverage radius, so it is
+// exactly .5 at 1.5 pixels (the design's half-coverage radius).
+float particleMarkerCoverage(float distance_px) {
+    float span=max(kParticleMarkerRadius-kParticleMarkerCoreRadius,kParticleDensityEpsilon);
+    return saturate((kParticleMarkerRadius-distance_px)/span);
+}
+
+// Recording a centre offset relative to the texel's own centre, not in absolute
+// raster coordinates: the offset stays inside the quad's own few pixels, so one
+// fixed-point quantum serves every raster size without a large-coordinate loss.
+float2 particleMarkerEncodeCentre(float2 centre_offset_px) {
+    return centre_offset_px/kParticleMarkerRecordScale+0.5;
+}
+
+float2 particleMarkerDecodeCentre(float2 record) {
+    return (record-0.5)*kParticleMarkerRecordScale;
+}
+
+float particleMarkerEncodeMaterial(uint material) {
+    return float(material)/kParticleMarkerMaterialScale;
+}
+
+uint particleMarkerDecodeMaterial(float record) {
+    return uint(record*kParticleMarkerMaterialScale+0.5);
+}
 #endif

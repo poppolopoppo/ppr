@@ -285,6 +285,19 @@ Reconstructed solids and liquids are no longer drawn as smooth envelopes: the
 world-lighting projection selects one categorical material per native cell and
 the resolved-cell terrain draw shades it with the same material path.
 
+`App.Renderer.GridPass.ParticleSurface.cpp` owns the liquid surface lane over the
+same prepared rows and indirect arguments: a minimum-presence marker pass
+(`vertexParticleSurfaceMarker`/`fragmentParticleSurfaceMarker`, one radius-2
+candidate per admitted row into an 8-byte-per-texel RGBA16Unorm winner record), a
+label selection pass (L/Z), an additive attribute accumulation (Q/G), the two
+separable world-width smoothing dispatches and the per-scene-sample deferred
+composite. The composite unions the physical body with the marker as
+`C = max(B, F)` and the body wins every tie, so a particle the density field cannot
+resolve at far zoom still keeps a 3-pixel half-coverage dot while a resolved body
+keeps its own contour and attributes bit for bit. The label, its synthetic depth,
+the two attribute sums, the marker record and the two smoothing bundles live in
+one completion-fenced ring slot and are rewritten every rendered frame.
+
 Task 11 retired `App.Renderer.GridPass.Fluids.cpp`, `App.Renderer.GridPass.Solids.cpp`,
 `grid_liquid_kernel.slang`, `grid_solid_kernel.slang`, `grid_fluid_filter.slang`,
 their screen-space attachments, splat/filter/composite pipelines and spatial

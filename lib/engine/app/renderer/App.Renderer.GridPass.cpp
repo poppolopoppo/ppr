@@ -4820,9 +4820,12 @@ namespace pP {
         // itself is world-scoped and re-derived on the next preparation.
         m_particle_surface_select_program.setNull();
         m_particle_surface_accumulate_program.setNull();
+        m_particle_surface_marker_program.setNull();
         m_particle_surface_composite_program.setNull();
         m_particle_surface_select_key.reset();
         m_particle_surface_select_pipeline.reset();
+        m_particle_surface_marker_key.reset();
+        m_particle_surface_marker_pipeline.reset();
         m_particle_surface_accumulate_key.reset();
         m_particle_surface_accumulate_pipeline.reset();
         m_particle_surface_composite_opaque_key.reset();

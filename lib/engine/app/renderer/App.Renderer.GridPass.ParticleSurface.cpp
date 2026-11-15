@@ -22,6 +22,10 @@ namespace pP {
     //
     //   label selection  L = R32Uint winning material, Z = D32Float minimum
     //                    eligible rho^2. No blend, strict Less, depth writes.
+    //   presence marker  M = RGBA16Unorm nearest liquid centre (pixel offset from
+    //                    the texel centre) + its material, Z = nearest pixel
+    //                    distance. No blend, strict Less, depth writes, one
+    //                    radius-2 candidate quad per admitted row.
     //   accumulation     Q = (sum w*base.rgb, sum w), G = (sum w*normal.xyz,
     //                    sum w*alpha). One/One/Add, no depth attachment.
     //   smoothing        two separable tiled label-masked Gaussian dispatches at
@@ -30,12 +34,15 @@ namespace pP {
     //   composite        one categorical four-tap reconstruction of the FILTERED
     //                    field and one deferred response evaluation per surviving
     //                    scene sample, drawn at each admitted class's existing
-    //                    depth/blend slot.
+    //                    depth/blend slot. Coverage is C = max(B, F): the physical
+    //                    body B wins every tie, and F is the unfiltered presence
+    //                    marker evaluated at each scene sample.
     //
     // There is no temporal history, no dirty-tile cache and no readback. Every
-    // target clears to its exact empty value every rendered frame, and the two
-    // scratch bundles are rewritten by the filter every rendered frame, so a held
-    // publication with an unchanged camera reproduces the field bit for bit.
+    // target clears to its exact empty value every rendered frame, the marker
+    // record is re-drawn from the current camera, and the two scratch bundles are
+    // rewritten by the filter every rendered frame, so a held publication with an
+    // unchanged camera reproduces the field and the marker bit for bit.
 
     namespace {
         rhi::BufferRange particleSurfaceRange(rhi::IBuffer *const buffer) noexcept {
@@ -200,6 +207,8 @@ namespace pP {
                               slot.m_base_view and
                               slot.m_normal and
                               slot.m_normal_view and
+                              slot.m_marker and
+                              slot.m_marker_view and
                               slot.m_horizontal.complete() and
                               slot.m_vertical.complete();
         if (complete and slot.m_width == width and slot.m_height == height) {
@@ -248,6 +257,20 @@ namespace pP {
         desc.label = "grid particle surface normal+alpha (G)";
         PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_normal.writeRef()));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_normal->getDefaultView(bundle.m_normal_view.writeRef()));
+
+        // The minimum-presence winner record, one texel per raster pixel. Eight
+        // bytes per texel: .xy is the nearest centre's offset from the texel centre
+        // over +/-4 pixels (unorm quantum 1.22e-4 px), .z is the winner's material
+        // as m/65535 and .w is unused. Unorm rather than float because the offset
+        // needs an absolute quantum; the composite evaluates the distance at its own
+        // scene sample, so no coverage is ever stored here.
+        desc.format = rhi::Format::RGBA16Unorm;
+        desc.usage = static_cast<rhi::TextureUsage>(
+            static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
+        desc.defaultState = rhi::ResourceState::ShaderResource;
+        desc.label = "grid particle surface marker";
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_marker.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_marker->getDefaultView(bundle.m_marker_view.writeRef()));
 
         // The two separable smoothing bundles at the same raster size. Each is one
         // 4-byte label plus two RGBA16F sums per texel (20 bytes/texel, 40 bytes of
@@ -435,11 +458,16 @@ namespace pP {
         };
 
         // Selection is a separate program: it writes the integer label plus
-        // SV_Depth and must not blend. Accumulation and the two composites are
-        // separate programs so each entry declares only the inputs it reads.
+        // SV_Depth and must not blend. The marker pass is its own program for the
+        // same reason: a winner record plus a synthetic distance, no label, no
+        // attribute sum. Accumulation and the two composites are separate programs
+        // so each entry declares only the inputs it reads.
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             create("vertexParticleSurfaceSplat", "fragmentParticleSurfaceSelect", m_particle_surface_select_program));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass,
+            create("vertexParticleSurfaceMarker", "fragmentParticleSurfaceMarker", m_particle_surface_marker_program));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
                           "vertexParticleSurfaceSplat", "fragmentParticleSurfaceAccumulate",
@@ -513,8 +541,8 @@ namespace pP {
                 target.format = formats[index];
                 switch (state) {
                     case EParticleSurfacePipelineState::selection:
-                        // Integer label: no blend, full write mask. Depth is the
-                        // synthetic rho^2 selection distance.
+                        // Winner record or integer label: no blend, full write
+                        // mask. Depth is the synthetic selection distance.
                         target.enableBlend = false;
                         break;
                     case EParticleSurfacePipelineState::attributes:
@@ -546,8 +574,10 @@ namespace pP {
             desc.depthStencil.depthTestEnable = depth_test and signature.m_depth_stencil_format.has_value();
             desc.depthStencil.depthWriteEnable = desc.depthStencil.depthTestEnable and (selection or depth_write);
             // Selection is the nearest-footprint test (strict Less, ties keep the
-            // first stable instance); the composite shares the scene plane depth
-            // with the coplanar terrain and particles (LessEqual).
+            // first stable instance), and the marker pass shares that state: the
+            // nearest centre wins, an exact tie keeps the first stable instance.
+            // The composite shares the scene plane depth with the coplanar terrain
+            // and particles (LessEqual).
             desc.depthStencil.depthFunc = selection ? rhi::ComparisonFunc::Less : rhi::ComparisonFunc::LessEqual;
             desc.rasterizer.cullMode = rhi::CullMode::None;
             desc.label = label;
@@ -657,6 +687,79 @@ namespace pP {
                 context.m_encoder.setTextureState(texture, whole, resource_state);
             }
         };
+
+        // --- minimum-presence marker -----------------------------------
+        // One radius-2 candidate per admitted liquid row, over the same prepared
+        // instances and indirect arguments as the splat. The record is the NEAREST
+        // particle centre per raster texel under the same strict-Less/first-stable
+        // order the label uses, and it exists even where every quadrature point of
+        // that row lies outside its texel: that is exactly the far-zoom row the
+        // density field cannot express. Nothing here reads or writes the label, the
+        // density or the filtered bundle.
+        RenderPipelineSignature marker_signature{};
+        marker_signature.m_color_formats[0] = rhi::Format::RGBA16Unorm;
+        marker_signature.m_color_format_count = 1u;
+        marker_signature.m_depth_stencil_format = rhi::Format::D32Float;
+        marker_signature.m_sample_count = SampleCount::x1;
+        const auto marker = particleSurfacePipeline_(
+            context.m_device, marker_signature, m_particle_surface_marker_program.get(), m_particle_surface_marker_key,
+            m_particle_surface_marker_pipeline, EParticleSurfacePipelineState::selection, true,
+            "grid particle surface marker pipeline");
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, marker);
+
+        state(slot.m_marker.get(), rhi::ResourceState::RenderTarget);
+        state(slot.m_depth.get(), rhi::ResourceState::DepthWrite);
+
+        rhi::RenderPassColorAttachment marker_attachment{};
+        marker_attachment.view = slot.m_marker_view;
+        marker_attachment.loadOp = rhi::LoadOp::Clear;
+        marker_attachment.storeOp = rhi::StoreOp::Store;
+        // The zero clear is the empty record: material zero owns nothing.
+        rhi::RenderPassDepthStencilAttachment marker_depth{};
+        marker_depth.view = slot.m_depth_view;
+        marker_depth.depthLoadOp = rhi::LoadOp::Clear;
+        // The marker distance is consumed only by this pass; the selection pass
+        // clears the same synthetic buffer immediately afterwards.
+        marker_depth.depthStoreOp = rhi::StoreOp::DontCare;
+        marker_depth.depthClearValue = 1.0f;
+
+        {
+            rhi::RenderPassDesc pass_desc{};
+            pass_desc.colorAttachments = &marker_attachment;
+            pass_desc.colorAttachmentCount = 1u;
+            pass_desc.depthStencilAttachment = &marker_depth;
+            auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->setRenderState(
+                {.viewports = {viewport},
+                    .viewportCount = 1u,
+                    .scissorRects = {scissor},
+                    .scissorRectCount = 1u,
+                    .vertexBuffers = {},
+                    .indexBuffer = {}});
+
+            rhi::ShaderCursor cursor{(*marker)->m_slot_roots[slot_index].get()};
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bind_common(**marker, cursor));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bind_draw_source(cursor));
+            pass->bindPipeline((*marker)->m_pipeline, (*marker)->m_slot_roots[slot_index].get());
+            markPipelineUse_(**marker, slot_index);
+            if (draw) {
+                pass->drawIndirect(1u, rhi::BufferOffsetPair{args});
+                ++m_draw_commands;
+            }
+
+            pass->end();
+        }
+        if (draw and m_particle_timing_queries) {
+            context.m_encoder.writeTimestamp(m_particle_timing_queries, 7u);
+        }
+
+        // Both winner passes write the slot's synthetic distance buffer in separate
+        // passes; order the two depth writes before the selection pass clears it and
+        // publish the record to the composite's later read.
+        context.m_encoder.globalBarrier();
+        state(slot.m_marker.get(), rhi::ResourceState::ShaderResource);
 
         // --- selection -------------------------------------------------
         RenderPipelineSignature selection_signature{};
@@ -1046,6 +1149,8 @@ namespace pP {
             GridPass, cursor["g_particle_base"].setBinding(rhi::Binding(slot.m_vertical.m_base_view)));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_particle_normal"].setBinding(rhi::Binding(slot.m_vertical.m_normal_view)));
+        // The marker winner record the composite unions with the reconstructed body.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_marker"].setBinding(rhi::Binding(slot.m_marker_view)));
 
         context.m_pass.setRenderState(
             {.viewports = {context.m_viewport},

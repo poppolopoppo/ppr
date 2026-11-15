@@ -614,7 +614,12 @@ namespace pP {
             std::memcpy(key.m_planes[plane].data(), source.data(), sizeof(key.m_planes[plane]));
         }
 
-        key.m_guard = m_world.m_particle_surface.admitted() ? particleSurfacePixelWorld_(m_camera_view) : 0.0f;
+        // The guard is the marker's own candidate radius, not one density pixel: a
+        // particle whose reconstructed support is far smaller than a pixel must
+        // still keep its radius-2 marker quad when that quad reaches the viewport.
+        key.m_guard = m_world.m_particle_surface.admitted()
+                          ? kParticleMarkerQuadRadiusPixels * particleSurfacePixelWorld_(m_camera_view)
+                          : 0.0f;
         key.m_phase_mask = m_world.m_particle_surface.m_phase_mask;
         key.m_count = count;
         return key;
