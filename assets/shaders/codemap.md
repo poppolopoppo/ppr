@@ -131,10 +131,12 @@ exposes the real fit/EMA helpers, the retained L1 schedule identity and
 ## Design
 
 `grid_particle_prepare.slang` is GridPass-owned resident-particle presentation:
-numerical64/readonly24/metadata32/packed32/frame128 byte protocols. Packing uses
+numerical64/readonly24/metadata32/packed24/frame128 byte protocols. Packing uses
 the committed hot/cold row identity and physical metric; three stable visibility
 scan/compaction dispatches produce ordered IDs and indirect arguments without
-reordering solver storage. `grid_tiles.slang` shares the particle quad helper.
+reordering solver storage. The packed row's fourth word is the stable-identity
+material-UV seed; the palette tint is decoded from the row's own element at
+shading time. `grid_tiles.slang` shares the particle quad helper.
 The only remaining particle draw is the sampled disk for gases and explicit
 legacy phase fixtures; Task 11 retired the smooth solid/liquid splat, filter and
 composite entries together with `grid_liquid_kernel.slang`,

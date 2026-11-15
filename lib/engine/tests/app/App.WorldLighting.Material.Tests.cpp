@@ -2717,7 +2717,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
     PPR_UNIT_TEST (presentation_tint_rgb9e5_matches_the_authored_palette_bytes) {
         // Authored palette tints: zero, full, dominant, dim and minimum-visible
-        // channels. Alpha is never part of the row.
+        // channels. The particle row no longer stores a tint copy (word 16..19 is
+        // the stable UV seed and shading decodes the palette bytes directly), so
+        // this pins the shared codec's own byte-error bounds and rejections.
         constexpr std::array<u32, 8u> authored{
             0x000000ffu, 0xffffffffu, 0xff0080ffu, 0x010203ffu, 0x11c840ffu, 0x808080ffu, 0xfe0102ffu, 0x7f7f7fffu};
         for (const u32 rgba: authored) {
@@ -2848,7 +2850,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
         PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
         PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
-        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+        PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_uv_seed) == 16u);
         PPR_TEST_ASSERT(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
 
         // Reflected on the device target this fixture initialized, so the same
@@ -2899,14 +2901,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
             {"position", 0u},
             {"radius", 8u},
             {"material_flags_temperature", 12u},
-            {"color_rgb9e5", 16u},
+            {"uv_seed", 16u},
             {"motion", 20u},
         }};
         constexpr std::array<std::pair<const char *, u32>, 5u> reader_fields{{
             {"m_position", 0u},
             {"m_radius_m", 8u},
             {"m_material_flags_temperature", 12u},
-            {"m_color_rgb9e5", 16u},
+            {"m_uv_seed", 16u},
             {"m_motion", 20u},
         }};
         verify("grid_particle_prepare.slang", "grid_particle_prepare", "g_packed", writer_fields);

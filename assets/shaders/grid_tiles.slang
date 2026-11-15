@@ -142,13 +142,14 @@ Texture2D<float4> g_backdrop;
 // Renderer-owned packed 24-byte particle presentation row; the writer is
 // PresentationRow in grid_particle_prepare.slang and the CPU twin is
 // pP::ParticleGpu in App.Renderer.GridPass.cppm. Position and radius are world
-// metres (not cells and not quantised); the material, tint and motion fields are
-// packed. Every field name and offset reflects against the CPU twin.
+// metres (not cells and not quantised); the material and motion fields are
+// packed and the fourth word is the stable-identity UV seed. Every field name
+// and offset reflects against the CPU twin.
 struct ParticleGpu {
     float2 m_position;                    // 0:  world metres
     float m_radius_m;                     // 8:  metres
     uint m_material_flags_temperature;    // 12: material 12 | class 4 << 12 | binary16 K << 16
-    uint m_color_rgb9e5;                  // 16: RGB9E5 tint; alpha is not stored
+    uint m_uv_seed;                       // 16: stable-identity material-UV seed
     half2 m_motion;                       // 20: native cells per solver step
 };
 static const uint kParticleMaterialMask = 0xfffu;
@@ -164,10 +165,49 @@ static const uint kParticleDrawGas = 0u;
 static const uint kParticleDrawOpaque = 1u;
 static const uint kParticleDrawOptical = 2u;
 
-// Shared-exponent RGB9E5 decode, matching the host lighting::unpackRGB9E5.
-float3 unpackParticleTint(uint word) {
-    int exponent=int((word>>27u)&0x1fu)-24;
-    return float3(float(word&0x1ffu),float((word>>9u)&0x1ffu),float((word>>18u)&0x1ffu))*exp2(float(exponent));
+// The row's palette tint in the linear r/g/b byte order the packer used, with
+// no sRGB decode: the particle response multiplies this by the lighting/cue term
+// and never by the palette alpha (that supplies the material opacity separately).
+// Deliberately not `diagnosticTint`, whose authored-sRGB decode and coverage
+// scale belong to the terrain path.
+float3 particleTint(uint rgba) {
+    return float3(float((rgba>>24u)&255u),float((rgba>>16u)&255u),float((rgba>>8u)&255u))/255.0;
+}
+
+// ------------------------------------------------------------------
+// stable-identity seeded particle UV
+// ------------------------------------------------------------------
+// The row's fourth word is the seed derived at pack time from the existing stable
+// 64-bit metadata id (grid_particle_prepare.slang). It is not a palette copy and
+// not a per-frame token, so a checkpoint/replay that restores the same ids
+// recreates the same offsets with no saved seed state.
+//
+// The two 16-bit halves plus a half step are the particle's constant offset in
+// texture periods. Every value is exactly representable in binary32, and the
+// hash bits are portable, so the offset itself is bit-identical on both backends.
+float2 particleUvOffset(uint seed) {
+    return (float2(float(seed&0xffffu),float(seed>>16u))+0.5)/65536.0;
+}
+
+// The particle-attached texture coordinate and its unwrapped gradients: a frame
+// translated with the particle centre p, aligned to world XY and never rotated or
+// stretched by the conic.
+//
+//   uv_unwrapped = offset(seed) + (x - p) / texture_period_m
+//   uv_dx, uv_dy = d(x - p)/d(raster) / texture_period_m
+//
+// The offset is a pure translation: it leaves every gradient untouched (a
+// constant has zero derivative) and is applied before the sampler's own
+// wrap/patch derivation, so a repeating material still samples
+// frac(uv_unwrapped) through SampleGrad with these unwrapped gradients and a
+// stochastic material still feeds texturePatches(uv_unwrapped) without a prior
+// frac. At x == p the sample is the seed offset itself, so the patch is anchored
+// to the particle rather than to the viewport or the world origin.
+//
+// This derivation is not consumed by the draw yet: the direct and splat paths
+// still sample the world-space UV, so exposing the seed changes no output.
+float2 particleUvUnwrapped(uint seed,float2 local_metres,float period) {
+    return particleUvOffset(seed)+local_metres/period;
 }
 Texture2D<float4> g_particle_mask;
 SamplerState g_particle_mask_sampler;
@@ -835,10 +875,141 @@ bool categoricalCellOccupied(uint resolved, GridVisual visual) {
     return !receive_only;
 }
 
-float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_position,
-    float2 gradient_x, float2 gradient_y, CH coefficients,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler,
-    bool premultiplied) {
+// ------------------------------------------------------------------
+// attribute-taking visible material response
+// ------------------------------------------------------------------
+// One surface's own sampled material attributes, before any lighting: the
+// linear tint*albedo base, the decoded unit normal, the palette authoring alpha
+// and the canonical-temperature thermal radiance the categorical response
+// consumes. The response helpers below take exactly these plus the physical
+// sample position, so the same response can shade a reconstruction of several
+// particles' attributes instead of one particle's texture sample.
+struct VisibleSurfaceSample {
+    // rgb: linear tint * sampled albedo (reflectance); a: sampled texture alpha.
+    float4 m_base;
+    // Unit world-plane normal after the element's decode, scale and patch mix.
+    float3 m_normal;
+    // thermalRGB of the row's canonical half-temperature, or zero when the
+    // material's response is not emission-eligible. Unused by the liquid policy.
+    float3 m_thermal;
+    // Palette tint alpha: the authored factor of the optical opacity rule.
+    float m_tint_alpha;
+};
+
+// The physical inputs a response reads beyond position and attributes: the
+// raster position the refraction offset is expressed in, the caller's
+// decoration, and the retained pre-render background copy.
+struct VisibleSurfaceBackdrop {
+    float2 m_screen;
+    float2 m_decoration;
+    bool m_reuse_background;
+    float3 m_unshifted_background;
+};
+
+// Current categorical/solid response: the CH diffuse/specular evaluation, the
+// BRDF pair, eligible authored emission and the (already converted) thermal
+// term. Material parameters stay per-label palette constants.
+float4 categoricalSurfaceResponse(uint material,uint resolved,float2 fine_position,
+    CH coefficients,VisibleSurfaceSample sample,bool premultiplied) {
+    GridVisual visual = g_terrain_visuals[min(material, 65535u)];
+    float metallic = visual.m_metallic;
+    float roughness = visual.m_roughness;
+    float eta = visual.m_ior;
+
+    float3 view = surfaceToCamera(fine_position);
+    float n_dot_v = visibleNoV(sample.m_normal, view);
+    float2 environment = brdfLutPair(g_brdf_lut, g_brdf_sampler, n_dot_v, roughness);
+    // `resolved` is the canonical material|temperature word the caller resolved
+    // for this sample, so occupancy (and therefore authored emission) is decided
+    // from that word and its matched palette record, never from brightness.
+    // The approved transport surface scope also bounds visible emission:
+    // receive-only transparent cells and gas never acquire a thermal or authored
+    // glow, while opaque surfaces and the approved emissive-liquid class do.
+    bool occupied = categoricalCellOccupied(resolved, visual);
+    float3 authored = occupied ? unpackSourceEmission(g_source_materials[material]) : float3(0.0);
+    float3 hdr = visibleMaterialResponse(
+        sample.m_base.rgb, metallic, roughness, eta, sample.m_normal, view, coefficients, environment, authored,
+        sample.m_thermal);
+
+    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
+    float opacity = optical_blend ? saturate(sample.m_tint_alpha * sample.m_base.a * visual.m_opacity) : 1.0;
+    if (premultiplied) hdr *= opacity;
+    return float4(hdr, opacity);
+}
+
+// Current liquid response: the fixed local relief/facing term, bounded palette
+// emission and the existing true-position refraction/absorption against the
+// retained background copy, then one premultiplication. It has neither CH nor
+// canonical-particle thermal input.
+float4 liquidSurfaceResponse(uint material,float2 fine_position,VisibleSurfaceSample sample,
+    VisibleSurfaceBackdrop backdrop,SamplerState.Handle sampler,bool premultiplied) {
+    GridVisual visual = g_terrain_visuals[min(material, 65535u)];
+    float2 world = fine_position * g_grid_frame.m_cell_size_m;
+    float3 normal = sample.m_normal;
+    float3 color = sample.m_base.rgb;
+    // Fixed local relief response uses PBR parameters without a world light/GI
+    // dependency. Roughness widens the facing lobe; metallic colors its F0.
+    float facing = saturate(dot(normal, normalize(float3(-0.35, 0.45, 1.0))));
+    float3 f0 = lerp(float3(0.04), color, visual.m_metallic);
+    if (visual.m_normal_texture_index != 0xffffffffu) {
+        color = color * (0.72 + 0.28 * facing) + f0 * pow(facing, lerp(48.0, 2.0, visual.m_roughness)) * 0.12;
+    }
+    // Self color only, bounded without overflowing large finite strengths.
+    color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
+    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
+    float opacity = !optical_blend ? 1.0 : saturate(sample.m_tint_alpha * sample.m_base.a * visual.m_opacity);
+    if (g_grid_frame.m_has_background == 0u) {
+        float4 surface=decorateSurface(float4(color,opacity),backdrop.m_decoration);
+        if (premultiplied) surface.rgb*=surface.a;
+        return surface;
+    }
+    if (opacity >= 1.0) { return decorateSurface(float4(color, 1.0), backdrop.m_decoration); }
+    float2 offset_pixels = float2(0.0);
+    if (optical_blend && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
+        float2 displacement = normal.xy / max(normal.z, 0.25) *
+            ((1.0 - 1.0 / visual.m_ior) * visual.m_refraction_depth_m);
+        float4 start = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
+        float4 shifted = mul(float4(world + displacement, 0.0, 1.0), g_grid_frame.m_view_projection);
+        if (abs(start.w) > 1.0e-6 && abs(shifted.w) > 1.0e-6) {
+            float2 delta_ndc = shifted.xy / shifted.w - start.xy / start.w;
+            offset_pixels = delta_ndc * float2(0.5, -0.5) * g_grid_frame.m_viewport.zw;
+            offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
+        }
+    }
+    // The refracted backdrop comes from the background copy (never the scene).
+    // Beer-Lambert absorption tints the transmitted light over the fixed optical
+    // thickness. This runs unconditionally, including the zero-offset and
+    // premultiplied paths, so a flat/IOR<=1 absorbing cell still tints.
+    float3 background = backdrop.m_reuse_background && all(offset_pixels == 0.0)
+        ? backdrop.m_unshifted_background : backdropColor(backdrop.m_screen + offset_pixels, sampler);
+    float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
+    if (any(sigma > 0.0)) {
+        background *= exp(-sigma * visual.m_refraction_depth_m);
+    }
+
+    // Blend over the destination (particles already drawn) with the material
+    // opacity, never a full replace: the refracted backdrop folds into the
+    // transmitted (1-opacity) term while the destination keeps its particles.
+    float4 surface = decorateSurface(float4(lerp(background, color, opacity), opacity), backdrop.m_decoration);
+    if (premultiplied) surface.rgb *= surface.a;
+    return surface;
+}
+
+// The one response entry every path uses. `liquid` is the explicit material
+// response policy (the current liquid particle response versus the current
+// categorical/solid one); it is never re-derived from a draw class.
+float4 visibleSurfaceResponse(bool liquid,bool premultiplied,uint material,uint resolved,float2 fine_position,
+    VisibleSurfaceSample sample,CH coefficients,VisibleSurfaceBackdrop backdrop,SamplerState.Handle sampler) {
+    if (liquid) return liquidSurfaceResponse(material,fine_position,sample,backdrop,sampler,premultiplied);
+    return categoricalSurfaceResponse(material,resolved,fine_position,coefficients,sample,premultiplied);
+}
+
+// The categorical/solid sampling stage: the element's own albedo, normal and
+// canonical-temperature thermal at the world-space texture context. Terrain
+// callers keep constructing their original world context.
+VisibleSurfaceSample categoricalSurfaceSample(uint material, uint resolved, float2 fine_position,
+    float2 gradient_x, float2 gradient_y,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
     GridVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float period = visual.m_texture_period_m;
@@ -861,42 +1032,38 @@ float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_posi
     float2 uv_gradient_y = textureUvGradient(gradient_y, period);
 
     // Visible base color is sampled before metallic reduction selects kD.
-    float4 base = visibleBaseColor(
+    VisibleSurfaceSample sample;
+    sample.m_base = visibleBaseColor(
         visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
-    float metallic = visual.m_metallic;
-    float roughness = visual.m_roughness;
-    float eta = visual.m_ior;
-
-    float3 normal = sampleVisibleNormal(
+    sample.m_normal = sampleVisibleNormal(
         visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
+    sample.m_tint_alpha = tint.a;
+    sample.m_thermal = categoricalCellOccupied(resolved, visual)
+        ? thermalRGB(unpackCellTemperature(resolved)) : float3(0.0);
+    return sample;
+}
 
-    float3 view = surfaceToCamera(fine_position);
-    float n_dot_v = visibleNoV(normal, view);
-    float2 environment = brdfLutPair(g_brdf_lut, g_brdf_sampler, n_dot_v, roughness);
-    // `coefficients` is supplied by the caller: the terrain path requires a
-    // published fine CH, while a particle world without one shades from an
-    // explicit zero field instead of indexing the one-element fallback.
-    // The approved transport surface scope also bounds visible emission:
-    // receive-only transparent cells and gas never acquire a thermal or authored
-    // glow, while opaque surfaces and the approved emissive-liquid class do.
-    bool occupied = categoricalCellOccupied(resolved, visual);
-    float3 authored = occupied ? unpackSourceEmission(g_source_materials[material]) : float3(0.0);
-    float3 thermal = occupied ? thermalRGB(unpackCellTemperature(resolved)) : float3(0.0);
-    float3 hdr = visibleMaterialResponse(
-        base.rgb, metallic, roughness, eta, normal, view, coefficients, environment, authored, thermal);
-
-    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
-    float opacity = optical_blend ? saturate(tint.a * base.a * visual.m_opacity) : 1.0;
-    if (premultiplied) hdr *= opacity;
-    return float4(hdr, opacity);
+float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_position,
+    float2 gradient_x, float2 gradient_y, CH coefficients,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler,
+    bool premultiplied) {
+    VisibleSurfaceSample sample = categoricalSurfaceSample(
+        material, resolved, fine_position, gradient_x, gradient_y, textures, sampler);
+    VisibleSurfaceBackdrop backdrop = {float2(0.0), float2(0.0), false, float3(0.0)};
+    return visibleSurfaceResponse(
+        false, premultiplied, material, resolved, fine_position, sample, coefficients, backdrop, sampler);
 }
 
 // Optical opacity and geometric coverage are separate. Native zero-offset RGB
 // stays premultiplied so actual destination samples supply transmission.
 // Callers blend coverage once.
-float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
-    float2 gradient_y, float2 screen, float2 decoration, bool reuse_background, float3 unshifted_background,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler, float2 receiver_position, bool moving_surface=false, bool premultiplied=false) {
+//
+// The liquid sampling stage: the element's own albedo (with the filtered-mean
+// variance normalization) and normal at the world-space texture context. Terrain
+// callers keep constructing their original world context.
+VisibleSurfaceSample liquidSurfaceSample(uint material, float2 fine_position, float2 gradient_x,
+    float2 gradient_y, StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures,
+    SamplerState.Handle sampler) {
     GridVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     float period = visual.m_texture_period_m;
@@ -950,53 +1117,25 @@ float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
         }
     }
 
-    float3 color = tint.rgb * albedo.rgb;
-    // Fixed local relief response uses PBR parameters without a world light/GI
-    // dependency. Roughness widens the facing lobe; metallic colors its F0.
-    float facing = saturate(dot(normal, normalize(float3(-0.35, 0.45, 1.0))));
-    float3 f0 = lerp(float3(0.04), color, visual.m_metallic);
-    if (visual.m_normal_texture_index != 0xffffffffu) {
-        color = color * (0.72 + 0.28 * facing) + f0 * pow(facing, lerp(48.0, 2.0, visual.m_roughness)) * 0.12;
-    }
-    // Self color only, bounded without overflowing large finite strengths.
-    color += 1.0 - exp(-visual.m_emissive_rgb * min(visual.m_emissive_strength, 80.0));
-    bool optical_blend = (visual.m_surface_flags & kSurfaceOpticalBlend) != 0u;
-    float opacity = !optical_blend ? 1.0 : saturate(tint.a * albedo.a * visual.m_opacity);
-    if (g_grid_frame.m_has_background == 0u) {
-        float4 surface=decorateSurface(float4(color,opacity),decoration);
-        if (premultiplied) surface.rgb*=surface.a;
-        return surface;
-    }
-    if (opacity >= 1.0) { return decorateSurface(float4(color, 1.0), decoration); }
-    float2 offset_pixels = float2(0.0);
-    if (optical_blend && visual.m_ior > 1.0 && visual.m_refraction_depth_m > 0.0 && any(normal.xy != 0.0)) {
-        float2 displacement = normal.xy / max(normal.z, 0.25) *
-            ((1.0 - 1.0 / visual.m_ior) * visual.m_refraction_depth_m);
-        float4 start = mul(float4(world, 0.0, 1.0), g_grid_frame.m_view_projection);
-        float4 shifted = mul(float4(world + displacement, 0.0, 1.0), g_grid_frame.m_view_projection);
-        if (abs(start.w) > 1.0e-6 && abs(shifted.w) > 1.0e-6) {
-            float2 delta_ndc = shifted.xy / shifted.w - start.xy / start.w;
-            offset_pixels = delta_ndc * float2(0.5, -0.5) * g_grid_frame.m_viewport.zw;
-            offset_pixels *= min(1.0, 8.0 / max(length(offset_pixels), 1.0e-6));
-        }
-    }
-    // The refracted backdrop comes from the background copy (never the scene).
-    // Beer-Lambert absorption tints the transmitted light over the fixed optical
-    // thickness. This runs unconditionally, including the zero-offset and
-    // premultiplied paths, so a flat/IOR<=1 absorbing cell still tints.
-    float3 background = reuse_background && all(offset_pixels == 0.0)
-        ? unshifted_background : backdropColor(screen + offset_pixels, sampler);
-    float3 sigma = float3(visual.m_sigma_r_per_m, visual.m_sigma_g_per_m, visual.m_sigma_b_per_m);
-    if (any(sigma > 0.0)) {
-        background *= exp(-sigma * visual.m_refraction_depth_m);
-    }
+    VisibleSurfaceSample sample;
+    sample.m_base = float4(tint.rgb * albedo.rgb, albedo.a);
+    sample.m_normal = normal;
+    sample.m_thermal = float3(0.0);
+    sample.m_tint_alpha = tint.a;
+    return sample;
+}
 
-    // Blend over the destination (particles already drawn) with the material
-    // opacity, never a full replace: the refracted backdrop folds into the
-    // transmitted (1-opacity) term while the destination keeps its particles.
-    float4 surface = decorateSurface(float4(lerp(background, color, opacity), opacity), decoration);
-    if (premultiplied) surface.rgb *= surface.a;
-    return surface;
+float4 materialSurface(uint material, float2 fine_position, float2 gradient_x,
+    float2 gradient_y, float2 screen, float2 decoration, bool reuse_background, float3 unshifted_background,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler, float2 receiver_position, bool moving_surface=false, bool premultiplied=false) {
+    VisibleSurfaceSample sample = liquidSurfaceSample(
+        material, fine_position, gradient_x, gradient_y, textures, sampler);
+    VisibleSurfaceBackdrop backdrop = {screen, decoration, reuse_background, unshifted_background};
+    // The liquid response reads no indirect light; the shared entry still takes
+    // the coefficient set so both policies have one call shape.
+    CH no_coefficients={};
+    return visibleSurfaceResponse(
+        true, premultiplied, material, 0u, fine_position, sample, no_coefficients, backdrop, sampler);
 }
 
 float4 shadeGridReactive(
@@ -1280,7 +1419,14 @@ struct ParticleVertexOutput {
     float2 fine_position:TEXCOORD0;
     float2 uv:TEXCOORD1;
     nointerpolation uint material:TEXCOORD2;
-    nointerpolation float4 color:COLOR0;
+    // Stable-identity material-UV seed from the row and the particle-centred world
+    // offset of this vertex. They carry the seeded sampling context of the
+    // particle's own texture patch; the frame is translated with the particle,
+    // not rotated or stretched by the conic, so neither follows the draw class.
+    // A sample-rate entry must evaluate local_m at the sample exactly as it does
+    // fine_position and uv, never reuse the pixel-centre value.
+    nointerpolation uint uv_seed:TEXCOORD9;
+    float2 local_m:TEXCOORD10;
     // Quad corner in units of the row's physical radius r: 64/62 for the gas
     // mask, and the shared support 2.0 for both restored classes (the
     // fragment's phase SDF and falloff produce the actual silhouette). A row
@@ -1394,7 +1540,8 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     output.fine_position=world.xy/g_grid_frame.m_cell_size_m;
     output.uv=corners[vertex]*0.5+0.5;
     output.material=material;
-    output.color=float4(unpackParticleTint(particle.m_color_rgb9e5),1.0);
+    output.uv_seed=particle.m_uv_seed;
+    output.local_m=world.xy-particle.m_position;
     output.shape_scale=extent/particle.m_radius_m;
     output.canonical=material|(particle.m_material_flags_temperature&0xffff0000u);
     output.flow=flow;
@@ -1494,6 +1641,11 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
     geometric_support=1;
 
     float materialAlpha=float(visual.m_color_rgba&255u)/255.0;
+    // The tint is the row's own palette element, the same authored RGBA8 word the
+    // packer derived its tint from: the row's fourth word now carries the UV seed,
+    // so this decodes the palette bytes directly. Alpha is not part of it; the
+    // palette alpha above is the separate opacity factor.
+    float3 tint=particleTint(visual.m_color_rgba);
     // Gas is alpha-composited over the already shaded scene. Its color uses the
     // current decoded CH angular mean; it never relights the background and
     // adds no authored/thermal transport emission or ambient floor. Without a
@@ -1504,8 +1656,8 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
         lighting = angularMean(input.fine_position);
     }
 
-    float opacity=alpha*input.color.a*materialAlpha*visual.m_opacity*(1.0-coverage);
-    float3 color=input.color.rgb*lighting;
+    float opacity=alpha*materialAlpha*visual.m_opacity*(1.0-coverage);
+    float3 color=tint*lighting;
     return float4(point_sample?color*opacity:color,opacity);
 }
 
@@ -1683,9 +1835,11 @@ bool terrainOccludesParticle(uint resolved_material, uint terrain_material_id, b
 // The particle's own material surface before geometric edge coverage: linear HDR
 // premultiplied RGB in .rgb and the authored optical alpha in .a (1 for the
 // opaque class, which ignores authored opacity). This is the one pre-edge
-// evaluation both the direct entry below and the future density entry read; it
-// only factors out the two calls that already followed the material/phase
-// resolution, with their arguments, order and arithmetic unchanged.
+// evaluation the direct entries and the density splat entry read. It is split at
+// the attribute boundary: `*SurfaceSample` evaluates this particle's own material
+// textures, while `visibleSurfaceResponse` performs the response from those
+// attributes and the physical sample position. The deferred composite will call
+// the same response with reconstructed attributes.
 //
 // A liquid shades through the optical surface (its albedo/normal, IOR, optical
 // thickness and absorption sigmas, refracting the backdrop copy); a solid
@@ -1697,16 +1851,23 @@ float4 shadeParticleSurfaceBeforeEdge(bool liquid,bool blend_class,uint material
     float2 fine_position,float2 screen,float2 world_gradient_x,float2 world_gradient_y,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,SamplerState.Handle g_sampler) {
     if (liquid) {
-        return materialSurface(material,fine_position,world_gradient_x,world_gradient_y,screen,
-            float2(0.0,0.0),false,float3(0.0),g_textures,g_sampler,fine_position,false,blend_class);
+        VisibleSurfaceSample sample=liquidSurfaceSample(
+            material,fine_position,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+        VisibleSurfaceBackdrop backdrop={screen,float2(0.0),false,float3(0.0)};
+        CH no_coefficients={};
+        return visibleSurfaceResponse(
+            true,blend_class,material,0u,fine_position,sample,no_coefficients,backdrop,g_sampler);
     }
 
     // A world with no published fine CH shades from an explicit zero field
     // instead of indexing the one-element fallback.
     CH coefficients={};
     if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(fine_position);
-    return categoricalMaterialSurface(material,canonical,fine_position,world_gradient_x,world_gradient_y,
-        coefficients,g_textures,g_sampler,blend_class);
+    VisibleSurfaceSample sample=categoricalSurfaceSample(
+        material,canonical,fine_position,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+    VisibleSurfaceBackdrop backdrop={screen,float2(0.0),false,float3(0.0)};
+    return visibleSurfaceResponse(
+        false,blend_class,material,canonical,fine_position,sample,coefficients,backdrop,g_sampler);
 }
 
 float4 shadeSolidLiquidReactive(ParticleVertexOutput input,

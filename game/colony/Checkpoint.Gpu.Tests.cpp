@@ -3376,7 +3376,7 @@ namespace pP::game::tests::detail::checkpoint {
         static_assert(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
         static_assert(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
         static_assert(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
-        static_assert(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+        static_assert(PPR_OFFSETOF(ParticleGpu, m_uv_seed) == 16u);
         static_assert(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
     };
 }

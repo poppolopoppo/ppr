@@ -441,7 +441,7 @@ namespace pP {
             {"position", 0u},
             {"radius", 8u},
             {"material_flags_temperature", 12u},
-            {"color_rgb9e5", 16u},
+            {"uv_seed", 16u},
             {"motion", 20u},
         }};
         bool packed_layout_matches = packed != nullptr and

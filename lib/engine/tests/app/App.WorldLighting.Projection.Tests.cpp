@@ -1927,21 +1927,15 @@ namespace pP::tests::detail::WorldLightingProjection {
     // packed particle presentation row
     // ------------------------------------------------------------------
 
-    // One authored palette entry; `rgba` is the presentation tint source and the
-    // flags carry the phase/optics class bits the packer reads at byte 76.
+    // One authored palette entry; `rgba` is the material tint the draw decodes
+    // from the palette (the row itself carries no tint copy) and the flags carry
+    // the phase/optics class bits the packer reads at byte 76.
     [[nodiscard]] GridTerrainVisual gridVisual(const u32 material, const u32 rgba, const u32 flags) noexcept {
         GridTerrainVisual visual{};
         visual.m_material_id = material;
         visual.m_color_rgba = rgba;
         visual.m_surface_flags = flags;
         return visual;
-    }
-
-    // Authored palette tint in the row's r/g/b byte order (low byte is alpha).
-    [[nodiscard]] float3 paletteTint(const u32 rgba) noexcept {
-        return float3{
-            static_cast<float>((rgba >> 24u) & 255u) / 255.0f, static_cast<float>((rgba >> 16u) & 255u) / 255.0f,
-            static_cast<float>((rgba >> 8u) & 255u) / 255.0f};
     }
 
     // One binary16 ulp at the magnitude of `value`.
@@ -2088,15 +2082,11 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_TEST_ASSERT(motionMatches(rows[0u].m_motion[0u], 0.1f));
         PPR_TEST_ASSERT(motionMatches(rows[0u].m_motion[1u], -0.25f));
 
-        // The tint is the authored palette colour within the RGBA8 source's own
-        // one-byte quantum; alpha was never stored.
-        const float3 decoded_tint = lighting::unpackRGB9E5(rows[0u].m_color_rgb9e5);
-        const float3 authored_tint = paletteTint(visuals[0u].m_color_rgba);
-        const std::array<float, 3u> decoded{decoded_tint.x, decoded_tint.y, decoded_tint.z};
-        const std::array<float, 3u> authored{authored_tint.x, authored_tint.y, authored_tint.z};
-        for (u32 channel = 0u; channel < authored.size(); ++channel) {
-            PPR_TEST_ASSERT(std::abs(decoded[channel] - authored[channel]) <= 1.0f / 255.0f);
-        }
+        // Word 16..19 is the stable-identity material-UV seed, not a palette copy:
+        // it is the design's independent golden vector for stable id 1, computed
+        // from the metadata id alone, independent of this row's position, radius,
+        // material, class and motion. The gas row below carries its own id's seed.
+        PPR_TEST_ASSERT(rows[0u].m_uv_seed == 0xa07c7a97u);
 
         // Row 2 clamps to exactly +/-64 native cells per step.
         PPR_TEST_ASSERT(::pP::details::decodeHalf(rows[2u].m_motion[0u]) == 64.0f);
@@ -2111,6 +2101,9 @@ namespace pP::tests::detail::WorldLightingProjection {
         PPR_TEST_ASSERT(rows[4u].m_radius_m == 0.5f);
         PPR_TEST_ASSERT(((rows[4u].m_material_flags_temperature >> 12u) & 0xfu) == 1u);
         PPR_TEST_ASSERT(rows[4u].m_motion[0u] == 0u and rows[4u].m_motion[1u] == 0u);
+        // The gas row carries the seed of its own stable id (5), so its material
+        // patch is attached to the row identity and not to its class.
+        PPR_TEST_ASSERT(rows[4u].m_uv_seed == 0x59f6d934u);
         // Row 5 derives the optical-blend class bit from its own visual.
         PPR_TEST_ASSERT(((rows[5u].m_material_flags_temperature >> 12u) & 0xfu) == 2u);
 
@@ -2135,9 +2128,9 @@ namespace pP::tests::detail::WorldLightingProjection {
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_PROJECTION presentation_row bytes={} instances={} rejected={} tint=({:.4f},{:.4f},"
-                "{:.4f}) motion=({:.5f},{:.5f})",
-                sizeof(ParticleGpu), args[1u], specs.size() - args[1u], decoded[0u], decoded[1u], decoded[2u],
+                "WORLD_LIGHTING_PROJECTION presentation_row bytes={} instances={} rejected={} seed=0x{:08x} "
+                "motion=({:.5f},{:.5f})",
+                sizeof(ParticleGpu), args[1u], specs.size() - args[1u], rows[0u].m_uv_seed,
                 ::pP::details::decodeHalf(rows[0u].m_motion[0u]), ::pP::details::decodeHalf(rows[0u].m_motion[1u])));
     };
 

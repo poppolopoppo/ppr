@@ -8,12 +8,12 @@ struct ReadonlyRow { float mass, volume, material, r, g, b; };
 // draw-side mirror is ParticleGpu in grid_tiles.slang. Position and radius stay
 // float32 world metres: the float ulp at the 1365 m map corner is 4.1e-3 px at
 // span64 where an absolute half2 position would be 8.44 px. Only the material
-// word, the tint and the motion pair are quantised.
+// word, the stable-identity UV seed and the motion pair are quantised.
 struct PresentationRow {
     float2 position;                  // 0:  world metres
     float radius;                     // 8:  metres
     uint material_flags_temperature;  // 12: material 12 | class 4 << 12 | binary16 K << 16
-    uint color_rgb9e5;                // 16: RGB9E5 palette tint; alpha not stored
+    uint uv_seed;                     // 16: stable-identity material-UV seed
     half2 motion;                     // 20: native cells per solver step
 };
 
@@ -70,29 +70,36 @@ StructuredBuffer<uint> g_best_row;
 StructuredBuffer<uint> g_cell_fill;
 
 // ------------------------------------------------------------------
+// stable-identity material UV seed
+// ------------------------------------------------------------------
+// The seed is a pure function of the row's existing stable 64-bit metadata id, so
+// it survives checkpoint/replay, repacking, compaction and row reordering with no
+// saved seed state. Nothing else enters it: no frame counter, compacted instance
+// index, source row, position, conic axis, material id, runtime world-generation
+// token or clock. All arithmetic is modulo 2^32 with logical right shifts, and
+// the draw converts the two 16-bit halves to exact binary32 texture offsets.
+uint mixParticleUvSeed(uint value) {
+    value^=value>>16u;
+    value*=0x7feb352du;
+    value^=value>>15u;
+    value*=0x846ca68bu;
+    value^=value>>16u;
+    return value;
+}
+
+uint particleUvSeed(uint id_low,uint id_high) {
+    return mixParticleUvSeed(id_low^mixParticleUvSeed(id_high^0x9e3779b9u));
+}
+
+// Independent golden vectors (id high:low -> seed): 00000000:00000001 ->
+// a07c7a97, 00000000:00000002 -> 0e77ceb6, 00000001:00000000 -> 8e374fe0,
+// ffffffff:ffffffff -> 8fad8c62, and the pure arithmetic vector
+// 00000000:00000000 -> ae6f80f1. They pin this arithmetic against a second
+// implementation; they are not a uniqueness guarantee.
+
+// ------------------------------------------------------------------
 // physical circle packing with the committed hot/cold row identity
 // ------------------------------------------------------------------
-
-// Shared-exponent RGB9E5, the same codec as the host `lighting::packRGB9E5`:
-// mantissas in bits 0..26, exponent in 27..31, nearest/ties-up rounding. The
-// source is the palette's RGBA8 tint, so every channel is finite and in [0,1]
-// and the rejection branch is unreachable for valid content; it still resolves
-// to a neutral tint so a future non-8-bit source can never place a NaN in the
-// row or fail the frame.
-uint packParticleTint(float3 rgb) {
-    if (!all(isfinite(rgb)) || any(rgb < 0.0) || any(rgb > 65408.0))
-        rgb = float3(1.0);
-    if (all(rgb == 0.0))
-        return 0u;
-    for (uint exponent=0u;exponent<=31u;++exponent) {
-        float3 scaled=rgb*exp2(float(int(24)-int(exponent)));
-        uint3 mantissa=uint3(floor(scaled+0.5));
-        if (!any(mantissa>uint3(511u)))
-            return mantissa.x|(mantissa.y<<9u)|(mantissa.z<<18u)|(exponent<<27u);
-    }
-
-    return 0u;
-}
 
 [shader("compute")]
 [numthreads(256,1,1)]
@@ -169,11 +176,12 @@ void packParticles(uint3 id:SV_DispatchThreadID) {
     if ((surface_flags&1u)!=0u)
         class_flags|=kParticleClassOptical;
 
-    // Tint comes from the authored palette word for every row; the cold r/g/b
-    // columns are not initialised by the app. Alpha is deliberately not stored:
-    // the material's own alpha supplies opacity.
-    uint rgba=g_particle_palette[material].rgba;
-    particle.color_rgb9e5=packParticleTint(float3((rgba>>24u)&255u,(rgba>>16u)&255u,(rgba>>8u)&255u)/255.0);
+    // The fourth word is this row's stable-identity UV seed, derived from the
+    // metadata id before compaction so a rejected publication can never replace
+    // it and a different id occupying the row recomputes it. The palette tint is
+    // no longer copied into the row: every shading path decodes the tint from the
+    // row's own palette element, so the row stays 24 bytes and no tint is stored.
+    particle.uv_seed=particleUvSeed(metadata.idLow,metadata.idHigh);
     // The material is not stored in its canonical packCell position: material,
     // class and temperature share one word. Shading reconstructs
     // canonical = material | (temperature << 16).

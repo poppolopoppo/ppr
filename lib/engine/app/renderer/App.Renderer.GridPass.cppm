@@ -122,7 +122,7 @@ export namespace pP {
     // Position and radius stay binary32 in world metres: the float32 ulp at the
     // 1365 m map corner is 4.1e-3 px at span64, where an absolute half2 position
     // would be 8.44 px. The quantised fields are the material/class/temperature
-    // word, the RGB9E5 tint and the binary16 motion pair.
+    // word, the stable-identity material-UV seed and the binary16 motion pair.
     struct alignas(8) ParticleGpu {
         float m_position[2]{};
         float m_radius_m{};
@@ -130,8 +130,10 @@ export namespace pP {
         // The material is not stored in its canonical packCell position; shading
         // reconstructs `material | (temperature << 16)`.
         u32 m_material_flags_temperature{};
-        // RGB9E5 tint from the palette's RGBA8 colour; alpha is not stored.
-        u32 m_color_rgb9e5{};
+        // Stable-identity material-UV seed, hashed at pack time from the row's
+        // 64-bit metadata id. The pinned palette tint is no longer copied into the
+        // row: shading decodes it from the row's own palette element instead.
+        u32 m_uv_seed{};
         // binary16 pair: native cells per solver step, x low word / y high word.
         u16 m_motion[2]{};
     };
@@ -139,7 +141,7 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(ParticleGpu, m_position) == 0u);
     static_assert(PPR_OFFSETOF(ParticleGpu, m_radius_m) == 8u);
     static_assert(PPR_OFFSETOF(ParticleGpu, m_material_flags_temperature) == 12u);
-    static_assert(PPR_OFFSETOF(ParticleGpu, m_color_rgb9e5) == 16u);
+    static_assert(PPR_OFFSETOF(ParticleGpu, m_uv_seed) == 16u);
     static_assert(PPR_OFFSETOF(ParticleGpu, m_motion) == 20u);
     static_assert(std::is_standard_layout_v<ParticleGpu> and std::is_trivially_copyable_v<ParticleGpu>);
 
