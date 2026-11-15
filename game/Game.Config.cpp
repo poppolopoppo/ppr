@@ -252,6 +252,10 @@ namespace pP::game {
         append("game.post.bloom", "Enable SPD bloom on the resolved HDR scene.", "post-bloom", true);
         append("game.post.bloom_intensity", "Bloom contribution scale (0 to 2).", "post-bloom-intensity", false);
         append("game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16).", "post-bloom-threshold", false);
+        append(
+            "game.post.sharpen", "Enable the contrast-adaptive sharpen applied after the presentation enlargement.",
+            "post-sharpen", true);
+        append("game.post.sharpen_strength", "Presentation sharpen strength (0 to 1).", "post-sharpen-strength", false);
 
         return options;
     }
@@ -359,6 +363,16 @@ namespace pP::game {
         post_process.m_adaptation_tau = post.m_adaptation_tau;
         post_process.m_ev_min = post.m_ev_min;
         post_process.m_ev_max = post.m_ev_max;
+
+        // The sharpen strength is a live slider value that reaches the post owner
+        // every frame, so this boundary is the last place a non-finite or
+        // out-of-domain draft could reach the pass. Resolution already rejects
+        // those values; the clamp keeps the pass precondition satisfied for a
+        // draft that skipped validation instead of failing the frame.
+        post_process.m_sharpen_enabled = post.m_sharpen;
+        post_process.m_sharpen_strength = std::isfinite(post.m_sharpen_strength)
+                                              ? std::clamp(post.m_sharpen_strength, 0.0f, 1.0f)
+                                              : PostProcessSettings{}.m_sharpen_strength;
     }
 
     // ------------------------------------------------------------------

@@ -55,11 +55,14 @@ export namespace pP {
         float m_exposure_ev{0.0f}, m_adaptation_tau{0.7f};
         float m_ev_min{-4.0f}, m_ev_max{4.0f};
         float m_bloom_intensity{0.125f}, m_bloom_threshold{1.0f};
+        float m_sharpen_strength{0.5f};
         bool m_auto_exposure{true}, m_bloom_enabled{true};
+        bool m_sharpen_enabled{true};
     };
 
-    /// Finite fields, a positive adaptation time constant, an ordered EV clamp
-    /// and non-negative bloom controls. These are physical pass preconditions;
-    /// the application owns its narrower user-control domains.
+    /// Finite fields, a positive adaptation time constant, an ordered EV clamp,
+    /// non-negative bloom controls and a sharpen strength inside [0,1]. These are
+    /// physical pass preconditions; the application owns its narrower
+    /// user-control domains.
     [[nodiscard]] std::error_code validatePostProcessSettings(const PostProcessSettings &settings);
 }

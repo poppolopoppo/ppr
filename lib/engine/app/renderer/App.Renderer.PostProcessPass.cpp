@@ -41,17 +41,23 @@ namespace pP {
         static_assert(PPR_OFFSETOF(PostParameters, m_manual_ev) == 12u);
         static_assert(PPR_OFFSETOF(PostParameters, m_bloom_enabled) == 16u);
 
-        // Mirrors present_scene.slang: exact integer resolved pixels and the
-        // single SDR sRGB encoding decision for the acquired surface.
+        // Mirrors present_scene.slang: exact integer resolved pixels, the single
+        // SDR sRGB encoding decision for the acquired surface, and the
+        // display-referred CAS strength (0 disables the cross taps).
         struct alignas(16) PresentParameters {
             u32 m_resolved_width;
             u32 m_resolved_height;
             u32 m_pixel_scale;
             u32 m_encode_srgb;
+            float m_sharpen_strength;
+            u32 m_reserved0;
+            u32 m_reserved1;
+            u32 m_reserved2;
         };
-        static_assert(sizeof(PresentParameters) == 16u and alignof(PresentParameters) == 16u);
+        static_assert(sizeof(PresentParameters) == 32u and alignof(PresentParameters) == 16u);
         static_assert(PPR_OFFSETOF(PresentParameters, m_pixel_scale) == 8u);
         static_assert(PPR_OFFSETOF(PresentParameters, m_encode_srgb) == 12u);
+        static_assert(PPR_OFFSETOF(PresentParameters, m_sharpen_strength) == 16u);
 
         // Mirrors spd_bloom.slang. Threshold/soft knee are exposed units and
         // are divided by the total exposure once inside the prefilter.
@@ -301,6 +307,41 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // presentation contrast-adaptive sharpen (CPU oracle)
+    // ------------------------------------------------------------------
+
+    float PostProcessPass::sharpenWeight(const float cross_min, const float cross_max) noexcept {
+        // 1/sqrt(min + max + eps) grows as the local contrast falls. The floor
+        // keeps black input finite and the ceiling bounds the cross-tap weight.
+        const float contrast = cross_min + cross_max + kSharpenContrastEps;
+        if (not (contrast > 0.0f)) {
+            return kSharpenMaxWeight;
+        }
+
+        return std::min(1.0f / std::sqrt(contrast), kSharpenMaxWeight);
+    }
+
+    float PostProcessPass::sharpenChannel(
+        const float center, const float left, const float right, const float up, const float down,
+        const float strength) noexcept {
+        // Zero strength (or a disabled control mapped to zero) is exactly the
+        // unsharpened presentation: no cross tap is read at all.
+        if (not (strength > 0.0f)) {
+            return center;
+        }
+
+        const float peak = strength * (kSharpenPeakMin + (kSharpenPeakMax - kSharpenPeakMin) * strength);
+        const float weight = sharpenWeight(
+            std::min(std::min(left, right), std::min(up, down)), std::max(std::max(left, right), std::max(up, down)));
+        const float cross = -peak * weight;
+
+        // The centre keeps 1 - 4*cross so the five taps sum to one: a flat patch
+        // is reproduced exactly, and only local contrast is amplified.
+        const float sharpened = center * (1.0f - 4.0f * cross) + cross * (left + right + up + down);
+        return std::clamp(sharpened, 0.0f, 1.0f);
+    }
+
+    // ------------------------------------------------------------------
     // initialization and teardown
     // ------------------------------------------------------------------
 
@@ -402,7 +443,8 @@ namespace pP {
         post_pipeline.label = "post process pipeline";
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, device.createRenderPipeline(post_pipeline, m_post_pipeline.writeRef()));
 
-        // Presentation: exact integer resolved loads and one sRGB decision.
+        // Presentation: exact integer resolved loads, display-referred CAS and
+        // one sRGB decision.
         shader::SharedModule present_module{};
         PPR_RETURN_ERROR_ON_FAIL(
             PostProcess, shader_service.loadModuleFromFile(
@@ -418,7 +460,9 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 PostProcess,
                 hasFieldOffset(layout, "m_pixel_scale", PPR_OFFSETOF(PresentParameters, m_pixel_scale)) and
-                        hasFieldOffset(layout, "m_encode_srgb", PPR_OFFSETOF(PresentParameters, m_encode_srgb))
+                        hasFieldOffset(layout, "m_encode_srgb", PPR_OFFSETOF(PresentParameters, m_encode_srgb)) and
+                        hasFieldOffset(
+                            layout, "m_sharpen_strength", PPR_OFFSETOF(PresentParameters, m_sharpen_strength))
                     ? std::error_code{}
                     : std::make_error_code(std::errc::invalid_argument));
         }
@@ -1211,6 +1255,10 @@ namespace pP {
         parameters.m_resolved_height = static_cast<u32>(slot.m_extent.y);
         parameters.m_pixel_scale = grid.m_pixel_scale;
         parameters.m_encode_srgb = encode_srgb ? 1u : 0u;
+        // A disabled control is the identity and skips every extra cross tap; the
+        // sharpen is independent of the pixel scale, so it also runs at P1.
+        parameters.m_sharpen_strength = m_pending_settings.m_sharpen_enabled ? m_pending_settings.m_sharpen_strength
+                                                                             : 0.0f;
 
         rhi::ShaderCursor cursor{slot.m_present_root};
         rhi::ShaderCursor constants;

@@ -42,6 +42,15 @@ export namespace pP {
         // level by its weight exactly once.
         static constexpr std::array<float, kMaxBloomLevels> kBloomLevelWeights{1.0f, 0.5f, 0.25f, 0.15f, 0.1f, 0.05f};
 
+        // Mirrored by present_scene.slang: the cross-tap coefficient magnitude at
+        // the low and high ends of the strength ramp, the local-contrast
+        // reciprocal's floor, and the bound that keeps the 5-tap kernel well
+        // conditioned on black input.
+        static constexpr float kSharpenPeakMin{0.125f};
+        static constexpr float kSharpenPeakMax{0.25f};
+        static constexpr float kSharpenContrastEps{1.0e-3f};
+        static constexpr float kSharpenMaxWeight{2.0f};
+
         [[nodiscard]] static float luminance(float r, float g, float b) noexcept;
         [[nodiscard]] static float log2Luminance(float lum) noexcept;
         [[nodiscard]] static u32 luminanceBin(float log2_lum) noexcept;
@@ -58,6 +67,13 @@ export namespace pP {
         // Full six-entry chain; entries after bloomLevelCount are the final
         // clamped 1x1 level so callers can size a fixed cohort.
         [[nodiscard]] static std::array<int2, kMaxBloomLevels> bloomLevelExtents(int2 resolved_extent) noexcept;
+
+        // Per-channel oracle for the presentation-resolution CAS in
+        // present_scene.slang. The shader applies exactly these expressions to
+        // R, G and B independently; strength <= 0 is the identity.
+        [[nodiscard]] static float sharpenWeight(float cross_min, float cross_max) noexcept;
+        [[nodiscard]] static float sharpenChannel(
+            float center, float left, float right, float up, float down, float strength) noexcept;
 
         [[nodiscard]] std::error_code initialize(
             IShaderService &shader_service, const std::filesystem::path &content_dir);
@@ -84,7 +100,10 @@ export namespace pP {
         // attachment (one RGBA16F color attachment, no depth).
         [[nodiscard]] std::error_code render(const DrawContext &context);
         // Fixed-P nearest enlargement/crop from the display-linear output to the
-        // acquired surface. Samples exact integer resolved pixels; never UV-stretches.
+        // acquired surface. Samples exact integer resolved pixels; never
+        // UV-stretches. The same pass applies the contrast-adaptive sharpen to the
+        // enlarged, display-linear values before the single sRGB transfer, so the
+        // final image is sharpened at presentation resolution.
         [[nodiscard]] std::error_code present(const DrawContext &context, const PresentationGrid &grid);
         // A previously accepted stage-B output that a retained-picture stage C
         // may present without a new stage B: same resolved extent and world.

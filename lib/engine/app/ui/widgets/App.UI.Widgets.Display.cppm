@@ -90,7 +90,16 @@ export namespace pP::ui {
         bool &m_bloom;
         float &m_bloom_intensity;
         float &m_bloom_threshold;
+        bool &m_sharpen;
+        float &m_sharpen_strength;
     };
+
+    /// Stable ids for the live "Lighting & Post" section that tests resolve
+    /// through the body window's navigation rects. The table owns the override id
+    /// that seeds its rows' item ids.
+    inline constexpr char kLightingPostTableId[]{"##display_lighting_post"};
+    inline constexpr char kSharpenToggleId[]{"##post_sharpen"};
+    inline constexpr char kSharpenStrengthId[]{"##post_sharpen_strength"};
 
     /// Reconciles the two live EV-clamp sliders after one was edited. Both
     /// values stay in [-8,8]; editing the lower bound above the upper raises the

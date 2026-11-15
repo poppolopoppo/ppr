@@ -297,9 +297,10 @@ export namespace pP::game {
         }
     };
 
-    /// Runtime-tunable independent post-processing settings. Eye adaptation
-    /// and bloom are applied to PostProcessPass through applyPostProcessSettings;
-    /// reconstruction history and lighting are not part of this schema.
+    /// Runtime-tunable independent post-processing settings. Eye adaptation,
+    /// bloom and the presentation sharpen are applied to PostProcessPass through
+    /// applyPostProcessSettings; reconstruction history and lighting are not part
+    /// of this schema.
     struct PostDisplaySettings {
         bool m_auto_exposure{true};
         float m_exposure_ev{0.0f};
@@ -309,6 +310,8 @@ export namespace pP::game {
         bool m_bloom{true};
         float m_bloom_intensity{0.125f};
         float m_bloom_threshold{1.0f};
+        bool m_sharpen{true};
+        float m_sharpen_strength{0.5f};
 
         [[nodiscard]] static std::error_code validate(
             const PostDisplaySettings &settings, config::Diagnostics &diagnostics);
@@ -365,6 +368,19 @@ export namespace pP::game {
                         "game.post.bloom_threshold", "Bloom bright-pass threshold (0 to 16)", "Post",
                         EMutability::runtime, ESource::all, true},
                     Range<float>{0.0f, 16.0f}),
+                field(
+                    &PostDisplaySettings::m_sharpen,
+                    Metadata{
+                        "game.post.sharpen",
+                        "Enable the contrast-adaptive sharpen applied after the presentation enlargement", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    boolean_domain),
+                field(
+                    &PostDisplaySettings::m_sharpen_strength,
+                    Metadata{
+                        "game.post.sharpen_strength", "Presentation sharpen strength (0 to 1)", "Post",
+                        EMutability::runtime, ESource::all, true},
+                    Range<float>{0.0f, 1.0f}),
             };
         }
     };

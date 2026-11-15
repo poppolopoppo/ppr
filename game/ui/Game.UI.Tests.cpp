@@ -1596,6 +1596,8 @@ descriptor = "earlier.toml"
         const game::PostDisplaySettings post_defaults{};
         PPR_TEST_ASSERT(post_defaults.m_auto_exposure);
         PPR_TEST_ASSERT(post_defaults.m_bloom);
+        PPR_TEST_ASSERT(post_defaults.m_sharpen);
+        PPR_TEST_ASSERT(post_defaults.m_sharpen_strength == 0.5f);
 
         // Invalid drafts are rejected with diagnostics, never silently clamped.
         game::WorldLightDisplaySettings invalid_sky = sky_draft;
@@ -1633,6 +1635,182 @@ descriptor = "earlier.toml"
         config::Diagnostics invalid_post_diagnostics{};
         PPR_TEST_ASSERT(not validatePostDraft(committed_post, invalid_post, invalid_post_diagnostics));
         PPR_TEST_ASSERT(invalid_post_diagnostics.hasErrors());
+
+        // The sharpen strength is a [0,1] slider domain: 1 and 0 are accepted
+        // drafts, out-of-range values are configuration errors, never clamped.
+        game::PostDisplaySettings boundary_post{};
+        for (const float strength: {0.0f, 1.0f}) {
+            boundary_post.m_sharpen_strength = strength;
+            config::Diagnostics boundary_diagnostics{};
+            const auto accepted = validatePostDraft(committed_post, boundary_post, boundary_diagnostics);
+            PPR_TEST_ASSERT(accepted.has_value());
+            PPR_TEST_ASSERT(accepted->m_value.m_sharpen_strength == strength);
+            PPR_TEST_ASSERT(not boundary_diagnostics.hasErrors());
+        }
+
+        for (const float strength: {-0.01f, 1.01f}) {
+            game::PostDisplaySettings out_of_range{};
+            out_of_range.m_sharpen_strength = strength;
+            config::Diagnostics out_of_range_diagnostics{};
+            PPR_TEST_ASSERT(not validatePostDraft(committed_post, out_of_range, out_of_range_diagnostics));
+            PPR_TEST_ASSERT(out_of_range_diagnostics.hasErrors());
+        }
+    };
+
+    PPR_UNIT_TEST (display_panel_sharpen_control_writes_the_live_post_draft) {
+        ImGuiContext *const context = ImGui::CreateContext();
+        PPR_DEFER {
+            ImGui::DestroyContext(context);
+        };
+        ImGui::SetCurrentContext(context);
+        ImGuiIO &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DeltaTime = 1.0f / 60.0f;
+        // A tall display lets the whole "Lighting & Post" section lay out inside
+        // the panel body, so the sharpen rows are reachable by a real click.
+        io.DisplaySize = ImVec2{1280.0f, 2400.0f};
+        io.Fonts->AddFontDefault();
+        unsigned char *pixels{};
+        int width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+        // Live, caller-owned fields. The display section has no per-field intent:
+        // like pixelization and bloom, a live control edits these values and the
+        // game maps them onto the post owner every frame.
+        EFramePacing pacing = EFramePacing::follow_vsync;
+        u32 cap_hz = 60u;
+        bool paced_vsync = true;
+        bool throttle_unfocused = true;
+        EDisplayWindowMode window_mode = EDisplayWindowMode::windowed;
+        std::string monitor{"auto"};
+        u32 window_width = 1280u;
+        u32 window_height = 720u;
+        u32 refresh_hz = 0u;
+        u32 pixel_scale = 1u;
+        i32 sky_hour = 12;
+        ELightingDiagnostic diagnostic = ELightingDiagnostic::off;
+        u32 cascade = 1u;
+        bool auto_exposure = true;
+        float exposure_ev = 0.0f;
+        float adaptation_tau = 0.7f;
+        float ev_min = -4.0f;
+        float ev_max = 4.0f;
+        bool bloom = true;
+        float bloom_intensity = 0.125f;
+        float bloom_threshold = 1.0f;
+        bool sharpen = true;
+        float sharpen_strength = 0.5f;
+
+        const ::pP::ui::DisplayWidgetSnapshot snapshot{};
+        const ::pP::ui::DisplayWidgetState state{
+            .m_draft =
+                {pacing, cap_hz, paced_vsync, throttle_unfocused, window_mode, monitor, window_width, window_height,
+                    refresh_hz},
+            .m_pixelization = {pixel_scale},
+            .m_lighting_post =
+                {sky_hour, diagnostic, cascade, auto_exposure, exposure_ev, adaptation_tau, ev_min, ev_max, bloom,
+                    bloom_intensity, bloom_threshold, sharpen, sharpen_strength},
+            .m_matches = true,
+            .m_availability = {true, nullptr}};
+        bool open = true;
+        const auto frame = [&]() {
+            ImGui::NewFrame();
+            const auto action = ::pP::ui::drawDisplayWidget(snapshot, state, open);
+            ImGui::Render();
+            return action;
+        };
+
+        // Settle the window, then give it room for the full body instead of the
+        // first-use fraction of the display.
+        std::ignore = frame();
+        ImGui::SetWindowSize("Display", ImVec2{900.0f, 2200.0f});
+        std::ignore = frame();
+        PPR_ASSERT(ImGui::FindWindowByName("Display") != nullptr);
+
+        ImGuiWindow *body = nullptr;
+        for (ImGuiWindow *const window: context->Windows) {
+            if (window->ParentWindow == ImGui::FindWindowByName("Display") and
+                std::string_view{window->Name}.find("##body") != std::string_view::npos) {
+                body = window;
+            }
+        }
+        PPR_TEST_ASSERT(body != nullptr);
+
+        // The rows live in the table inside the body child, so their ids hash the
+        // table's override id on top of the child's own id. Both strings come from
+        // the widget header, so the test cannot drift from the submitted ids.
+        const ImGuiID table_id = body->GetID(::pP::ui::kLightingPostTableId);
+        const ImGuiID toggle_id = ImHashStr(::pP::ui::kSharpenToggleId, 0u, table_id);
+        const ImGuiID strength_id = ImHashStr(::pP::ui::kSharpenStrengthId, 0u, table_id);
+
+        // ItemAdd only records a navigation rectangle when the item belongs to the
+        // navigation window: the body child is not NavFlattened, so the outer
+        // "Display" window would stay empty. Focus the owning window instead.
+        const auto navigateTo = [&](const ImGuiID id) -> ImGuiWindow * {
+            io.AddMousePosEvent(-100.0f, -100.0f);
+            std::ignore = frame();
+            ImGui::FocusWindow(body);
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetNavID(id, ImGuiNavLayer_Main, 0u, ImRect{});
+            std::ignore = frame();
+            return context->NavWindow;
+        };
+
+        const auto itemRect = [&](const ImGuiID id) {
+            ImGuiWindow *const item_window = navigateTo(id);
+            PPR_TEST_ASSERT(item_window == body);
+            return ImGui::WindowRectRelToAbs(item_window, item_window->NavRectRel[ImGuiNavLayer_Main]);
+        };
+
+        // A control id that is never submitted yields an empty rectangle, so the
+        // non-empty expectation below distinguishes a real control from a
+        // mis-derived id rather than accepting either.
+        const ImRect unmatched = itemRect(ImHashStr("##no_such_control", 0u, table_id));
+        PPR_TEST_ASSERT(unmatched.GetWidth() == 0.0f and unmatched.GetHeight() == 0.0f);
+
+        const auto itemCenter = [&](const ImGuiID id) {
+            const ImRect rect = itemRect(id);
+            PPR_TEST_ASSERT(rect.GetWidth() > 0.0f and rect.GetHeight() > 0.0f);
+
+            // Both rows must be laid out inside the body's visible inner rect, or
+            // the click would land outside the child and never reach the control.
+            const ImVec2 center = rect.GetCenter();
+            PPR_TEST_ASSERT(body->InnerRect.Contains(center));
+            return center;
+        };
+
+        const auto click = [&](const ImVec2 position) {
+            io.AddMousePosEvent(position.x, position.y);
+            std::ignore = frame();
+
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            std::ignore = frame();
+
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            return frame();
+        };
+
+        // The strength slider sits under the toggle in the same table column.
+        const ImVec2 toggle_position = itemCenter(toggle_id);
+        const ImVec2 strength_position = itemCenter(strength_id);
+        PPR_TEST_ASSERT(strength_position.y > toggle_position.y);
+
+        // Clicking the toggle writes the caller-owned live value and emits no
+        // display transaction intent (it is not a draft or trial edit).
+        const auto action = click(toggle_position);
+        PPR_TEST_ASSERT(not action.has_value());
+        PPR_TEST_ASSERT(not sharpen);
+        PPR_TEST_ASSERT(sharpen_strength == 0.5f);
+
+        // The live value reaches the post owner only through the mapping seam.
+        game::PostDisplaySettings post{};
+        post.m_sharpen = sharpen;
+        post.m_sharpen_strength = sharpen_strength;
+        PostProcessSettings mapped{};
+        game::applyPostProcessSettings(mapped, post);
+        PPR_TEST_ASSERT(not mapped.m_sharpen_enabled);
+        PPR_TEST_ASSERT(mapped.m_sharpen_strength == 0.5f);
+        PPR_TEST_ASSERT(not validatePostProcessSettings(mapped));
     };
 
     PPR_UNIT_TEST (live_ev_limit_edits_remain_ordered_and_valid) {
@@ -1718,6 +1896,7 @@ namespace pP::game::tests {
             detail::presentation::world_actions_close_during_activation_publication_and_shutdown,
             detail::presentation::unsaved_edits_allow_cancel_while_a_save_settles,
             detail::presentation::lighting_post_draft_validates_and_resets,
+            detail::presentation::display_panel_sharpen_control_writes_the_live_post_draft,
             detail::presentation::live_ev_limit_edits_remain_ordered_and_valid,
         });
     };

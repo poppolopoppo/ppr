@@ -772,11 +772,14 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_intensity == 0.125f);
         PPR_TEST_ASSERT(normal->m_post.m_value.m_bloom_threshold == 1.0f);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_sharpen);
+        PPR_TEST_ASSERT(normal->m_post.m_value.m_sharpen_strength == 0.5f);
 
         Diagnostics configured_diagnostics;
         const auto configured = resolveCli(
             {"--world-light-sky-hour=12", "--world-light-diagnostic=cascade", "--world-light-cascade=5",
-                "--pixel-scale=2", "--post-auto-exposure", "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25"},
+                "--pixel-scale=2", "--post-auto-exposure", "--post-exposure-ev=2.5", "--post-bloom-intensity=1.25",
+                "--post-sharpen-strength=0.25"},
             configured_diagnostics);
         PPR_TEST_ASSERT(configured.has_value());
         PPR_TEST_ASSERT(configured->m_world_light.m_value.m_sky_hour == 12);
@@ -786,13 +789,17 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(configured->m_post.m_value.m_auto_exposure);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_exposure_ev == 2.5f);
         PPR_TEST_ASSERT(configured->m_post.m_value.m_bloom_intensity == 1.25f);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_sharpen);
+        PPR_TEST_ASSERT(configured->m_post.m_value.m_sharpen_strength == 0.25f);
 
         for (const auto *const invalid:
             {"--world-light-sky-hour=24", "--world-light-sky-hour=-2", "--post-exposure-ev=-16.1",
                 "--post-adaptation-tau=0.09", "--post-ev-min=-8.1", "--post-ev-max=8.1", "--post-bloom-intensity=2.1",
                 "--post-bloom-threshold=16.1", "--post-exposure-ev=nan", "--post-adaptation-tau=inf",
-                "--post-bloom-threshold=nan", "--world-light-diagnostic=debug", "--world-light-diagnostic=none",
-                "--world-light-cascade=0", "--world-light-cascade=6", "--pixel-scale=0", "--pixel-scale=9"}) {
+                "--post-bloom-threshold=nan", "--post-sharpen-strength=-0.01", "--post-sharpen-strength=1.01",
+                "--post-sharpen-strength=nan", "--post-sharpen-strength=inf", "--world-light-diagnostic=debug",
+                "--world-light-diagnostic=none", "--world-light-cascade=0", "--world-light-cascade=6",
+                "--pixel-scale=0", "--pixel-scale=9"}) {
             Diagnostics rejected;
             PPR_TEST_ASSERT(not resolveCli({invalid}, rejected));
             PPR_TEST_ASSERT(rejected.hasErrors());
@@ -914,6 +921,65 @@ namespace pP::game::tests::detail::compat {
         PPR_TEST_ASSERT(not persisted.has_value());
     };
 
+    PPR_UNIT_TEST (sharpen_defaults_round_trip_and_mapping) {
+        // Factory defaults: the sharpen is on at the panel's mid strength.
+        const PostDisplaySettings defaults{};
+        PPR_TEST_ASSERT(defaults.m_sharpen);
+        PPR_TEST_ASSERT(defaults.m_sharpen_strength == 0.5f);
+
+        // A persisted `false` survives the overlay write and a fresh resolution.
+        PostDisplaySettings persisted{};
+        persisted.m_sharpen = false;
+        persisted.m_sharpen_strength = 0.75f;
+        const auto overlay = buildLightingPostOverlayDocument(
+            config::Document{}, WorldLightDisplaySettings{}, PixelDisplaySettings{}, persisted);
+        PPR_TEST_ASSERT(overlay.has_value());
+        const Layer persisted_layer = toLayer(*overlay, "lighting-post.toml");
+        const Layer *const persisted_layers = std::addressof(persisted_layer);
+        Diagnostics persisted_diagnostics{};
+        const auto persisted_resolved = resolveGameCli(
+            CliResult{}, std::span<const Layer>{persisted_layers, 1u}, persisted_diagnostics);
+        PPR_TEST_ASSERT(persisted_resolved.has_value() and not persisted_diagnostics.hasErrors());
+        PPR_TEST_ASSERT(not persisted_resolved->m_post.m_value.m_sharpen);
+        PPR_TEST_ASSERT(persisted_resolved->m_post.m_value.m_sharpen_strength == 0.75f);
+
+        // The default picture keeps the sharpen enabled across the same trip.
+        const auto default_overlay = buildLightingPostOverlayDocument(
+            config::Document{}, WorldLightDisplaySettings{}, PixelDisplaySettings{}, defaults);
+        PPR_TEST_ASSERT(default_overlay.has_value());
+        const Layer default_layer = toLayer(*default_overlay, "lighting-post.toml");
+        const Layer *const default_layers = std::addressof(default_layer);
+        Diagnostics default_diagnostics{};
+        const auto default_resolved = resolveGameCli(
+            CliResult{}, std::span<const Layer>{default_layers, 1u}, default_diagnostics);
+        PPR_TEST_ASSERT(default_resolved.has_value() and not default_diagnostics.hasErrors());
+        PPR_TEST_ASSERT(default_resolved->m_post.m_value.m_sharpen);
+        PPR_TEST_ASSERT(default_resolved->m_post.m_value.m_sharpen_strength == 0.5f);
+
+        // The mapping boundary clamps an out-of-domain draft and sanitises a
+        // non-finite one instead of failing the frame on the pass precondition.
+        PostProcessSettings mapped{};
+        PostDisplaySettings draft{};
+        draft.m_sharpen = true;
+        draft.m_sharpen_strength = 4.0f;
+        applyPostProcessSettings(mapped, draft);
+        PPR_TEST_ASSERT(mapped.m_sharpen_enabled);
+        PPR_TEST_ASSERT(mapped.m_sharpen_strength == 1.0f);
+
+        draft.m_sharpen_strength = -4.0f;
+        applyPostProcessSettings(mapped, draft);
+        PPR_TEST_ASSERT(mapped.m_sharpen_strength == 0.0f);
+
+        draft.m_sharpen_strength = std::numeric_limits<float>::quiet_NaN();
+        applyPostProcessSettings(mapped, draft);
+        PPR_TEST_ASSERT(mapped.m_sharpen_strength == PostProcessSettings{}.m_sharpen_strength);
+        PPR_TEST_ASSERT(not validatePostProcessSettings(mapped));
+
+        draft.m_sharpen = false;
+        applyPostProcessSettings(mapped, draft);
+        PPR_TEST_ASSERT(not mapped.m_sharpen_enabled);
+    };
+
     PPR_UNIT_TEST (retired_crash_harness_rejected) {
         Diagnostics diagnostics{};
         const auto result = resolveCli({"--diag-crash=abort"}, diagnostics);
@@ -954,6 +1020,7 @@ namespace pP::game::tests {
             detail::compat::sky_and_post_settings_parse_and_validate,
             detail::compat::retired_world_light_settings_are_rejected,
             detail::compat::invalid_post_draft_is_rejected_and_not_persisted,
+            detail::compat::sharpen_defaults_round_trip_and_mapping,
             detail::compat::retired_crash_harness_rejected,
         });
     };

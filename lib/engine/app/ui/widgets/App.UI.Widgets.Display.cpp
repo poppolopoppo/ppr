@@ -74,7 +74,7 @@ namespace pP::ui {
             "Picture device", "Change in flight", "Last problem", "Window", "Observed window", "Observed exclusive",
             // Lighting & Post:
             "Sky hour", "Auto exposure", "Exposure EV", "Adaptation tau (s)", "EV clamp", "Bloom", "Bloom intensity",
-            "Bloom threshold"};
+            "Bloom threshold", "Sharpen", "Sharpen strength"};
 
         void reconcileEvLimitsImpl(float &ev_min, float &ev_max, const bool edited_min) noexcept {
             ev_min = std::clamp(ev_min, -8.0f, 8.0f);
@@ -691,7 +691,7 @@ namespace pP::ui {
         // every frame); the retained sky hour is a begin-time control. Neither
         // edits the display draft or joins Apply/Save.
         ImGui::SeparatorText("Lighting & Post");
-        if (beginLabelTable("##display_lighting_post", label_width)) {
+        if (beginLabelTable(kLightingPostTableId, label_width)) {
             const LightingPostWidgetDraft &lp = state.m_lighting_post;
 
             {
@@ -796,6 +796,23 @@ namespace pP::ui {
                     lp.m_bloom_threshold = std::clamp(lp.m_bloom_threshold, 0.0f, 16.0f);
                 }
                 ImGui::SetItemTooltip("Bloom bright-pass threshold (0 to 16).");
+            }
+
+            {
+                beginValueRow("Sharpen");
+                ImGui::Checkbox(kSharpenToggleId, &lp.m_sharpen);
+                ImGui::SetItemTooltip(
+                    "Contrast-adaptive sharpen applied to the enlarged picture at presentation resolution.");
+            }
+
+            {
+                DisplayDisabledScope sharpen_disabled{not lp.m_sharpen};
+                beginValueRow("Sharpen strength");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderFloat(kSharpenStrengthId, &lp.m_sharpen_strength, 0.0f, 1.0f, "%.2f")) {
+                    lp.m_sharpen_strength = std::clamp(lp.m_sharpen_strength, 0.0f, 1.0f);
+                }
+                ImGui::SetItemTooltip("Sharpening strength (0 to 1); 0 is the unsharpened picture.");
             }
 
             ImGui::EndTable();

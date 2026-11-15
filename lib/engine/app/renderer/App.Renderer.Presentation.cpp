@@ -72,7 +72,8 @@ namespace pP {
                                   std::isfinite(settings.m_ev_min) and
                                   std::isfinite(settings.m_ev_max) and
                                   std::isfinite(settings.m_bloom_intensity) and
-                                  std::isfinite(settings.m_bloom_threshold)
+                                  std::isfinite(settings.m_bloom_threshold) and
+                                  std::isfinite(settings.m_sharpen_strength)
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
 
@@ -82,6 +83,12 @@ namespace pP {
                               : std::make_error_code(std::errc::invalid_argument));
         PPR_RETURN_ERROR_ON_FAIL(
             Presentation, settings.m_bloom_intensity >= 0.0f and settings.m_bloom_threshold >= 0.0f
+                              ? std::error_code{}
+                              : std::make_error_code(std::errc::invalid_argument));
+        // The sharpen strength is a kernel weight: outside [0,1] it would either
+        // invert the local contrast or exceed the configured cross-tap peak.
+        PPR_RETURN_ERROR_ON_FAIL(
+            Presentation, settings.m_sharpen_strength >= 0.0f and settings.m_sharpen_strength <= 1.0f
                               ? std::error_code{}
                               : std::make_error_code(std::errc::invalid_argument));
 

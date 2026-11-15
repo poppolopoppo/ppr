@@ -27,7 +27,7 @@ Slang shader assets for application render passes. `mesh_bindless.slang` is the
 `TrianglePass` static-mesh program; `grid_tiles.slang` is the `GridPass` debug-grid program (flat
 tinted or per-cell quads, one instance per visible chunk-sized tile). `post_process.slang` and
 `present_scene.slang` supply the independent resolved-size treatment and fixed-Presentation
-enlargement through `PostProcessPass`. The former `triangle.slang`
+enlargement with its display-referred sharpen through `PostProcessPass`. The former `triangle.slang`
 reference asset was deleted. Each pass owns its shader program, and diagnostic
 fixtures load their qualification assets directly.
 
@@ -237,12 +237,13 @@ resulting immutable texture.
   runs exactly once on scene + `intensity*bloom` with total
   `exp2(manual_ev + adapted)` exposure. Entries: `vertexPostProcess`,
   `fragmentPostProcess`.
-- `present_scene.slang` is the fixed-P nearest enlargement/crop: each window pixel
-  loads `floor(pixel/P)` from the resolved output and the R*P-W excess is cropped
-  rather than stretched. Its 16-byte constant block carries resolved extents,
-  the pixel scale and the single SDR sRGB encoding decision. Float targets stay
-  linear; sRGB attachments encode in hardware. Entries: `vertexPresentScene`,
-  `fragmentPresentScene`.
+- `present_scene.slang` is the fixed-P nearest enlargement/crop with the display-referred
+  contrast-adaptive sharpen: each window pixel loads `floor(pixel/P)` from the resolved output and
+  the R*P-W excess is cropped rather than stretched, while the four CAS cross taps are the same
+  integer loads one window pixel away. Its 32-byte constant block carries resolved extents, the
+  pixel scale, the single SDR sRGB encoding decision and the sharpen strength (0 = identity and no
+  cross tap read). Float targets stay linear; sRGB attachments encode in hardware, and the sharpen
+  runs before that one transfer. Entries: `vertexPresentScene`, `fragmentPresentScene`.
 - `luminance_histogram.slang` downsamples the valid R region to min(R,256) with
   integer partition blocks, builds the 64-bin [-8,8] log2 histogram and reduces
   a fractional 10-90% percentile mean. `auto_exposure.slang` applies the
@@ -304,7 +305,7 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 - `world_lighting_fine.slang` - in-place fine CH reconstruction and EMA (`reconstructFine`).
 - `world_lighting_sky.slang` - analytic terminal sky sector integration (include-only).
 - `post_process.slang` - resolved-size bloom combine and once-only AgX treatment.
-- `present_scene.slang` - fixed-P nearest enlargement/crop and single sRGB decision.
+- `present_scene.slang` - fixed-P nearest enlargement/crop, display-referred CAS and single sRGB decision.
 - `luminance_histogram.slang` / `auto_exposure.slang` - metering and adaptation.
 - `display_agx.slang` - display treatment included by `post_process.slang`:
   attributed Filament scalar Punchy approximation, explicit linear-sRGB/Rec.2020

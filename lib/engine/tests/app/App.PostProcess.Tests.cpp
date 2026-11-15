@@ -106,6 +106,12 @@ namespace pP::tests::detail {
             invalid = valid;
             invalid.m_bloom_threshold = std::numeric_limits<float>::quiet_NaN();
             PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_sharpen_strength = std::numeric_limits<float>::quiet_NaN();
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_sharpen_strength = std::numeric_limits<float>::infinity();
+            PPR_TEST_ASSERT(rejects(invalid));
 
             invalid = valid;
             invalid.m_adaptation_tau = 0.0f;
@@ -120,6 +126,12 @@ namespace pP::tests::detail {
             invalid = valid;
             invalid.m_bloom_threshold = -0.01f;
             PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_sharpen_strength = -0.01f;
+            PPR_TEST_ASSERT(rejects(invalid));
+            invalid = valid;
+            invalid.m_sharpen_strength = 1.01f;
+            PPR_TEST_ASSERT(rejects(invalid));
 
             // Finite endpoints and the documented game defaults stay accepted.
             PostProcessSettings defaults{};
@@ -131,8 +143,16 @@ namespace pP::tests::detail {
             defaults.m_bloom_enabled = true;
             defaults.m_bloom_intensity = 0.125f;
             defaults.m_bloom_threshold = 1.0f;
+            PPR_TEST_ASSERT(defaults.m_sharpen_enabled);
+            PPR_TEST_ASSERT(defaults.m_sharpen_strength == 0.5f);
             PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
 
+            for (const float endpoint: {0.0f, 1.0f}) {
+                defaults.m_sharpen_strength = endpoint;
+                PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
+            }
+
+            defaults.m_sharpen_strength = 0.5f;
             defaults.m_exposure_ev = -16.0f;
             PPR_TEST_ASSERT(not validatePostProcessSettings(defaults));
             defaults.m_exposure_ev = 16.0f;
@@ -1449,6 +1469,89 @@ namespace pP::tests::detail {
         };
 
         // ------------------------------------------------------------------
+        // presentation contrast-adaptive sharpen
+        // ------------------------------------------------------------------
+        // The CPU oracle is the same expression present_scene.slang evaluates per
+        // channel on the enlarged display-linear picture.
+        namespace ContrastAdaptiveSharpen {
+            PPR_UNIT_TEST (cpu_sharpen_identity_and_flat_preservation) {
+                // Zero strength is the unsharpened picture, bit for bit, whatever
+                // the cross neighbourhood looks like.
+                const std::array<const float, 6> values{0.0f, 0.05f, 0.25f, 0.5f, 0.9f, 1.0f};
+                for (const float center: values) {
+                    for (const float neighbour: values) {
+                        PPR_TEST_ASSERT(
+                            PostProcessPass::sharpenChannel(center, neighbour, center, neighbour, center, 0.0f) ==
+                            center);
+                    }
+                }
+
+                // The disabled control is mapped to zero strength, so it is the
+                // same identity even across a hard edge.
+                PPR_TEST_ASSERT(PostProcessPass::sharpenChannel(0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f) == 0.5f);
+
+                // A flat patch has min == max == centre: the contrast weight stays
+                // finite, but the five taps are equal and their coefficients sum to
+                // one, so the patch is reproduced.
+                for (const float value: values) {
+                    for (const float strength: {0.25f, 0.5f, 0.75f, 1.0f}) {
+                        const float flat = PostProcessPass::sharpenChannel(value, value, value, value, value, strength);
+                        PPR_TEST_ASSERT(std::abs(flat - value) <= 1e-6f);
+                    }
+                }
+            };
+
+            PPR_UNIT_TEST (cpu_sharpen_amplifies_a_step_edge_monotonically) {
+                constexpr float low = 0.25f;
+                constexpr float high = 0.75f;
+
+                // Bright side of a vertical edge: the left tap lands in the dark
+                // half while the other three stay bright. The dark side is its
+                // mirror image (one bright tap).
+                float previous_bright = high;
+                float previous_dark = low;
+                for (const float strength: {0.1f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+                    const float bright = PostProcessPass::sharpenChannel(high, low, high, high, high, strength);
+                    const float dark = PostProcessPass::sharpenChannel(low, low, high, low, low, strength);
+                    PPR_TEST_ASSERT(bright > high);
+                    PPR_TEST_ASSERT(dark < low);
+                    PPR_TEST_ASSERT(bright >= previous_bright);
+                    PPR_TEST_ASSERT(dark <= previous_dark);
+                    previous_bright = bright;
+                    previous_dark = dark;
+                }
+
+                // Peaking, not inversion: the full-strength overshoot stays inside
+                // the display range and below the neighbouring plateau.
+                PPR_TEST_ASSERT(previous_bright < 1.0f and previous_dark > 0.0f);
+
+                // The flat region beside the edge is untouched at that strength.
+                const float beside = PostProcessPass::sharpenChannel(high, high, high, high, high, 1.0f);
+                PPR_TEST_ASSERT(std::abs(beside - high) <= 1e-6f);
+            };
+
+            PPR_UNIT_TEST (cpu_sharpen_weight_falls_with_local_contrast) {
+                // Dark, low-contrast neighbourhoods take the larger weight; bright
+                // ones take the smaller one. That is the adaptive part.
+                PPR_TEST_ASSERT(
+                    PostProcessPass::sharpenWeight(0.05f, 0.10f) > PostProcessPass::sharpenWeight(0.40f, 0.80f));
+
+                // Black input stays finite and pinned at the ceiling.
+                PPR_TEST_ASSERT(std::isfinite(PostProcessPass::sharpenWeight(0.0f, 0.0f)));
+                PPR_TEST_ASSERT(PostProcessPass::sharpenWeight(0.0f, 0.0f) == PostProcessPass::kSharpenMaxWeight);
+                PPR_TEST_ASSERT(PostProcessPass::sharpenWeight(0.9f, 1.0f) < PostProcessPass::kSharpenMaxWeight);
+            };
+
+            const UnitTest sharpen = UnitTest::Named("sharpen") / [](UnitTest::IRun &run) -> void {
+                run.recurse({
+                    cpu_sharpen_identity_and_flat_preservation,
+                    cpu_sharpen_amplifies_a_step_edge_monotonically,
+                    cpu_sharpen_weight_falls_with_local_contrast,
+                });
+            };
+        }
+
+        // ------------------------------------------------------------------
         // padded backing, R=1 and odd non-square GPU coverage
         // ------------------------------------------------------------------
 
@@ -1763,6 +1866,7 @@ namespace pP::tests {
             detail::PostProcess::teardown_is_idempotent_before_initialize,
             detail::PostProcess::HistogramAdaptation::histogram_adaptation,
             detail::PostProcess::SpdBloom::spd_bloom,
+            detail::PostProcess::ContrastAdaptiveSharpen::sharpen,
             detail::PostProcess::output_lifetime,
             detail::PostProcess::backing,
         });

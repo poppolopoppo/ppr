@@ -3493,14 +3493,19 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(differing_pixels(base, repeated) == 0u);
 
             // Pixelization is a resolution control: each P=4 block is one exact
-            // source texel and the P=1 image keeps distinct neighbours.
-            const auto pixelized = capture(baseline, 128u, 4u);
+            // source texel and the P=1 image keeps distinct neighbours. The
+            // sharpen is an independent display treatment applied to the enlarged
+            // picture, so this block-exactness check keeps it off.
+            PostProcessSettings unsharpened = baseline;
+            unsharpened.m_sharpen_enabled = false;
+            const auto unsharpened_base = capture(unsharpened);
+            const auto pixelized = capture(unsharpened, 128u, 4u);
             for (u32 y = 0u; y < 4u; ++y) {
                 for (u32 x = 0u; x < 4u; ++x) {
                     PPR_TEST_ASSERT(gateTexel_(pixelized, 16u + x, 16u + y) == gateTexel_(pixelized, 16u, 16u));
                 }
             }
-            PPR_TEST_ASSERT(differing_pixels(base, pixelized) > 100u);
+            PPR_TEST_ASSERT(differing_pixels(unsharpened_base, pixelized) > 100u);
             saveGridQa_(pixelized, "picture-pixelized-independent-post");
 
             // Exposure is a display treatment: it changes color/brightness but
