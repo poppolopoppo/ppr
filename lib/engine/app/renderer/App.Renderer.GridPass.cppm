@@ -1747,8 +1747,6 @@ export namespace pP {
             u32 m_phase_mask{kParticleSurfaceNoPhase};
             // Bit (1u << static_cast<u32>(class)) for each admitted liquid class.
             u32 m_class_mask{0u};
-            // How many distinct valid liquid materials were admitted.
-            u32 m_material_count{0u};
 
             [[nodiscard]] bool admitted() const noexcept {
                 return m_phase_mask != kParticleSurfaceNoPhase;
@@ -1757,6 +1755,8 @@ export namespace pP {
             [[nodiscard]] bool admits(const EGridParticleDrawClass draw_class) const noexcept {
                 return (m_class_mask & (1u << static_cast<u32>(draw_class))) != 0u;
             }
+
+            [[nodiscard]] bool operator==(const ParticleSurfaceLane &) const noexcept = default;
         };
 
         // One completion-selected surface bundle: the selection label and depth,
@@ -1796,24 +1796,20 @@ export namespace pP {
         [[nodiscard]] std::error_code encodeParticleSurfacePasses_(
             const PreRenderContext &context, ParticleSurfaceSlot &slot, u32 slot_index, const rhi::Viewport &viewport,
             const rhi::ScissorRect &scissor);
-        // The composite root's binder: the same validity-guarded response set the
-        // accumulation root uses (palette, sources, categorical publication, the
-        // ownership authority and the backdrop it samples). The backdrop view is
-        // retained on the composite root because shading reads it, not on the
-        // accumulation root, which never samples it. Every field is
-        // validity-guarded, so a program that folded an input away is skipped.
-        [[nodiscard]] std::error_code bindParticleSurfaceInputs_(
-            rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
         // Ensures every shared owner the surface set can bind (contour/chunk-slot
         // maps, palette + source palette + texture inventory + boundary noise,
         // lighting fallback). Idempotent; the surface passes never depend on the
         // scene pass having prepared these first.
         [[nodiscard]] std::error_code ensureParticleSurfaceOwners_(rhi::IDevice &device);
-        // Binds the accumulation root's attribute-sampling inputs. Every field is
-        // validity-guarded (a program that dropped a dead resource is skipped
-        // instead of dereferencing a null cursor) and every resource is ensured
-        // first, so a missing input is a reported error, never a null binding.
-        [[nodiscard]] std::error_code bindParticleSurfaceSplat_(
+        // THE surface input binder, shared by the selection/accumulation roots and
+        // by the composite root: the palette, sources, categorical publication, the
+        // ownership authority, the texture inventory/sampler and the backdrop.
+        // Every field is validity-guarded (a program that folded a resource away is
+        // skipped instead of dereferencing a null cursor) and every resource is
+        // ensured first, so a missing input is a reported error, never a null
+        // binding. The composite root also retains the backdrop it samples; the
+        // accumulation root never samples it.
+        [[nodiscard]] std::error_code bindParticleSurfaceInputs_(
             rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability);
         // The three surface pipeline states. Selection is an integer/no-blend
         // strict-Less depth-writing pass, attributes are additive One/One on every

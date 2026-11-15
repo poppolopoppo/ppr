@@ -60,6 +60,10 @@ namespace pP {
         // together, including a material with no visible row: an offscreen
         // competitor still owns texels the moment it becomes visible, and a
         // one-material field would then change representation mid-frame.
+        //
+        // The previous admission is captured first so the diagnostic below can fire
+        // only on a transition instead of on every preparation.
+        const ParticleSurfaceLane previous = m_world.m_particle_surface;
         m_world.m_particle_surface = {};
         if (m_world.m_diagnostic_mode != EGridDiagnosticMode::textured or not m_world.m_gpu_particles) {
             return;
@@ -78,6 +82,7 @@ namespace pP {
         }
 
         ParticleSurfaceLane lane{};
+        u32 admitted_materials{};
         for (const u32 material: metadata->m_materials) {
             const auto visual = std::ranges::find(
                 m_world.m_terrain_visuals, material, &GridTerrainVisual::m_material_id);
@@ -99,7 +104,7 @@ namespace pP {
                                         ? EGridParticleDrawClass::optical
                                         : EGridParticleDrawClass::opaque;
             lane.m_class_mask |= 1u << static_cast<u32>(draw_class);
-            ++lane.m_material_count;
+            ++admitted_materials;
         }
 
         if (not lane.admitted()) {
@@ -107,32 +112,42 @@ namespace pP {
         }
 
         m_world.m_particle_surface = lane;
-        PPR_LOG(
-            GridPass, debug, "particle surface lane admitted",
-            {
-                {"liquid_materials", lane.m_material_count},
-                {"publication_materials", metadata->m_materials.size()},
-                {"class_mask", lane.m_class_mask},
-            });
+        if (lane != previous) {
+            // Transition-only diagnostic: an unchanged admission is not re-logged
+            // on every preparation.
+            PPR_LOG(
+                GridPass, debug, "particle surface lane admitted",
+                {
+                    {"liquid_materials", admitted_materials},
+                    {"publication_materials", metadata->m_materials.size()},
+                    {"class_mask", lane.m_class_mask},
+                });
+        }
     }
 
     std::error_code GridPass::ensureParticleSurfaceTarget_(
         rhi::IDevice &device, ParticleSurfaceSlot &slot, const u32 width, const u32 height) {
-        if (slot.m_label and slot.m_width == width and slot.m_height == height) {
+        // A complete bundle at the requested size is the only reusable state: a
+        // partial creation failure must never look reusable. The caller proved
+        // this slot's last reader completed before selecting it, so replacing the
+        // bundle cannot race an in-flight composite or accumulation.
+        const bool complete = slot.m_label and
+                              slot.m_label_view and
+                              slot.m_depth and
+                              slot.m_depth_view and
+                              slot.m_base and
+                              slot.m_base_view and
+                              slot.m_normal and
+                              slot.m_normal_view;
+        if (complete and slot.m_width == width and slot.m_height == height) {
             return {};
         }
 
-        // The caller proved this slot's last reader completed before selecting
-        // it, so replacing the bundle cannot race an in-flight composite or
-        // accumulation.
-        slot.m_label.setNull();
-        slot.m_label_view.setNull();
-        slot.m_depth.setNull();
-        slot.m_depth_view.setNull();
-        slot.m_base.setNull();
-        slot.m_base_view.setNull();
-        slot.m_normal.setNull();
-        slot.m_normal_view.setNull();
+        // Build into a local bundle and publish it only on complete success: a
+        // recoverable failure part-way through leaves the previous (still fenced)
+        // bundle and its dimensions untouched, so a later retry rebuilds from a
+        // consistent state instead of matching cached dimensions to half a set.
+        ParticleSurfaceSlot bundle{};
 
         rhi::TextureDesc desc{};
         desc.type = rhi::TextureType::Texture2D;
@@ -145,8 +160,8 @@ namespace pP {
             static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
         desc.defaultState = rhi::ResourceState::ShaderResource;
         desc.label = "grid particle surface label";
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, slot.m_label.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, slot.m_label->getDefaultView(slot.m_label_view.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_label.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_label->getDefaultView(bundle.m_label_view.writeRef()));
 
         // Selection depth: the synthetic rho^2 distance, never scene depth and
         // never sampled at composite.
@@ -154,8 +169,8 @@ namespace pP {
         desc.usage = rhi::TextureUsage::DepthStencil;
         desc.defaultState = rhi::ResourceState::DepthWrite;
         desc.label = "grid particle surface selection depth";
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, slot.m_depth.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, slot.m_depth->getDefaultView(slot.m_depth_view.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_depth.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_depth->getDefaultView(bundle.m_depth_view.writeRef()));
 
         // Q and G: the two attribute sums. RGBA16F carries signed normal
         // components and the existing additive blend contract.
@@ -164,15 +179,20 @@ namespace pP {
             static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));
         desc.defaultState = rhi::ResourceState::ShaderResource;
         desc.label = "grid particle surface base+density (Q)";
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, slot.m_base.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, slot.m_base->getDefaultView(slot.m_base_view.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_base.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_base->getDefaultView(bundle.m_base_view.writeRef()));
 
         desc.label = "grid particle surface normal+alpha (G)";
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, slot.m_normal.writeRef()));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, slot.m_normal->getDefaultView(slot.m_normal_view.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, device.createTexture(desc, nullptr, bundle.m_normal.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bundle.m_normal->getDefaultView(bundle.m_normal_view.writeRef()));
 
-        slot.m_width = width;
-        slot.m_height = height;
+        // Publish: the old bundle (if any) is released here, after every new
+        // member exists. The slot's completion value belongs to the slot, not to
+        // the images, so it is preserved.
+        bundle.m_width = width;
+        bundle.m_height = height;
+        bundle.m_last_use = slot.m_last_use;
+        slot = std::move(bundle);
         return {};
     }
 
@@ -433,7 +453,7 @@ namespace pP {
         // inherits nothing.
         const auto bind_common = [&](GridCachedPipeline &pipeline, rhi::ShaderCursor &cursor) -> std::error_code {
             u32 availability{};
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindParticleSurfaceSplat_(context.m_device, cursor, availability));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, bindParticleSurfaceInputs_(context.m_device, cursor, availability));
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, uploadFrameConstants_(pipeline.m_slot_frame_cursors[slot_index], availability));
             PPR_RETURN_ERROR_ON_FAIL(GridPass, bindGridPass_(cursor, 0u, EGridParticleDrawClass::opaque));
@@ -500,7 +520,10 @@ namespace pP {
         rhi::RenderPassDepthStencilAttachment depth_attachment{};
         depth_attachment.view = slot.m_depth_view;
         depth_attachment.depthLoadOp = rhi::LoadOp::Clear;
-        depth_attachment.depthStoreOp = rhi::StoreOp::Store;
+        // Selection distance is consumed only by this pass: the next selection
+        // clears it and neither accumulation nor composite samples it, so the
+        // store is discarded. The attachment itself stays.
+        depth_attachment.depthStoreOp = rhi::StoreOp::DontCare;
         depth_attachment.depthClearValue = 1.0f;
 
         {
@@ -758,7 +781,7 @@ namespace pP {
         return ensureLightingFallback_(device);
     }
 
-    std::error_code GridPass::bindParticleSurfaceSplat_(
+    std::error_code GridPass::bindParticleSurfaceInputs_(
         rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability) {
         availability = 0u;
         PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureParticleSurfaceOwners_(device));
@@ -878,15 +901,5 @@ namespace pP {
         // the grid, so the explicit shader test stays false.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindTerrainLighting_(cursor, availability));
         return {};
-    }
-
-    std::error_code GridPass::bindParticleSurfaceInputs_(
-        rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability) {
-        // The composite shades the reconstructed surface, so its root carries the
-        // same validity-guarded response inputs the accumulation root does: the
-        // palette that supplies the winning label's parameters, the categorical
-        // publication it rechecks, the ownership authority and the backdrop it
-        // samples. A program that folded one of them away is skipped.
-        return bindParticleSurfaceSplat_(device, cursor, availability);
     }
 }

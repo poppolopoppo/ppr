@@ -858,17 +858,25 @@ float4 sampleVisibleAlbedo(GridVisual visual, TexturePatches patches, bool repea
     return a0 * patches.weights.x + a1 * patches.weights.y + a2 * patches.weights.z;
 }
 
-// Linear tint times the visible albedo. The filtered-mean variance normalization
-// is the approved approximation; alpha keeps ordinary barycentric blending.
-float4 normalizeVisibleAlbedo(
-    GridVisual visual, float4 albedo, float3 weights, bool repeat_texture) {
-    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
-    float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
+// The approved filtered-mean variance normalization for stochastic (non-repeat)
+// materials; alpha keeps ordinary barycentric blending. Kept separate from the
+// tint so the direct gas path can reuse it without adopting the terrain tint's
+// authored-sRGB decode.
+float4 albedoVarianceNormalized(GridVisual visual, float4 albedo, float3 weights, bool repeat_texture) {
     if (!repeat_texture) {
+        float3 mean = float3(visual.m_filtered_mean_r, visual.m_filtered_mean_g, visual.m_filtered_mean_b);
         albedo.rgb = saturate(mean + (albedo.rgb - mean) * rsqrt(dot(weights, weights)));
     }
 
-    return float4(tint.rgb * albedo.rgb, albedo.a);
+    return albedo;
+}
+
+// Linear tint times the visible albedo.
+float4 normalizeVisibleAlbedo(
+    GridVisual visual, float4 albedo, float3 weights, bool repeat_texture) {
+    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
+    float4 normalized = albedoVarianceNormalized(visual, albedo, weights, repeat_texture);
+    return float4(tint.rgb * normalized.rgb, normalized.a);
 }
 
 float4 visibleBaseColor(GridVisual visual, TexturePatches patches, bool repeat_texture,
@@ -1064,45 +1072,106 @@ float4 visibleSurfaceResponse(bool liquid,bool premultiplied,uint material,uint 
     if (liquid) return liquidSurfaceResponse(material,fine_position,sample,backdrop,sampler,premultiplied);
     return categoricalSurfaceResponse(material,resolved,fine_position,coefficients,sample,premultiplied);
 }
-// The categorical/solid sampling stage: the element's own albedo, normal and
-// canonical-temperature thermal at the world-space texture context. Terrain
-// callers keep constructing their original world context.
-VisibleSurfaceSample categoricalSurfaceSample(uint material, uint resolved, float2 fine_position,
-    float2 gradient_x, float2 gradient_y,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
-    GridVisual visual = g_terrain_visuals[min(material, 65535u)];
-    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
-    float period = visual.m_texture_period_m;
-    float2 world = fine_position * g_grid_frame.m_cell_size_m;
-    float2 uv = world / period;
-    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
+
+// The texture-coordinate context of one particle sample, split from the physical
+// position the response reads. `m_unwrapped` is the particle-centred seeded
+// coordinate of design section 2.6 and the gradients are its unwrapped
+// derivatives, so a texture sample never needs a fake position and lighting,
+// refraction, CH and terrain keep the real one.
+struct VisibleUvContext {
+    float2 m_unwrapped;
+    float2 m_gradient_x;
+    float2 m_gradient_y;
+};
+
+// The patch set of one element sample in a supplied texture context. The repeat
+// path wraps the unwrapped coordinate with frac and keeps the unwrapped gradient;
+// the stochastic path feeds texturePatches the unwrapped coordinate, never a prior
+// frac. Every stage below shares this one construction.
+TexturePatches visibleTexturePatches(GridVisual visual, float2 unwrapped) {
     TexturePatches patches;
-    if (repeat_texture) {
-        patches.uv0 = frac(uv);
+    if ((visual.m_surface_flags & kSurfaceTextureRepeat) != 0u) {
+        patches.uv0 = frac(unwrapped);
         patches.uv1 = patches.uv0;
         patches.uv2 = patches.uv0;
         patches.weights = float3(1.0, 0.0, 0.0);
     } else {
-        patches = texturePatches(uv);
+        patches = texturePatches(unwrapped);
     }
 
-    // Derivatives belong to the continuous world UV, before lattice/hash/fract.
-    // All albedo and normal patches use these same gradients and translations.
-    float2 uv_gradient_x = textureUvGradient(gradient_x, period);
-    float2 uv_gradient_y = textureUvGradient(gradient_y, period);
+    return patches;
+}
+
+// World-space texture context of a native-cell sample: the terrain translucent
+// path and any caller without a particle seed keeps its original coordinates.
+VisibleUvContext worldUvContext(float2 fine_position, float2 gradient_x, float2 gradient_y, float period) {
+    VisibleUvContext context;
+    float2 world = fine_position * g_grid_frame.m_cell_size_m;
+    context.m_unwrapped = world / period;
+    context.m_gradient_x = gradient_x / period;
+    context.m_gradient_y = gradient_y / period;
+    return context;
+}
+
+// Particle-centred seeded context of one surface splat: the stable-identity
+// offset plus the interpolated world-plane offset, and the unwrapped world
+// gradients of that same offset over the texture period. The seed translates the
+// patch and leaves every derivative untouched.
+VisibleUvContext particleUvContext(uint seed, float2 local_metres, float2 local_gradient_x,
+    float2 local_gradient_y, float period) {
+    VisibleUvContext context;
+    context.m_unwrapped = particleUvUnwrapped(seed, local_metres, period);
+    context.m_gradient_x = local_gradient_x / period;
+    context.m_gradient_y = local_gradient_y / period;
+    return context;
+}
+
+// The categorical/solid sampling stage in a supplied texture context: the
+// element's own tinted albedo, decoded normal and canonical-temperature thermal.
+// The context carries the particle-attached seeded frame for a splat and the
+// world-space frame for terrain, so both use the same texture helpers.
+VisibleSurfaceSample categoricalSurfaceSampleAt(uint material, uint resolved, VisibleUvContext context,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    GridVisual visual = g_terrain_visuals[min(material, 65535u)];
+    float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
+    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
+    TexturePatches patches = visibleTexturePatches(visual, context.m_unwrapped);
 
     // Visible base color is sampled before metallic reduction selects kD.
     VisibleSurfaceSample sample;
     sample.m_base = visibleBaseColor(
-        visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
+        visual, patches, repeat_texture, context.m_gradient_x, context.m_gradient_y, textures, sampler);
     sample.m_normal = sampleVisibleNormal(
-        visual, patches, repeat_texture, uv_gradient_x, uv_gradient_y, textures, sampler);
+        visual, patches, repeat_texture, context.m_gradient_x, context.m_gradient_y, textures, sampler);
     sample.m_tint_alpha = tint.a;
     sample.m_thermal = categoricalCellOccupied(resolved, visual)
         ? thermalRGB(unpackCellTemperature(resolved)) : float3(0.0);
     sample.m_alpha = 1.0;
     sample.m_alpha_reconstructed = false;
     return sample;
+}
+
+// The element's own albedo (variance-normalized) and sampled alpha in a supplied
+// texture context, WITHOUT a tint: the direct gas path multiplies its palette tint
+// itself, keeping the existing byte tint rather than the terrain sRGB decode.
+float4 visibleElementAlbedo(GridVisual visual, VisibleUvContext context,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
+    TexturePatches patches = visibleTexturePatches(visual, context.m_unwrapped);
+    float4 albedo = sampleVisibleAlbedo(
+        visual, patches, repeat_texture, context.m_gradient_x, context.m_gradient_y, textures, sampler);
+    return albedoVarianceNormalized(visual, albedo, patches.weights, repeat_texture);
+}
+
+// World-space context of a native-cell sample: the terrain paths keep their
+// original coordinates.
+VisibleSurfaceSample categoricalSurfaceSample(uint material, uint resolved, float2 fine_position,
+    float2 gradient_x, float2 gradient_y,
+    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> textures, SamplerState.Handle sampler) {
+    GridVisual visual = g_terrain_visuals[min(material, 65535u)];
+    return categoricalSurfaceSampleAt(
+        material, resolved,
+        worldUvContext(fine_position, gradient_x, gradient_y, visual.m_texture_period_m), textures, sampler);
 }
 
 float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_position,
@@ -1120,17 +1189,6 @@ float4 categoricalMaterialSurface(uint material, uint resolved, float2 fine_posi
 // stays premultiplied so actual destination samples supply transmission.
 // Callers blend coverage once.
 //
-// The texture-coordinate context of one particle sample, split from the physical
-// position the response reads. `m_unwrapped` is the particle-centred seeded
-// coordinate of design section 2.6 and the gradients are its unwrapped
-// derivatives, so a texture sample never needs a fake position and lighting,
-// refraction, CH and terrain keep the real one.
-struct VisibleUvContext {
-    float2 m_unwrapped;
-    float2 m_gradient_x;
-    float2 m_gradient_y;
-};
-
 // The liquid sampling stage: the element's own albedo (with the filtered-mean
 // variance normalization), normal and authoring alpha in the supplied texture
 // context. The repeat path wraps the unwrapped coordinate with frac and keeps
@@ -1142,15 +1200,7 @@ VisibleSurfaceSample liquidSurfaceSampleAt(uint material, VisibleUvContext conte
     GridVisual visual = g_terrain_visuals[min(material, 65535u)];
     float4 tint = diagnosticTint(visual.m_color_rgba, 1.0);
     bool repeat_texture = (visual.m_surface_flags & kSurfaceTextureRepeat) != 0u;
-    TexturePatches patches;
-    if (repeat_texture) {
-        patches.uv0 = frac(context.m_unwrapped);
-        patches.uv1 = patches.uv0;
-        patches.uv2 = patches.uv0;
-        patches.weights = float3(1.0, 0.0, 0.0);
-    } else {
-        patches = texturePatches(context.m_unwrapped);
-    }
+    TexturePatches patches = visibleTexturePatches(visual, context.m_unwrapped);
 
     float2 uv_gradient_x = context.m_gradient_x;
     float2 uv_gradient_y = context.m_gradient_y;
@@ -1196,30 +1246,6 @@ VisibleSurfaceSample liquidSurfaceSampleAt(uint material, VisibleUvContext conte
     sample.m_alpha = 1.0;
     sample.m_alpha_reconstructed = false;
     return sample;
-}
-
-// World-space texture context of a native-cell sample: the terrain translucent
-// path and any caller without a particle seed keeps its original coordinates.
-VisibleUvContext worldUvContext(float2 fine_position, float2 gradient_x, float2 gradient_y, float period) {
-    VisibleUvContext context;
-    float2 world = fine_position * g_grid_frame.m_cell_size_m;
-    context.m_unwrapped = world / period;
-    context.m_gradient_x = gradient_x / period;
-    context.m_gradient_y = gradient_y / period;
-    return context;
-}
-
-// Particle-centred seeded context of one surface splat: the stable-identity
-// offset plus the interpolated world-plane offset, and the unwrapped world
-// gradients of that same offset over the texture period. The seed translates the
-// patch and leaves every derivative untouched.
-VisibleUvContext particleUvContext(uint seed, float2 local_metres, float2 local_gradient_x,
-    float2 local_gradient_y, float period) {
-    VisibleUvContext context;
-    context.m_unwrapped = particleUvUnwrapped(seed, local_metres, period);
-    context.m_gradient_x = local_gradient_x / period;
-    context.m_gradient_y = local_gradient_y / period;
-    return context;
 }
 
 VisibleSurfaceSample liquidSurfaceSample(uint material, float2 fine_position, float2 gradient_x,
@@ -1777,6 +1803,10 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
     geometric_support=0;
+    // Coherent derivatives first (design §4.2): the element albedo/gradients below
+    // are evaluated before the mask/terrain discards that follow.
+    float2 local_gradient_x=ddx(input.local_m),local_gradient_y=ddy(input.local_m);
+
     // D9: the material id is the shading key and is never substituted. A row
     // whose id the palette does not carry discards here instead of reading the
     // empty entry 0; the host counts rejected materials once per publication.
@@ -1810,8 +1840,21 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
         lighting = angularMean(input.fine_position);
     }
 
-    float opacity=alpha*materialAlpha*visual.m_opacity*(1.0-coverage);
-    float3 color=tint*lighting;
+    // The element's own albedo and alpha, sampled in the particle-attached seeded
+    // frame (design §2.7). Gas keeps its mask UV above and gains no normal, no
+    // emission and no density field; the palette tint still multiplies it, so an
+    // untextured element's neutral albedo reproduces the previous tint-only color
+    // up to the seeded patch.
+    float period = visual.m_texture_period_m;
+    float4 element = float4(1.0);
+    if (period > 0.0 && isfinite(period)) {
+        element = visibleElementAlbedo(visual,
+            particleUvContext(input.uv_seed,input.local_m,local_gradient_x,local_gradient_y,period),
+            g_textures,g_sampler);
+    }
+
+    float opacity=alpha*materialAlpha*element.a*visual.m_opacity*(1.0-coverage);
+    float3 color=tint*element.rgb*lighting;
     return float4(point_sample?color*opacity:color,opacity);
 }
 
@@ -2001,12 +2044,25 @@ bool terrainOccludesParticle(uint resolved_material, uint terrain_material_id, b
 // authored emission and the temperature classification carried in the canonical
 // word). `blend_class` is the optical draw class: it premultiplies the authored
 // opacity and is never re-derived from the phase.
+//
+// The particle's texture coordinates are the seeded, particle-attached frame of
+// design §2.5–2.7, never the world UV: this is the same `VisibleUvContext` the
+// surface lane accumulates, so a temporary direct solid, a direct liquid and a
+// reconstructed splat of one element sample the same patch at the same point.
+// The physical position (fine_position) still drives CH, the view, refraction,
+// terrain and depth; only the texture coordinate is attached to the particle.
 float4 shadeParticleSurfaceBeforeEdge(bool liquid,bool blend_class,uint material,uint canonical,
-    float2 fine_position,float2 screen,float2 world_gradient_x,float2 world_gradient_y,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,SamplerState.Handle g_sampler) {
+    float2 fine_position,float2 screen,uint seed,float2 local_m,float2 local_gradient_x,
+    float2 local_gradient_y,StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler) {
+    // Admitted positive finite period; a malformed record keeps a finite context
+    // instead of an infinite coordinate (the palette admission already validates it).
+    float period=g_terrain_visuals[min(material,65535u)].m_texture_period_m;
+    if (!(period>0.0)||!isfinite(period)) period=1.0;
+    VisibleUvContext context=particleUvContext(seed,local_m,local_gradient_x,local_gradient_y,period);
+
     if (liquid) {
-        VisibleSurfaceSample sample=liquidSurfaceSample(
-            material,fine_position,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+        VisibleSurfaceSample sample=liquidSurfaceSampleAt(material,context,g_textures,g_sampler);
         VisibleSurfaceBackdrop backdrop={screen,float2(0.0),false,float3(0.0)};
         CH no_coefficients={};
         return visibleSurfaceResponse(
@@ -2017,8 +2073,7 @@ float4 shadeParticleSurfaceBeforeEdge(bool liquid,bool blend_class,uint material
     // instead of indexing the one-element fallback.
     CH coefficients={};
     if (g_grid_frame.m_has_resolved_cells!=0u) coefficients=sampleFineCH(fine_position);
-    VisibleSurfaceSample sample=categoricalSurfaceSample(
-        material,canonical,fine_position,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+    VisibleSurfaceSample sample=categoricalSurfaceSampleAt(material,canonical,context,g_textures,g_sampler);
     VisibleSurfaceBackdrop backdrop={screen,float2(0.0),false,float3(0.0)};
     return visibleSurfaceResponse(
         false,blend_class,material,canonical,fine_position,sample,coefficients,backdrop,g_sampler);
@@ -2031,6 +2086,12 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // The draw class is the depth/blend state only; it never selects the
     // description family.
     bool blend_class=g_grid_pass.particle_class==kParticleDrawOptical;
+
+    // Coherent derivatives first (design §4.2): the terrain footprint and the
+    // seeded texture gradients are evaluated before any per-pixel reject, so a
+    // discard below cannot leave them undefined across a fragment quad.
+    float2 local_gradient_x=ddx(input.local_m),local_gradient_y=ddy(input.local_m);
+    ParticleTerrainFootprint footprint=particleTerrainFootprint(input.fine_position,g_sampler);
 
     // D9: the material is the row's own id in its canonical packCell word. An
     // absent id discards this instance and is counted on the host; it never
@@ -2047,11 +2108,6 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     bool authored_solid=(visual.m_surface_flags&kSurfaceParticleSolid)!=0u;
     bool liquid=authored_liquid&&!authored_solid;
 
-    // Derivatives are prepared before any per-pixel reject so the texture
-    // gradients stay coherent across the quad.
-    float2 world_gradient_x=clamp(ddx(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
-    float2 world_gradient_y=clamp(ddy(input.fine_position)*g_grid_frame.m_cell_size_m,-2048.0,2048.0);
-    ParticleTerrainFootprint footprint=particleTerrainFootprint(input.fine_position,g_sampler);
     float2 local=(input.uv*2.0-1.0)*input.shape_scale;
     // The optional flow cue only reshapes the local coordinates; at k == 1 this
     // is the unchanged value, so a zero-motion row draws today's disk/rounded
@@ -2127,7 +2183,8 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
     // opacity and premultiplies only the coverage, so its interior is fully
     // opaque where the rim and terrain complement leave coverage at 1.
     float4 surface=shadeParticleSurfaceBeforeEdge(liquid,blend_class,material,input.canonical,
-        input.fine_position,input.position.xy,world_gradient_x,world_gradient_y,g_textures,g_sampler);
+        input.fine_position,input.position.xy,input.uv_seed,input.local_m,local_gradient_x,local_gradient_y,
+        g_textures,g_sampler);
     if (blend_class) return float4(surface.rgb*edge_coverage,surface.a*edge_coverage);
     return float4(surface.rgb*edge_coverage,edge_coverage);
 }
@@ -2289,6 +2346,22 @@ struct ParticleSurfaceAttributeOutput {
     float4 m_normal_alpha:SV_Target1;
 };
 
+// Coherent per-pixel derivatives of one particle sample. ddx/ddy are
+// primitive-coherent state (design §4.2): every lane of the 2x2 fragment quad must
+// reach them, so they are evaluated by the entry point BEFORE any per-texel
+// rejection. Evaluating them inside the accumulation after a label-driven early
+// return left them undefined exactly at a material boundary, where adjacent texels
+// have different winning labels, and both the quadrature offsets and the texture
+// gradients are then unspecified.
+struct ParticleSurfaceGradients {
+    // d(world-plane offset)/d(pixel) in metres; this particle's raster Jacobian.
+    float2 m_local_x;
+    float2 m_local_y;
+    // d(native-cell position)/d(pixel), for the terrain predicate.
+    float2 m_fine_x;
+    float2 m_fine_y;
+};
+
 // One fragment per raster texel of one accepted same-label splat. The weight is
 // the four-point terrain-masked kernel average; the material attributes are
 // sampled ONCE at this texel's centre in the particle's own seeded texture
@@ -2296,25 +2369,20 @@ struct ParticleSurfaceAttributeOutput {
 // through the response (lighting, emission and refraction are deferred to the
 // composite). No CH, BRDF or backdrop input is read here.
 ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput input,uint label,
-    StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,SamplerState.Handle g_sampler) {
+    ParticleSurfaceGradients gradients,StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
+    SamplerState.Handle g_sampler) {
     ParticleSurfaceAttributeOutput output;
     output.m_base_density=float4(0.0);
     output.m_normal_alpha=float4(0.0);
 
-    // D9: a FOREIGN same-phase label and an unknown palette id write nothing, so no
-    // contribution is ever redirected into another material's sum. An EMPTY label
-    // is not a competitor: the label partition is a material partition, and gating
-    // the attributes on the label's *presence* couples two passes whose coverage
-    // differs by exactly the boundary-straddling texels. The selection pass discards
-    // a footprint with no eligible quadrature point; the accumulation's averaged
-    // weight can still be positive at such a texel (a rim texel whose centre is
-    // outside the support but whose inner quadrature points are inside). Dropping
-    // those weights under-integrates the field by the boundary band, which is
-    // measurable at coarse zoom (4.0 % at a 3.0-pixel support, 0.9 % at 4.8 pixels)
-    // and is *not* quadrature error (the four-point sum is 0.19 % low there).
-    // Empty-texel values are never read: the categorical gather loads Q/G only for
-    // taps whose label equals the nearest label, and an empty nearest label discards
-    // the sample, so the field is complete without changing what is shaded.
+    // D9: only a FOREIGN same-phase label and an unknown palette id write nothing
+    // (§4.2 and §9.3 reject a foreign material; the label partition is a material
+    // partition, never a presence test). Selection and accumulation rasterise the
+    // same quad, use the same coherent gradients and evaluate the same four
+    // terrain-masked quadrature points, so positive kernel weight (rho < 1 - 1e-6)
+    // always implies selection eligibility (rho^2 < 1) at that same texel. A
+    // positive Q at an empty L beyond rounding is therefore a selection or
+    // derivative discrepancy to diagnose, not an expected operator property.
     uint material=input.canonical&kParticleMaterialMask;
     if (label!=0u&&label!=material) return output;
 
@@ -2325,12 +2393,6 @@ ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput in
     float period=visual.m_texture_period_m;
     if (!(period>0.0)||!isfinite(period)) return output;
 
-    // Derivatives are prepared before the support test so both stages stay
-    // coherent: local_m is this particle's world-plane offset in metres, and
-    // fine is the same position in native cells for terrain lookups.
-    float2 local_x=ddx(input.local_m),local_y=ddy(input.local_m);
-    float2 fine_x=ddx(input.fine_position),fine_y=ddy(input.fine_position);
-
     // The kernel metric is the stored conic: world XY, camera-independent, with
     // the vertex's eigenvalue correction and the record's own det normalisation.
     float3 conic=input.conic.xyz;
@@ -2339,8 +2401,8 @@ ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput in
     float weight=0.0;
     for (uint corner=0u;corner<4u;++corner) {
         float2 step=particleDensityQuadratureOffset(corner);
-        float2 quadrature=input.local_m+step.x*local_x+step.y*local_y;
-        float2 quadrature_fine=input.fine_position+step.x*fine_x+step.y*fine_y;
+        float2 quadrature=input.local_m+step.x*gradients.m_local_x+step.y*gradients.m_local_y;
+        float2 quadrature_fine=input.fine_position+step.x*gradients.m_fine_x+step.y*gradients.m_fine_y;
         if (terrainExcludesDensity(quadrature_fine)) continue;
         weight+=particleDensityWeight(quadrature,conic,sqrt_determinant);
     }
@@ -2350,7 +2412,8 @@ ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput in
     // This particle's own element attributes at the texel centre, in the
     // particle-attached seeded frame. The response never runs here.
     VisibleSurfaceSample sample=liquidSurfaceSampleAt(material,
-        particleUvContext(input.uv_seed,input.local_m,local_x,local_y,period),g_textures,g_sampler);
+        particleUvContext(input.uv_seed,input.local_m,gradients.m_local_x,gradients.m_local_y,period),
+        g_textures,g_sampler);
     float alpha=visibleSurfaceAlpha(visual,sample);
 
     output.m_base_density=float4(sample.m_base.rgb*weight,weight);
@@ -2362,9 +2425,17 @@ ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput in
 ParticleSurfaceAttributeOutput fragmentParticleSurfaceAccumulate(ParticleVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) {
+    // Derivatives first, unconditionally: the label below is per texel and may
+    // differ from a neighbouring fragment's, so no divergent guard may precede
+    // ddx/ddy.
+    ParticleSurfaceGradients gradients;
+    gradients.m_local_x=ddx(input.local_m);
+    gradients.m_local_y=ddy(input.local_m);
+    gradients.m_fine_x=ddx(input.fine_position);
+    gradients.m_fine_y=ddy(input.fine_position);
     int2 texel=int2(floor(input.position.xy));
     return particleSurfaceAccumulate(
-        input,g_particle_label.Load(int3(texel.x,texel.y,0)),g_textures,g_sampler);
+        input,g_particle_label.Load(int3(texel.x,texel.y,0)),gradients,g_textures,g_sampler);
 }
 
 // ------------------------------------------------------------------
@@ -2427,14 +2498,19 @@ bool particleSurfaceReconstruct(float2 uv,out ParticleSurfaceReconstruction resu
     int2 extent=int2(int(width),int(height));
     if (width==0u||height==0u) return false;
 
-    // The sample position in target pixels. A tap outside the target is air; the
-    // sample coordinate itself is clamped to the last texel centre so a raster
-    // edge never drops a covered sample to a half-open interval.
-    float2 raster=clamp(uv*float2(extent),float2(0.0),float2(extent)-0.5);
+    // The actual sample position in target pixels, never clamped: clamping to the
+    // last texel centre would hold the right/bottom edge at that centre instead of
+    // zero-extending it like the left/top edges, and would make the quotient
+    // derivative the derivative of the clamped reconstruction. A tap that falls
+    // outside the target is air (below), so the nearest label is the only
+    // coordinate that needs an explicit bounds check.
+    float2 raster=uv*float2(extent);
+    if (any(raster<0.0)||any(raster>=float2(extent))) return false;
 
     int2 base=int2(floor(raster-0.5));
     float2 fraction=raster-0.5-float2(base);
     int2 nearest=int2(floor(raster));
+    if (any(nearest<int2(0))||any(nearest>=extent)) return false;
 
     uint nearest_label=g_particle_label.Load(int3(nearest.x,nearest.y,0));
     if (nearest_label==0u) return false;
@@ -2450,10 +2526,14 @@ bool particleSurfaceReconstruct(float2 uv,out ParticleSurfaceReconstruction resu
     float beta_y[4]={-(1.0-fraction.x),-fraction.x,1.0-fraction.x,fraction.x};
 
     // Z = sum(beta * e) with e = matching or empty, U = sum(beta * matching
-    // value). Q.a is the density channel, so U.a and Z carry it.
+    // value) for the three attribute channels the composite consumes. Only the
+    // DENSITY channel needs a derivative (the contour width), so its weighted sum
+    // and first derivatives are scalars; the base/normal derivatives are not
+    // consumed and are not accumulated.
     float air=0.0,air_x=0.0,air_y=0.0;
-    float4 base_sum=float4(0.0),base_x=float4(0.0),base_y=float4(0.0);
-    float4 normal_sum=float4(0.0),normal_x=float4(0.0),normal_y=float4(0.0);
+    float4 base_sum=float4(0.0);
+    float4 normal_sum=float4(0.0);
+    float density_sum=0.0,density_x=0.0,density_y=0.0;
     for (uint tap=0u;tap<4u;++tap) {
         int2 texel=base+int2(int(tap&1u),int(tap>>1u));
         // A tap outside the target is zero in every channel: it is air, never a
@@ -2473,29 +2553,28 @@ bool particleSurfaceReconstruct(float2 uv,out ParticleSurfaceReconstruction resu
         air_x+=beta_x[tap]*keep;
         air_y+=beta_y[tap]*keep;
         base_sum+=beta[tap]*q;
-        base_x+=beta_x[tap]*q;
-        base_y+=beta_y[tap]*q;
         normal_sum+=beta[tap]*g;
-        normal_x+=beta_x[tap]*g;
-        normal_y+=beta_y[tap]*g;
+        density_sum+=beta[tap]*q.a;
+        density_x+=beta_x[tap]*q.a;
+        density_y+=beta_y[tap]*q.a;
     }
 
     if (!(air>0.0)) return false;
 
-    // F = U/Z and its quotient derivative with the label selection held fixed.
-    float4 mean_base=base_sum/air;
-    float4 mean_normal=normal_sum/air;
-    derivative_x=(base_x.a*air-base_sum.a*air_x)/(air*air);
-    derivative_y=(base_y.a*air-base_sum.a*air_y)/(air*air);
+    // F = U/Z and the quotient derivative of its density channel, label selection
+    // held fixed: d(U.D/Z) = (Ux.D*Z - U.D*Zx)/Z^2.
+    derivative_x=(density_x*air-density_sum*air_x)/(air*air);
+    derivative_y=(density_y*air-density_sum*air_y)/(air*air);
 
     result.m_material=nearest_label;
     result.m_raster=raster;
-    result.m_density=mean_base.a;
-    result.m_base=mean_base.rgb/max(mean_base.a,kParticleDensityEpsilon);
-    float3 normal_vector=mean_normal.rgb/max(mean_base.a,kParticleDensityEpsilon);
+    result.m_density=density_sum/air;
+    float density_denominator=max(density_sum,kParticleDensityEpsilon);
+    result.m_base=base_sum.rgb/density_denominator;
+    float3 normal_vector=normal_sum.rgb/density_denominator;
     result.m_normal=dot(normal_vector,normal_vector)>1.0e-12&&all(isfinite(normal_vector))&&
         normal_vector.z>0.0 ? normalize(normal_vector) : float3(0.0,0.0,1.0);
-    result.m_alpha=mean_normal.a/max(mean_base.a,kParticleDensityEpsilon);
+    result.m_alpha=normal_sum.a/density_denominator;
     return true;
 }
 
