@@ -82,7 +82,9 @@ namespace pP {
         }
 
         ParticleSurfaceLane lane{};
-        u32 admitted_materials{};
+        // Only the transition diagnostic reads this; the release log level
+        // compiles PPR_LOG out, so the counter is otherwise unused.
+        [[maybe_unused]] u32 admitted_materials{};
         for (const u32 material: metadata->m_materials) {
             const auto visual = std::ranges::find(
                 m_world.m_terrain_visuals, material, &GridTerrainVisual::m_material_id);
