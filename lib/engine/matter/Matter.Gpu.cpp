@@ -869,11 +869,11 @@ namespace pP::matter {
                            : std::make_error_code(std::errc::state_not_recoverable));
 
         const ITimerClock *const preparation_clock = state.m_timing ? state.m_timing->m_clock : nullptr;
-        const TimePoint sparse_begin = preparation_clock ? preparation_clock->now() : TimePoint{};
+        [[maybe_unused]] const TimePoint sparse_begin = preparation_clock ? preparation_clock->now() : TimePoint{};
         const auto sparse_error = replacement.m_sparse.initialize_(
             *state.m_device, *state.m_shaders, state.m_content_root, replacement.m_particle_count,
             state.m_profile.m_grid_width, state.m_profile.m_grid_height, bootstrap ? nullptr : &current.m_sparse);
-        const TimePoint sparse_end = preparation_clock ? preparation_clock->now() : TimePoint{};
+        [[maybe_unused]] const TimePoint sparse_end = preparation_clock ? preparation_clock->now() : TimePoint{};
 
         PPR_LOG(
             MatterGpu, emphasis, "Sparse preparation CPU including allocations",
