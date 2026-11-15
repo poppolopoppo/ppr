@@ -2623,13 +2623,32 @@ namespace pP::tests::detail::WorldLightingMaterial {
             nearByte(occupancy(3u)[1], white) and
             nearByte(occupancy(3u)[2], white));
 
-        // jump: every stored class is a distinct labeled color.
+        // jump: the six empty classes are fills on their literal palette entries
+        // and stored class 0 is the occupancy colour (white), never black. These
+        // sampled cells are surrounded by class 0, so no square bound is drawn
+        // beside them and the fill fills the texel; at this 16-cell-per-pixel
+        // zoom the bound fade is also off.
         const std::array<float3, 6u> jump_colors{
             float3{0.80f, 0.08f, 0.08f}, float3{0.95f, 0.45f, 0.05f}, float3{0.92f, 0.92f, 0.08f},
             float3{0.10f, 0.80f, 0.20f}, float3{0.10f, 0.35f, 0.95f}, float3{0.85f, 0.15f, 0.85f}};
         for (u32 index = 0u; index < jump_colors.size(); ++index) {
             InspectionRenderer::assertCategorical(
                 _, InspectionRenderer::texel(jump_pixels, index, 63u), jump_colors[index]);
+        }
+
+        // Pixel 6 reads cell (104,8), stored class 0: occupancy, distinct from
+        // every empty class at this zoom.
+        const auto jump_occupancy = InspectionRenderer::texel(jump_pixels, 6u, 63u);
+        InspectionRenderer::assertCategorical(_, jump_occupancy, float3{1.0f, 1.0f, 1.0f});
+        for (const float3 &color: jump_colors) {
+            const std::array<int, 3u> encoded{
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.x) * 255.0f)),
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.y) * 255.0f)),
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.z) * 255.0f))};
+            const int separation = (std::max) (std::abs(static_cast<int>(jump_occupancy[0]) - encoded[0]),
+                (std::max) (std::abs(static_cast<int>(jump_occupancy[1]) - encoded[1]),
+                    std::abs(static_cast<int>(jump_occupancy[2]) - encoded[2])));
+            PPR_TEST_ASSERT(separation >= 24);
         }
 
         // cascade: left panel is radiance through the inspection curve, right
@@ -2709,6 +2728,136 @@ namespace pP::tests::detail::WorldLightingMaterial {
                                    (static_cast<u64>(4u) * cascade_level_records + static_cast<u64>(8u * edge + 136u)) *
                                        sizeof(lighting::PackedInterval),
                                    sizeof(lighting::PackedInterval)));
+    };
+
+    // The jump view shows the selected origin-aligned square, not a distance
+    // band. One occupied cell at (31,31) makes row 31 read class 16/8/4/2/1 up
+    // to the solid and class 32 immediately to its right, because every empty
+    // square is aligned to the origin rather than grown from the obstacle.
+    PPR_UNIT_TEST (inspection_jump_view_labels_occupancy_and_selected_square_bounds) {
+        Fixture fixture;
+        fixture.initialize();
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        auto &device = fixture.device();
+        InspectionRenderer renderer{fixture};
+
+        constexpr u32 edge = WorldLightingPass::kWorldEdge;
+        const auto cell = [](const u32 x, const u32 y) { return static_cast<std::size_t>(y) * edge + x; };
+
+        InspectionResources inputs{};
+        std::vector<u32> resolved(static_cast<std::size_t>(edge) * edge, 0u);
+        std::vector<u8> jump(static_cast<std::size_t>(edge) * edge, 32u);
+        jump[cell(31u, 31u)] = 0u;
+        resolved[cell(31u, 31u)] = *lighting::packCell(1u, 300.0);
+
+        std::array<GridTerrainVisual, 2u> visuals{};
+        visuals[1u].m_material_id = 1u;
+        visuals[1u].m_color_rgba = 0xffff'ffffu;
+
+        // The jump view decodes only the published class texture. The remaining
+        // bindings exist because the shared overlay program declares them for
+        // its sibling views.
+        const auto ch = lighting::packCH(uniformCH(float3{0.0f}));
+        PPR_TEST_ASSERT(ch.has_value());
+        const auto interval = lighting::packInterval(lighting::Interval{});
+        PPR_TEST_ASSERT(interval.has_value());
+        std::array<lighting::PackedCH, 64u> fine{};
+        for (auto &record: fine) {
+            record = *ch;
+        }
+
+        inputs.m_resolved = makeBuffer(device, resolved.size() * sizeof(u32), sizeof(u32), resolved.data());
+        inputs.m_visuals = makeBuffer(device, sizeof(visuals), sizeof(GridTerrainVisual), visuals.data());
+        inputs.m_fine_ch = makeBuffer(device, sizeof(fine), sizeof(lighting::PackedCH), fine.data());
+        inputs.m_source = makeBuffer(device, sizeof(u32), sizeof(u32), resolved.data());
+        inputs.m_cascades = makeBuffer(
+            device, sizeof(lighting::PackedInterval), sizeof(lighting::PackedInterval), &*interval);
+
+        rhi::TextureDesc jump_description{};
+        jump_description.type = rhi::TextureType::Texture2D;
+        jump_description.size = {edge, edge, 1u};
+        jump_description.arrayLength = 1u;
+        jump_description.mipCount = 1u;
+        jump_description.format = rhi::Format::R8Uint;
+        jump_description.memoryType = rhi::MemoryType::DeviceLocal;
+        jump_description.usage = rhi::TextureUsage::ShaderResource;
+        jump_description.defaultState = rhi::ResourceState::ShaderResource;
+        const rhi::SubresourceData jump_initial{jump.data(), edge, static_cast<u64>(edge) * edge};
+        PPR_TEST_ASSERT(
+            not make_error_code(device.createTexture(jump_description, &jump_initial, inputs.m_jump.writeRef())));
+
+        // Eight window pixels per native cell: a class fill sits several pixels
+        // from its square bounds and each bound is a one-pixel line. The
+        // translated camera leaves an outside-domain corner on screen.
+        const float cells_per_metre = 1.0f;
+        const int2 extent{512, 512};
+        const CameraSnapshot camera = inspectionMetricCamera(
+            cells_per_metre, float2{-8.0f, -8.0f}, float2{64.0f, 64.0f});
+        const auto pixels = renderer.draw(
+            inputs, camera, static_cast<u32>(ELightingDiagnostic::jump), 1u, extent, cells_per_metre);
+
+        const auto texelAt = [&](const float2 native) {
+            const float2 pixel = inspectionPixelAt(camera, native, cells_per_metre, extent);
+            return InspectionRenderer::texel(
+                pixels, static_cast<u32>(std::floor(pixel.x)), static_cast<u32>(std::floor(pixel.y)));
+        };
+        const auto channelSum = [](const std::array<u8, 4u> &texel) {
+            return static_cast<int>(texel[0]) + static_cast<int>(texel[1]) + static_cast<int>(texel[2]);
+        };
+
+        // Fill: every empty class keeps its exact palette entry at a cell
+        // centre, so the six classes stay comparable with earlier captures.
+        const std::array<float3, 6u> classes{
+            float3{0.80f, 0.08f, 0.08f}, float3{0.95f, 0.45f, 0.05f}, float3{0.92f, 0.92f, 0.08f},
+            float3{0.10f, 0.80f, 0.20f}, float3{0.10f, 0.35f, 0.95f}, float3{0.85f, 0.15f, 0.85f}};
+        const std::array<u32, 6u> class_cells{30u, 28u, 24u, 16u, 4u, 40u};
+        for (u32 index = 0u; index < classes.size(); ++index) {
+            const float2 centre{static_cast<float>(class_cells[index]) + 0.5f, 31.5f};
+            InspectionRenderer::assertCategorical(_, texelAt(centre), classes[index]);
+        }
+
+        // Occupancy: class 0 is the occupied publication, so the solid reads as
+        // the flat occupancy colour and stays distinct from every empty class.
+        const auto occupied = texelAt(float2{31.5f, 31.5f});
+        InspectionRenderer::assertCategorical(_, occupied, float3{1.0f, 1.0f, 1.0f});
+        for (const float3 &color: classes) {
+            const std::array<int, 3u> encoded{
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.x) * 255.0f)),
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.y) * 255.0f)),
+                static_cast<int>(std::lround(inspectionSrgbEncode(color.z) * 255.0f))};
+            const int separation = (std::max) (std::abs(static_cast<int>(occupied[0]) - encoded[0]),
+                (std::max) (std::abs(static_cast<int>(occupied[1]) - encoded[1]),
+                    std::abs(static_cast<int>(occupied[2]) - encoded[2])));
+            PPR_TEST_ASSERT(separation >= 24);
+        }
+
+        // Outside-domain black remains distinct from occupied white.
+        const auto outside = texelAt(float2{-4.0f, -4.0f});
+        PPR_TEST_ASSERT(outside[0] == 0u and outside[1] == 0u and outside[2] == 0u);
+
+        // Bounds are drawn only where the selected square changes. Cell (15,31)
+        // selects the 16-square [0,16)x[16,32), cell (16,31) the 8-square
+        // [16,24)x[24,32); each sees an empty cell across their shared bound, so
+        // one line pixel there is darker than either fill while both fills keep
+        // their exact class colour, including the one-cell square of cell (30,31)
+        // sampled above.
+        const auto left_fill = texelAt(float2{15.5f, 31.5f});
+        const auto right_fill = texelAt(float2{16.5f, 31.5f});
+        InspectionRenderer::assertCategorical(_, left_fill, classes[4u]);
+        InspectionRenderer::assertCategorical(_, right_fill, classes[3u]);
+        const int softened = (std::min) (channelSum(left_fill), channelSum(right_fill)) - 12;
+        PPR_TEST_ASSERT(channelSum(texelAt(float2{16.0f, 31.5f})) < softened);
+
+        // The bound against the solid at x=32 is not a square change: the cell
+        // across it is occupancy, so that fill reaches the solid undlined.
+        InspectionRenderer::assertCategorical(_, texelAt(float2{32.0f, 31.5f}), classes[5u]);
+
+        // Inside one selected square a cell edge is not a square bound: cells
+        // (40,31) and (41,31) share the 32-square [32,64)x[0,32), so a sample
+        // straddling their edge keeps the exact class fill instead of a grid.
+        InspectionRenderer::assertCategorical(_, texelAt(float2{41.0f, 31.5f}), classes[5u]);
     };
 
     // ------------------------------------------------------------------

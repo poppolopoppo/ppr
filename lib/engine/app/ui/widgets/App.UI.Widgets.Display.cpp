@@ -836,7 +836,11 @@ namespace pP::ui {
                     noteText("Empty cells black; opaque cells white; receive-only cells cyan.");
                     break;
                 case ELightingDiagnostic::jump:
-                    noteText("Jump class colors: 0 black, 1 red, 2 orange, 4 yellow, 8 green, 16 blue, 32 magenta.");
+                    noteText(
+                        "Jump value is the side in cells (1/2/4/8/16/32) of the largest empty origin-aligned square "
+                        "containing the cell, not a distance to a wall. Class 0 is occupied and drawn white; empty "
+                        "classes are 1 red, 2 orange, 4 yellow, 8 green, 16 blue, 32 magenta. Outlines mark where "
+                        "the selected square changes, so cells of one square read as one block.");
                     break;
                 case ELightingDiagnostic::cascade:
                     noteText(

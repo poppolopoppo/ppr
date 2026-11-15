@@ -67,16 +67,19 @@ float3 inspectionSrgb(float3 display_linear) {
         1.055 * pow(max(display_linear, float3(0.0)), float3(1.0 / 2.4)) - 0.055);
 }
 
-// Distinct jump classes: 0 occupied/none, then 1, 2, 4, 8, 16, 32.
+// The six empty-square classes keep one literal palette entry each: 1 red,
+// 2 orange, 4 yellow, 8 green, 16 blue, 32 magenta. Class 0 is the occupied
+// publication, not an empty-square size, so it is drawn below as occupancy
+// rather than as a palette entry. Outside-domain fragments stay black, which
+// therefore never reads as occupancy.
 float3 jumpColor(uint jump) {
-    if (jump == 0u) return float3(0.0, 0.0, 0.0);
     if (jump == 1u) return float3(0.80, 0.08, 0.08);
     if (jump == 2u) return float3(0.95, 0.45, 0.05);
     if (jump == 4u) return float3(0.92, 0.92, 0.08);
     if (jump == 8u) return float3(0.10, 0.80, 0.20);
     if (jump == 16u) return float3(0.10, 0.35, 0.95);
     if (jump == 32u) return float3(0.85, 0.15, 0.85);
-    return float3(1.0, 0.0, 1.0); // Unreachable stored class: loudly invalid.
+    return float3(1.0, 0.0, 1.0); // Unreachable stored class: loudly invalid (0 is occupancy).
 }
 
 // ------------------------------------------------------------------
@@ -105,6 +108,62 @@ bool cellInside(int2 cell) {
 
 uint cellIndex(int2 cell) {
     return uint(cell.y) * kInspectEdge + uint(cell.x);
+}
+
+// ------------------------------------------------------------------
+// selected square bounds
+// ------------------------------------------------------------------
+// A positive class j is the side of the largest empty origin-aligned square
+// containing the cell, so that square is [floor(cell/j)*j, +j) and every cell
+// inside it stores the same j. A bound is only drawn where the selected square
+// really changes, meaning the cell directly across that bound is empty: cells
+// of one square then read as one block, a one-cell square stays a fill with
+// lines on its outer cell edges, and a sparse class cell surrounded by
+// occupancy is not painted as boundary at all. The line is one pixel wide and
+// only partly darkens the class, so the fill stays readable, and it fades out
+// where a square side covers fewer than a few pixels.
+
+static const float3 kInspectOccupiedColor = float3(1.0);
+
+bool boundSeparatesSquares(int2 across) {
+    return cellInside(across) && g_jump.Load(int3(across, 0)) != 0u;
+}
+
+float3 jumpBlockColor(int2 cell, float2 native, uint jump) {
+    if (jump == 0u) {
+        return kInspectOccupiedColor;
+    }
+
+    int side = int(max(jump, 1u));
+    float2 origin = floor(float2(cell) / float(side)) * float(side);
+    float2 inside = native - origin;
+    float2 footprint = max(fwidth(native), float2(1.0e-6));
+    float2 to_bound_pixels = min(inside, float(side) - inside) / footprint;
+    float side_pixels = float(side) / max(footprint.x, footprint.y);
+    float fade = smoothstep(3.0, 6.0, side_pixels);
+    if (fade <= 0.0) {
+        return jumpColor(jump);
+    }
+
+    // The nearest bound on each axis is the square's lower bound when the
+    // pixel sits in the first half of the square, its upper bound otherwise.
+    // Only the cell across that exact bound answers whether the square changes.
+    int2 origin_cell = int2(origin);
+    float line = 0.0;
+    if (to_bound_pixels.x < 1.0) {
+        int across_x = inside.x * 2.0 < float(side) ? origin_cell.x - 1 : origin_cell.x + side;
+        if (boundSeparatesSquares(int2(across_x, cell.y))) {
+            line = max(line, 1.0 - to_bound_pixels.x);
+        }
+    }
+    if (to_bound_pixels.y < 1.0) {
+        int across_y = inside.y * 2.0 < float(side) ? origin_cell.y - 1 : origin_cell.y + side;
+        if (boundSeparatesSquares(int2(cell.x, across_y))) {
+            line = max(line, 1.0 - to_bound_pixels.y);
+        }
+    }
+
+    return lerp(jumpColor(jump), float3(0.02), 0.7 * line * fade);
 }
 
 // ------------------------------------------------------------------
@@ -211,7 +270,7 @@ float4 fragmentInspect(InspectVertexOutput input) : SV_Target {
                 color = receive_only ? float3(0.0, 1.0, 1.0) : float3(1.0, 1.0, 1.0);
             }
         } else if (g_inspect.m_diagnostic == kDiagnosticJump) {
-            color = jumpColor(g_jump.Load(int3(cell, 0)));
+            color = jumpBlockColor(cell, native, g_jump.Load(int3(cell, 0)));
         }
     }
 

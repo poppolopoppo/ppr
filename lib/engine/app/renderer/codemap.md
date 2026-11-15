@@ -251,8 +251,10 @@ settle that attempt with `notifySubmitted` or `discardUnsubmitted` first.
 `assets/shaders/world_lighting_inspect.slang` after post-presentation and before
 native UI. `ELightingDiagnostic` selects `off`, `probes` (fine-CH angular mean with
 the two-cell probe lattice), `source` (cached outgoing RGB), `occupancy` (empty
-black / opaque white / receive-only cyan), `jump` (stored 0/1/2/4/8/16/32 classes)
-or `cascade` (selected L1..L5 atlas; left radiance, right transmittance).
+black / opaque white / receive-only cyan), `jump` (class 0 occupancy in white and
+the 1/2/4/8/16/32 empty-square classes on their palette entries, outlined only
+where the selected origin-aligned square changes) or `cascade` (selected L1..L5
+atlas; left radiance, right transmittance).
 Radiance views use the fixed inspection curve `max(RGB,0)/(1+max(RGB,0))`; the
 overlay never changes exposure. `LightingInspectionSettings::m_cascade` is an
 inspection atlas level only, never the active cascade count. The draw decodes the

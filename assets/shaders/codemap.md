@@ -74,9 +74,15 @@ atlas addressing are shared with fine reconstruction through
 (vertex `vertexInspect`, fragment `fragmentInspect`). It reconstructs the world
 plane from the captured inverse view-projection and decodes only published data:
 fine-CH angular mean with the two-cell probe lattice, cached source RGB,
-occupancy classification, the stored jump classes, or the selected L1..L5
-interval atlas (radiance left, transmittance right). Radiance uses the fixed
-`max(RGB,0)/(1+max(RGB,0))` inspection mapping; categorical colors are literal.
+occupancy classification, the stored jump classes with their selected
+origin-aligned square bounds, or the selected L1..L5 interval atlas (radiance
+left, transmittance right). The jump view draws class 0 as one flat occupancy
+colour, keeps the six empty classes on their literal palette entries, and
+outlines only the bounds where the selected square changes (the cell across the
+bound is empty), so a square reads as one block while a one-cell square stays a
+fill; the outline fades where a square side covers only a few pixels.
+Radiance uses the fixed `max(RGB,0)/(1+max(RGB,0))` inspection mapping;
+categorical colors are literal.
 It writes no state and is drawn after post-presentation and before native UI.
 
 `world_lighting_projection.slang` is the `WorldLightingPass` categorical
