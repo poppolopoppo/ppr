@@ -11,6 +11,10 @@ after the GPU and dependent Scene step jointly commit. Normal ticks retain
 physical/ID/gas metadata, with no full particle readback, restore, coordinate
 sweep, presentation batch conversion, or particle CPU upload.
 
+Fresh `MatterState` and resident preparation use `matter::kDefaultIterations`
+(K5), following the reference baseline at dt1/480. Restored v7 worlds retain their
+saved K; v6 restores K2. K2, K5 and K10 remain admitted schedules.
+
 ## Asynchronous Matter ownership
 
 `MatterRuntime` retains one instance/generation-qualified request, its owned

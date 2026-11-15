@@ -46,7 +46,7 @@ export namespace pP::colony {
         matter::GpuParameters m_profile{};
         u32 m_world_edge{sim::kWorldEdge};
         /// World-owned schedule, outside the sixteen-word shader profile ABI.
-        u32 m_iterations{2u};
+        u32 m_iterations{matter::kDefaultIterations};
     };
 
     [[nodiscard]] Expected<MatterState> makeMatterState(

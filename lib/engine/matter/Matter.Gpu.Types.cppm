@@ -27,6 +27,8 @@ export namespace pP::matter {
     inline constexpr u32 kParticleDispatchSize = 64u;
     inline constexpr u32 kGridDispatchSize = 8u;
     inline constexpr u32 kSourceIterations = 2u;
+    /// New-world policy follows the reference baseline at dt = 1/480.
+    inline constexpr u32 kDefaultIterations = 5u;
     inline constexpr u32 kGameSubsteps = 8u;
     inline constexpr std::array<u32, 3u> kAdmittedIterations{2u, 5u, 10u};
 
@@ -168,7 +170,8 @@ export namespace pP::matter {
     /// follow the pin except for unit liquid relaxation: the pinned fork
     /// defaults to 1.5, and unit relaxation departs from that because a larger
     /// value amplifies density error with the admitted K2 gather/integration
-    /// schedule. The game explicitly configures shared gravity.
+    /// schedule. Re-derivation for new-world K5 remains pending; this tuning is
+    /// unchanged. The game explicitly configures shared gravity.
     struct GpuParameters {
         u32 m_grid_width{};
         u32 m_grid_height{};

@@ -38,7 +38,7 @@ coupling and step Box2D once; normal frames carry a shared GPU view without a
 CPU particle mirror or batch upload. Metadata prepares only at world/inventory
 admission. Checkpoint, preview, inspection and edit coverage request exact demand
 snapshots on existing workers, with simulation admission frozen while UI/render
-continues. Complete v7 payloads retain the world schedule; v6 migrates to K2.
+continues. New worlds use `matter::kDefaultIterations` (K5). Complete v7 payloads retain the world schedule; v6 migrates to K2.
 Atomic file saving retains the same ownership protocol.
 
 Preparation readiness separately matches an actual-present resident stamp for
@@ -104,7 +104,7 @@ the `app.game.worldgen_frontier`/`worldgen_hollows` profile validations unless t
 are explicitly disabled. The CPU entry excludes `game/checkpoint_gpu` and the two
 heavy preview replay/crop leaves; the worldgen entry uses `PROCESSORS 4`.
 Each GPU entry has its own 180-second ceiling and unchanged explicit validated
-D3D12/4103-grid/eight-substep/K2 fixture. `game.tests` stages its shader assets
+D3D12/4103-grid/eight-substep/new-world-K5 fixture. `game.tests` stages its shader assets
 independently. `Game.Config.Tests.cpp` covers invocation compatibility, source
 precedence and help; `Game.ProfileCapture.Tests.cpp` covers readiness/frozen
 pause/stop-token/shutdown/sdk-sequence behavior; `Game.Display.Tests.cpp` covers drafts, persistence and

@@ -5,7 +5,7 @@ The numerical authority is [ErikSom/pbmpm at
 The original BSD-3-Clause notice is in `LICENSE.md`. Historical EA pins remain
 provenance, not alternative production backends.
 
-PPR uses liquid relaxation **1** with its admitted K2 schedule, rather than the
+PPR uses liquid relaxation **1**, inherited from its K2 stability tuning, rather than the
 selected fork's default of1.5. The historical EA pin defaulted to2, which is the
 value the instability analysis below was computed at. The liquid equations
 remain unchanged. With default viscosity0.01, the isolated isotropic pressure
@@ -15,7 +15,8 @@ amplifies it. That analysis describes2, not the selected fork's1.5; the
 regression below covers the unit production value. This is an explicit profile
 correction, not a scatter clamp or a change to the dense source oracle. Both
 production and oracle consume the supplied profile. See the isolated pressure
-and frontier5×7-dig regression tests.
+and frontier5×7-dig regression tests. Re-derivation for the new-world K5 schedule
+and investigation of its first-step clamp activation remain follow-up work.
 
 `solver.slang` has two production entry points, `fused0` and `fused1`. `fused0`
 is the stage-0 bootstrap and `fused1` serves every later stage, so both keep the
@@ -30,7 +31,10 @@ gravity, the engine radial brush and the sand pressure impulse run exactly once
 per substep. The stage index and K travel in the runtime parameter row
 (`reserved0`, `reserved1`); the shader integrates when
 `reserved0 + 1 >= reserved1`. The engine admits K∈{2,5,10} and rejects every
-other count before any GPU work; production still submits the K2 default.
+other count before any GPU work. Production submits the world's saved schedule;
+new worlds use `kDefaultIterations` (K5) by reference-baseline decision, v6
+checkpoints restore K2, and v7 checkpoints retain their saved K. The pinned
+no-adapter fixtures keep `kSourceIterations` (K2).
 Production advances eight evolving dt=1/480 substeps per fixed tick; drawing does
 not advance simulation. Each fused dispatch owns its immutable stage/K,
 ping-pong-side, source-generation and predicted-body-base constants through

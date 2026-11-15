@@ -156,8 +156,9 @@ export namespace pP::matter {
         void publishReplacement() noexcept;
         void cancelReplacement() noexcept;
 
-        /// One working batch; game calls with eight substeps and the admitted source
-        /// K=2 default. The admitted iteration counts are {2, 5, 10}; every other
+        /// One working batch; game calls with eight substeps and the world's saved
+        /// schedule (new worlds use kDefaultIterations). The API default stays K2
+        /// for source fixtures. The admitted iteration counts are {2, 5, 10}; every other
         /// count fails before GPU work.
         /// Focused fixtures may use fewer complete substeps.
         /// One-way body inputs, GPU publication checks and compact status only.

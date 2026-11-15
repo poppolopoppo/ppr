@@ -60,8 +60,10 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `submitResidentTick` copies committed to working and runs compact GPU discovery,
   count/allocate/insert and destination initialization plus one indirect fused
   dispatch per admitted stage; the admitted counts are K∈{2,5,10} and production
-  uses eight evolving dt1/480 substeps at the world's saved K (new worlds and
-  migrated v6 checkpoints default to K2). `isSupportedIterations` is the shared
+   uses eight evolving dt1/480 substeps at the world's saved K. New worlds use
+   `kDefaultIterations` (K5) by reference-baseline decision; migrated v6 checkpoints
+   retain K2, and v7 retains its saved K. `kSourceIterations` stays K2 for pinned
+   source-conformance fixtures. `isSupportedIterations` is the shared
   admission predicate for solver submissions and game checkpoint/runtime state.
   Stage0 bootstraps scatter without a
   particle gather; stages 1..K-2 gather, constrain and scatter; stage K-1 also
@@ -220,7 +222,8 @@ use the same resident execution path. The completion coverage/retirement ledger
 is in `out/diagnostics/gpu-authoritative-20261020/completion-20261021/`;
 current integrated execution remains a separate validation gate.
 
-The default liquid relaxation is1 for the production K2 integration schedule. The
+The default liquid relaxation is1, inherited from the K2 stability tuning; it
+still needs re-derivation for the new-world K5 schedule. The
 selected fork defaults to1.5 and the historical EA pin to2, which has an
 amplifying isolated density/affine-pressure mode; shader arithmetic and
 fixed-point overflow checks are unchanged. Regression coverage asserts

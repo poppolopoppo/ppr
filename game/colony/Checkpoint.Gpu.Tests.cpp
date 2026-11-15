@@ -1232,6 +1232,33 @@ namespace pP::game::tests::detail::checkpoint {
         Fixture fixture{"schedule", "frontier", 1024u};
         const auto &catalog = *fixture.m_catalog;
 
+        // A matterless world cannot supply tick evidence: sparse discovery publishes zero groups.
+        {
+            // This fixture calls makeMatterState with particles; no checkpoint decoding supplies its default.
+            const auto fresh = editedCheckpoint(catalog);
+            PPR_TEST_ASSERT(matter::kDefaultIterations == 5u);
+            PPR_TEST_ASSERT(fresh.m_current_matter.m_iterations == matter::kDefaultIterations);
+            PPR_TEST_ASSERT(not fresh.m_current_matter.m_particles.empty());
+
+            GpuOwner owner;
+            owner.initialize();
+            owner.restore(fixture.m_catalog, fresh, 30u);
+            auto &driver = *owner.m_driver;
+            PPR_TEST_ASSERT(driver.matterState()->m_iterations == matter::kDefaultIterations);
+            const auto before = owner.m_runtime.accounting();
+            PPR_TEST_ASSERT(before.has_value());
+
+            driver.setPaused(false);
+            owner.update(TimeSpan{std::chrono::seconds{1}} / 60u);
+            owner.completeTick();
+            driver.setPaused(true);
+
+            const auto after = owner.m_runtime.accounting();
+            PPR_TEST_ASSERT(after.has_value());
+            PPR_TEST_ASSERT(after->m_dispatches - before->m_dispatches == 152u);
+            PPR_TEST_ASSERT(driver.matterState()->m_iterations == matter::kDefaultIterations);
+        }
+
         for (const u32 iterations: {2u, 5u, 10u}) {
             auto checkpoint = editedCheckpoint(catalog);
             checkpoint.m_current_matter.m_iterations = iterations;
@@ -3240,11 +3267,11 @@ namespace pP::game::tests::detail::checkpoint {
 
         std::fprintf(
             stderr,
-            "[dug-sand-input] G=4103 K=2 source_substeps_per_game_tick=8 endpoints=60 "
+            "[dug-sand-input] G=4103 K=%u source_substeps_per_game_tick=8 endpoints=60 "
             "dig=(127,40,2,1) IDs=[12,13] temperatures_K=[321,345] density=2000 h=%.17g thickness=%.17g "
             "physical_volume_each=%.17g physical_mass_each=%.17g kernel_mass_each=2 kernel_volume_each=1 "
             "flat_top_world_fine=36 bottom=32 flat_x=[120.5,135.5] actor=distant; no sand/body-impact claim\n",
-            h, emitted.m_thickness_metres, volume, mass);
+            emitted.m_iterations, h, emitted.m_thickness_metres, volume, mass);
         std::fflush(stderr);
 
         Array<matter::GpuParticle> previous = emitted.m_particles;

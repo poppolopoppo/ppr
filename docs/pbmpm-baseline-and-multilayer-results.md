@@ -86,6 +86,7 @@ No test was removed. The census found no entry whose contract is proven elsewher
 
 ## Open items
 
+- A zero-particle tick dispatches zero-size compute groups (validation error) and completes without a particle snapshot; this pre-existing issue is independent of K and should be rejected at admission or handled explicitly.
 - A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator), A2's precision diagnostic, and A3's checkpoint persistence are not started or incomplete; see the sections below.
 - D3D12/Windows verification is unavailable on this host and remains an unrun gate.
 - Only the Debug/ASan/validation configuration has been measured; Release timing and cost evidence is pending.
@@ -198,7 +199,7 @@ These are measurements for this scene and host, not product budgets. The leaf is
 
 ## A4 — operating-point criteria still open
 
-The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf, and the elastic/visco comparison recorded below uses a rotation-sensitive metric that cannot separate stretch from rotation. Until both exist, the K5 default must not be adopted on cost evidence alone.
+The cost side is measured; the correctness comparison across K for rest, compression, elastic recovery and visco residual strain is not yet an automated leaf, and the elastic/visco comparison recorded below uses a rotation-sensitive metric that cannot separate stretch from rotation. Cost evidence alone does not justify a default change; the later reference-baseline decision below adopts K5 while retaining these open acceptance questions.
 
 ## A4 — correctness matrix across K (Release)
 
@@ -221,7 +222,7 @@ All scenes hold 240 substeps (or the stated horizons), identical initialization 
 
 ### Operating-point ruling
 
-**Retain K = 2 as the default pending completion of baseline acceptance.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows, and the current evidence does not justify switching to K5. K2 is not a verified acceptable baseline: its correctness side is precisely what baseline acceptance has still to establish, and the metric used here leaves the elastic and visco responses undetermined. K5/K10 remain admitted and covered by `matter_schedule_gpu`, so the choice is cheap to revisit once B1/B2 change the material set. Do not switch the default on cost evidence alone, and do not treat K10's bounded elastic response as a fix.
+**Historical ruling, superseded by the reference-baseline decision below: retain K = 2 pending baseline acceptance.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows. K2 is not a verified acceptable baseline: its correctness side is precisely what baseline acceptance has still to establish, and the metric used here leaves the elastic and visco responses undetermined. These measurements alone do not justify switching defaults, and K10's bounded elastic response is not a fix.
 
 ## A4 — re-measured with rotation-free metrics
 
@@ -256,4 +257,8 @@ Cost re-measured (non-exclusive GPU): K2 5.91 ms, K5 8.39 ms (1.42×), K10 13.59
 
 ### Operating point
 
-Retain **K = 2** as the default. It is the only K with production evidence, the higher counts cost 1.4–2.4×, and the K-sensitivities above are unresolved defects or model questions rather than improvements. K2 is **not** yet a verified-acceptable baseline: the recovery question is now partially answered (shape relaxes, body translates), but the load-path K-dependence, the higher-K clamp activation and the sand divergence must be understood before any default change or before Elastic is admitted.
+**K = 5 is now the new-world default by reference-baseline decision**, superseding the earlier retain-K2 ruling: the reference implementation's baseline scenes use five iterations per substep at the same 480 Hz timestep. `kDefaultIterations = 5u` names that policy; `kSourceIterations = 2u` remains the pinned no-adapter conformance default. K2 and K10 remain admitted and selectable. Per-world persistence is unchanged: v6 restores K2 and v7 restores its saved schedule, including K10.
+
+This decision does not establish baseline acceptance or erase the measured caveats: K5 costs 1.42× K2 in the non-exclusive re-measurement; the same brush load produces 16× less applied distortion at K10 than K2 (not a 16× K5 result); K5 activates the first-step integration clamp on 10 rows; and sand is qualitatively different across K. These remain unresolved model questions, not demonstrated improvements, and Elastic admission still requires its constitutive response to be understood.
+
+Follow-up: re-derive the liquid relaxation constant for K5 instead of inheriting the K2 stability tuning, and investigate the first-step clamp activation. This default change leaves liquidRelaxation, elasticRelaxation, sampling, units and the fixed-point multiplier unchanged. Build and runtime validation of the default change remain with the orchestrator.

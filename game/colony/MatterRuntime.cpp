@@ -716,7 +716,7 @@ namespace pP::colony {
         MatterIdentity m_identity{};
         MatterIdentity m_prepared_identity{};
         std::error_code m_submit_error{};
-        u32 m_iterations{2u}, m_prepared_iterations{2u};
+        u32 m_iterations{matter::kDefaultIterations}, m_prepared_iterations{matter::kDefaultIterations};
         bool m_submitted{};
         bool m_ready{};
         bool m_append_prepared{}, m_append_ready{};
