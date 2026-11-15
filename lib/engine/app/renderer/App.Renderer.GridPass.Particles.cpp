@@ -53,11 +53,11 @@ namespace pP {
             // outcome. Host tokens, never a clock: there is no dt.
             u32 m_orientation_update{}, m_orientation_remap{};
             u32 m_orientation_previous_count{}, m_orientation_owned{};
-            // Density-lane admission padding: one density pixel in world metres and
-            // the one admitted lane material. The homogeneous guard expands only
-            // that material's visibility margin, so no other row's cull changes.
+            // Surface admission padding: one density pixel in world metres and the
+            // admitted phase mask. The homogeneous guard expands every row's
+            // visibility margin; it never enlarges the drawn support.
             float m_surface_guard{};
-            u32 m_surface_material{0xffff'ffffu};
+            u32 m_surface_phase_mask{};
         };
 
         static_assert(sizeof(ParticlePrepareFrame) == 144u and alignof(ParticlePrepareFrame) == 16u);
@@ -70,7 +70,7 @@ namespace pP {
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_previous_count) == 128u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_orientation_owned) == 132u);
         static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_surface_guard) == 136u);
-        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_surface_material) == 140u);
+        static_assert(PPR_OFFSETOF(ParticlePrepareFrame, m_surface_phase_mask) == 140u);
 
         // Consecutive held preparations before the hold is reported at warning.
         // While the solver runs, the committed publication is normally one epoch
@@ -604,7 +604,7 @@ namespace pP {
 
     auto GridPass::particleCullKey_(const u32 count) const noexcept -> ParticleCullKey {
         // The one definition of "what the compaction was encoded against": the
-        // six clip planes, the density-lane guard and material, and the row
+        // six clip planes, the surface guard and admitted phase mask, and the row
         // count. Both the pack and the held recull derive their constants and
         // this key from the same call, so the reuse decision cannot disagree with
         // the encoded cull.
@@ -615,7 +615,7 @@ namespace pP {
         }
 
         key.m_guard = m_world.m_particle_surface.admitted() ? particleSurfacePixelWorld_(m_camera_view) : 0.0f;
-        key.m_material = m_world.m_particle_surface.m_material;
+        key.m_phase_mask = m_world.m_particle_surface.m_phase_mask;
         key.m_count = count;
         return key;
     }
@@ -763,7 +763,7 @@ namespace pP {
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = std::max(1u, (count + 255u) / 256u);
         frame.m_surface_guard = key.m_guard;
-        frame.m_surface_material = key.m_material;
+        frame.m_surface_phase_mask = key.m_phase_mask;
         // A hold advances no cue slew and writes no history: rank derives the
         // conic from the retained accepted word into the newly selected slot and
         // writes nothing to either orientation role.
@@ -1082,9 +1082,9 @@ namespace pP {
     }
 
     void GridPass::settleParticleAttempt_() noexcept {
-        // A definitely-unsubmitted frame never fenced its density targets and its
-        // composite must not read them; the flag lives outside the particle
-        // storage so it clears even before the first publication.
+        // A definitely-unsubmitted frame never fenced its surface bundle and its
+        // composite must not read it; the flag lives outside the particle storage
+        // so it clears even before the first publication.
         m_particle_surface_encoded = false;
         m_particle_surface_ready = false;
         if (not m_world.m_gpu_particles) {
@@ -1136,10 +1136,10 @@ namespace pP {
         // committed later.
         settleParticleAttempt_();
 
-        // The density lane is derived before every early return, including a hold:
-        // a held frame draws the retained rows directly and must exclude the same
-        // material the density pass reconstructs, or the two representations would
-        // overlap.
+        // Surface admission is derived before every early return, including a
+        // hold: a held frame draws the retained rows directly and must exclude the
+        // same phases the surface passes reconstruct, or the two representations
+        // would overlap.
         deriveParticleSurfaceLane_();
 
         if (m_spatial_msaa) {
@@ -1248,7 +1248,7 @@ namespace pP {
         frame.m_moving_count = metadata.m_moving_count;
         frame.m_block_count = blocks;
         frame.m_surface_guard = cull.m_guard;
-        frame.m_surface_material = cull.m_material;
+        frame.m_surface_phase_mask = cull.m_phase_mask;
 
         // Orientation publication planning. The orientation clock is the accepted
         // presentation identity (publication, terrain revision, joint tick) plus the
@@ -1793,20 +1793,20 @@ namespace pP {
             context.m_pass.writeTimestamp(m_particle_timing_queries, 10u);
         }
 
-        // The admitted density lane is composited at its own class slot: after that
-        // class's direct draw and before the other class. The direct draw already
-        // rejected the lane material (bindGridPass_ writes it only when this frame
-        // accumulated the field), so exactly one representation is visible.
-        const bool surface_lane = m_particle_surface_ready and m_world.m_particle_surface.admitted();
-        const EGridParticleDrawClass surface_class = m_world.m_particle_surface.m_draw_class;
-
+        // The admitted surface field is composited at each class slot: after that
+        // class's direct draw and before the other class. Every admitted liquid
+        // material's rows were rejected by the direct draws (bindGridPass_ writes
+        // the phase mask only when this frame encoded the field), so exactly one
+        // representation is visible. A mixed-class publication draws both
+        // composites; each reconstructs the same label and rejects the class that
+        // does not own the sample.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::opaque));
-        if (surface_lane and surface_class == EGridParticleDrawClass::opaque) {
+        if (particleSurfaceClassAdmitted(EGridParticleDrawClass::opaque)) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, renderParticleSurface(context, EGridParticleDrawClass::opaque));
         }
 
         PPR_RETURN_ERROR_ON_FAIL(GridPass, renderGpuParticleClass_(context, EGridParticleDrawClass::optical));
-        if (surface_lane and surface_class == EGridParticleDrawClass::optical) {
+        if (particleSurfaceClassAdmitted(EGridParticleDrawClass::optical)) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, renderParticleSurface(context, EGridParticleDrawClass::optical));
         }
 

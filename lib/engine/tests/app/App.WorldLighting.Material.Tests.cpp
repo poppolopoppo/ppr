@@ -3476,7 +3476,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
             gas_desc.multisample.sampleCount == 1u);
 
         // Declaration order of the per-draw selector both particle stages read:
-        // pass, particle_class, pad1, pad2.
+        // pass, particle_class, surface_phase_mask, pad2. Field 2 was the single
+        // admitted lane material before the phase/class cutover; it is the phase
+        // mask now, so a material-id compare cannot silently reappear.
         shader::SharedModule module{};
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
             std::filesystem::current_path() / "shaders" / "grid_tiles.slang", "grid_tiles", module.writeRef()));
@@ -3496,14 +3498,45 @@ namespace pP::tests::detail::WorldLightingMaterial {
         constexpr std::array<std::pair<const char *, u32>, 4u> switch_fields{{
             {"pass", 0u},
             {"particle_class", 4u},
-            {"surface_material", 8u},
+            {"surface_phase_mask", 8u},
             {"pad2", 12u},
         }};
         PPR_TEST_ASSERT(switch_layout->getFieldCount() == static_cast<unsigned>(switch_fields.size()));
         for (u32 index = 0u; index < switch_fields.size(); ++index) {
             auto *const field = switch_layout->getFieldByIndex(index);
+            PPR_TEST_ASSERT(field != nullptr);
             PPR_TEST_ASSERT(std::string_view{field->getName()} == switch_fields[index].first);
             PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == switch_fields[index].second);
+            PPR_TEST_ASSERT(field->getTypeLayout()->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 4u);
+        }
+
+        // The lane constant buffer the selection, accumulation and composite
+        // entries share. Its field order is the ABI the three pipelines read, so
+        // the test pins the same names and offsets the production reflection
+        // check enforces instead of trusting only the shader-side compiler.
+        slang::TypeLayoutReflection *lane_layout = nullptr;
+        for (unsigned index = 0u; index < layout->getParameterCount(); ++index) {
+            auto *const parameter = layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_particle_surface") {
+                lane_layout = parameter->getTypeLayout()->getElementTypeLayout();
+                break;
+            }
+        }
+
+        PPR_TEST_ASSERT(lane_layout != nullptr);
+        PPR_TEST_ASSERT(lane_layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == 16u);
+        constexpr std::array<std::pair<const char *, u32>, 4u> lane_fields{{
+            {"m_pixel_world", 0u},
+            {"m_phase_mask", 4u},
+            {"m_composite_class", 8u},
+            {"m_pad", 12u},
+        }};
+        PPR_TEST_ASSERT(lane_layout->getFieldCount() == static_cast<unsigned>(lane_fields.size()));
+        for (u32 index = 0u; index < lane_fields.size(); ++index) {
+            auto *const field = lane_layout->getFieldByIndex(index);
+            PPR_TEST_ASSERT(field != nullptr);
+            PPR_TEST_ASSERT(std::string_view{field->getName()} == lane_fields[index].first);
+            PPR_TEST_ASSERT(field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM) == lane_fields[index].second);
         }
 
         // The contour cues now read one shared stored axis: the prepare pass owns
@@ -4828,7 +4861,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(not encode());
         PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::current);
         PPR_TEST_ASSERT(grid.particleSurfaceAdmitted());
-        PPR_TEST_ASSERT(grid.particleSurfaceDrawClass() == EGridParticleDrawClass::opaque);
+        PPR_TEST_ASSERT(grid.particleSurfaceClassMask() == (1u << static_cast<u32>(EGridParticleDrawClass::opaque)));
         const auto accepted_ids = readIds(2u);
         PPR_TEST_ASSERT(readArgs().instanceCount == 2u);
         PPR_TEST_ASSERT(accepted_ids == Array<u32>{0u, 1u});
@@ -4872,7 +4905,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(grid.observations().m_dispatch_commands == dispatches_before_hold);
         PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
         PPR_TEST_ASSERT(grid.particleSurfaceAdmitted());
-        PPR_TEST_ASSERT(grid.particleSurfaceDrawClass() == EGridParticleDrawClass::opaque);
+        PPR_TEST_ASSERT(grid.particleSurfaceClassMask() == (1u << static_cast<u32>(EGridParticleDrawClass::opaque)));
+        // The admitted phase mask and the class come from the retained accepted
+        // owner, so a rejected incoming solid inventory cannot re-route A's rows.
+        PPR_TEST_ASSERT(grid.particleSurfaceTargetsForTest().m_phase_mask == 1u);
         const rhi::IndirectDrawArguments held_args = readArgs();
         PPR_TEST_ASSERT(held_args.instanceCount == 2u);
         PPR_TEST_ASSERT(readIds(2u) == accepted_ids);
@@ -5721,11 +5757,22 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // the liquid solver variable J, not the mass density of mixed substances and
     // not an optical thickness along a 3D ray.
 
-    inline constexpr double kDensitySupportScale = 2.0;
+    // Revision 5 calibration: one shared surface radius for both phases, the
+    // retained threshold, and the neutral rest-lattice closure numbers.
+    inline constexpr double kDensityDirectSupportScale = 2.0;
+    inline constexpr double kDensitySurfaceRadiusScale = 1.5259485586443693;
     inline constexpr double kDensityPlateau = 2.0 / 3.0;
     inline constexpr double kDensityBandFraction = 1.0 / 3.0;
+    // The profile integrates to 0.7*pi over the unit q-disk; A_2 = 1/(0.7 pi) =
+    // 10/(7 pi) is what makes A_2*0.7 pi = 1. The amplitude of
+    // w = V*A_2*sqrt(det M)/R^2*s is V/R^2 = pi/c^2 times A_2, i.e. pi*A_2/c^2 =
+    // (10/7)/c^2. The profile's 0.7 is already inside A_2 and must not appear as a
+    // factor of the amplitude (that underweights every splat by pi/0.7 = 4.488).
     inline constexpr double kDensityProfileIntegral = 0.7;
-    inline constexpr double kDensityNormalization = 2.8;
+    inline constexpr double kDensitySecondMoment = 10.0 / (7.0 * kPi);
+    inline constexpr double kDensityAmplitude = kPi *
+                                                kDensitySecondMoment /
+                                                (kDensitySurfaceRadiusScale * kDensitySurfaceRadiusScale);
     inline constexpr double kDensityStretchCap = 1.5;
     inline constexpr double kDensityBiasCap = 0.3999;
     inline constexpr double kDensityThreshold = 5.0 / 28.0;
@@ -5734,11 +5781,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
     inline constexpr double kDensityCoverageFloor = 1.0 / 255.0;
     inline constexpr double kDensityQuadratureOffset = 0.25;
     inline constexpr double kDensityCullRadiusScale = 3.0625;
+    inline constexpr double kDensityDepthCeiling = 0.9999999403953552;
 
     // The anisotropic metric decoded from the existing 4-byte orientation word:
     // b = 0.3999 * bias8/255, k = 1 + 0.5 * stretch8/255, eta = (1-b/2)/(1+b/2)
     // and det(A) = k * eta. eta <= 1 and k <= 1.5 keep every oriented support
-    // inside max(k, eta) * R = 3.000 r, under the existing 3.0625 r cull.
+    // inside max(k, eta) * R_surface = 2.288923 r, under the retained 3.0625 r
+    // cull (which still covers the direct solid's 3.000 r silhouette).
     struct DensityKernel {
         Double2 m_axis{1.0, 0.0};
         double m_stretch{1.0};
@@ -5774,13 +5823,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return 0.0;
 
         const double t = std::clamp((1.0 - rho) / kDensityBandFraction, 0.0, 1.0);
-        return densityRamp(t) / (kDensityNormalization * kernel.m_stretch * kernel.m_ratio);
+        return densityRamp(t) * kDensityAmplitude / (kernel.m_stretch * kernel.m_ratio);
     }
 
     // The same weight for a world-plane offset and particle radius in native cells.
     [[nodiscard]] double densityWeightCells(
         const Double2 offset_cells, const double radius_cells, const DensityKernel kernel) noexcept {
-        const double support = kDensitySupportScale * radius_cells;
+        const double support = kDensitySurfaceRadiusScale * radius_cells;
         return densityWeight({offset_cells.x / support, offset_cells.y / support}, kernel);
     }
 
@@ -5803,32 +5852,145 @@ namespace pP::tests::detail::WorldLightingMaterial {
         return densityRamp(t);
     }
 
-    struct DensityComposite {
+    // One stored surface texel: the winning label plus the Q/G sums it owns. The
+    // CPU mirror keeps the shader's exact channel meanings: Q = (sum w * base.rgb,
+    // sum w) and G = (sum w * normal.xyz, sum w * alpha).
+    struct SurfaceTexel {
+        u32 m_label{};
+        Double3 m_base{};
+        double m_density{};
+        Double3 m_normal{};
+        double m_alpha{};
+        // The palette class of the label this texel stored (opaque = false).
+        bool m_optical{};
+    };
+
+    // One stored texel built from this texel's own accepted contributions:
+    // Q = (sum w * base, sum w) and G = (sum w * normal, sum w * alpha), exactly
+    // the channel meanings the accumulation writes.
+    [[nodiscard]] SurfaceTexel surfaceTexel(
+        const u32 label, const double weight, const Double3 base, const Double3 normal, const double alpha,
+        const bool optical) noexcept {
+        return {
+            label, Double3{base.x * weight, base.y * weight, base.z * weight}, weight,
+            Double3{normal.x * weight, normal.y * weight, normal.z * weight}, alpha * weight, optical};
+    }
+
+    struct SurfaceReconstruction {
+        bool m_valid{};
+        u32 m_material{};
+        double m_density{};
+        Double3 m_base{};
+        Double3 m_normal{};
+        double m_alpha{};
+        double m_derivative_x{};
+        double m_derivative_y{};
+    };
+
+    // Independent restatement of grid_tiles.slang particleSurfaceReconstruct:
+    // integer four-tap categorical gather with the analytic quotient derivative.
+    // The label is never filtered, an empty tap keeps its weight as air, a foreign
+    // nonempty tap keeps no weight and contributes no value, and the returned
+    // material is always the nearest own label (never a mixture). The composite
+    // class must be the winning label's own class.
+    [[nodiscard]] SurfaceReconstruction densityReconstruct(
+        const std::array<SurfaceTexel, 4u> &taps, const SurfaceTexel &nearest, const double fx, const double fy,
+        const bool composite_optical) noexcept {
+        SurfaceReconstruction result{};
+        if (nearest.m_label == 0u)
+            return result;
+        if (nearest.m_optical != composite_optical)
+            return result;
+
+        const std::array<double, 4u> beta{(1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy};
+        const std::array<double, 4u> beta_x{-(1.0 - fy), 1.0 - fy, -fy, fy};
+        const std::array<double, 4u> beta_y{-(1.0 - fx), -fx, 1.0 - fx, fx};
+
+        double air = 0.0;
+        double air_x = 0.0;
+        double air_y = 0.0;
+        double density = 0.0;
+        double density_x = 0.0;
+        double density_y = 0.0;
+        Double3 base{};
+        Double3 normal{};
+        double alpha = 0.0;
+        for (u32 tap = 0u; tap < 4u; ++tap) {
+            const SurfaceTexel &texel = taps[tap];
+            const bool matching = texel.m_label == nearest.m_label;
+            const bool empty = texel.m_label == 0u;
+            const double keep = matching or empty ? 1.0 : 0.0;
+            air += beta[tap] * keep;
+            air_x += beta_x[tap] * keep;
+            air_y += beta_y[tap] * keep;
+            if (not matching)
+                continue;
+
+            density += beta[tap] * texel.m_density;
+            density_x += beta_x[tap] * texel.m_density;
+            density_y += beta_y[tap] * texel.m_density;
+            base.x += texel.m_base.x * beta[tap];
+            base.y += texel.m_base.y * beta[tap];
+            base.z += texel.m_base.z * beta[tap];
+            normal.x += texel.m_normal.x * beta[tap];
+            normal.y += texel.m_normal.y * beta[tap];
+            normal.z += texel.m_normal.z * beta[tap];
+            alpha += beta[tap] * texel.m_alpha;
+        }
+
+        if (not (air > 0.0) or not (density > 0.0))
+            return result;
+
+        // F = U/Z, then the attribute means divide by the same density channel.
+        result.m_valid = true;
+        result.m_material = nearest.m_label;
+        result.m_density = density / air;
+        result.m_base = Double3{base.x / density, base.y / density, base.z / density};
+        const Double3 normal_vector{normal.x / density, normal.y / density, normal.z / density};
+        const double length_squared = normal_vector.x * normal_vector.x +
+                                      normal_vector.y * normal_vector.y +
+                                      normal_vector.z * normal_vector.z;
+        result.m_normal = length_squared > 1.0e-12 and normal_vector.z > 0.0
+            ? Double3{normal_vector.x / std::sqrt(length_squared), normal_vector.y / std::sqrt(length_squared),
+                  normal_vector.z / std::sqrt(length_squared)}
+            : Double3{0.0, 0.0, 1.0};
+        result.m_alpha = alpha / density;
+        result.m_derivative_x = (density_x * air - density * air_x) / (air * air);
+        result.m_derivative_y = (density_y * air - density * air_y) / (air * air);
+        return result;
+    }
+
+    // Independent restatement of the composite tail: form the straight response
+    // colour H and alpha from the reconstructed attributes, then premultiply once
+    // and scale by the geometric coverage. The response itself is the shipped
+    // material helper; this mirror only proves the coverage/premultiplication
+    // algebra and the divide guard.
+    struct SurfaceComposite {
         bool m_visible{};
-        Double3 m_radiance{};
+        Double3 m_premultiplied{};
         double m_alpha{};
     };
 
-    // N/D and O/D premultiplied by C, with the empty-field divide guard and the
-    // negligible-coverage floor. The caller discards when nothing is visible.
-    [[nodiscard]] DensityComposite densityComposite(
-        const Double3 numerator, const double density, const double optical_numerator, const bool optical,
-        const double coverage) noexcept {
-        if (not (density > kDensityEpsilon) or not (coverage > kDensityCoverageFloor))
+    [[nodiscard]] SurfaceComposite densityComposite(
+        const SurfaceReconstruction &reconstruction, const Double3 straight_color, const double coverage,
+        const bool optical) noexcept {
+        if (not reconstruction.m_valid or not (reconstruction.m_density > kDensityEpsilon))
+            return {};
+        if (not (coverage > kDensityCoverageFloor))
             return {};
 
+        const double alpha = optical ? std::clamp(reconstruction.m_alpha, 0.0, 1.0) : 1.0;
+        const double scale = coverage * alpha;
         return {
-            true,
-            {coverage * (numerator.x / density), coverage * (numerator.y / density),
-                coverage * (numerator.z / density)},
-            coverage * (optical ? optical_numerator / density : 1.0)};
+            true, Double3{straight_color.x * scale, straight_color.y * scale, straight_color.z * scale},
+            coverage * alpha};
     }
 
     // Midpoint integral of one kernel over the plane in native cells. The square
     // extends 10% past the oriented support, so the truncation is exact.
     [[nodiscard]] double densityIntegral(
         const DensityKernel kernel, const double radius_cells, const u32 steps) noexcept {
-        const double support = kDensitySupportScale * radius_cells;
+        const double support = kDensitySurfaceRadiusScale * radius_cells;
         const double reach = 1.1 * (std::max) ((std::max) (kernel.m_stretch, kernel.m_ratio), 1.0) * support;
         const int count = static_cast<int>(steps);
         const double extent = 2.0 * reach;
@@ -5851,7 +6013,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
     // reported separately from the continuous integral.
     [[nodiscard]] double densityQuadratureIntegral(
         const DensityKernel kernel, const double radius_cells, const double pixel) noexcept {
-        const double support = kDensitySupportScale * radius_cells;
+        const double support = kDensitySurfaceRadiusScale * radius_cells;
         const double reach = 1.1 * (std::max) ((std::max) (kernel.m_stretch, kernel.m_ratio), 1.0) * support;
         const int count = static_cast<int>(std::ceil(2.0 * reach / pixel));
         const double half = 0.5 * double(count) * pixel;
@@ -5865,6 +6027,62 @@ namespace pP::tests::detail::WorldLightingMaterial {
                     const Double2 offset = densityQuadratureOffset(corner);
                     quadrature += densityWeight(
                         {(x + offset.x * pixel) / support, (y + offset.y * pixel) / support}, kernel);
+                }
+
+                total += 0.25 * quadrature * pixel * pixel;
+            }
+        }
+
+        return total;
+    }
+
+    // Exact discrete expectation of the accumulated field for ONE isolated
+    // particle: the operator grid_tiles.slang actually runs, evaluated in double.
+    //
+    //   * the splat quad is the screen-aligned square of half-extent
+    //     R*conic_support + pad with pad = one density pixel, so the square always
+    //     encloses the support circle (R*conic_support is its major semiaxis);
+    //     only texels whose CENTRE lies inside that square rasterise;
+    //   * a texel receives the label iff at least one quadrature point has
+    //     rho < 1, which is exactly the condition for a nonzero averaged weight,
+    //     so the label pass can never remove a positive contribution;
+    //   * the stored density is (1/4)*sum_j w(centre + offset_j) with offsets
+    //     (+/-1/4, +/-1/4) pixel, and the plane integral sums that over texels
+    //     times the pixel area.
+    //
+    // Unlike the particle-centred grid in densityQuadratureIntegral this carries
+    // the raster phase and the quad clip, so it is comparable texel-for-texel with
+    // a read-back and needs no tolerance for the model itself.
+    // Label modes: `strict_boundary` labels a texel only when all four quadrature
+    // points are inside the support; the shipped operator labels it when any point
+    // is, which is the specified field.
+    [[nodiscard]] double densityFieldIntegral(
+        const DensityKernel kernel, const double radius_cells, const double pixel, const u32 raster,
+        const double particle_raster_x, const double particle_raster_y, const double conic_support,
+        const bool strict_boundary) noexcept {
+        const double support = kDensitySurfaceRadiusScale * radius_cells;
+        const double half_extent = support * conic_support + pixel;
+        double total = 0.0;
+        for (u32 y = 0u; y < raster; ++y) {
+            const double cy = (double(y) + 0.5 - particle_raster_y) * pixel;
+            if (std::abs(cy) > half_extent)
+                continue;
+            for (u32 x = 0u; x < raster; ++x) {
+                const double cx = (double(x) + 0.5 - particle_raster_x) * pixel;
+                if (std::abs(cx) > half_extent)
+                    continue;
+                double quadrature = 0.0;
+                u32 inside = 0u;
+                for (u32 corner = 0u; corner < 4u; ++corner) {
+                    const Double2 offset = densityQuadratureOffset(corner);
+                    const double weight = densityWeight(
+                        {(cx + offset.x * pixel) / support, (cy + offset.y * pixel) / support}, kernel);
+                    quadrature += weight;
+                    inside += weight > 0.0 ? 1u : 0u;
+                }
+
+                if (strict_boundary and inside < 4u) {
+                    continue;
                 }
 
                 total += 0.25 * quadrature * pixel * pixel;
@@ -7345,50 +7563,89 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 outer_coverage));
     };
 
-    PPR_UNIT_TEST (particle_density_constants_match_the_plan) {
-        // Section 10.2/10.3/10.9 constants against independent literals. The
-        // shader twins are grid_particle_density.slang's kParticleDensity* plus the
-        // existing kParticleSupportScale, kParticleFalloffInnerFraction, stretch
-        // cap, bias cap and coverage floor in grid_particle_native.slang.
-        PPR_TEST_ASSERT(kDensitySupportScale == 2.0);
-        PPR_TEST_ASSERT(kDensityPlateau == 2.0 / 3.0);
-        PPR_TEST_ASSERT(kDensityBandFraction == 1.0 / 3.0);
-        // 1/3 and 1 - 2/3 differ by one double ulp; the identity is mathematical,
-        // not a bit pattern.
-        PPR_TEST_ASSERT(std::abs(kDensityBandFraction - (1.0 - kDensityPlateau)) <= 1.0e-15);
-        // The ramp width is R/3, i.e. (2 r) * (1/3).
-        PPR_TEST_ASSERT(kDensitySupportScale * kDensityBandFraction == 2.0 / 3.0);
+    PPR_UNIT_TEST (particle_surface_constants_match_revision_five) {
+        // Revision 5 section 10.5 numeric contract against independent literals.
+        // The shader twins are grid_particle_density.slang's kParticleSurfaceRadiusScale,
+        // kParticleDensitySecondMoment, kParticleDensityAmplitude and threshold, plus
+        // the retained stretch/bias caps and coverage floor in grid_particle_native.
+        // std::sqrt is not constexpr in this standard library, so the mirror
+        // evaluates it at run time; the value is the shipped 0.28209479177387814.
+        const double r_reference_cells = std::sqrt(0.25 / kPi);
+        constexpr double solid_extent_divisor = 0.25 + 0.75 * 1.4142135623730951;
+        constexpr double r_over_r = 2.0 / solid_extent_divisor;
+        // R is the old solid's AXIS half-extent, not its circumradius.
+        PPR_TEST_ASSERT(std::abs(r_over_r - 1.525948558644369) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(kDensitySurfaceRadiusScale - r_over_r) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensitySurfaceRadiusScale * solid_extent_divisor - 2.0) <= 1.0e-14);
+        PPR_TEST_ASSERT(std::abs(kDensitySurfaceRadiusScale * r_reference_cells - 0.430462140908433) <= 1.0e-14);
+        // The direct solid silhouette keeps its own R = 2 r until the migration,
+        // and both still fit the retained 3.0625 r cull.
+        PPR_TEST_ASSERT(kDensityDirectSupportScale == 2.0);
+
+        // A_2 = 10/(7 pi), the second moment of the unit-disk profile.
+        PPR_TEST_ASSERT(std::abs(kDensitySecondMoment - 10.0 / (7.0 * kPi)) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensitySecondMoment - 0.454728408833987) <= 1.0e-15);
         PPR_TEST_ASSERT(kDensityProfileIntegral == 0.7);
-        PPR_TEST_ASSERT(kDensityNormalization == 2.8);
-        PPR_TEST_ASSERT(
-            std::abs(kDensityNormalization - kDensityProfileIntegral * kDensitySupportScale * kDensitySupportScale) <=
-            1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensityProfileIntegral * kPi * kDensitySecondMoment - 1.0) <= 1.0e-14);
+        // V / R^2 = pi / c^2, so the whole amplitude is pi*A_2/c^2 = 10/(7 c^2).
+        // The delta is logged before the assertion so a drift reports both sides.
+        constexpr double expected_amplitude = 10.0 / (7.0 * r_over_r * r_over_r);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_amplitude actual={:.17g} expected={:.17g} delta={:.3e} "
+                "ratio={:.15f}",
+                kDensityAmplitude, expected_amplitude, std::abs(kDensityAmplitude - expected_amplitude),
+                kDensityAmplitude / expected_amplitude));
+        PPR_TEST_ASSERT(std::abs(kDensityAmplitude - expected_amplitude) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensityAmplitude - 0.613510744960683) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensityPlateau - 2.0 / 3.0) <= 1.0e-16);
+        PPR_TEST_ASSERT(std::abs(kDensityBandFraction - (1.0 - kDensityPlateau)) <= 1.0e-15);
+
         PPR_TEST_ASSERT(kDensityStretchCap == 1.5);
         PPR_TEST_ASSERT(kDensityBiasCap == 0.3999);
         PPR_TEST_ASSERT(kDensityThreshold == 5.0 / 28.0);
-        PPR_TEST_ASSERT(std::abs(kDensityThreshold - 0.17857142857142858) <= 1.0e-16);
-        // theta * 2.8 = 1/2 is exactly the neutral isolated s = 1/2 crossing.
-        PPR_TEST_ASSERT(std::abs(kDensityThreshold * kDensityNormalization - 0.5) <= 1.0e-15);
-        PPR_TEST_ASSERT(kDensityThreshold < 0.5);
+        // The decimal literal is the design's 15-digit transcription of 5/28;
+        // compare it at the precision it actually carries.
+        PPR_TEST_ASSERT(std::abs(kDensityThreshold - 5.0 / 28.0) <= 1.0e-15);
         PPR_TEST_ASSERT(kDensityEpsilon == 1.0e-6);
         PPR_TEST_ASSERT(kDensitySupportClosure == 1.0e-6);
         PPR_TEST_ASSERT(kDensityCoverageFloor == 1.0 / 255.0);
         PPR_TEST_ASSERT(kDensityQuadratureOffset == 0.25);
         PPR_TEST_ASSERT(kDensityCullRadiusScale == 3.0625);
-        // max(k, eta) * R = 1.5 * 2 r = 3.000 r <= 3.0625 r.
-        PPR_TEST_ASSERT(kDensitySupportScale * kDensityStretchCap == 3.0);
-        PPR_TEST_ASSERT(kDensitySupportScale * kDensityStretchCap <= kDensityCullRadiusScale);
+        PPR_TEST_ASSERT(std::abs(kDensityDepthCeiling - 0.9999999403953552) <= 1.0e-16);
 
-        // Anisotropy mapping endpoints.
+        // support_max = stretch_cap * R = 2.288922837966554 r <= 3.0625 r.
+        constexpr double support_over_r = kDensityStretchCap * kDensitySurfaceRadiusScale;
+        PPR_TEST_ASSERT(std::abs(support_over_r - 2.288922837966554) <= 1.0e-13);
+        PPR_TEST_ASSERT(support_over_r <= kDensityCullRadiusScale);
+        PPR_TEST_ASSERT(std::abs(kDensityCullRadiusScale - support_over_r - 0.773577162033446) <= 1.0e-12);
+        // The direct solid's 1.5x-stretched silhouette is still the cull driver.
+        PPR_TEST_ASSERT(kDensityDirectSupportScale * kDensityStretchCap == 3.0);
+        PPR_TEST_ASSERT(kDensityDirectSupportScale * kDensityStretchCap <= kDensityCullRadiusScale);
+
+        // Neutral peak and the drawn isolated contour. theta crosses at the
+        // solved root 0.8810686303395725, which the design quotes to 15 digits as
+        // 0.881068630339572 (5.6e-16 = 5 ulps below the root, |dw/drho| = 2.53
+        // there, so the 15-digit literal moves the profile value by 1.4e-15). The
+        // value assertion uses the root and the literal is pinned separately.
         const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
-        PPR_TEST_ASSERT(neutral.m_axis.x == 1.0 and neutral.m_axis.y == 0.0);
-        PPR_TEST_ASSERT(neutral.m_stretch == 1.0);
-        PPR_TEST_ASSERT(neutral.m_ratio == 1.0);
+        constexpr double crossing_rho = 0.8810686303395725;
+        PPR_TEST_ASSERT(std::abs(crossing_rho - 0.881068630339572) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(densityWeight({0.0, 0.0}, neutral) - 0.613510744960683) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(densityWeight({crossing_rho, 0.0}, neutral) - kDensityThreshold) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(densityWeight({5.0 / 6.0, 0.0}, neutral) - 0.306755372480341) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(densityWeight({5.0 / 6.0, 0.0}, neutral) - kDensityThreshold) > 0.1);
+        const double apparent_radius_cells = crossing_rho * r_over_r * r_reference_cells;
+        PPR_TEST_ASSERT(std::abs(apparent_radius_cells - 0.379266688903233) <= 1.0e-14);
+        PPR_TEST_ASSERT(std::abs(apparent_radius_cells / r_reference_cells - 1.344465406533439) <= 1.0e-13);
+        // A physical-radius contour is not selectable by theta: r/R is inside the
+        // rho <= 2/3 plateau.
+        PPR_TEST_ASSERT(r_reference_cells / (kDensitySurfaceRadiusScale * r_reference_cells) <= kDensityPlateau);
+
+        // Anisotropy mapping endpoints (unchanged cue mapping).
         const DensityKernel extremes = densityKernel({1.0, 0.0}, 1.0, 1.0);
         PPR_TEST_ASSERT(extremes.m_stretch == 1.5);
-        PPR_TEST_ASSERT(std::abs(extremes.m_ratio - 0.66673611400475022) <= 1.0e-15);
         PPR_TEST_ASSERT(std::abs(extremes.m_ratio - (1.0 - 0.5 * 0.3999) / (1.0 + 0.5 * 0.3999)) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(extremes.m_stretch * extremes.m_ratio - 1.0001041710071252) <= 1.0e-15);
         PPR_TEST_ASSERT(extremes.m_ratio <= 1.0 and extremes.m_stretch >= 1.0);
 
         // The four fixed quadrature offsets of a density pixel.
@@ -7403,101 +7660,164 @@ namespace pP::tests::detail::WorldLightingMaterial {
         }
         PPR_TEST_ASSERT(offset_sum_x == 0.0 and offset_sum_y == 0.0);
         PPR_TEST_ASSERT(densityQuadratureOffset(0u).x == -0.25 and densityQuadratureOffset(0u).y == -0.25);
-        PPR_TEST_ASSERT(densityQuadratureOffset(1u).x == 0.25 and densityQuadratureOffset(1u).y == -0.25);
-        PPR_TEST_ASSERT(densityQuadratureOffset(2u).x == -0.25 and densityQuadratureOffset(2u).y == 0.25);
         PPR_TEST_ASSERT(densityQuadratureOffset(3u).x == 0.25 and densityQuadratureOffset(3u).y == 0.25);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_constants V=pi*r^2 R={:.1f}r plateau={:.12f} "
-                "band={:.12f} normalization={:.1f} theta={:.12f} eta_max={:.12f} b_max={:.4f} stretch_max={:.1f} "
-                "epsilon={:.1e} floor={:.12f}",
-                kDensitySupportScale, kDensityPlateau, kDensityBandFraction, kDensityNormalization, kDensityThreshold,
-                extremes.m_ratio, kDensityBiasCap, kDensityStretchCap, kDensityEpsilon, kDensityCoverageFloor));
+                "WORLD_LIGHTING_MATERIAL particle_surface_constants R={:.15f}r R_ref={:.15f} A2={:.15f} "
+                "amplitude={:.15f} theta={:.15f} support_max={:.15f}r apparent={:.15f}r/{:.15f}cell",
+                kDensitySurfaceRadiusScale, kDensitySurfaceRadiusScale * r_reference_cells, kDensitySecondMoment,
+                kDensityAmplitude, kDensityThreshold, support_over_r, apparent_radius_cells / r_reference_cells,
+                apparent_radius_cells));
     };
 
-    PPR_UNIT_TEST (particle_density_isolated_neutral_keeps_the_half_coverage_radius) {
-        // The calibrated threshold preserves the old isolated half-coverage
-        // radius: w = s/2.8, theta = 5/28 crosses at s = 1/2, i.e. t = 1/2 and
-        // rho = 1 - (1/2)/3 = 5/6. A threshold of 0.5 would erase the particle
-        // instead of half-covering it, because its peak is only 1/2.8.
+    PPR_UNIT_TEST (particle_surface_isolated_neutral_draws_the_apparent_radius) {
+        // Revision 5 keeps theta and raises the neutral peak to 0.613510745 by
+        // shrinking R. The isolated half-coverage (C = .5) contour is therefore
+        // the solved root rho = 0.8810686303395725 (quoted to 15 digits by the
+        // design as 0.881068630339572), not the old 5/6, and the old 5R/6 radius
+        // is only the half-PEAK point.
         const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
         const double peak = densityWeight({0.0, 0.0}, neutral);
-        PPR_TEST_ASSERT(std::abs(peak - 1.0 / 2.8) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(peak - 0.35714285714285715) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(peak - 0.613510744960683) <= 1.0e-15);
         PPR_TEST_ASSERT(peak > kDensityThreshold);
-        PPR_TEST_ASSERT(peak < 0.5);
 
-        // The crossing is exactly rho = 5/6 and is a monotone decreasing edge.
-        const double crossing_rho = 1.0 - 0.5 * kDensityBandFraction;
-        PPR_TEST_ASSERT(std::abs(crossing_rho - 5.0 / 6.0) <= 1.0e-15);
+        constexpr double crossing_rho = 0.8810686303395725;
+        PPR_TEST_ASSERT(std::abs(crossing_rho - 0.881068630339572) <= 1.0e-15);
         const double crossing = densityWeight({crossing_rho, 0.0}, neutral);
         PPR_TEST_ASSERT(std::abs(crossing - kDensityThreshold) <= 1.0e-15);
         PPR_TEST_ASSERT(densityWeight({crossing_rho - 1.0e-6, 0.0}, neutral) > kDensityThreshold);
         PPR_TEST_ASSERT(densityWeight({crossing_rho + 1.0e-6, 0.0}, neutral) < kDensityThreshold);
-
-        // Explicit counterfactual: at theta = 0.5 an isolated particle's peak is
-        // below the threshold, so its contour is exactly zero everywhere.
-        const auto coverage_at = [](const double threshold, const double density) {
-            const double lower = threshold - 0.5 * kDensityEpsilon;
-            const double upper = threshold + 0.5 * kDensityEpsilon;
-            const double t = std::clamp((density - lower) / (upper - lower), 0.0, 1.0);
-            return densityRamp(t);
-        };
-        PPR_TEST_ASSERT(coverage_at(0.5, peak) == 0.0);
-        PPR_TEST_ASSERT(coverage_at(kDensityThreshold, peak) == 1.0);
         PPR_TEST_ASSERT(densityContour(peak, 0.0, 0.0) == 1.0);
+        // Just outside the drawn contour the one-pixel band is still live, and the
+        // support beyond rho = 1 is exactly zero.
+        PPR_TEST_ASSERT(densityContour(densityWeight({0.95, 0.0}, neutral), 0.0, 0.0) == 0.0);
+        PPR_TEST_ASSERT(densityWeight({1.0, 0.0}, neutral) == 0.0);
+
+        // Half-peak is not theta: raising theta to that value would move the drawn
+        // contour and is explicitly not the selected calibration.
+        const double half_peak_rho = 5.0 / 6.0;
+        const double half_peak = densityWeight({half_peak_rho, 0.0}, neutral);
+        PPR_TEST_ASSERT(std::abs(half_peak - 0.306755372480341) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(half_peak - 0.5 * peak) <= 1.0e-15);
+        PPR_TEST_ASSERT(half_peak > kDensityThreshold);
+
+        // 34.4465% larger than physical r and 11.8931% smaller than the old solid's
+        // 0.430462141-cell axis extent.
+        constexpr double r_cells = 0.28209479177387814;
+        const double apparent_cells = crossing_rho * kDensitySurfaceRadiusScale * r_cells;
+        PPR_TEST_ASSERT(std::abs(apparent_cells / r_cells - 1.344465406533439) <= 1.0e-13);
+        PPR_TEST_ASSERT(std::abs(apparent_cells / 0.430462140908433 - 1.0 + 0.118931) <= 1.0e-5);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_isolated peak={:.12f} theta={:.12f} crossing_rho={:.12f} "
-                "dropped_at_half_theta={:.0f}",
-                peak, kDensityThreshold, crossing_rho, coverage_at(0.5, peak)));
+                "WORLD_LIGHTING_MATERIAL particle_surface_isolated peak={:.15f} theta={:.15f} rho_star={:.15f} "
+                "apparent_cells={:.15f} half_peak={:.15f}",
+                peak, kDensityThreshold, crossing_rho, apparent_cells, half_peak));
     };
 
-    PPR_UNIT_TEST (particle_density_integrated_weight_is_the_reference_area) {
-        // The normalization is exact for this kernel: the continuous integral of w
-        // over the plane is V = pi r^2 for neutral, maximum-stretch (k = 1.5) and
-        // maximum-bias (b = 0.3999) orientations. The finite four-point quadrature
-        // the splat pass performs is a separate number with its own tolerance: it
-        // approaches V only as the density pixel shrinks.
+    PPR_UNIT_TEST (particle_surface_integrated_weight_is_the_reference_area) {
+        // Two different claims, asserted with the tools each one needs.
+        //
+        // 1. The CONTINUOUS plane integral of w is exactly V. This is analytic, not
+        //    a quadrature result: integrating s over the unit q-disk gives
+        //    2*(2/9 + 23/180) = 0.7 in rho form, and A_2 = 1/(0.7 pi) makes
+        //    A_2*0.7 pi = 1, so amplitude*0.7*pi*R^2 = V for R = c r. No tolerance
+        //    wider than double round-off is needed.
+        // 2. The 512-step midpoint sum in `densityIntegral` is NOT exact for this
+        //    kernel: w is C1 but not polynomial in x and y, and the circular
+        //    support boundary is only first-order accurate per cell, so the sum
+        //    has the second-order error |I_h - V| = C h^2 + O(h^3). The probe
+        //    therefore asserts the derived second-order relation on a refined pair
+        //    and a measured regression bound, instead of reading a fixed 1e-6 as if
+        //    the sum were exact.
+        PPR_TEST_ASSERT(std::abs(kDensityProfileIntegral * kPi * kDensitySecondMoment - 1.0) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(kDensitySecondMoment - 1.0 / (kDensityProfileIntegral * kPi)) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(2.0 * (2.0 / 9.0 + 23.0 / 180.0) - kDensityProfileIntegral) <= 1.0e-15);
         constexpr double volume = 0.25;
         constexpr u32 integral_steps = 512u;
         const double radius = std::sqrt(volume / kPi);
+        // V = pi r^2 and R = c r, so the whole amplitude is
+        // amplitude = V*A_2/R^2 = pi*A_2/c^2 = 10/(7 c^2).
+        PPR_TEST_ASSERT(
+            std::abs(
+                kDensityAmplitude -
+                kPi * kDensitySecondMoment / (kDensitySurfaceRadiusScale * kDensitySurfaceRadiusScale)) <= 1.0e-16);
+        PPR_TEST_ASSERT(
+            std::abs(kDensityAmplitude - 10.0 / (7.0 * kDensitySurfaceRadiusScale * kDensitySurfaceRadiusScale)) <=
+            1.0e-15);
+        PPR_TEST_ASSERT(
+            std::abs(
+                kDensityAmplitude *
+                    kDensityProfileIntegral *
+                    kPi *
+                    kDensitySurfaceRadiusScale *
+                    kDensitySurfaceRadiusScale *
+                    radius *
+                    radius -
+                volume) <= 1.0e-15);
+
         const std::array<std::pair<const char *, DensityKernel>, 3u> kernels{{
             {"neutral", densityKernel({1.0, 0.0}, 0.0, 0.0)},
             {"stretched", densityKernel({1.0, 0.0}, 0.0, 1.0)},
             {"biased", densityKernel({0.6, 0.8}, 1.0, 0.0)},
         }};
 
-        for (const auto &[name, kernel]: kernels) {
-            const double integral = densityIntegral(kernel, radius, integral_steps);
-            const double relative = std::abs(integral - volume) / volume;
-            PPR_TEST_ASSERT(relative <= 1.0e-6);
+        // Logged before the assertions so a drift reports both sides.
+        {
+            const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+            const double actual = densityIntegral(neutral, radius, integral_steps);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_integral_actual I512={:.17g} expected={:.17g} "
+                    "delta={:.3e}",
+                    actual, volume, std::abs(actual - volume)));
+        }
 
-            const double support = kDensitySupportScale * radius;
-            const double coarse = densityQuadratureIntegral(kernel, radius, support / 8.0);
-            const double fine = densityQuadratureIntegral(kernel, radius, support / 64.0);
-            const double coarse_relative = std::abs(coarse - volume) / volume;
-            const double fine_relative = std::abs(fine - volume) / volume;
-            PPR_TEST_ASSERT(coarse_relative <= 2.0e-4);
-            PPR_TEST_ASSERT(fine_relative <= 1.0e-5);
-            PPR_TEST_ASSERT(fine_relative < coarse_relative or fine_relative <= 1.0e-9);
+        for (const auto &[name, kernel]: kernels) {
+            // Midpoint sum at h and h/2. For a second-order method
+            // I_h - V = C h^2 + O(h^3), so |I_h/2 - V| is at most about
+            // |I_h - I_h/2|/3; 0.4 admits the O(h^3) boundary term (measured
+            // ratio at most 0.159 over the three kernels).
+            const double coarse = densityIntegral(kernel, radius, integral_steps);
+            const double fine = densityIntegral(kernel, radius, 2u * integral_steps);
+            const double coarse_error = std::abs(coarse - volume);
+            const double fine_error = std::abs(fine - volume);
+            PPR_TEST_ASSERT(fine_error <= 0.4 * std::abs(coarse - fine));
+            PPR_TEST_ASSERT(fine_error <= coarse_error);
+            // Measured 512-step relative error over the three kernels is
+            // 3.0e-9 / 5.7e-9 / 7.4e-9, so this is a 13x regression bound.
+            PPR_TEST_ASSERT(coarse_error <= 1.0e-7 * volume);
+
+            // The four-point variant the splat pass actually performs has its own
+            // measured tolerance: 4.8e-5 / 2.6e-5 / 9.0e-6 relative at
+            // support/8 and 1.4e-8 / 2.0e-9 / 1.8e-8 at support/64.
+            const double support = kDensitySurfaceRadiusScale * radius;
+            const double quad_coarse = densityQuadratureIntegral(kernel, radius, support / 8.0);
+            const double quad_fine = densityQuadratureIntegral(kernel, radius, support / 64.0);
+            const double quad_coarse_relative = std::abs(quad_coarse - volume) / volume;
+            const double quad_fine_relative = std::abs(quad_fine - volume) / volume;
+            PPR_TEST_ASSERT(quad_coarse_relative <= 2.0e-4);
+            PPR_TEST_ASSERT(quad_fine_relative <= 1.0e-5);
+            PPR_TEST_ASSERT(quad_fine_relative < quad_coarse_relative or quad_fine_relative <= 1.0e-9);
 
             _.log(
                 std::format(
-                    "WORLD_LIGHTING_MATERIAL particle_density_integral kernel={} V={:.12f} continuous={:.12f} "
-                    "continuous_rel={:.3e} quad_R8={:.12f} quad_R8_rel={:.3e} quad_R64={:.12f} quad_R64_rel={:.3e}",
-                    name, volume, integral, relative, coarse, coarse_relative, fine, fine_relative));
+                    "WORLD_LIGHTING_MATERIAL particle_surface_integral kernel={} V={:.12f} I512={:.12f} "
+                    "rel512={:.3e} I1024={:.12f} rel1024={:.3e} refinement={:.3e} quad_R8_rel={:.3e} "
+                    "quad_R64_rel={:.3e}",
+                    name, volume, coarse, coarse_error / volume, fine, fine_error / volume, std::abs(coarse - fine),
+                    quad_coarse_relative, quad_fine_relative));
         }
     };
 
-    PPR_UNIT_TEST (particle_density_kernel_is_zero_at_and_beyond_the_support) {
+    PPR_UNIT_TEST (particle_surface_kernel_is_zero_at_and_beyond_the_support) {
         // The compact support is exactly zero from the support radius outward for
-        // every orientation, so the existing 3.0625 r cull still bounds the drawn
-        // kernel: max reach is max(k, eta) * R = 3.000 r at the stretch cap.
+        // every orientation. The surface radius is 1.5259486 r, so the maximum
+        // reach is 1.5 * R = 2.2889228 r, inside the retained 3.0625 r cull (which
+        // still bounds the direct solid's 3.000 r silhouette).
         constexpr double radius = 1.0;
-        const double support = kDensitySupportScale * radius;
+        const double support = kDensitySurfaceRadiusScale * radius;
         const std::array<DensityKernel, 4u> kernels{{
             densityKernel({1.0, 0.0}, 0.0, 0.0),
             densityKernel({1.0, 0.0}, 0.0, 1.0),
@@ -7523,7 +7843,6 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 // closure constant covers the ulps the transform can lose inside R.
                 PPR_TEST_ASSERT(densityWeightCells(at_support, radius, kernel) == 0.0);
                 PPR_TEST_ASSERT(densityWeightCells({at_support.x * 1.01, at_support.y * 1.01}, radius, kernel) == 0.0);
-                PPR_TEST_ASSERT(densityWeightCells({at_support.x * 1.5, at_support.y * 1.5}, radius, kernel) == 0.0);
                 PPR_TEST_ASSERT(densityWeightCells({at_support.x * 10.0, at_support.y * 10.0}, radius, kernel) == 0.0);
 
                 // Just inside is still live: the closure is a round-off guard, not
@@ -7535,34 +7854,50 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
         }
 
-        // The maximum reach is exactly 3.000 r, inside the 3.0625 r cull margin.
-        PPR_TEST_ASSERT(std::abs(maximum_reach - 3.0) <= 1.0e-12);
+        // The maximum reach is exactly 2.2889228 r, inside the 3.0625 r cull.
+        PPR_TEST_ASSERT(std::abs(maximum_reach - 2.288922837966554) <= 1.0e-13);
         PPR_TEST_ASSERT(maximum_reach <= kDensityCullRadiusScale);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_support R={:.4f}r max_reach={:.12f}r cull={:.4f}r", support,
+                "WORLD_LIGHTING_MATERIAL particle_surface_support R={:.15f}r max_reach={:.15f}r cull={:.4f}r", support,
                 maximum_reach, kDensityCullRadiusScale));
     };
 
-    PPR_UNIT_TEST (particle_density_lattice_yields_the_calibrated_examples) {
+    PPR_UNIT_TEST (particle_surface_lattice_closes_the_rest_grid) {
         // The nominal rest pool: V = 0.25 cell, spacing 0.5 cell, neutral cues.
-        // The analytic values are not a flat raw density; the final geometric
-        // coverage saturates after thresholding, which is the plan's claim.
+        // Revision 5's closure numbers: the centre keeps its unchanged peak, the
+        // junction and edge midpoints sit well above theta, and the nearest-
+        // contributor bound keeps the whole interior closed.
         constexpr double volume = 0.25;
         constexpr double spacing = 0.5;
+        constexpr double r_cells = 0.28209479177387814;
+        // Logged before the assertions so a drift reports both sides.
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_lattice_actual centre={:.17g}/{:.17g} "
+                "junction={:.17g}/{:.17g} edge={:.17g}/{:.17g}",
+                densityLatticeSample({0.0, 0.0}), 0.613510744960683, densityLatticeSample({0.25, 0.25}),
+                1.359298427893234, densityLatticeSample({0.25, 0.0}), 1.227021489921365));
         const double centre = densityLatticeSample({0.0, 0.0});
         const double junction = densityLatticeSample({0.25, 0.25});
         const double edge = densityLatticeSample({0.25, 0.0});
-        PPR_TEST_ASSERT(std::abs(centre - 0.7428140983662449) <= 1.0e-12);
-        PPR_TEST_ASSERT(std::abs(junction - 1.4285714285714286) <= 1.0e-12);
-        PPR_TEST_ASSERT(std::abs(edge - 0.7174684038414513) <= 1.0e-12);
-        // Every point has at least one plateau contributor, so D >= 1/2.8 and the
-        // whole interior is above the calibrated threshold.
-        PPR_TEST_ASSERT(std::abs(1.0 / 2.8 - 0.35714285714285715) <= 1.0e-15);
-        PPR_TEST_ASSERT(edge >= 1.0 / 2.8);
+        PPR_TEST_ASSERT(std::abs(centre - 0.613510744960683) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(junction - 1.359298427893234) <= 1.0e-12);
+        PPR_TEST_ASSERT(std::abs(edge - 1.227021489921365) <= 1.0e-12);
         PPR_TEST_ASSERT(centre > kDensityThreshold and junction > kDensityThreshold and edge > kDensityThreshold);
-        PPR_TEST_ASSERT(junction > centre and centre > edge);
+        PPR_TEST_ASSERT(junction > edge and edge > centre);
+
+        // Every interior point has a nearest lattice corner within sqrt(.125), so
+        // that single contributor already bounds D from below. The bound exceeds
+        // theta, and the AA width that still saturates is 2*(bound - theta).
+        const double nearest_offset = std::sqrt(0.125);
+        const double nearest_rho = nearest_offset / (kDensitySurfaceRadiusScale * r_cells);
+        const double interior_bound = kDensityAmplitude * densityRamp(std::clamp(3.0 * (1.0 - nearest_rho), 0.0, 1.0));
+        PPR_TEST_ASSERT(std::abs(interior_bound - 0.339824607) <= 1.0e-9);
+        PPR_TEST_ASSERT(interior_bound > kDensityThreshold);
+        PPR_TEST_ASSERT(std::abs(2.0 * (interior_bound - kDensityThreshold) - 0.322506357) <= 1.0e-9);
+        PPR_TEST_ASSERT(densityContour(interior_bound, 0.0, 0.0) == 1.0);
 
         // Area mean over one lattice cell is one: V / cell area = 0.25 / 0.25.
         constexpr u32 steps = 64u;
@@ -7574,137 +7909,337 @@ namespace pP::tests::detail::WorldLightingMaterial {
             }
         }
         const double mean = total / double(steps * steps);
-        const double expected_mean = volume / (spacing * spacing);
-        PPR_TEST_ASSERT(std::abs(mean - expected_mean) <= 1.0e-5);
-        PPR_TEST_ASSERT(expected_mean == 1.0);
+        PPR_TEST_ASSERT(std::abs(mean - volume / (spacing * spacing)) <= 1.0e-5);
+        PPR_TEST_ASSERT(volume / (spacing * spacing) == 1.0);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_lattice V={:.2f} spacing={:.2f} centre={:.9f} "
-                "junction={:.9f} edge={:.9f} mean={:.9f}",
-                volume, spacing, centre, junction, edge, mean));
+                "WORLD_LIGHTING_MATERIAL particle_surface_lattice V={:.2f} spacing={:.2f} centre={:.12f} "
+                "junction={:.12f} edge={:.12f} bound={:.12f} mean={:.9f}",
+                volume, spacing, centre, junction, edge, interior_bound, mean));
     };
 
-    PPR_UNIT_TEST (particle_density_optical_composite_requires_the_opacity_numerator) {
-        // Two samples of one optical lane with different weights, authored alpha and
-        // linear HDR premultiplied colors. N = sum w P, D = sum w, O = sum w alpha.
+    PPR_UNIT_TEST (particle_surface_label_selection_keeps_the_first_stable_row) {
+        // Strict Less over the stable compacted order: the first minimum wins and an
+        // exactly equal distance never advances to a later instance. The stored
+        // depth is the minimum over ELIGIBLE quadrature points; a completely
+        // excluded candidate stores nothing, which lets the next eligible label win.
+        struct Candidate {
+            u32 m_row{};
+            u32 m_label{};
+            double m_rho2{};
+            bool m_eligible{true};
+        };
+
+        const auto select = [](const std::vector<Candidate> &candidates) -> std::optional<Candidate> {
+            std::optional<Candidate> winner;
+            for (const Candidate &candidate: candidates) {
+                if (not candidate.m_eligible)
+                    continue;
+                if (not winner or candidate.m_rho2 < winner->m_rho2)
+                    winner = candidate;
+            }
+
+            return winner;
+        };
+
+        // Nearest wins.
+        const auto nearest = select({{0u, 11u, 0.60}, {1u, 12u, 0.40}, {2u, 13u, 0.80}});
+        PPR_TEST_ASSERT(nearest and nearest->m_row == 1u and nearest->m_label == 12u);
+        // Exact tie: the first row keeps the texel.
+        const auto tied = select({{0u, 11u, 0.40}, {1u, 12u, 0.40}, {2u, 13u, 0.40}});
+        PPR_TEST_ASSERT(tied and tied->m_row == 0u and tied->m_label == 11u);
+        // A half-conic quantisation tie is the same case: the equal metric does not
+        // reorder by material.
+        const auto quantized = select({{0u, 12u, 0.5000001}, {1u, 11u, 0.5000001}});
+        PPR_TEST_ASSERT(quantized and quantized->m_label == 12u);
+        // An excluded first candidate cannot starve the next eligible label.
+        const auto excluded = select({{0u, 11u, 0.10, false}, {1u, 12u, 0.70}});
+        PPR_TEST_ASSERT(excluded and excluded->m_row == 1u and excluded->m_label == 12u);
+        // No eligible candidate: the texel stores no label and no depth.
+        PPR_TEST_ASSERT(not select({{0u, 11u, 0.10, false}, {1u, 12u, 0.20, false}}));
+
+        // The stored synthetic distance is clamped below the 1.0 clear value so an
+        // open support that rounds to exactly 1 stays writable under strict Less,
+        // and the clamp never reorders two distinct distances.
+        const double clamped = std::min(0.999999999999, kDensityDepthCeiling);
+        PPR_TEST_ASSERT(clamped < 1.0);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_label_ties nearest={} tied={} quantized_tie={} "
+                "clamped={:.9f}",
+                nearest->m_row, tied->m_row, quantized->m_row, clamped));
+    };
+
+    PPR_UNIT_TEST (particle_surface_categorical_reconstruction_never_filters_ids) {
+        // Four taps of one sample: left column material 11, right two foreign
+        // material 12 and air. The reconstruction must return exactly one own
+        // material's attributes, never a numeric blend of 11 and 12, and must
+        // renormalise by the same Z for every channel.
+        const Double3 plane{0.0, 0.0, 1.0};
+        const SurfaceTexel a = surfaceTexel(11u, 0.60, {0.8, 0.4, 0.2}, plane, 0.5, false);
+        const SurfaceTexel b = surfaceTexel(12u, 0.90, {0.1, 0.2, 0.9}, {0.3, 0.0, 0.954}, 0.7, false);
+        const SurfaceTexel air{};
+        const std::array<SurfaceTexel, 4u> taps{a, b, a, air};
+
+        // Nearest = the top-left own tap; fx = fy = .5 so the weights split.
+        const auto own = densityReconstruct(taps, a, 0.5, 0.5, false);
+        PPR_TEST_ASSERT(own.m_valid);
+        PPR_TEST_ASSERT(own.m_material == 11u);
+        // Z counts the two own taps and the air tap only: .25 + .25 + .25 = .75.
+        const double z = 0.75;
+        PPR_TEST_ASSERT(std::abs(own.m_density - (0.25 * 0.60 + 0.25 * 0.60) / z) <= 1.0e-15);
+        // Z = U/Z / (D) is the own material's base: no foreign contribution at all.
+        PPR_TEST_ASSERT(std::abs(own.m_base.x - 0.8) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(own.m_base.y - 0.4) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(own.m_base.z - 0.2) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(own.m_alpha - 0.5) <= 1.0e-15);
+        PPR_TEST_ASSERT(own.m_material != 12u);
+
+        // The same taps with material 12 nearest return 12's attributes; the id
+        // itself is never averaged, and a returned id is always one of the taps.
+        const auto foreign = densityReconstruct(taps, b, 0.5, 0.5, false);
+        PPR_TEST_ASSERT(foreign.m_valid);
+        PPR_TEST_ASSERT(foreign.m_material == 12u);
+        PPR_TEST_ASSERT(std::abs(foreign.m_base.z - 0.9) <= 1.0e-15);
+        for (const u32 id: {own.m_material, foreign.m_material})
+            PPR_TEST_ASSERT(id == 11u or id == 12u);
+
+        // All-foreign and all-air taps: no sample exists, and the caller discards.
+        const std::array<SurfaceTexel, 4u> other{b, b, b, b};
+        PPR_TEST_ASSERT(not densityReconstruct(other, a, 0.25, 0.25, false).m_valid);
+        const std::array<SurfaceTexel, 4u> empty{air, air, air, air};
+        PPR_TEST_ASSERT(not densityReconstruct(empty, air, 0.25, 0.25, false).m_valid);
+
+        // The analytic quotient derivative is in density-per-pixel units: a
+        // one-texel linear ramp of the same label gives |dD/dx| = the step.
+        const SurfaceTexel left = surfaceTexel(11u, 0.0, {0.5, 0.5, 0.5}, plane, 1.0, false);
+        const SurfaceTexel right = surfaceTexel(11u, 1.0, {0.5, 0.5, 0.5}, plane, 1.0, false);
+        const std::array<SurfaceTexel, 4u> ramp{left, right, left, right};
+        const auto ramp_mid = densityReconstruct(ramp, left, 0.5, 0.0, false);
+        PPR_TEST_ASSERT(ramp_mid.m_valid);
+        PPR_TEST_ASSERT(std::abs(ramp_mid.m_density - 0.5) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(ramp_mid.m_derivative_x - 1.0) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(ramp_mid.m_derivative_y) <= 1.0e-15);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_reconstruction own_id={} own_D={:.9f} own_base=({:.6f},"
+                "{:.6f},{:.6f}) foreign_id={} ramp_D={:.9f} ramp_dDdx={:.9f}",
+                own.m_material, own.m_density, own.m_base.x, own.m_base.y, own.m_base.z, foreign.m_material,
+                ramp_mid.m_density, ramp_mid.m_derivative_x));
+    };
+
+    PPR_UNIT_TEST (particle_surface_two_liquids_of_one_class_keep_one_owner_per_texel) {
+        // Two OPAQUE liquid materials touching. Each texel still stores exactly one
+        // label, so an interior sample reconstructs one material's attributes and a
+        // border sample renormalises instead of averaging the two albedos.
+        const Double3 plane{0.0, 0.0, 1.0};
+        const SurfaceTexel water = surfaceTexel(11u, 1.0, {0.1, 0.3, 0.9}, plane, 1.0, false);
+        const SurfaceTexel brine = surfaceTexel(12u, 1.0, {0.6, 0.6, 0.2}, plane, 1.0, false);
+        const SurfaceTexel empty{};
+
+        // Interior of water and of brine: exactly that material, full density.
+        const std::array<SurfaceTexel, 4u> water_interior{water, water, water, water};
+        const auto inside_water = densityReconstruct(water_interior, water, 0.3, 0.4, false);
+        PPR_TEST_ASSERT(inside_water.m_valid and inside_water.m_material == 11u);
+        PPR_TEST_ASSERT(std::abs(inside_water.m_density - 1.0) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(inside_water.m_base.x - 0.1) <= 1.0e-15);
+        const std::array<SurfaceTexel, 4u> brine_interior{brine, brine, brine, brine};
+        const auto inside_brine = densityReconstruct(brine_interior, brine, 0.6, 0.6, false);
+        PPR_TEST_ASSERT(inside_brine.m_valid and inside_brine.m_material == 12u);
+        PPR_TEST_ASSERT(std::abs(inside_brine.m_base.x - 0.6) <= 1.0e-15);
+
+        // Border: one own tap, three foreign taps. The owner is the nearest label
+        // and the foreign weights are removed, so the remaining side renormalises
+        // to its own full values rather than an air slit or a blended albedo.
+        const std::array<SurfaceTexel, 4u> border{water, brine, empty, empty};
+        const auto water_side = densityReconstruct(border, water, 0.0, 0.0, false);
+        PPR_TEST_ASSERT(water_side.m_valid and water_side.m_material == 11u);
+        PPR_TEST_ASSERT(std::abs(water_side.m_base.x - 0.1) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(water_side.m_density - 1.0) <= 1.0e-15);
+        const auto brine_side = densityReconstruct(border, brine, 1.0, 0.0, false);
+        PPR_TEST_ASSERT(brine_side.m_valid and brine_side.m_material == 12u);
+        PPR_TEST_ASSERT(std::abs(brine_side.m_base.x - 0.6) <= 1.0e-15);
+
+        // Mixed classes: exactly one liquid class owns a sample. The same taps
+        // reconstruct for the matching class and reject the other.
+        const SurfaceTexel oil = surfaceTexel(13u, 1.0, {0.9, 0.7, 0.1}, plane, 0.4, true);
+        const std::array<SurfaceTexel, 4u> oil_interior{oil, oil, oil, oil};
+        PPR_TEST_ASSERT(densityReconstruct(oil_interior, oil, 0.5, 0.5, true).m_valid);
+        PPR_TEST_ASSERT(not densityReconstruct(oil_interior, oil, 0.5, 0.5, false).m_valid);
+        PPR_TEST_ASSERT(densityReconstruct(water_interior, water, 0.5, 0.5, false).m_valid);
+        PPR_TEST_ASSERT(not densityReconstruct(water_interior, water, 0.5, 0.5, true).m_valid);
+
+        // Optical alpha is the reconstructed mean, applied once: 0.4 for oil,
+        // exactly 1 for an opaque liquid.
+        const auto oil_sample = densityReconstruct(oil_interior, oil, 0.5, 0.5, true);
+        const SurfaceComposite oil_composite = densityComposite(oil_sample, {1.0, 1.0, 1.0}, 1.0, true);
+        PPR_TEST_ASSERT(oil_composite.m_visible);
+        PPR_TEST_ASSERT(std::abs(oil_composite.m_alpha - 0.4) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(oil_composite.m_premultiplied.x - 0.4) <= 1.0e-15);
+        const auto water_sample = densityReconstruct(water_interior, water, 0.5, 0.5, false);
+        const SurfaceComposite water_composite = densityComposite(water_sample, {1.0, 1.0, 1.0}, 1.0, false);
+        PPR_TEST_ASSERT(std::abs(water_composite.m_alpha - 1.0) <= 1.0e-15);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_two_liquids water=({:.3f}) brine=({:.3f}) "
+                "border_water=({:.3f}) border_brine=({:.3f}) oil_alpha={:.3f}",
+                inside_water.m_base.x, inside_brine.m_base.x, water_side.m_base.x, brine_side.m_base.x,
+                oil_composite.m_alpha));
+    };
+
+    PPR_UNIT_TEST (particle_surface_deferred_composite_premultiplies_once_and_guards_the_field) {
+        // Two same-label splats with different sampled attributes: the stored Q/G
+        // are weighted sums and the composite recovers weighted means, then
+        // premultiplies exactly once. Nothing is shaded per splat.
         constexpr double weight_a = 0.6;
         constexpr double weight_b = 0.4;
-        const Double3 color_a{4.0, 2.0, 1.0};
-        const Double3 color_b{0.5, 1.0, 8.0};
+        const Double3 base_a{0.8, 0.4, 0.2};
+        const Double3 base_b{0.2, 0.4, 0.8};
+        const Double3 normal_a{0.0, 0.0, 1.0};
+        const Double3 normal_b{0.6, 0.0, 0.8};
         constexpr double alpha_a = 0.25;
         constexpr double alpha_b = 0.75;
+        // The stored texel is the accumulation of both splats' own contributions.
+        const Double3 mean_base{
+            base_a.x * weight_a + base_b.x * weight_b, base_a.y * weight_a + base_b.y * weight_b,
+            base_a.z * weight_a + base_b.z * weight_b};
+        const Double3 mean_normal{
+            normal_a.x * weight_a + normal_b.x * weight_b, normal_a.y * weight_a + normal_b.y * weight_b,
+            normal_a.z * weight_a + normal_b.z * weight_b};
+        const SurfaceTexel summed = surfaceTexel(
+            11u, weight_a + weight_b, mean_base, mean_normal, weight_a * alpha_a + weight_b * alpha_b, true);
+        const std::array<SurfaceTexel, 4u> taps{summed, summed, summed, summed};
+        const auto reconstructed = densityReconstruct(taps, summed, 0.5, 0.5, true);
+        PPR_TEST_ASSERT(reconstructed.m_valid);
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_density - 1.0) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_base.x - 0.56) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_base.z - 0.44) <= 1.0e-15);
+        // The mean normal is renormalized, not summed raw:
+        // 0.6 * 1.0 + 0.4 * 0.8 = 0.92 in z and 0.4 * 0.6 = 0.24 in x.
+        const Double3 raw_normal{0.24, 0.0, 0.92};
+        const double raw_length = std::sqrt(
+            raw_normal.x * raw_normal.x + raw_normal.y * raw_normal.y + raw_normal.z * raw_normal.z);
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_normal.z - raw_normal.z / raw_length) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_normal.x - raw_normal.x / raw_length) <= 1.0e-15);
+        // Mean alpha: 0.45, applied once by the composite as C*alpha.
+        PPR_TEST_ASSERT(std::abs(reconstructed.m_alpha - 0.45) <= 1.0e-15);
         constexpr double coverage = 0.8;
-        const double density = weight_a + weight_b;
-        const Double3 numerator{
-            weight_a * color_a.x + weight_b * color_b.x, weight_a * color_a.y + weight_b * color_b.y,
-            weight_a * color_a.z + weight_b * color_b.z};
-        const double opacity = weight_a * alpha_a + weight_b * alpha_b;
-        PPR_TEST_ASSERT(density == 1.0);
-        PPR_TEST_ASSERT(std::abs(numerator.x - 2.6) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(numerator.y - 1.6) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(numerator.z - 3.8) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(opacity - 0.45) <= 1.0e-15);
-
-        // The composed sample is C * (N/D) and C * (O/D).
-        const DensityComposite composite = densityComposite(numerator, density, opacity, true, coverage);
+        const SurfaceComposite composite = densityComposite(reconstructed, reconstructed.m_base, coverage, true);
         PPR_TEST_ASSERT(composite.m_visible);
-        PPR_TEST_ASSERT(std::abs(composite.m_radiance.x - 2.08) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(composite.m_radiance.y - 1.28) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(composite.m_radiance.z - 3.04) <= 1.0e-15);
         PPR_TEST_ASSERT(std::abs(composite.m_alpha - 0.36) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(composite.m_premultiplied.x - 0.56 * 0.36) <= 1.0e-15);
+        // Premultiplying twice would halve it again; that is the defect this pins.
+        PPR_TEST_ASSERT(std::abs(composite.m_premultiplied.x - 0.56 * 0.36 * 0.45) > 1.0e-3);
 
-        // Dropping O is materially wrong, not a rounding difference. Unit alpha
-        // overstates the composited coverage by 0.44 and one sample's authored alpha
-        // understates it by 0.24; neither can be recovered from the premultiplied
-        // RGB numerator.
-        const DensityComposite unit_alpha = densityComposite(numerator, density, 0.0, false, coverage);
-        const DensityComposite first_alpha = densityComposite(numerator, density, weight_a * alpha_a, true, coverage);
-        PPR_TEST_ASSERT(std::abs(unit_alpha.m_alpha - coverage) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(composite.m_alpha - unit_alpha.m_alpha) >= 0.4);
-        PPR_TEST_ASSERT(std::abs(first_alpha.m_alpha - 0.12) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(composite.m_alpha - first_alpha.m_alpha) >= 0.2);
-        PPR_TEST_ASSERT(std::abs(composite.m_radiance.x - 2.08) <= 1.0e-15);
+        // An opaque liquid ignores the stored alpha entirely.
+        const SurfaceComposite opaque = densityComposite(reconstructed, reconstructed.m_base, coverage, false);
+        PPR_TEST_ASSERT(std::abs(opaque.m_alpha - coverage) <= 1.0e-15);
 
-        // Empty-field divide guard and the negligible-coverage floor; both leave no
-        // sample for the caller to composite instead of returning a NaN or a
-        // defaulted color that looks valid.
-        const DensityComposite empty = densityComposite({0.0, 0.0, 0.0}, 0.0, 0.0, true, 1.0);
-        PPR_TEST_ASSERT(not empty.m_visible);
-        PPR_TEST_ASSERT(empty.m_radiance.x == 0.0 and empty.m_radiance.y == 0.0 and empty.m_radiance.z == 0.0);
-        PPR_TEST_ASSERT(empty.m_alpha == 0.0);
-        PPR_TEST_ASSERT(not densityComposite(numerator, kDensityEpsilon, opacity, true, 1.0).m_visible);
-        const DensityComposite tiny = densityComposite(numerator, 2.0 * kDensityEpsilon, opacity, true, 1.0);
-        PPR_TEST_ASSERT(tiny.m_visible);
-        PPR_TEST_ASSERT(std::isfinite(tiny.m_radiance.x) and std::isfinite(tiny.m_alpha));
-        PPR_TEST_ASSERT(not densityComposite(numerator, density, opacity, true, kDensityCoverageFloor).m_visible);
-        PPR_TEST_ASSERT(densityComposite(numerator, density, opacity, true, 2.0 * kDensityCoverageFloor).m_visible);
+        // Degenerate normal: the reconstructed vector falls back to the plane
+        // normal instead of normalizing noise.
+        const SurfaceTexel cancelled = surfaceTexel(11u, 1.0, {0.5, 0.5, 0.5}, {0.0, 0.0, 0.0}, 1.0, false);
+        const std::array<SurfaceTexel, 4u> cancelled_taps{cancelled, cancelled, cancelled, cancelled};
+        const auto cancelled_sample = densityReconstruct(cancelled_taps, cancelled, 0.5, 0.5, false);
+        PPR_TEST_ASSERT(cancelled_sample.m_normal.x == 0.0 and cancelled_sample.m_normal.y == 0.0);
+        PPR_TEST_ASSERT(cancelled_sample.m_normal.z == 1.0);
+
+        // Empty-field divide guard and the negligible-coverage floor: both leave no
+        // sample for the caller instead of a NaN or a defaulted visible colour.
+        const SurfaceReconstruction absent{};
+        PPR_TEST_ASSERT(not densityComposite(absent, {1.0, 1.0, 1.0}, 1.0, true).m_visible);
+        SurfaceReconstruction tiny = reconstructed;
+        tiny.m_density = kDensityEpsilon;
+        PPR_TEST_ASSERT(not densityComposite(tiny, {1.0, 1.0, 1.0}, 1.0, true).m_visible);
+        tiny.m_density = 2.0 * kDensityEpsilon;
+        PPR_TEST_ASSERT(densityComposite(tiny, {1.0, 1.0, 1.0}, 1.0, true).m_visible);
+        PPR_TEST_ASSERT(
+            not densityComposite(reconstructed, reconstructed.m_base, kDensityCoverageFloor, true).m_visible);
+        PPR_TEST_ASSERT(
+            densityComposite(reconstructed, reconstructed.m_base, 2.0 * kDensityCoverageFloor, true).m_visible);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_optical D={:.3f} N=({:.3f},{:.3f},{:.3f}) O={:.3f} "
-                "C={:.3f} rgb=({:.3f},{:.3f},{:.3f}) alpha={:.3f} unit_alpha={:.3f} sample_alpha={:.3f}",
-                density, numerator.x, numerator.y, numerator.z, opacity, coverage, composite.m_radiance.x,
-                composite.m_radiance.y, composite.m_radiance.z, composite.m_alpha, unit_alpha.m_alpha,
-                first_alpha.m_alpha));
+                "WORLD_LIGHTING_MATERIAL particle_surface_deferred D={:.9f} base=({:.6f},{:.6f},{:.6f}) "
+                "normal=({:.6f},{:.6f},{:.6f}) alpha={:.6f} C={:.3f} premultiplied=({:.6f},{:.6f},{:.6f})",
+                reconstructed.m_density, reconstructed.m_base.x, reconstructed.m_base.y, reconstructed.m_base.z,
+                reconstructed.m_normal.x, reconstructed.m_normal.y, reconstructed.m_normal.z, reconstructed.m_alpha,
+                coverage, composite.m_premultiplied.x, composite.m_premultiplied.y, composite.m_premultiplied.z));
     };
 
-    PPR_UNIT_TEST (particle_density_contour_is_a_one_texel_antialiased_threshold) {
-        // C = smoothstep(theta - w_AA/2, theta + w_AA/2, D), with
-        // w_AA = max(|dD/dpx_x| + |dD/dpx_y|, 1e-6). The width is a derivative
-        // width in density pixels, not a blur radius: C is exactly 0 below the
-        // lower edge, exactly 1 above the upper edge and continuous across it.
-        constexpr double derivative_x = 0.6;
-        constexpr double derivative_y = 0.4;
-        const double width = derivative_x + derivative_y;
-        PPR_TEST_ASSERT(width == 1.0);
-        const double lower = kDensityThreshold - 0.5 * width;
-        const double upper = kDensityThreshold + 0.5 * width;
-        PPR_TEST_ASSERT(std::abs(lower - (-0.3214285714285714)) <= 1.0e-15);
-        PPR_TEST_ASSERT(std::abs(upper - 0.6785714285714286) <= 1.0e-15);
+    PPR_UNIT_TEST (particle_surface_terrain_exclusion_masks_each_quadrature_point) {
+        // The same authoritative predicate masks each of the four quadrature
+        // positions of one texel, at every stage: the label selection skips an
+        // excluded point when it takes the minimum eligible rho^2, the attribute
+        // accumulation skips it when it averages w, and the composite rechecks the
+        // actual scene sample position. The field itself (Q.a / G.a) is what this
+        // probe exercises, so it is independent of the retired (N, D, O) channels.
+        //
+        // For the neutral kernel the four offsets are all equidistant from the
+        // texel centre (|offset| = sqrt(2)/4 pixel in each axis pair), so every
+        // position contributes the same weight w_off and the identities below are
+        // exact:
+        //   masked(none)          = (1/4)*4*w_off = w_off
+        //   masked(one excluded)  = (1/4)*3*w_off = 0.75*w_off   (all four equal)
+        //   masked(all excluded)  = 0
+        // The texel-centre weight is the plateau value, not w_off; the mask applies
+        // to the quadrature positions, never to an interpolated centre.
+        const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+        constexpr double radius = 0.28209479177387814;
+        // One pixel is chosen so a quadrature offset lands inside the ramp band
+        // (2/3 < rho < 1) rather than on the plateau: rho = 0.35355/0.43046 =
+        // 0.8213, w = 0.3399, strictly between zero and the plateau peak 0.6135.
+        constexpr double pixel = 1.0;
+        const double support = kDensitySurfaceRadiusScale * radius;
+        const Double2 offset = densityQuadratureOffset(0u);
+        const double w_offset = densityWeight({offset.x * pixel / support, offset.y * pixel / support}, neutral);
+        const double centre_weight = densityWeight({0.0, 0.0}, neutral);
+        PPR_TEST_ASSERT(w_offset > 0.0 and w_offset < centre_weight);
 
-        PPR_TEST_ASSERT(densityContour(lower - 0.25, derivative_x, derivative_y) == 0.0);
-        PPR_TEST_ASSERT(densityContour(lower, derivative_x, derivative_y) == 0.0);
-        PPR_TEST_ASSERT(densityContour(upper, derivative_x, derivative_y) == 1.0);
-        PPR_TEST_ASSERT(densityContour(upper + 0.25, derivative_x, derivative_y) == 1.0);
-        PPR_TEST_ASSERT(std::abs(densityContour(kDensityThreshold, derivative_x, derivative_y) - 0.5) <= 1.0e-12);
+        const auto masked = [&](const std::array<bool, 4u> &excluded) {
+            double weight = 0.0;
+            for (u32 corner = 0u; corner < 4u; ++corner) {
+                if (excluded[corner])
+                    continue;
+                const Double2 sample = densityQuadratureOffset(corner);
+                weight += densityWeight({sample.x * pixel / support, sample.y * pixel / support}, neutral);
+            }
 
-        // Monotone in D, and strictly increasing inside the band.
-        double previous = densityContour(lower - 0.1, derivative_x, derivative_y);
-        for (u32 step = 0u; step <= 400u; ++step) {
-            const double density = lower - 0.1 + 1.2 * double(step) / 400.0;
-            const double contour = densityContour(density, derivative_x, derivative_y);
-            PPR_TEST_ASSERT(contour >= previous);
-            if (density > lower and density < upper)
-                PPR_TEST_ASSERT(contour > previous);
-            previous = contour;
+            return 0.25 * weight;
+        };
+
+        const std::array<bool, 4u> none{false, false, false, false};
+        const std::array<bool, 4u> all{true, true, true, true};
+        PPR_TEST_ASSERT(std::abs(masked(none) - w_offset) <= 1.0e-15);
+        PPR_TEST_ASSERT(std::abs(masked(all)) <= 1.0e-15);
+
+        // Every quadrant is individually maskable, and the four single-exclusion
+        // results are identical: the predicate is position-independent, so no
+        // quadrant is privileged and none leaks past the mask.
+        for (u32 corner = 0u; corner < 4u; ++corner) {
+            std::array<bool, 4u> one{false, false, false, false};
+            one[corner] = true;
+            const double kept = masked(one);
+            PPR_TEST_ASSERT(std::abs(kept - 0.75 * w_offset) <= 1.0e-15);
+            PPR_TEST_ASSERT(std::abs(kept - masked(std::array<bool, 4u>{true, false, false, false})) <= 1.0e-15);
         }
 
-        // A synthetic one-density-texel edge: D ramps from 0 to 1 over one texel,
-        // so |dD/dpx| = 1 and the contour transitions over exactly that texel with
-        // no jump. Consecutive samples 0.005 texel apart move by at most 0.01.
-        double maximum_step = 0.0;
-        double previous_edge = densityContour(-0.5, 1.0, 0.0);
-        for (u32 step = 1u; step <= 400u; ++step) {
-            const double density = -0.5 + 2.0 * double(step) / 400.0;
-            const double contour = densityContour(density, 1.0, 0.0);
-            maximum_step = (std::max) (maximum_step, std::abs(contour - previous_edge));
-            previous_edge = contour;
-        }
-        PPR_TEST_ASSERT(maximum_step <= 1.0e-2);
-        PPR_TEST_ASSERT(previous_edge == 1.0);
-
-        // Zero gradient: the epsilon is the width floor, so C(theta) is still half
-        // and the threshold is a one-pixel step rather than a division by zero.
-        PPR_TEST_ASSERT(densityContour(kDensityThreshold, 0.0, 0.0) == 0.5);
-        PPR_TEST_ASSERT(densityContour(kDensityThreshold - 1.0e-4, 0.0, 0.0) == 0.0);
-        PPR_TEST_ASSERT(densityContour(kDensityThreshold + 1.0e-4, 0.0, 0.0) == 1.0);
+        // A fully excluded splat contributes nothing, so its label can never be
+        // selected (the selection has no eligible point and discards) and its
+        // density can never be accumulated.
+        PPR_TEST_ASSERT(masked(all) == 0.0 and densityContour(masked(all), 0.0, 0.0) == 0.0);
+        // Two of four excluded keeps exactly half of the unmasked weight, which is
+        // the same mask applied at two positions.
+        PPR_TEST_ASSERT(std::abs(masked(std::array<bool, 4u>{true, true, false, false}) - 0.5 * w_offset) <= 1.0e-15);
 
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_contour width={:.6f} lower={:.12f} upper={:.12f} "
-                "max_step={:.6f}",
-                width, lower, upper, maximum_step));
+                "WORLD_LIGHTING_MATERIAL particle_surface_terrain_mask none={:.12f} one_excluded={:.12f} "
+                "all_excluded={:.12f} centre={:.12f}",
+                masked(none), masked(std::array<bool, 4u>{true, false, false, false}), masked(all), centre_weight));
     };
 
     // ------------------------------------------------------------------
@@ -7720,6 +8255,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         double m_x_m{};
         double m_y_m{};
         double m_radius_m{0.28209479177387814};
+        // The row's own material id. Every distinct id the cohort publishes gets a
+        // palette entry, so a cohort can exercise several admitted materials.
+        u32 m_material{1u};
         bool m_enabled{true};
     };
 
@@ -7728,19 +8266,26 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // World metres across the raster. The whole cohorts share one cell metre.
         float m_world_extent_m{8.0f};
         u32 m_raster{256u};
+        // Material 1 is optical when this is true; the explicit list below marks
+        // any other material optical instead.
         bool m_optical{};
+        std::vector<u32> m_optical_materials{};
         // Subpixel camera translation in raster pixels (+x right, +y down).
         double m_camera_offset_px{};
         // When true the draw callback encodes the direct classes without the
-        // density composite; used to prove the lane emits no direct instances.
+        // composite; used to prove routed rows emit no direct instances.
         bool m_direct_only{};
     };
 
     struct DensityFrameResult {
-        std::vector<float> m_density{}; // D per density pixel
+        std::vector<float> m_density{}; // Q.a per raster texel
+        std::vector<u32> m_label{}; // L per raster texel
+        std::vector<std::array<float, 4u>> m_base{}; // Q per raster texel
+        std::vector<std::array<float, 4u>> m_normal_alpha{}; // G per raster texel
         std::vector<float> m_composite{}; // premultiplied RGBA per composite pixel
         u32 m_raster{};
-        u32 m_material{0xffff'ffffu};
+        u32 m_phase_mask{};
+        u32 m_class_mask{};
         float m_pixel_world{};
     };
 
@@ -7749,18 +8294,40 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const u32 raster) {
         DensityFrameResult result{};
         result.m_raster = raster;
-        result.m_material = targets.m_material;
+        result.m_phase_mask = targets.m_phase_mask;
+        result.m_class_mask = targets.m_class_mask;
         result.m_pixel_world = targets.m_pixel_world;
-        PPR_TEST_ASSERT(targets.m_density != nullptr);
+        PPR_TEST_ASSERT(targets.m_label != nullptr and targets.m_base != nullptr and targets.m_normal != nullptr);
 
-        const TextureReadback density = readTexture(device, *targets.m_density);
-        result.m_density.resize(std::size_t{raster} * raster);
+        const TextureReadback label = readTexture(device, *targets.m_label);
+        result.m_label.resize(std::size_t{raster} * raster);
         for (u32 y = 0u; y < raster; ++y) {
             for (u32 x = 0u; x < raster; ++x) {
-                const auto *const words = reinterpret_cast<const u16 *>(
-                    density.m_bytes.data() + std::size_t{y} * density.m_row_pitch + std::size_t{x} * 8u);
-                result.m_density[std::size_t{y} * raster + x] = halfToFloat(words[3]);
+                const auto *const words = reinterpret_cast<const u32 *>(
+                    label.m_bytes.data() + std::size_t{y} * label.m_row_pitch + std::size_t{x} * 4u);
+                result.m_label[std::size_t{y} * raster + x] = *words;
             }
+        }
+
+        const auto read_half4 = [&](rhi::ITexture &texture, std::vector<std::array<float, 4u>> &into) {
+            const TextureReadback readback = readTexture(device, texture);
+            into.resize(std::size_t{raster} * raster);
+            for (u32 y = 0u; y < raster; ++y) {
+                for (u32 x = 0u; x < raster; ++x) {
+                    const auto *const words = reinterpret_cast<const u16 *>(
+                        readback.m_bytes.data() + std::size_t{y} * readback.m_row_pitch + std::size_t{x} * 8u);
+                    for (u32 channel = 0u; channel < 4u; ++channel) {
+                        into[std::size_t{y} * raster + x][channel] = halfToFloat(words[channel]);
+                    }
+                }
+            }
+        };
+
+        read_half4(*targets.m_base, result.m_base);
+        read_half4(*targets.m_normal, result.m_normal_alpha);
+        result.m_density.resize(std::size_t{raster} * raster);
+        for (std::size_t texel = 0u; texel < result.m_density.size(); ++texel) {
+            result.m_density[texel] = result.m_base[texel][3u];
         }
 
         const TextureReadback composite_readback = readTexture(device, composite);
@@ -7802,17 +8369,41 @@ namespace pP::tests::detail::WorldLightingMaterial {
         auto &device = fixture.device();
         const u32 raster = spec.m_raster;
 
-        GridTerrainVisual water{};
-        water.m_material_id = 1u;
-        water.m_color_rgba = 0x0000ffffu;
-        water.m_ior = 1.0f;
-        water.m_opacity = 1.0f;
-        water.m_surface_flags = kGridSurfaceParticleLiquid | (spec.m_optical ? kGridSurfaceOpticalBlend : 0u);
+        // One palette entry per distinct material the cohort publishes, so a
+        // cohort can stage several admitted liquids of one class or of both
+        // classes. Material 1 always exists: the empty-lane case still needs a
+        // publication that carries the admitted phase.
+        std::vector<u32> material_ids{1u};
+        for (const DensityParticleSpec &particle: spec.m_particles) {
+            if (std::ranges::find(material_ids, particle.m_material) == material_ids.end())
+                material_ids.push_back(particle.m_material);
+        }
+
+        const auto is_optical_material = [&spec](const u32 material) {
+            if (material == 1u and spec.m_optical)
+                return true;
+            return std::ranges::find(spec.m_optical_materials, material) != spec.m_optical_materials.end();
+        };
 
         GridStagedFrame stage{};
         stage.m_world_edge = WorldLightingPass::kWorldEdge;
         stage.m_cell_size_m = 1.0f;
-        stage.m_terrain_visuals.push_back(water);
+        for (const u32 material: material_ids) {
+            GridTerrainVisual visual{};
+            visual.m_material_id = material;
+            // Distinct authored tints per material (so a wrongly shared or
+            // fallback albedo binding cannot pass a colour comparison), and an
+            // authored 0x80 alpha byte on the optical materials so a reconstructed
+            // optical sample is distinguishable from an opaque one.
+            const u32 red = (material * 53u) & 0xffu;
+            visual.m_color_rgba = (red << 24u) | (is_optical_material(material) ? 0x0000'0080u : 0x0000'00ffu);
+            visual.m_ior = 1.0f;
+            visual.m_opacity = 1.0f;
+            visual.m_texture_period_m = 1.0f;
+            visual.m_surface_flags = kGridSurfaceParticleLiquid |
+                                     (is_optical_material(material) ? kGridSurfaceOpticalBlend : 0u);
+            stage.m_terrain_visuals.push_back(visual);
+        }
         stage.m_tiles.push_back(
             GridTileSubmission{.m_dirty_mask = 1u, .m_tile_range = {0, 0, 128, 128}, .m_chunk_id = 0u});
 
@@ -7824,7 +8415,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const auto &particle = spec.m_particles[row];
             rows[row].m_id_low = static_cast<u32>(row) + 1u;
             rows[row].m_source_row = static_cast<u32>(row);
-            const auto packed_temperature = lighting::packCell(1u, 300.0);
+            const auto packed_temperature = lighting::packCell(static_cast<u16>(particle.m_material), 300.0);
             PPR_TEST_ASSERT(packed_temperature.has_value());
             rows[row].m_material_temperature = *packed_temperature;
             // The pack validator admits a committed row only with a finite,
@@ -7958,7 +8549,19 @@ namespace pP::tests::detail::WorldLightingMaterial {
                     return grid.renderDirectParticleClassesForTest(context);
                 }
 
-                return grid.renderParticleSurface(context, grid.particleSurfaceDrawClass());
+                // Class order is the contract: opaque first, optical second, each
+                // reconstructing the same label and rejecting the other class.
+                if (grid.particleSurfaceClassAdmitted(EGridParticleDrawClass::opaque)) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridPass, grid.renderParticleSurface(context, EGridParticleDrawClass::opaque));
+                }
+
+                if (grid.particleSurfaceClassAdmitted(EGridParticleDrawClass::optical)) {
+                    PPR_RETURN_ERROR_ON_FAIL(
+                        GridPass, grid.renderParticleSurface(context, EGridParticleDrawClass::optical));
+                }
+
+                return {};
             };
             DrawSubmission submission{"grid particle density fixture", DrawCallback{draw}};
             submission.m_viewport = viewport;
@@ -8009,7 +8612,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         empty.m_particles.push_back(DensityParticleSpec{.m_enabled = false});
         const auto empty_frames = runDensityCohort(empty, 1u);
         PPR_TEST_ASSERT(empty_frames.size() == 1u);
-        PPR_TEST_ASSERT(empty_frames[0].m_material == 1u);
+        PPR_TEST_ASSERT(empty_frames[0].m_phase_mask == 1u);
+        PPR_TEST_ASSERT(empty_frames[0].m_class_mask == (1u << static_cast<u32>(EGridParticleDrawClass::opaque)));
         for (const float density: empty_frames[0].m_density)
             PPR_TEST_ASSERT(density == 0.0f);
         for (u32 pixel = 0u; pixel < empty_frames[0].m_raster * empty_frames[0].m_raster; ++pixel) {
@@ -8038,9 +8642,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(integral - predicted) <= std::max(0.01 * predicted, 1.0e-4));
         PPR_TEST_ASSERT(std::abs(integral - reference_area) <= 0.01 * reference_area);
 
-        // Composite: the isolated threshold crossing keeps the reference convention
-        // (rho = 5/6 of the shared support), so the centre pixel is saturated and a
-        // pixel far outside the support keeps the cleared target.
+        // Composite: revision 5's isolated threshold crossing is rho = 0.88106863 of
+        // the shared support, so the centre pixel is saturated and a pixel far
+        // outside the support keeps the cleared target.
         const auto alpha_at = [&](const u32 x, const u32 y) {
             return frame.m_composite[(std::size_t{y} * frame.m_raster + x) * 4u + 3u];
         };
@@ -8178,11 +8782,27 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return total * span64_pixel * span64_pixel;
         };
 
-        // The isolated droplet's region integral equals the discrete prediction.
+        // The isolated droplet's region integral, bracketed by the same two derived
+        // operators the coarse cohort uses. Here R/pixel =
+        // 1.5259486*0.282095/0.088889 = 4.84 density pixels, so the boundary term is
+        // 1.00 % of V (against 4.49 % at span220) and the four-point quadrature
+        // error is 0.011 %. Before the accumulation stopped gating on the label's
+        // presence this cohort lost 0.93 %; it must now land within 0.02 % of V.
         const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
-        const double predicted = densityQuadratureIntegral(neutral, radius_m, span64_pixel);
+        const double droplet_particle_x = droplet_x / span64_pixel;
+        const double droplet_particle_y = droplet_y / span64_pixel;
+        const double span64_ideal = densityFieldIntegral(
+            neutral, radius_m, span64_pixel, frame.m_raster, droplet_particle_x, droplet_particle_y, 1.0, false);
+        const double span64_strict = densityFieldIntegral(
+            neutral, radius_m, span64_pixel, frame.m_raster, droplet_particle_x, droplet_particle_y, 1.0, true);
+        const double predicted = span64_ideal;
         const double droplet = integral_in(droplet_x - 2.0, droplet_x + 2.0, droplet_y - 2.0, droplet_y + 2.0);
-        PPR_TEST_ASSERT(std::abs(droplet - predicted) <= std::max(0.01 * predicted, 1.0e-4));
+        // Same structural equality as the coarse cohort; the 2e-3 bound is the FP16
+        // rounding of the contributing texels plus float32 arithmetic.
+        PPR_TEST_ASSERT(droplet <= span64_ideal * (1.0 + 1.0e-3));
+        PPR_TEST_ASSERT(droplet >= span64_ideal * (1.0 - 2.0e-3));
+        PPR_TEST_ASSERT(droplet <= kPi * radius_m * radius_m * (1.0 + 1.0e-3));
+        PPR_TEST_ASSERT(span64_strict < span64_ideal);
 
         // Sparse supports do not meet: the midpoint keeps exactly zero density.
         PPR_TEST_ASSERT(density_at(12.75, 4.0) == 0.0f);
@@ -8194,8 +8814,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(density_at(17.55, 4.0) > 0.0f);
         PPR_TEST_ASSERT(density_at(18.45, 4.0) > 0.0f);
 
-        // Half-coverage width at theta against the analytic 5/6 support radius.
-        const double expected_half_width_px = (5.0 / 6.0) * kDensitySupportScale * radius_m / span64_pixel;
+        // Half-coverage width at theta against the analytic drawn contour radius
+        // rho = 0.881068630339572 of the shared surface support.
+        const double expected_half_width_px = 0.881068630339572 * kDensitySurfaceRadiusScale * radius_m / span64_pixel;
         u32 crossing = 0u;
         for (u32 step = 0u; step < 64u; ++step) {
             const double world_x = droplet_x + (double(step) + 0.5) * span64_pixel;
@@ -8229,17 +8850,173 @@ namespace pP::tests::detail::WorldLightingMaterial {
         }
 
         PPR_TEST_ASSERT(covered >= 8u);
-        const double coarse_predicted = densityQuadratureIntegral(neutral, 0.6, span220_pixel);
+        // Revision 5 shrank the support by 24 %, so at this zoom the kernel spans
+        // R/pixel = 1.5259486*0.6/0.3055556 = 3.00 density pixels and the particle
+        // sits on a pixel corner. Two derived operators quantify the cohort:
+        //
+        //   ideal  = the specified rule (a texel counts when at least one
+        //            quadrature point is inside): 1.128821114, only 0.19 % below V.
+        //            The four-point quadrature is therefore NOT a 4 % effect at this
+        //            zoom.
+        //   strict = the boundary-straddling rule (a texel counts only when all
+        //            four quadrature points are inside): 1.078041852, 4.49 % below
+        //            V. That is the size of the label-partition boundary term, and
+        //            it is the deficit this probe reported while the accumulation
+        //            gated attributes on the label's PRESENCE.
+        //
+        // The read-back must now equal `ideal`; `strict` is measured as well so the
+        // log keeps the boundary term that was being lost.
+        const double coarse_particle_px = coarse_x / span220_pixel;
+        const double coarse_ideal = densityFieldIntegral(
+            neutral, 0.6, span220_pixel, coarse.m_raster, coarse_particle_px, coarse_particle_px, 1.0, false);
+        const double coarse_strict = densityFieldIntegral(
+            neutral, 0.6, span220_pixel, coarse.m_raster, coarse_particle_px, coarse_particle_px, 1.0, true);
+        const double coarse_volume = kPi * 0.6 * 0.6;
         double coarse_integral = 0.0;
         for (const float density: coarse.m_density)
             coarse_integral += static_cast<double>(density) * span220_pixel * span220_pixel;
-        PPR_TEST_ASSERT(std::abs(coarse_integral - coarse_predicted) <= std::max(0.03 * coarse_predicted, 1.0e-3));
         _.log(
             std::format(
-                "WORLD_LIGHTING_MATERIAL particle_density_span droplet={:.9f} predicted={:.9f} "
-                "half_width_px={} expected_px={:.4f} coarse_peak={:.4f} coarse_covered={} "
-                "coarse_integral={:.9f}",
-                droplet, predicted, crossing, expected_half_width_px, peak, covered, coarse_integral));
+                "WORLD_LIGHTING_MATERIAL particle_density_span droplet={:.9f} droplet_strict={:.9f} "
+                "predicted={:.9f} half_width_px={} expected_px={:.4f} coarse_peak={:.4f} coarse_covered={} "
+                "coarse_integral={:.9f} coarse_ideal={:.9f} coarse_strict={:.9f} coarse_volume={:.9f} "
+                "coarse_vs_ideal={:.4f} coarse_vs_strict={:.4f}",
+                droplet, span64_strict, predicted, crossing, expected_half_width_px, peak, covered, coarse_integral,
+                coarse_ideal, coarse_strict, coarse_volume, coarse_integral / coarse_ideal - 1.0,
+                coarse_integral / coarse_strict - 1.0));
+        // The field must EQUAL the ideal operator, not merely sit near it. That is
+        // structural, not a fitted tolerance: every shaded texel with a positive
+        // averaged weight now stores that weight (the accumulation rejects only a
+        // FOREIGN label), and the quad of half-extent R + 1 px shades every texel
+        // whose weight can be positive (reach R + sqrt(2)/4 px). The 2e-3 bound is
+        // the FP16 per-texel rounding of 32 texels (<= 5e-4 relative) plus float32
+        // shader arithmetic; it admits neither over- nor under-integration beyond
+        // rounding, and it is 2.2x tighter than the 4.49 % boundary term this probe
+        // used to lose.
+        PPR_TEST_ASSERT(coarse_integral <= coarse_ideal * (1.0 + 1.0e-3));
+        PPR_TEST_ASSERT(coarse_integral >= coarse_ideal * (1.0 - 2.0e-3));
+        // One-sided continuous identity: a positive quadrature of a positive kernel
+        // can never exceed the reference area, and the ideal operator is below it.
+        PPR_TEST_ASSERT(coarse_integral <= coarse_volume);
+        PPR_TEST_ASSERT(coarse_strict < coarse_ideal);
+    };
+
+    PPR_UNIT_TEST (particle_surface_two_materials_of_one_class_hold_one_label_per_texel) {
+        // Two OPAQUE liquids of one publication touching: material 11 at y = 4.0 and
+        // material 12 at y = 4.5. The selection stores exactly one material per
+        // texel and the accumulation only sums the winning label's own rows, so no
+        // texel mixes the two albedos and no texel is unlabelled inside the union.
+        constexpr double radius_m = 0.28209479177387814;
+        DensityCohortSpec cohort{};
+        cohort.m_particles.push_back(
+            DensityParticleSpec{.m_x_m = 4.0, .m_y_m = 4.0, .m_radius_m = radius_m, .m_material = 11u});
+        cohort.m_particles.push_back(
+            DensityParticleSpec{.m_x_m = 4.0, .m_y_m = 4.5, .m_radius_m = radius_m, .m_material = 12u});
+        const auto frames = runDensityCohort(cohort, 1u);
+        PPR_TEST_ASSERT(frames.size() == 1u);
+        const auto &frame = frames[0];
+        constexpr u32 raster = 256u;
+        const double pixel_world = 8.0 / 256.0;
+        const auto pixel_x = [&](const double world_x) { return static_cast<u32>(std::floor(world_x / pixel_world)); };
+        const auto pixel_y = [&](const double world_y) {
+            return static_cast<u32>(std::floor((8.0 - world_y) / pixel_world));
+        };
+        const auto at = [&](const u32 x, const u32 y) { return std::size_t{y} * raster + x; };
+
+        // Exactly one admitted class, and only the two published materials appear.
+        PPR_TEST_ASSERT(frame.m_phase_mask == 1u);
+        PPR_TEST_ASSERT(frame.m_class_mask == (1u << static_cast<u32>(EGridParticleDrawClass::opaque)));
+        for (const u32 label: frame.m_label) {
+            PPR_TEST_ASSERT(label == 0u or label == 11u or label == 12u);
+        }
+
+        // Each particle's own centre is owned by its own material, and the stored
+        // Q.a there is the single-particle kernel value: a mis-bound attribute or
+        // label target, or a second material leaking in, would move it.
+        const std::size_t a_centre = at(pixel_x(4.0), pixel_y(4.0));
+        const std::size_t b_centre = at(pixel_x(4.0), pixel_y(4.5));
+        PPR_TEST_ASSERT(frame.m_label[a_centre] == 11u);
+        PPR_TEST_ASSERT(frame.m_label[b_centre] == 12u);
+        PPR_TEST_ASSERT(frame.m_density[a_centre] > static_cast<float>(kDensityThreshold));
+        PPR_TEST_ASSERT(frame.m_density[b_centre] > static_cast<float>(kDensityThreshold));
+
+        // The overlapping band picks one owner per texel and accumulates only that
+        // owner: the density there stays below the sum of both kernels.
+        const std::size_t band = at(pixel_x(4.0), pixel_y(4.25));
+        PPR_TEST_ASSERT(frame.m_label[band] == 11u or frame.m_label[band] == 12u);
+        PPR_TEST_ASSERT(frame.m_density[band] > 0.0f);
+        const DensityKernel neutral = densityKernel({1.0, 0.0}, 0.0, 0.0);
+        const double one_particle_at_band = densityWeightCells({0.0, 0.25}, radius_m, neutral);
+        PPR_TEST_ASSERT(static_cast<double>(frame.m_density[band]) <= 1.1 * one_particle_at_band + 1.0e-3);
+
+        // The two materials' own stores differ, so the composite colours at their
+        // centres differ: a single shared/albedo-fallback binding would not.
+        const std::size_t composite_a = a_centre * 4u;
+        const std::size_t composite_b = b_centre * 4u;
+        PPR_TEST_ASSERT(frame.m_composite[composite_a + 3u] > 0.9f);
+        PPR_TEST_ASSERT(frame.m_composite[composite_b + 3u] > 0.9f);
+        PPR_TEST_ASSERT(frame.m_composite[composite_a] != frame.m_composite[composite_b]);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_two_materials labels a={} b={} band={} D_a={:.6f} "
+                "D_b={:.6f} D_band={:.6f}",
+                frame.m_label[a_centre], frame.m_label[b_centre], frame.m_label[band], frame.m_density[a_centre],
+                frame.m_density[b_centre], frame.m_density[band]));
+    };
+
+    PPR_UNIT_TEST (particle_surface_two_classes_touch_at_one_owner_per_sample) {
+        // One opaque (material 11) and one optical (material 13, authored alpha
+        // 0x80/0xff = 0.501961) liquid touching. Both composites read the same
+        // label, so exactly one class writes each sample: the opaque sample is fully
+        // opaque, the optical sample carries its authored alpha, and neither
+        // double-blends the other.
+        constexpr double radius_m = 0.28209479177387814;
+        DensityCohortSpec cohort{};
+        cohort.m_optical_materials = {13u};
+        cohort.m_particles.push_back(
+            DensityParticleSpec{.m_x_m = 4.0, .m_y_m = 4.0, .m_radius_m = radius_m, .m_material = 11u});
+        cohort.m_particles.push_back(
+            DensityParticleSpec{.m_x_m = 4.0, .m_y_m = 4.5, .m_radius_m = radius_m, .m_material = 13u});
+        const auto frames = runDensityCohort(cohort, 1u);
+        PPR_TEST_ASSERT(frames.size() == 1u);
+        const auto &frame = frames[0];
+        constexpr u32 raster = 256u;
+        const double pixel_world = 8.0 / 256.0;
+        const auto pixel_x = [&](const double world_x) { return static_cast<u32>(std::floor(world_x / pixel_world)); };
+        const auto pixel_y = [&](const double world_y) {
+            return static_cast<u32>(std::floor((8.0 - world_y) / pixel_world));
+        };
+        const auto at = [&](const u32 x, const u32 y) { return std::size_t{y} * raster + x; };
+
+        PPR_TEST_ASSERT(frame.m_phase_mask == 1u);
+        PPR_TEST_ASSERT(
+            frame.m_class_mask == ((1u << static_cast<u32>(EGridParticleDrawClass::opaque)) |
+                                      (1u << static_cast<u32>(EGridParticleDrawClass::optical))));
+
+        const std::size_t opaque_centre = at(pixel_x(4.0), pixel_y(4.0));
+        const std::size_t optical_centre = at(pixel_x(4.0), pixel_y(4.5));
+        PPR_TEST_ASSERT(frame.m_label[opaque_centre] == 11u);
+        PPR_TEST_ASSERT(frame.m_label[optical_centre] == 13u);
+
+        // Opaque liquid: the stored alpha is exactly one and the composite writes
+        // C = 1 at the centre.
+        PPR_TEST_ASSERT(std::abs(frame.m_normal_alpha[opaque_centre][3u] - frame.m_density[opaque_centre]) <= 1.0e-3f);
+        PPR_TEST_ASSERT(frame.m_composite[opaque_centre * 4u + 3u] >= 0.99f);
+        // Optical liquid: stored alpha is the authored 0.501961 weighted by the same
+        // kernel, and the composite applies it once (0.501961 at full coverage).
+        const float stored_alpha = frame.m_normal_alpha[optical_centre][3u];
+        const float density = frame.m_density[optical_centre];
+        PPR_TEST_ASSERT(density > static_cast<float>(kDensityThreshold));
+        PPR_TEST_ASSERT(std::abs(stored_alpha / density - 0.501961f) <= 2.0e-3f);
+        PPR_TEST_ASSERT(std::abs(frame.m_composite[optical_centre * 4u + 3u] - 0.501961f) <= 2.0e-2f);
+        // A double blend would leave 1.0 here; a missed class rejection would too.
+        PPR_TEST_ASSERT(frame.m_composite[optical_centre * 4u + 3u] < 0.95f);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_MATERIAL particle_surface_two_classes label_o={} label_x={} alpha_o={:.6f} "
+                "alpha_x={:.6f} stored_x={:.6f} D_x={:.6f}",
+                frame.m_label[opaque_centre], frame.m_label[optical_centre], frame.m_composite[opaque_centre * 4u + 3u],
+                frame.m_composite[optical_centre * 4u + 3u], stored_alpha, density));
     };
 
     PPR_UNIT_TEST (particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere) {
@@ -8265,6 +9042,18 @@ namespace pP::tests::detail::WorldLightingMaterial {
         for (std::size_t index = 0u; index < held[0].m_composite.size(); ++index) {
             PPR_TEST_ASSERT(held[0].m_composite[index] == held[1].m_composite[index]);
         }
+        // The labels are a per-frame render product too: a held frame re-derives
+        // the same winner and the same attributes, not a retained label image.
+        PPR_TEST_ASSERT(held[0].m_label.size() == held[1].m_label.size());
+        for (std::size_t index = 0u; index < held[0].m_label.size(); ++index) {
+            PPR_TEST_ASSERT(held[0].m_label[index] == held[1].m_label[index]);
+        }
+
+        // The routed rows must also not be shaded directly: the direct classes draw
+        // the same prepared frame with no field, and the cleared label proves the
+        // exclusion (an admitted material drawn directly would still leave the
+        // field empty, so the label is asserted against the admitted value below).
+        PPR_TEST_ASSERT(held[0].m_phase_mask == 1u);
 
         // The admitted lane's own rows must not be encoded by the direct classes.
         // The same prepared frame with only the direct classes must leave the target
@@ -8327,17 +9116,25 @@ namespace pP::tests {
                 detail::WorldLightingMaterial::particle_tangent_energy_gate_fades_weak_fields,
                 detail::WorldLightingMaterial::particle_tangent_gate_sequence_reduces_weak_flips_only,
                 detail::WorldLightingMaterial::particle_plateau_coverage_is_conditional,
-                detail::WorldLightingMaterial::particle_density_constants_match_the_plan,
-                detail::WorldLightingMaterial::particle_density_isolated_neutral_keeps_the_half_coverage_radius,
-                detail::WorldLightingMaterial::particle_density_integrated_weight_is_the_reference_area,
-                detail::WorldLightingMaterial::particle_density_kernel_is_zero_at_and_beyond_the_support,
-                detail::WorldLightingMaterial::particle_density_lattice_yields_the_calibrated_examples,
-                detail::WorldLightingMaterial::particle_density_optical_composite_requires_the_opacity_numerator,
-                detail::WorldLightingMaterial::particle_density_contour_is_a_one_texel_antialiased_threshold,
+                detail::WorldLightingMaterial::particle_surface_constants_match_revision_five,
+                detail::WorldLightingMaterial::particle_surface_isolated_neutral_draws_the_apparent_radius,
+                detail::WorldLightingMaterial::particle_surface_integrated_weight_is_the_reference_area,
+                detail::WorldLightingMaterial::particle_surface_kernel_is_zero_at_and_beyond_the_support,
+                detail::WorldLightingMaterial::particle_surface_lattice_closes_the_rest_grid,
+                detail::WorldLightingMaterial::particle_surface_label_selection_keeps_the_first_stable_row,
+                detail::WorldLightingMaterial::particle_surface_categorical_reconstruction_never_filters_ids,
+                detail::WorldLightingMaterial::particle_surface_two_liquids_of_one_class_keep_one_owner_per_texel,
+                detail::WorldLightingMaterial::
+                    particle_surface_deferred_composite_premultiplies_once_and_guards_the_field,
+                detail::WorldLightingMaterial::particle_surface_terrain_exclusion_masks_each_quadrature_point,
+                // The one-texel contour threshold moved into the deferred-composite
+                // probe when the density field was replaced by L/Z/Q/G.
                 detail::WorldLightingMaterial::particle_density_empty_lane_clears_and_one_splat_integrates_to_its_area,
                 detail::WorldLightingMaterial::
                     particle_density_lattice_saturates_and_holds_area_under_subpixel_translation,
                 detail::WorldLightingMaterial::particle_density_span_and_droplet_cohorts_keep_the_reference_area,
+                detail::WorldLightingMaterial::particle_surface_two_materials_of_one_class_hold_one_label_per_texel,
+                detail::WorldLightingMaterial::particle_surface_two_classes_touch_at_one_owner_per_sample,
                 detail::WorldLightingMaterial::
                     particle_density_held_frame_repeats_the_field_and_the_lane_draws_directly_nowhere,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,

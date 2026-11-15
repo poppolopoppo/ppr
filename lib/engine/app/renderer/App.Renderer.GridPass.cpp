@@ -391,10 +391,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createOpticalPrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createGpuParticlePrograms_(shader_service, device, content_dir));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, createParticleSurfacePrograms_(shader_service, device, content_dir));
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureParticleSurfaceSampler_(device));
-        // The density field is additive HDR at both possible formats. A device
-        // that cannot render-and-blend either one fails here rather than falling
-        // back to a clamped or storage-only path.
+        // The attribute bundle is additive HDR at RGBA16F and the label is an
+        // integer render target. A device that cannot render-and-blend the
+        // attributes fails here rather than falling back to a clamped or
+        // storage-only path; the label needs no blend support.
         {
             rhi::FormatSupport support{};
             constexpr u32 required = static_cast<u32>(rhi::FormatSupport::RenderTarget) |
@@ -405,9 +405,10 @@ namespace pP {
                 GridPass, (static_cast<u32>(support) & required) == required
                               ? std::error_code{}
                               : std::make_error_code(std::errc::function_not_supported));
-            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.getFormatSupport(rhi::Format::R16Float, &support));
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, device.getFormatSupport(rhi::Format::R32Uint, &support));
+            constexpr u32 label_required = static_cast<u32>(rhi::FormatSupport::RenderTarget);
             PPR_RETURN_ERROR_ON_FAIL(
-                GridPass, (static_cast<u32>(support) & required) == required
+                GridPass, (static_cast<u32>(support) & label_required) == label_required
                               ? std::error_code{}
                               : std::make_error_code(std::errc::function_not_supported));
         }
@@ -3741,28 +3742,30 @@ namespace pP {
     std::error_code GridPass::bindGridPass_(
         rhi::ShaderCursor &cursor, const u32 pass, const EGridParticleDrawClass particle_class) {
         // CPU mirror of the Slang GridPassSwitch: the particle draw class and the
-        // one admitted density-lane material ride the same 16-byte constant buffer
-        // as the terrain pass selector, so the particle vertex and fragment stages
-        // both read the class of this draw and the direct classes reject the lane
-        // material's non-gas rows without a second constant buffer.
+        // admitted surface phase mask ride the same 16-byte constant buffer as the
+        // terrain pass selector, so the particle vertex and fragment stages both
+        // read the class of this draw and the direct classes reject every row whose
+        // own palette phase is routed to the surface, without a second constant
+        // buffer.
         struct GridPassSwitch {
             u32 m_pass{};
             u32 m_particle_class{};
-            u32 m_surface_material{};
+            u32 m_surface_phase_mask{};
             u32 m_pad{};
         };
         static_assert(sizeof(GridPassSwitch) == 16u and alignof(GridPassSwitch) == 4u);
         static_assert(PPR_OFFSETOF(GridPassSwitch, m_particle_class) == 4u);
-        static_assert(PPR_OFFSETOF(GridPassSwitch, m_surface_material) == 8u);
+        static_assert(PPR_OFFSETOF(GridPassSwitch, m_surface_phase_mask) == 8u);
 
         GridPassSwitch sw{};
         sw.m_pass = pass;
         sw.m_particle_class = static_cast<u32>(particle_class);
-        // The direct classes exclude the lane only on a frame whose density field
-        // was accumulated. A caller that draws particles without the density
-        // preparation keeps every row direct, so no representation can disappear.
-        sw.m_surface_material = m_particle_surface_ready ? m_world.m_particle_surface.m_material
-                                                         : kParticleSurfaceNoMaterial;
+        // The direct classes exclude the routed phases only on a frame whose
+        // surface field was encoded. A caller that draws particles without the
+        // surface preparation keeps every row direct, so no representation can
+        // disappear. The phase bits are the same word the surface passes receive.
+        sw.m_surface_phase_mask = m_particle_surface_ready ? m_world.m_particle_surface.m_phase_mask
+                                                           : kParticleSurfaceNoPhase;
         rhi::ShaderCursor constants{};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_grid_pass"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, constants.setData(&sw, sizeof(sw)));
@@ -4812,18 +4815,16 @@ namespace pP {
         m_world.m_gpu_particles.reset();
         m_particle_census_program = {};
         m_particle_timing_queries.setNull();
-        // Screen-space density lane: the pass-owned programs, sampler, cached
-        // pipelines and completion-fenced targets are dropped together. The lane
+        // Screen-space particle surface: the pass-owned programs, cached
+        // pipelines and completion-fenced bundles are dropped together. The lane
         // itself is world-scoped and re-derived on the next preparation.
+        m_particle_surface_select_program.setNull();
         m_particle_surface_accumulate_program.setNull();
-        m_particle_surface_accumulate_optical_program.setNull();
         m_particle_surface_composite_program.setNull();
-        m_particle_surface_composite_optical_program.setNull();
-        m_particle_surface_sampler.setNull();
+        m_particle_surface_select_key.reset();
+        m_particle_surface_select_pipeline.reset();
         m_particle_surface_accumulate_key.reset();
         m_particle_surface_accumulate_pipeline.reset();
-        m_particle_surface_accumulate_optical_key.reset();
-        m_particle_surface_accumulate_optical_pipeline.reset();
         m_particle_surface_composite_opaque_key.reset();
         m_particle_surface_composite_opaque_pipeline.reset();
         m_particle_surface_composite_optical_key.reset();

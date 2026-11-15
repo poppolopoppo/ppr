@@ -285,10 +285,14 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 ## Key Files
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
-- `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`).
-- `grid_particle_density.slang` - include-only screen-space particle-density kernel and composite mathematics
-  (normalized anisotropic cubic sigmoid, fixed five-twenty-eighths threshold, derivative-width contour, N/D/O
-  composite guards); constants and pure functions only, consumed by `grid_tiles.slang`.
+- `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`)
+  and the particle lanes: direct gas/solid classes plus the surface reconstruction's label selection
+  (`fragmentParticleSurfaceSelect`), attribute accumulation (`fragmentParticleSurfaceAccumulate`) and
+  per-scene-sample deferred composite (`fragmentParticleSurfaceComposite`).
+- `grid_particle_density.slang` - include-only screen-space particle-surface mathematics: the revision-5 shared
+  radius (R = 1.525948559 r), A_2 = 10/(7 pi) normalized anisotropic cubic sigmoid, retained 5/28 threshold,
+  squared-radius selection metric and derivative-width contour; constants and pure functions only, consumed by
+  `grid_tiles.slang`.
 - `world_lighting_material.slang` - include-only visible CH diffuse/specular filters and material response.
 - `material_brdf_lut.slang` - one-time 64x128 RG16F isotropic VNDF/Smith integration entry and sampling helper.
 - `world_lighting_source.slang` - cached-source preparation over the full native-cell domain.
