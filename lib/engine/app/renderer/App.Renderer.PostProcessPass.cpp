@@ -310,6 +310,15 @@ namespace pP {
     // presentation contrast-adaptive sharpen (CPU oracle)
     // ------------------------------------------------------------------
 
+    int2 PostProcessPass::resolvedPixelForWindowPixel(
+        const int2 window_pixel, const int2 resolved_extent, const u32 pixel_scale) noexcept {
+        // Truncating division matches the shader's integer divide; the crop clamp
+        // then pins the right/bottom excess and any out-of-range input.
+        const i32 scale = std::max<i32>(1, static_cast<i32>(pixel_scale));
+        const int2 last{std::max<i32>(0, resolved_extent.x - 1), std::max<i32>(0, resolved_extent.y - 1)};
+        return int2{std::clamp(window_pixel.x / scale, 0, last.x), std::clamp(window_pixel.y / scale, 0, last.y)};
+    }
+
     float PostProcessPass::sharpenWeight(const float cross_min, const float cross_max) noexcept {
         // 1/sqrt(min + max + eps) grows as the local contrast falls. The floor
         // keeps black input finite and the ceiling bounds the cross-tap weight.
@@ -335,8 +344,8 @@ namespace pP {
             std::min(std::min(left, right), std::min(up, down)), std::max(std::max(left, right), std::max(up, down)));
         const float cross = -peak * weight;
 
-        // The centre keeps 1 - 4*cross so the five taps sum to one: a flat patch
-        // is reproduced exactly, and only local contrast is amplified.
+        // The centre keeps 1 - 4*cross so the five taps sum to one: a flat patch is
+        // reproduced up to a rounding step, and only local contrast is amplified.
         const float sharpened = center * (1.0f - 4.0f * cross) + cross * (left + right + up + down);
         return std::clamp(sharpened, 0.0f, 1.0f);
     }
@@ -1255,8 +1264,9 @@ namespace pP {
         parameters.m_resolved_height = static_cast<u32>(slot.m_extent.y);
         parameters.m_pixel_scale = grid.m_pixel_scale;
         parameters.m_encode_srgb = encode_srgb ? 1u : 0u;
-        // A disabled control is the identity and skips every extra cross tap; the
-        // sharpen is independent of the pixel scale, so it also runs at P1.
+        // A disabled control is the identity and skips every extra cross tap. The
+        // shader sharpens resolved texels, so the same five loads serve every pixel
+        // scale and the nearest enlargement replicates the result.
         parameters.m_sharpen_strength = m_pending_settings.m_sharpen_enabled ? m_pending_settings.m_sharpen_strength
                                                                              : 0.0f;
 

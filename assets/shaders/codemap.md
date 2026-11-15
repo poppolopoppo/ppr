@@ -239,8 +239,9 @@ resulting immutable texture.
   `fragmentPostProcess`.
 - `present_scene.slang` is the fixed-P nearest enlargement/crop with the display-referred
   contrast-adaptive sharpen: each window pixel loads `floor(pixel/P)` from the resolved output and
-  the R*P-W excess is cropped rather than stretched, while the four CAS cross taps are the same
-  integer loads one window pixel away. Its 32-byte constant block carries resolved extents, the
+  the R*P-W excess is cropped rather than stretched, while the four CAS cross taps are the four
+  **resolved** neighbours one texel apart (extent-clamped) so the nearest enlargement replicates each
+  sharpened texel to its whole `P x P` block. Its 32-byte constant block carries resolved extents, the
   pixel scale, the single SDR sRGB encoding decision and the sharpen strength (0 = identity and no
   cross tap read). Float targets stay linear; sRGB attachments encode in hardware, and the sharpen
   runs before that one transfer. Entries: `vertexPresentScene`, `fragmentPresentScene`.

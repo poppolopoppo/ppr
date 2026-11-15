@@ -70,7 +70,11 @@ export namespace pP {
 
         // Per-channel oracle for the presentation-resolution CAS in
         // present_scene.slang. The shader applies exactly these expressions to
-        // R, G and B independently; strength <= 0 is the identity.
+        // R, G and B independently on five resolved taps: `center` plus the four
+        // resolved neighbours one texel apart (extent-clamped). strength <= 0 is
+        // the identity.
+        [[nodiscard]] static int2 resolvedPixelForWindowPixel(
+            int2 window_pixel, int2 resolved_extent, u32 pixel_scale) noexcept;
         [[nodiscard]] static float sharpenWeight(float cross_min, float cross_max) noexcept;
         [[nodiscard]] static float sharpenChannel(
             float center, float left, float right, float up, float down, float strength) noexcept;
@@ -101,9 +105,10 @@ export namespace pP {
         [[nodiscard]] std::error_code render(const DrawContext &context);
         // Fixed-P nearest enlargement/crop from the display-linear output to the
         // acquired surface. Samples exact integer resolved pixels; never
-        // UV-stretches. The same pass applies the contrast-adaptive sharpen to the
-        // enlarged, display-linear values before the single sRGB transfer, so the
-        // final image is sharpened at presentation resolution.
+        // UV-stretches. The same pass sharpens the display-linear content on
+        // resolved texels (cross taps one texel apart) so the nearest enlargement
+        // replicates each sharpened texel to its whole pixel-scale block, then
+        // applies the single sRGB transfer.
         [[nodiscard]] std::error_code present(const DrawContext &context, const PresentationGrid &grid);
         // A previously accepted stage-B output that a retained-picture stage C
         // may present without a new stage B: same resolved extent and world.

@@ -3,11 +3,13 @@
 // ------------------------------------------------------------------
 // Final fixed-P enlargement: each window pixel loads the exact integer resolved
 // pixel at floor(pixel/P); the R*P-W right/bottom excess is simply cropped by
-// not sampling it. The contrast-adaptive sharpen reads the same integer loads
-// one window pixel away, so the 3x3 cross is evaluated at presentation
-// resolution on the display-linear post-AgX values, before the single sRGB
-// transfer (only when the target asks for one). UI is composed natively after
-// this draw.
+// not sampling it. The contrast-adaptive sharpen runs on resolved texels: its
+// cross taps are the four resolved neighbours one texel apart, so the nearest
+// enlargement replicates each sharpened texel to its whole P x P window block.
+// Sharpening in window space instead would make every tap coincide with the
+// centre for P > 1 and degenerate to the identity. The sharpen runs on the
+// display-linear post-AgX values, before the single sRGB transfer (only when the
+// target asks for one). UI is composed natively after this draw.
 
 struct PresentSceneParameters {
     uint m_resolved_width;
@@ -43,18 +45,16 @@ PresentSceneVertexOutput vertexPresentScene(uint vertex : SV_VertexID) {
     return output;
 }
 
-// One enlarged value per window pixel: the exact resolved pixel that this window
-// pixel covers, with the right/bottom excess cropped by the resolved-extent clamp.
-float3 enlargedTexel(int2 window_pixel, uint2 extent, uint scale) {
-    uint2 clamped = uint2(max(window_pixel, int2(0, 0)));
-    uint2 pixel = min(clamped / scale, extent - 1u);
-    return g_output.Load(int3(pixel, 0)).rgb;
+// One resolved texel, clamped to the content extent so the picture border
+// replicates instead of wrapping.
+float3 resolvedTexel(int2 resolved_pixel, int2 extent_last) {
+    return g_output.Load(int3(clamp(resolved_pixel, int2(0, 0), extent_last), 0)).rgb;
 }
 
-// AMD FidelityFX-style CAS: the four cross taps fix the local contrast weight
-// 1/sqrt(min + max + eps); the negative cross coefficient grows from 1/8 to 1/4
-// with strength while the centre keeps 1 - 4 * coefficient, so the five taps sum
-// to one and a flat patch is reproduced exactly.
+// AMD FidelityFX-style CAS: the four resolved cross taps fix the local contrast
+// weight 1/sqrt(min + max + eps); the negative cross coefficient grows from 1/8 to
+// 1/4 with strength while the centre keeps 1 - 4 * coefficient, so the five taps
+// sum to one and a flat patch is reproduced up to a rounding step.
 float3 contrastAdaptiveSharpen(
     float3 center, float3 left, float3 right, float3 up, float3 down, float strength) {
     float3 mn = min(min(left, right), min(up, down));
@@ -74,18 +74,22 @@ float3 presentLinearToSrgb(float3 linear_color) {
 float4 fragmentPresentScene(PresentSceneVertexOutput input) : SV_Target {
     uint2 extent = max(uint2(g_present.m_resolved_width, g_present.m_resolved_height), uint2(1u, 1u));
     uint scale = max(g_present.m_pixel_scale, 1u);
-    int2 base_pixel = int2(input.position.xy);
-    float3 display_color = enlargedTexel(base_pixel, extent, scale);
+    int2 extent_last = int2(extent) - int2(1, 1);
+
+    // The resolved texel this window pixel enlarges; the crop clamp drops the
+    // R*P-W right/bottom excess.
+    int2 resolved = clamp(int2(input.position.xy) / int2(int(scale), int(scale)), int2(0, 0), extent_last);
+    float3 display_color = resolvedTexel(resolved, extent_last);
 
     // A zero strength (disabled or slider at zero) is the exact unsharpened
     // presentation: no cross tap is read.
     if (g_present.m_sharpen_strength > 0.0) {
         display_color = contrastAdaptiveSharpen(
             display_color,
-            enlargedTexel(base_pixel + int2(-1, 0), extent, scale),
-            enlargedTexel(base_pixel + int2(1, 0), extent, scale),
-            enlargedTexel(base_pixel + int2(0, -1), extent, scale),
-            enlargedTexel(base_pixel + int2(0, 1), extent, scale),
+            resolvedTexel(resolved + int2(-1, 0), extent_last),
+            resolvedTexel(resolved + int2(1, 0), extent_last),
+            resolvedTexel(resolved + int2(0, -1), extent_last),
+            resolvedTexel(resolved + int2(0, 1), extent_last),
             g_present.m_sharpen_strength);
     }
 

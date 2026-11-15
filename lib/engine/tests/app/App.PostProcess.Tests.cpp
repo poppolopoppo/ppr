@@ -1472,8 +1472,35 @@ namespace pP::tests::detail {
         // presentation contrast-adaptive sharpen
         // ------------------------------------------------------------------
         // The CPU oracle is the same expression present_scene.slang evaluates per
-        // channel on the enlarged display-linear picture.
+        // channel on the resolved display-linear picture: the shader resolves the
+        // window pixel to a resolved texel, then reads the four resolved cross
+        // neighbours one texel apart and lets the nearest enlargement replicate the
+        // sharpened value to the whole pixel-scale block.
         namespace ContrastAdaptiveSharpen {
+            // Synthetic 6x3 resolved pictures: a vertical step at texel 3, and a
+            // uniform patch. Both stay inside the display range.
+            // int2 is not a literal type in Mango, so the extent is a plain constant.
+            inline const int2 kResolvedExtent{6, 3};
+            inline constexpr std::array<float, 6> kStepRow{0.25f, 0.25f, 0.25f, 0.75f, 0.75f, 0.75f};
+            inline constexpr std::array<float, 6> kFlatRow{0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
+            inline constexpr std::array<float, 6> kIndexRow{0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
+
+            // One window pixel through the shader's mapping and kernel: the resolved
+            // centre plus the four extent-clamped resolved cross taps.
+            [[nodiscard]] float presentedValue(
+                const std::array<float, 6> &row, const int2 window_pixel, const u32 pixel_scale,
+                const float strength) noexcept {
+                const auto texel = [&row](const int2 resolved_pixel) {
+                    const i32 x = std::clamp(resolved_pixel.x, 0, kResolvedExtent.x - 1);
+                    return row[static_cast<std::size_t>(x)];
+                };
+                const int2 resolved = PostProcessPass::resolvedPixelForWindowPixel(
+                    window_pixel, kResolvedExtent, pixel_scale);
+                return PostProcessPass::sharpenChannel(
+                    texel(resolved), texel(int2{resolved.x - 1, resolved.y}), texel(int2{resolved.x + 1, resolved.y}),
+                    texel(int2{resolved.x, resolved.y - 1}), texel(int2{resolved.x, resolved.y + 1}), strength);
+            }
+
             PPR_UNIT_TEST (cpu_sharpen_identity_and_flat_preservation) {
                 // Zero strength is the unsharpened picture, bit for bit, whatever
                 // the cross neighbourhood looks like.
@@ -1542,11 +1569,95 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(PostProcessPass::sharpenWeight(0.9f, 1.0f) < PostProcessPass::kSharpenMaxWeight);
             };
 
+            PPR_UNIT_TEST (cpu_sharpen_changes_the_picture_at_every_pixel_scale) {
+                // A resolved-space kernel changes the enlarged picture at every
+                // pixel scale: the two resolved texels beside the step are sharpened
+                // and each replicates to its whole P x P block. Sampling the cross in
+                // window space instead collapses to the identity inside a block.
+                for (const u32 scale: {1u, 2u, 3u}) {
+                    const i32 window_width = kResolvedExtent.x * static_cast<i32>(scale);
+                    const i32 window_height = kResolvedExtent.y * static_cast<i32>(scale);
+                    u32 changed = 0u;
+                    float max_delta = 0.0f;
+                    float flat_max_delta = 0.0f;
+                    for (i32 y = 0; y < window_height; ++y) {
+                        for (i32 x = 0; x < window_width; ++x) {
+                            const int2 window_pixel{x, y};
+                            const int2 resolved = PostProcessPass::resolvedPixelForWindowPixel(
+                                window_pixel, kResolvedExtent, scale);
+                            const float unsharpened = kStepRow[static_cast<std::size_t>(resolved.x)];
+
+                            // Strength 0 stays bit-identical at every scale.
+                            PPR_TEST_ASSERT(presentedValue(kStepRow, window_pixel, scale, 0.0f) == unsharpened);
+
+                            // A change threshold above float rounding: a flat
+                            // neighbourhood reproduces the centre to within an ulp,
+                            // while a sharpened edge texel moves by ~0.08 here.
+                            const float delta = presentedValue(kStepRow, window_pixel, scale, 0.75f) - unsharpened;
+                            if (std::abs(delta) > 1e-4f) {
+                                ++changed;
+                                max_delta = std::max(max_delta, std::abs(delta));
+                            }
+
+                            // A uniform region is unchanged at every scale: all five
+                            // resolved taps hold the same value and sum to one.
+                            flat_max_delta = std::max(
+                                flat_max_delta, std::abs(presentedValue(kFlatRow, window_pixel, scale, 0.75f) - 0.5f));
+                        }
+                    }
+
+                    // Both resolved columns beside the step change for every window
+                    // pixel of their block: 2 resolved columns * scale window columns
+                    // * (3 * scale) window rows.
+                    PPR_TEST_ASSERT(changed == 6u * scale * scale);
+                    PPR_TEST_ASSERT(max_delta > 0.01f);
+                    PPR_TEST_ASSERT(flat_max_delta <= 1e-6f);
+                }
+            };
+
+            PPR_UNIT_TEST (cpu_sharpen_taps_span_one_resolved_texel) {
+                // A picture whose texel n holds n. At P=2 the window pixels 4 and 5
+                // both enlarge resolved texel 2, so window-space taps (x +/- 1) would
+                // read texel 2 five times and produce the identity.
+                constexpr u32 scale = 2u;
+                const int2 inside_block = PostProcessPass::resolvedPixelForWindowPixel(
+                    int2{5, 1}, kResolvedExtent, scale);
+                PPR_TEST_ASSERT(inside_block.x == 2);
+                PPR_TEST_ASSERT(
+                    PostProcessPass::resolvedPixelForWindowPixel(int2{4, 1}, kResolvedExtent, scale).x ==
+                    inside_block.x);
+                PPR_TEST_ASSERT(
+                    PostProcessPass::resolvedPixelForWindowPixel(int2{5, 1}, kResolvedExtent, scale).x ==
+                    inside_block.x);
+
+                // The resolved cross taps are one texel apart, not the centre texel.
+                PPR_TEST_ASSERT(kIndexRow[static_cast<std::size_t>(inside_block.x)] == 2.0f);
+                PPR_TEST_ASSERT(kIndexRow[static_cast<std::size_t>(inside_block.x - 1)] == 1.0f);
+                PPR_TEST_ASSERT(kIndexRow[static_cast<std::size_t>(inside_block.x + 1)] == 3.0f);
+
+                // Crossing one resolved texel needs +/-2 window pixels at P=2.
+                PPR_TEST_ASSERT(
+                    PostProcessPass::resolvedPixelForWindowPixel(int2{3, 1}, kResolvedExtent, scale).x ==
+                    inside_block.x - 1);
+                PPR_TEST_ASSERT(
+                    PostProcessPass::resolvedPixelForWindowPixel(int2{6, 1}, kResolvedExtent, scale).x ==
+                    inside_block.x + 1);
+
+                // Those resolved taps actually reach the kernel: the step row changes
+                // the block's value, which five identical taps could never do.
+                PPR_TEST_ASSERT(presentedValue(kStepRow, int2{5, 1}, scale, 0.75f) != 0.25f);
+                PPR_TEST_ASSERT(
+                    std::abs(PostProcessPass::sharpenChannel(0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.75f) - 0.25f) <=
+                    1e-6f);
+            };
+
             const UnitTest sharpen = UnitTest::Named("sharpen") / [](UnitTest::IRun &run) -> void {
                 run.recurse({
                     cpu_sharpen_identity_and_flat_preservation,
                     cpu_sharpen_amplifies_a_step_edge_monotonically,
                     cpu_sharpen_weight_falls_with_local_contrast,
+                    cpu_sharpen_changes_the_picture_at_every_pixel_scale,
+                    cpu_sharpen_taps_span_one_resolved_texel,
                 });
             };
         }

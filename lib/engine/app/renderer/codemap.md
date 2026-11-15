@@ -5,9 +5,9 @@
 The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
 queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.presentation` supplies checked W/P/R/S/B values and `ResolvedHdrView`, and `engine.app:renderer.post_process_pass` (`PostProcessPass`) owns exposure adaptation, ceil-sized bloom, the single AgX treatment, the display-referred presentation sharpen and fixed-P presentation.
 Post-processing runs at the resolved content extent after the scene image; final
-nearest enlargement, cropping, the contrast-adaptive sharpen and the single sRGB
-decision live in `present_scene.slang` / `PostProcessPass::present`, and native UI
-remains last.
+nearest enlargement, cropping, the resolved-space contrast-adaptive sharpen and the
+single sRGB decision live in `present_scene.slang` / `PostProcessPass::present`, and
+native UI remains last.
 Pixelization is a rendering-resolution control (P1..8, default 3), not a
 post-effect filter; there is no AA selector or legacy runtime alternative.
 
@@ -551,9 +551,10 @@ validation requirements; user visual acceptance is separate.
   committed only on acceptance, world replacement restarts at 0) and bloom (ceil(R/2) level 0, ceil-halved
   separate unweighted images to 1x1 or six levels, edge-replicated 2x2 boxes, then a weighted descent
   `w_l*raw_l + tent(result_(l+1))` with each weight applied once, linear-clamped [1,2,1]/4 tent). `render` combines scene + `intensity*bloom0` and invokes AgX once into its own
-  RGBA16F output. `present` loads exact integer resolved pixels at fixed P, applies the
-  contrast-adaptive sharpen to the enlarged display-linear values (one full-screen presentation-pass
-  effect, strength 0 = identity, independent of P) and encodes sRGB once. Per-slot roots
+  RGBA16F output. `present` loads exact integer resolved pixels at fixed P, sharpens the resolved
+  display-linear texels (one full-screen presentation-pass effect; cross taps one resolved texel apart,
+  extent-clamped, so the nearest enlargement replicates the sharpened value; strength 0 = identity,
+  independent of P) and encodes sRGB once. Per-slot roots
   and cohorts are keyed by completion; `notifySubmitted`, `notifyPresented`, `discardUnsubmitted` and
   `collectCompleted` provide stage-B/C settlement without steady-state waits.
 
