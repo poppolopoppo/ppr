@@ -222,3 +222,38 @@ All scenes hold 240 substeps (or the stated horizons), identical initialization 
 ### Operating-point ruling
 
 **Retain K = 2 as the default pending completion of baseline acceptance.** Cost is 1.46× at K5 and 2.41× at K10 measured on 4096 rows, and the current evidence does not justify switching to K5. K2 is not a verified acceptable baseline: its correctness side is precisely what baseline acceptance has still to establish, and the metric used here leaves the elastic and visco responses undetermined. K5/K10 remain admitted and covered by `matter_schedule_gpu`, so the choice is cheap to revisit once B1/B2 change the material set. Do not switch the default on cost evidence alone, and do not treat K10's bounded elastic response as a fix.
+
+## A4 — re-measured with rotation-free metrics
+
+The earlier recovery metric (`max |F − I|`) was withdrawn as rotation-sensitive. The diagnostic now reports singular values, `‖FᵀF − I‖_F`, `det F`, clamp activation counts, kinetic energy and positional offset, and applies a brush load for 16 substeps followed by a 224-substep release.
+
+Identity: Release binary sha256 `269bf20f…`, source `078f48a` plus the metric edit; GPU **not** exclusive (desktop compositor and a clock ramp present throughout), so cost variance of ~10 % applies.
+
+| Property | K | horizon | σmax | σmin | ‖FᵀF−I‖ | clamp rows | Σ KE | offset |
+|---|---:|---|---:|---:|---:|---|---:|---:|
+| elastic load/release | 2 | load_end | 1.016 | 0.944 | 0.109 | 0 | 1.72e4 | 0.403 |
+| elastic load/release | 5 | load_end | 1.002 | 0.992 | 0.0165 | 0 | 1.72e4 | 0.366 |
+| elastic load/release | 10 | load_end | 1.001 | 0.997 | 0.0067 | 0 | 1.71e4 | 0.363 |
+| elastic load/release | 2 | release_end | 1.001 | 0.9995 | 0.0015 | 0 | 1.71e4 | 11.16 |
+| elastic load/release | 5 | release_end | 1.000 | 1.000 | 6.4e-5 | 0 | 1.67e4 | 11.07 |
+| elastic load/release | 10 | release_end | 1.000 | 1.000 | 5.7e-5 | 0 | 1.63e4 | 10.99 |
+| first-step relaxation | 2 | s1 | 3.55 | 0.284 | 11.6 | 0 | 1.30e6 | 1.01 |
+| first-step relaxation | 5 | s1 | 3.54 | 0.100 | 11.6 | **10** | 1.07e7 | 2.14 |
+| first-step relaxation | 10 | s1 | 4.15 | 0.100 | 16.2 | **6** | 3.06e7 | 3.47 |
+| granular state | 2 | settle_end | 1.000 | 0.738 | 0.457 | 124 sand | 2.72e4 | 17.7 |
+| granular state | 5 | settle_end | 1.000 | 1.000 | 1.1e-6 | 128 sand | 6.54e4 | 15.2 |
+| granular state | 10 | settle_end | 1.000 | 1.000 | 9.8e-7 | 128 sand | 6.02e4 | 14.8 |
+
+Cost re-measured (non-exclusive GPU): K2 5.91 ms, K5 8.39 ms (1.42×), K10 13.59 ms (2.30×) wall per tick; GPU 1.82 / 3.36 / 6.91 ms; dispatches 104 / 152 / 232 as designed.
+
+### What this establishes
+
+- **Recovery ratio is not comparable across K.** The applied load differs by 16× between K2 and K10 (`0.109` vs `0.0067` at `load_end`), so K5/K10's smaller release residual means less distortion was applied, not better recovery. Within a K, the retained distortion falls to ~1 % (K2) and ~0.4–0.9 % (K5/K10) of the applied value, and positional offset keeps growing — the shape relaxes while the body keeps translating. `‖FᵀF−I‖` is blind to translation/rearrangement and inflated by near-singular elements, so it cannot mean "returned to the initial shape".
+- **The load path is itself K-dependent**: the same 16-substep brush produces 16× less distortion at K10 than at K2.
+- **Higher K drives first-step trials into the integration clamp** (10 rows at K5, 6 at K10, none at K2) with `σmin` pinned at the 0.1 floor and `det F` down to 0.043 — near-inverted trial states that K2 does not reach.
+- **Sand is qualitatively K-dependent**: K2 retains distortion while K5/K10 project every row and report ~1e-6.
+- The load/release fixture does not separate elastic from visco (yield clamp never active); only the first-step fixture does.
+
+### Operating point
+
+Retain **K = 2** as the default. It is the only K with production evidence, the higher counts cost 1.4–2.4×, and the K-sensitivities above are unresolved defects or model questions rather than improvements. K2 is **not** yet a verified-acceptable baseline: the recovery question is now partially answered (shape relaxes, body translates), but the load-path K-dependence, the higher-K clamp activation and the sand divergence must be understood before any default change or before Elastic is admitted.
