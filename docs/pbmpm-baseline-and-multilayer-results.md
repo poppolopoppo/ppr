@@ -86,6 +86,43 @@ No test was removed. The census found no entry whose contract is proven elsewher
 
 ## Open items
 
-- A1–A6 of the plan are not started: reference provenance, arithmetic-domain guards, generalized scheduling, operating-point decision, sand-history derivation, and the final Phase A acceptance run.
+- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator), A2's precision diagnostic, and A3–A6 are not started or incomplete; see the sections below.
 - D3D12/Windows verification is unavailable on this host and remains an unrun gate.
 - Only the Debug/ASan/validation configuration has been measured; Release timing and cost evidence is pending.
+
+## A1 — upstream reference harness (stage 1 complete)
+
+The retained demo snapshot was incomplete (no `gpu.js`, `shader.js`, `buffer_factory.js`, `v.js`, and no bukkit kernels), so the harness drives the full upstream tree at `61749b6c2d2631ed243f86882752ba43196f2de7` (cloned to `/tmp/opencode/pbmpm-upstream2`).
+
+Runtime: `webgpu@0.6.2` (Dawn bindings) with adapter `nvidia-geforce-rtx-2080`. This host has no alternative: Chromium exposes no `navigator.gpu`, and Node 22 has no built-in WebGPU.
+
+Harness: `/tmp/opencode/pbmpm-harness` — upstream `sim/shader/buffer_factory/v/time.js` copied verbatim, a compute-only `gpu.js` replacement, a `fetch` shim serving `shaders/*.wgsl` through the upstream `//!include` / `//!insert` preprocessor, and direct particle seeding in the `particle.inc.wgsl` layout.
+
+Stage 1 evidence (`out/liquid-k2-s1.json`):
+
+| Check | Result |
+|---|---|
+| Determinism | Two separate processes byte-identical (sha256 `6a396a31…9509cbe`) |
+| Gravity application | `displacement.y = -0.005555556` = `-32 · 2.5 · (1/120)²`, exactly once |
+| Real P2G work | Bukkit args `[4,1,1,0]`, grid mass `64 · 1e7` present |
+| Liquid state | `max |det F − 1| = 0`, `liquidDensity ∈ [1,1]`, `nonFiniteCount = 0` |
+| Particles | 64 seeded, 3 grid buffers × 4096 words, all values full-precision |
+
+Upstream scheduling fact re-verified in `sim.js`: the first substep of an `update()` call dispatches zero `g2p2g` workgroups (blank indirect args produced at the end of the previous substep). A single-substep trace therefore has to go through the two-substep frame path.
+
+Stage 2 (unbuilt): Elastic/Sand/Visco seeds, K5/K10, per-substep snapshots, and the committed generator under `scripts/pbmpm/` with its dependency documented.
+
+## A2 — constitutive domains (complete)
+
+Admission (`validProfileDomain` in `Matter.Gpu.cpp`) refuses, before any encoding: non-finite damping constants, non-invertible `dt`, friction angle outside `[0, 90)`, and `exp(1 - plasticity)` that is not finite and positive.
+
+Shader guards, all before the unsafe use and without a second decomposition:
+- `solver.slang`: stored `F` → witness `4`; trial `(I + D)F` → witness `8`; checks are finiteness, a derived magnitude bound `1.3e19` (`2·entry² < FLT_MAX`), and determinant/reciprocal/assembled-inverse finiteness. No guard calls `forkSvd`, `exp` or `sqrt`; intentionally limited singular values stay legal.
+- `fork_core.slang`, adapter-only blocks: sand records `17` at the zero-deviatoric divide, visco records `16` at non-finite/zero `exp(1 - plasticity)`, `J`, `newJ`. The no-adapter preprocessed text is byte-identical to the pre-change source, so upstream conformance is unaffected.
+
+Tests: `matter_constitutive_gpu` adds three leaves — witness attribution across a liquid reciprocal, stored/trial gradient failures, magnitude and inverse overflow (fields 12/4/4/8/4/4), admission rejection with unchanged committed state, and the transfer identity leaf (partition of unity, first/second moments, affine reproduction). Witness assertions pin `(flags & 8) == 8` and `(flags & 2) == 0` rather than the exact union, because flag `128` is an independent pre-existing stencil-key condition.
+
+Gates after this change: `matter_fast` 21/21 in 291 s.
+
+Build discipline learned here: a fast-gate failure on `app/matter_runtime_gpu/...` after the guard commit disappeared when the identical committed sources were rebuilt, and the gate then passed. The build had been taken while an implementation lane was still editing `assets/shaders/pbmpm`; the staged shader tree did not match the linked binary. Builds must follow a quiescent lane.
+
