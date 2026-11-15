@@ -1036,6 +1036,12 @@ export namespace pP {
         // until shutdown/device loss. Production never calls these.
         [[nodiscard]] std::error_code setLightingBuffersForTest(
             rhi::ComPtr<rhi::IBuffer> resolved, rhi::ComPtr<rhi::IBuffer> fine_ch);
+        // Tests-only: publishes the committed per-native-cell winner grid that
+        // carries particle ownership, the second half of the resolved-cell
+        // publication. Resolved cells and the winner grid are one publication
+        // authority, so neither seam flips the ownership bit alone: the bit is
+        // reported only once both are present.
+        [[nodiscard]] std::error_code setParticleOwnershipForTest(rhi::ComPtr<rhi::IBuffer> best_row);
 
         // Tests-only: runs the same terrain ownership authority the draw path
         // uses (bit derivation + `g_best_row` binding) and reports the
@@ -1610,9 +1616,9 @@ export namespace pP {
         // when this call actually bound every committed grid the root declares (the
         // winner grid for base retirement and particle occlusion; a root that also
         // declares the Q16 fill, such as the particle prepare rank invocation,
-        // binds that through the same authority). A stale attempt, a fixture
-        // publication or no publication binds the zero fallbacks and leaves bit 1
-        // clear.
+        // binds that through the same authority). A stale attempt or no
+        // publication binds the zero fallbacks and leaves bit 1 clear; a fixture
+        // publication reaches bit 1 only through the tests-only winner-grid seam.
         [[nodiscard]] std::error_code bindTerrainLighting_(rhi::ShaderCursor &cursor, u32 &availability);
 
         // Reclaims deferred pipelines/roots at or below `completed`.
@@ -1691,9 +1697,12 @@ export namespace pP {
         // Zero-valued fallback for worlds whose lighting owner has not published
         // resolved cells/CH yet, so binding stays valid while the scene is black.
         rhi::ComPtr<rhi::IBuffer> m_lighting_fallback{};
-        // Tests-only external categorical state; empty in production.
+        // Tests-only external categorical state; empty in production. Resolved
+        // cells and the winner grid travel together as one publication, so the
+        // ownership bit requires both.
         rhi::ComPtr<rhi::IBuffer> m_test_resolved{};
         rhi::ComPtr<rhi::IBuffer> m_test_fine_ch{};
+        rhi::ComPtr<rhi::IBuffer> m_test_best_row{};
         struct VisibilityProgram {
             rhi::ComPtr<rhi::IShaderProgram> m_program{};
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};

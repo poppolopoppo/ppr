@@ -3522,6 +3522,15 @@ namespace pP {
         return {};
     }
 
+    std::error_code GridPass::setParticleOwnershipForTest(rhi::ComPtr<rhi::IBuffer> best_row) {
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, best_row and best_row->getDesc().elementSize == sizeof(u32)
+                          ? std::error_code{}
+                          : std::make_error_code(std::errc::invalid_argument));
+        m_test_best_row = std::move(best_row);
+        return {};
+    }
+
     std::error_code GridPass::bindTerrainLightingForTest(
         rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &availability) {
         // The draw path always runs ensureSurfaceBuffers_ first; the fixture seam
@@ -3689,6 +3698,27 @@ namespace pP {
         }
 
         availability = kFrameHasResolvedCells;
+        if (m_test_best_row) {
+            // A fixture publication that also supplies the winner grid owns
+            // particle cells exactly as a committed projection attempt does: the
+            // resolved cells above and this grid are the same published pair.
+            const rhi::ShaderCursor ownership = cursor["g_best_row"];
+            if (not ownership.isValid()) {
+                // A root that declares no winner grid reads no ownership, so it
+                // gains nothing from the bit; any other declared ownership field
+                // keeps its static zero binding.
+                PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
+                return {};
+            }
+
+            auto *const best_row = m_test_best_row.get();
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, ownership.setBinding(rhi::Binding(best_row, makeFullRange(best_row))));
+
+            availability |= kFrameHasParticleOwnership;
+            m_terrain_ownership_fallback_used = false;
+            return {};
+        }
+
         if (published) {
             bool ownership_bound = false;
             const std::error_code ownership = m_world.m_lighting->bindTerrainOwnership(cursor, ownership_bound);
@@ -3707,8 +3737,8 @@ namespace pP {
             return {};
         }
 
-        // A fixture publication has no committed particle attempt, so no cell is
-        // particle-owned and the bit stays clear.
+        // A fixture publication without the winner-grid seam has no committed
+        // particle attempt, so no cell is particle-owned and the bit stays clear.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, bindOwnershipFallback_(cursor));
         return {};
     }
@@ -4935,6 +4965,7 @@ namespace pP {
         m_lighting_fallback.setNull();
         m_test_resolved.setNull();
         m_test_fine_ch.setNull();
+        m_test_best_row.setNull();
         m_world.m_source_materials.setNull();
         m_world.m_terrain_cells.setNull();
         m_world.m_terrain_staging.setNull();

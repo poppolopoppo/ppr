@@ -2868,24 +2868,32 @@ namespace pP::tests::detail::MatterGpu {
 
         std::array<u64, 2u> holes{};
         std::array<u64, 2u> samples{};
-        std::array<u64, 2u> outside_painted{};
+        // Painted pixels in cells that nominated no particle of their own, keyed
+        // by the cell-space Chebyshev distance to the nearest cell that did: band
+        // 1, band 2, band 3 and band 4-or-more. The reconstruction's influence
+        // radius decides which of those bands may legitimately receive paint.
+        constexpr u32 kPoolBands = 4u;
+        std::array<std::array<u64, kPoolBands>, 2u> outside_band_painted{};
         std::array<u64, 2u> outside_edge_band_painted{};
+        std::array<u64, 2u> far_field_painted{};
         std::array<u64, 2u> precedence_samples{};
         std::array<u64, 2u> precedence_ok{};
         std::array<u64, 2u> precedence_edge_band_samples{};
         std::array<u64, 2u> water_pixels{};
-        // The accepted C1 particle edge spans about one target pixel. The fixture
+        // A one-pixel band around each cell boundary is excluded from the strict
+        // interior judgement. The presentation reads a screen-space field that two
+        // separable Gaussian passes have already smoothed, so a pixel whose
+        // footprint straddles two cells is attributable to neither. The fixture
         // maps 12 m onto 512 px and one native cell is 1/3 m, so a cell is
-        // 512/(12*3) = 14.2222 px and a one-pixel band is 1/14.2222 = 0.0703125 of
-        // a cell per side. Only pixels inside that band on both axes are excluded
-        // from the strict interior contract; edge-band paint is reported separately
-        // and never used to declare the pool gate passed.
+        // 512/(12*3) = 14.2222 px and the band is 1/14.2222 = 0.0703125 cell per
+        // side. Band paint is reported separately and never used to declare the
+        // pool gate passed.
         constexpr double kPoolTargetPixels = 512.0;
         constexpr double kPoolWorldMetres = 12.0;
         constexpr double kPoolNativeCellMetres = 1.0 / 3.0;
-        constexpr double kPoolAnalyticEdgePixels = 1.0;
+        constexpr double kPoolEdgeBandPixels = 1.0;
         const double pool_cell_pixels = kPoolTargetPixels * kPoolNativeCellMetres / kPoolWorldMetres;
-        const double pool_edge_band = kPoolAnalyticEdgePixels / pool_cell_pixels;
+        const double pool_edge_band = kPoolEdgeBandPixels / pool_cell_pixels;
         for (u32 state = 0u; state < 2u; ++state) {
             u64 hash = 14695981039346656037ull;
             double rms_motion_squared = 0.0;
@@ -2912,9 +2920,11 @@ namespace pP::tests::detail::MatterGpu {
 
             // Approved categorical presentation: project the frozen solver rows
             // into native cells with the same ordered key the production
-            // projection uses (nearest cell centre, stable-ID tie, terrain
-            // precedence). One terrain cell inside the deep ROI proves that
-            // existing terrain material wins over a nominating particle.
+            // projection uses (nearest cell centre, stable-ID tie). The same rows
+            // also nominate the committed winner grid, so a winning cell is
+            // particle-owned and retires the categorical base under it, while the
+            // one injected terrain cell keeps no winner: terrain owns it and
+            // excludes the particle density field there.
             constexpr u32 kPoolEdge = WorldLightingPass::kWorldEdge;
             constexpr u32 kPrecedenceX = 21u;
             constexpr u32 kPrecedenceY = 15u;
@@ -2965,6 +2975,64 @@ namespace pP::tests::detail::MatterGpu {
                 }
             }
 
+            // The committed winner grid is published with the resolved cells: the
+            // nominating row where this model recorded a winner, the no-winner
+            // sentinel everywhere else. The injected terrain cell therefore keeps
+            // the sentinel and stays terrain-owned, which is what excludes the
+            // particle density over it.
+            std::vector<u32> ownership(WorldLightingPass::kCellCount, 0xffffffffu);
+            for (u32 cell = 0u; cell < ownership.size(); ++cell) {
+                if (best_row[cell] != 0xffffffffu) {
+                    ownership[cell] = best_row[cell];
+                }
+            }
+
+            // Cell-space Chebyshev distance from every cell to the nearest cell
+            // that nominated a particle, saturated where nothing in the grid is
+            // nominated. One multi-source breadth-first expansion over the
+            // 8-neighbourhood settles each cell once, so the pass is linear in the
+            // cell count and the distance is exact; no pairwise cell scan is
+            // needed to bound how far a neighbour's paint may reach.
+            constexpr u32 kPoolUnreached = 0xffffffffu;
+            std::vector<u32> nomination_distance(WorldLightingPass::kCellCount, kPoolUnreached);
+            std::vector<u32> frontier;
+            frontier.reserve(WorldLightingPass::kCellCount);
+            for (u32 cell = 0u; cell < nomination_distance.size(); ++cell) {
+                if (best_row[cell] != 0xffffffffu) {
+                    nomination_distance[cell] = 0u;
+                    frontier.push_back(cell);
+                }
+            }
+
+            for (std::size_t head = 0u; head < frontier.size(); ++head) {
+                const u32 cell = frontier[head];
+                const u32 next_distance = nomination_distance[cell] + 1u;
+                const u32 cell_x = cell % kPoolEdge;
+                const u32 cell_y = cell / kPoolEdge;
+
+                for (i32 step_y = -1; step_y <= 1; ++step_y) {
+                    for (i32 step_x = -1; step_x <= 1; ++step_x) {
+                        const i32 neighbour_x = static_cast<i32>(cell_x) + step_x;
+                        const i32 neighbour_y = static_cast<i32>(cell_y) + step_y;
+                        const bool inside = neighbour_x >= 0 and
+                                            neighbour_y >= 0 and
+                                            neighbour_x < static_cast<i32>(kPoolEdge) and
+                                            neighbour_y < static_cast<i32>(kPoolEdge);
+                        if (not inside) {
+                            continue;
+                        }
+
+                        const u32 neighbour = static_cast<u32>(neighbour_y) * kPoolEdge + static_cast<u32>(neighbour_x);
+                        if (nomination_distance[neighbour] != kPoolUnreached) {
+                            continue;
+                        }
+
+                        nomination_distance[neighbour] = next_distance;
+                        frontier.push_back(neighbour);
+                    }
+                }
+            }
+
             for (u32 variant = 0u; variant < (glossy_qa ? 2u : 1u); ++variant) {
                 const bool glossy = variant != 0u;
                 {
@@ -2997,6 +3065,8 @@ namespace pP::tests::detail::MatterGpu {
                         shader_buffer(resolved.size() * sizeof(u32), sizeof(u32), resolved.data()),
                         shader_buffer(
                             fine_ch.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH), fine_ch.data())));
+                    PPR_TEST_ASSERT(not grid.setParticleOwnershipForTest(
+                        shader_buffer(ownership.size() * sizeof(u32), sizeof(u32), ownership.data())));
                     PPR_DEFER {
                         const auto submitted = renderer.lastSubmittedFenceValue();
                         if (submitted != kFenceValueNone) {
@@ -3037,8 +3107,9 @@ namespace pP::tests::detail::MatterGpu {
                         }
                     }
 
-                    // Terrain material 2 occupies one interior pool cell; the
-                    // categorical projection keeps it ahead of the particles.
+                    // Terrain material 2 occupies one interior pool cell and the
+                    // fixture's projection nominates no winner there, so terrain
+                    // owns the cell and excludes the particle density field.
                     GridTerrainVisual terrain{};
                     terrain.m_material_id = 2u;
                     terrain.m_color_rgba = 0xff0000ffu;
@@ -3131,10 +3202,11 @@ namespace pP::tests::detail::MatterGpu {
                             // Inventory is 360 source-cell areas in a 24-cell-wide
                             // basin (15 cells deep). This deep ROI excludes walls by
                             // >=5 source cells, floor by >=4, and free surface by >=7.
-                            // The approved categorical projection selects one
-                            // material per native cell, so the renderer contract is
-                            // exact cell coverage: each particle-nominated cell is
-                            // painted and each empty or terrain-precedence cell is not.
+                            // A cell that nominated a particle must be fully painted.
+                            // A cell that nominated none is judged against the
+                            // reconstruction's influence radius instead: its paint is
+                            // counted by Chebyshev distance band and bounded by the
+                            // kernel, not assumed to be absent.
                             if (not glossy and
                                 source_x > 17.0 and
                                 source_x < 31.0 and
@@ -3145,12 +3217,13 @@ namespace pP::tests::detail::MatterGpu {
                                 const u32 cell_y = native_cell(source_y);
                                 const u32 cell = cell_y * kPoolEdge + cell_x;
                                 const bool blue = pixel[2] >= 200u;
-                                // The accepted analytic particle coverage blends across a
-                                // one-pixel edge, so a particle intentionally paints a little
-                                // beyond its own cell. The per-cell contract is therefore
-                                // judged outside that pixel-measured band on both axes;
-                                // interior holes stay strict over every sampled pixel and
-                                // edge-band paint/precedence are reported separately.
+                                // Two separable label-masked Gaussian passes smooth
+                                // the accumulated label and attribute field, so a
+                                // particle's paint deliberately extends past its own
+                                // cell. The strict interior judgement therefore
+                                // applies outside a one-pixel boundary band on both
+                                // axes; interior holes stay strict over every sampled
+                                // pixel and band paint is reported separately.
                                 const double fraction_x = (source_x - 3.0) - double(cell_x);
                                 const double fraction_y = (source_y - 3.0) - double(cell_y);
                                 const bool cell_interior = fraction_x > pool_edge_band and
@@ -3168,7 +3241,8 @@ namespace pP::tests::detail::MatterGpu {
                                     ++water_pixels[index];
                                     holes[index] += blue ? 0u : 1u;
                                 } else if (cell_interior) {
-                                    outside_painted[index] += blue ? 1u : 0u;
+                                    const u32 band = std::clamp(nomination_distance[cell], 1u, kPoolBands);
+                                    outside_band_painted[index][band - 1u] += blue ? 1u : 0u;
                                 } else {
                                     outside_edge_band_painted[index] += blue ? 1u : 0u;
                                 }
@@ -3179,7 +3253,7 @@ namespace pP::tests::detail::MatterGpu {
                                 source_x < 31.0 and
                                 source_y > 40.0 and
                                 source_y < 43.0) {
-                                outside_painted[index] += pixel[2] >= 200u ? 1u : 0u;
+                                far_field_painted[index] += pixel[2] >= 200u ? 1u : 0u;
                             }
 
                             if (ppm.is_open()) {
@@ -3203,19 +3277,38 @@ namespace pP::tests::detail::MatterGpu {
 
                     _.log(
                         std::format(
-                            "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_painted={} outside_edge_band_painted={} precedence={}/{} precedence_edge_band={}",
+                            "SOLVER-POOL spacing_source=1 cold_volume=1 physical_spacing_m=1/3 physical_volume_m3=1/9 epoch={} tick={} rows={} hash={} rms_displacement_cells={} roi_source=[17,31]x[16,20] samples={} holes={} outside_band1_painted={} outside_band2_painted={} outside_band3_painted={} outside_band4plus_painted={} outside_edge_band_painted={} far_field_painted={} precedence={}/{} precedence_edge_band={}",
                             epochs[state], state == 0u ? 1u : 120u, frozen[state].size(), hash,
                             std::sqrt(rms_motion_squared / double(frozen[state].size())), samples[index], holes[index],
-                            outside_painted[index], outside_edge_band_painted[index], precedence_ok[index],
+                            outside_band_painted[index][0u], outside_band_painted[index][1u],
+                            outside_band_painted[index][2u], outside_band_painted[index][3u],
+                            outside_edge_band_painted[index], far_field_painted[index], precedence_ok[index],
                             precedence_samples[index], precedence_edge_band_samples[index]));
                 }
             }
         }
 
         // Emit all early/late native evidence even against old shaders.
+        //
+        // The accepted bound is derived from the reconstruction kernel, not from
+        // an observed count. One particle fills one native cell here, so its
+        // reference radius is r = sqrt(V/pi) = sqrt(1/pi) = 0.5642 cell and the
+        // accumulated support is R_surface = kParticleSurfaceRadiusScale * r =
+        // 1.5259485586443693 * 0.5642 = 0.8609 cell. The two separable
+        // label-masked Gaussian passes then spread that accumulation by
+        // sigma = 0.15 cell truncated at +/-3 sigma, i.e. 3 * kParticleSurfaceSmoothingSigma
+        // = 3 * 0.15 = 0.45 cell. The furthest a painted pixel can therefore lie
+        // from the centre of a particle that nominated a cell is
+        // 0.8609 + 0.45 = 1.3109 cell, and a pixel that close sits at most
+        // ceil(1.3109) = 2 cells away from that nominated cell. Bands 1-2 may
+        // legitimately receive that bleed and are reported; band 3 and beyond
+        // cannot, so they must stay unpainted. The far-field probe lies outside
+        // every support and must stay unpainted in all bands.
         for (u32 index = 0u; index < holes.size(); ++index) {
             PPR_TEST_ASSERT(samples[index] > 0u);
-            PPR_TEST_ASSERT(outside_painted[index] == 0u);
+            PPR_TEST_ASSERT(outside_band_painted[index][2u] == 0u); // band 3
+            PPR_TEST_ASSERT(outside_band_painted[index][3u] == 0u); // band 4+
+            PPR_TEST_ASSERT(far_field_painted[index] == 0u); // beyond all support
             PPR_TEST_ASSERT(holes[index] == 0u);
             PPR_TEST_ASSERT(precedence_samples[index] > 0u);
             PPR_TEST_ASSERT(precedence_ok[index] == precedence_samples[index]);
