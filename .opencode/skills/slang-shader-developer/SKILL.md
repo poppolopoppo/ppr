@@ -146,6 +146,20 @@ float4 fragmentMain(VertexOutput input) : SV_Target { ... }
 - A pass using fixed-function vertex buffers must keep its input layout and
   shader vertex input synchronized. A pass using `SV_VertexID` plus
   `StructuredBuffer` fetch must not also add fixed-function geometry bindings.
+- A fragment entry point must not call another entry point. Slang 2026.17.1
+  crashes in `TransformParamsToConstRef` when it does, so an entry that shares a
+  body calls an unannotated helper instead.
+- The stage interface belongs to the **entry pair**, not the struct. When one
+  vertex expansion feeds several fragments, give each pair its own output type
+  and copy only the fields that fragment reads. Widening it warns
+  (`WARNING-Shader-OutputNotConsumed`) on every attribute the fragment's own
+  reads leave out, because Slang strips unread inputs from the fragment side;
+  narrowing it below what the fragment reads is `VUID-RuntimeSpirv-OpEntryPoint-08743`,
+  which is an outright violation that feeds undefined values. Check both
+  directions, not the warning count alone.
+- `discard` executes in the callee. An entry that returns a value before calling
+  the shading function skips that discard and paints pixels that should reject,
+  so a diagnostic tint must transform the function's result, never replace it.
 
 ## CPU/GPU ABI rules
 
@@ -224,6 +238,13 @@ Slang-RHI is actively refactored and does not advertise a stable public API.
 When adding a new cursor or program operation, inspect the exact dependency
 source/API used by the configured build instead of relying on examples from a
 different revision.
+
+Slang compiles at runtime, so a shader that fails to compile still passes the
+build and only fails when the application starts. After editing a shader,
+compile each touched entry point directly before launching (for example
+`slangc <file> -entry <name> -stage <stage> -target spirv`), and treat a launch
+failure whose message carries `category=slang` as a compile failure in the file
+just edited, not as an unrelated application fault.
 
 Read [program creation, source placement/staging, and failure signatures](references/programs-and-staging.md)
 for the selected integration task. Runtime assets belong under `assets/shaders/`;

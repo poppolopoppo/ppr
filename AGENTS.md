@@ -185,6 +185,13 @@ report unavailable tooling without treating its checks as passed.
 - Renderer boundary types are camera-free. Passes consume a `CameraSnapshot`
   and must not consult a mutable `Camera` while drawing; viewport and scissor
   travel per-draw on `DrawSubmission`.
+- A pass may leave work undone only by writing a defined value. `discard` writes
+  nothing, so the target keeps whatever it held — usually the previous frame.
+  A predicated skip is therefore sound only when another pass *certainly* writes
+  that sample, and "certainly" must survive every derivation of the same
+  decision: a cell-level test does not imply pixel coverage when the writer is a
+  contour renderer, and two passes that compute the same index by different
+  arithmetic can disagree on a boundary.
 - The camera/matrix contract is row-major, row-vector, left-handed, +Z-forward,
   +Y-up, with `[0,1]` depth: use `mul(float4, matrix)`, view-projection
   `view * projection`, and no backend-specific transpose or Y flip. See

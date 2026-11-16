@@ -132,6 +132,30 @@ on the same thread: unrelated work could interleave with the open scope.
 
 ## Verify usefulness and cost
 
+### Attribution rules for a captured frame
+
+Per-pass **elapsed** time is not a usable A/B signal on this hardware: three runs
+of one unchanged binary spread up to **1.8×** per pass (and 1.5× on the whole
+frame), while executed **instructions** stayed within 10%. Attribute a change
+from instruction counts, launch/thread counts, or per-cycle *rates* — never from
+a single elapsed delta. A pass under ~10% SM utilization is reporting wait time,
+not work, so its elapsed number says nothing about the change.
+
+Read the exported fields for what they are: `RelativeFrameDuration` is a
+fraction of the frame with nested markers double-counted, `*.sum` metrics are
+capture totals that fold in the occurrence count, and `.avg` metrics are the only
+per-occurrence values. Save the region's instruction count before and after, and
+keep a pass no change touched in the same capture as a control.
+
+### Isolate a visual artifact before changing anything
+
+Bisect with the running build instead of reasoning from the shader: launch with
+`--capture-frame <png> --auto-exit <frames>` and inspect the image, then repeat
+with one pass tinted to a flat colour and then with it disabled. A mark that
+takes the tint belongs to that pass; one that keeps its colour does not. Repeat a
+comparison at the same `--auto-exit` count so the world state matches, and keep
+the disabled run as the control that proves the fix rather than arguing it.
+
 For a changed subsystem, briefly record scopes added, retained, consolidated, or
 omitted and the question that choice answers. This is part of the existing task
 context, not a per-function inventory or a new tracking system.
