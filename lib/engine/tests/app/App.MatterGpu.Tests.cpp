@@ -5419,6 +5419,125 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
+    // retained Phase A sand-law characterization
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (sand_history_phase_a_characterization) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+        PPR_TEST_ASSERT(fixture.m_solver.profile().m_gravity_strength == 0.0f);
+
+        std::array<GpuParticle, 2u> particles{restParticle(), restParticle()};
+        for (u32 row = 0u; row < particles.size(); ++row) {
+            particles[row].m_material = static_cast<float>(ESourceMaterial::sand);
+            particles[row].m_position_x = 6.5f + 14.0f * static_cast<float>(row);
+            particles[row].m_log_jp = row == 0u ? 0.2f : 1.0f;
+        }
+
+        // Isolated, motionless rows: F=I, D=0, no gravity, brush or contacts.
+        // H is a hot-row field and never crosses the fixed-point grid. Both
+        // scaling factors (1/2 and 2^-n) are powers of two: halving the stored
+        // FP32 H is exact here, without underflow. 0.2f itself is NOT a power
+        // of two; the reference starts from that same rounded input value.
+        for (const u32 iterations: {2u, 5u, 10u}) {
+            fixture.replace(particles);
+            for (u32 substep = 1u; substep <= 8u; ++substep) {
+                const u64 epoch = fixture.m_solver.accounting().m_epoch;
+                fixture.finishOneSubstep(iterations);
+                PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+
+                const auto state = fixture.publishCompletedTick();
+                PPR_TEST_ASSERT(state.size() == particles.size());
+                // The observable advancement event is committed publication:
+                // one epoch per tick, not one per solver stage.
+                PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+                PPR_TEST_ASSERT(fixture.m_solver.accounting().m_substeps == 1u);
+                for (u32 row = 0u; row < state.size(); ++row) {
+                    const float expected = std::ldexp(particles[row].m_log_jp, -static_cast<int>(substep));
+                    PPR_TEST_ASSERT(state[row].m_log_jp == expected);
+
+                    // eHat = log(Sigma) - (sum(log(Sigma)) + H)/2 has
+                    // trace -H, including at F=I. eHat is not observable here;
+                    // only the committed pair (F approximately I, H=H0*2^-n)
+                    // is asserted. It exposes ledger loss at rest, not a direct
+                    // measurement of eHat or proof of a physically correct law.
+                    // F can consume grid-derived D: retain the schedule leaf's
+                    // n*1e-5 allowance (9 nodes * 9 gathers / 1e7 < 1e-5).
+                    const auto &f = state[row].m_deformation_gradient;
+                    const float bound = static_cast<float>(substep) * 1.0e-5f;
+                    PPR_TEST_ASSERT(std::abs(f.m_c0x - 1.0f) <= bound);
+                    PPR_TEST_ASSERT(std::abs(f.m_c0y) <= bound);
+                    PPR_TEST_ASSERT(std::abs(f.m_c1x) <= bound);
+                    PPR_TEST_ASSERT(std::abs(f.m_c1y - 1.0f) <= bound);
+                }
+            }
+
+            // A multi-substep tick separates history updates from publication:
+            // three halvings, but still only one committed advancement event.
+            fixture.replace(particles);
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, 3u, iterations));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            PPR_TEST_ASSERT(complete and *complete);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+
+            const auto state = fixture.publishCompletedTick();
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch + 1u);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_substeps == 3u);
+            PPR_TEST_ASSERT(state.size() == particles.size());
+            for (u32 row = 0u; row < state.size(); ++row) {
+                PPR_TEST_ASSERT(state[row].m_log_jp == particles[row].m_log_jp * 0.125f);
+            }
+        }
+
+        // Positive-history anisotropic compression, away from branch boundaries.
+        // With elasticityRatio=1 and H>0 the constraint target is F itself;
+        // diag(1, 1/2) also makes its inverse/reconstruction dyadic at D=0.
+        // Current return: e' = e - a*eHat, H'=0, trace(e')=s+a*H.
+        // The rejected candidate instead gives trace(e')=t=s+H, H'=0
+        // and e'=(t/2 +/- min(n_dev,-c*t)/sqrt(2)), a different F.
+        GpuParticle anisotropic = particles[0u];
+        anisotropic.m_deformation_gradient = {1.0f, 0.0f, 0.0f, 0.5f};
+        const auto profile = fixture.m_solver.profile();
+        PPR_TEST_ASSERT(profile.m_elasticity_ratio == 1.0f);
+        const float s = std::log(0.5f);
+        const float t = s + anisotropic.m_log_jp;
+        const float hat_x = -0.5f * t;
+        const float hat_y = s - 0.5f * t;
+        const float norm = std::sqrt(hat_x * hat_x + hat_y * hat_y);
+        const float sin_phi = std::sin(profile.m_friction_angle / 180.0f * 3.14159f);
+        const float c = 2.0f * std::sqrt(2.0f / 3.0f) * 2.0f * sin_phi / (3.0f - sin_phi);
+        const float a = (norm + c * t) / norm;
+        PPR_TEST_ASSERT(t < 0.0f and a > 0.0f and a < 1.0f);
+
+        for (const u32 iterations: {2u, 5u, 10u}) {
+            fixture.replace({&anisotropic, 1u});
+            fixture.finishOneSubstep(iterations);
+            const auto state = fixture.publishCompletedTick();
+            PPR_TEST_ASSERT(state.size() == 1u);
+            PPR_TEST_ASSERT(state[0u].m_log_jp == 0.0f);
+
+            // 2e-5 covers the <=8.1e-6 grid-transfer scale plus FP32
+            // SVD/log/exp reconstruction for this bounded, unclipped fixture.
+            constexpr float kProjectionTolerance = 2.0e-5f;
+            const auto &f = state[0u].m_deformation_gradient;
+            PPR_TEST_ASSERT(std::abs(f.m_c0x - std::exp(-a * hat_x)) <= kProjectionTolerance);
+            PPR_TEST_ASSERT(std::abs(f.m_c1y - std::exp(s - a * hat_y)) <= kProjectionTolerance);
+            PPR_TEST_ASSERT(std::abs(f.m_c0y) <= kProjectionTolerance);
+            PPR_TEST_ASSERT(std::abs(f.m_c1x) <= kProjectionTolerance);
+
+            const float ledger = std::log(f.m_c0x * f.m_c1y - f.m_c0y * f.m_c1x) + state[0u].m_log_jp;
+            PPR_TEST_ASSERT(std::abs(ledger - (s + a * anisotropic.m_log_jp)) <= kProjectionTolerance);
+            PPR_TEST_ASSERT(std::abs(ledger - t) > 100.0f * kProjectionTolerance);
+        }
+    };
+
+    // ------------------------------------------------------------------
     // admitted iteration schedule
     // ------------------------------------------------------------------
 
@@ -7472,6 +7591,7 @@ namespace pP::tests {
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::supported_iteration_counts_validate_before_work,
                 detail::MatterGpu::iteration_roles_integrate_once_per_substep,
+                detail::MatterGpu::sand_history_phase_a_characterization,
                 detail::MatterGpu::odd_even_schedule_preserves_sparse_sources,
                 detail::MatterGpu::iteration_count_gpu_cost_diagnostic,
                 detail::MatterGpu::iteration_count_correctness_diagnostic,

@@ -160,21 +160,21 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # lists are explicit tokens, not group prefixes, so each entry's worst observed
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
-# leaf: 3 terrain + 9 contact + 12 material + 10 grid + 3 constitutive + 4
-# resident + 3 schedule + 1 cost + 1 correctness + 1 precision = 47
+# leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
+# resident + 3 schedule + 1 cost + 1 correctness + 1 precision = 49
 # `app/matter_gpu` leaves, and the resident list also holds one
 # `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
 # their own entries outside `matter_fast`, below. The two whole-grid terrain
 # leaves are separated from the rest of the contact geometry because their joint
 # worst observed bound co-resident with the contact set was 267.62 s (89 % of
-# 300 s). The material list measures 880 characters; it is split away from the
+# 300 s). The material list measures 933 characters; it is split away from the
 # constitutive and schedule lists to stay inside the 1024-character string domain
 # the CLI filter enforces.
 set(ppr_matter_terrain_filter "app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact,app/matter_gpu/transport_exit_repair_is_bounded_and_a_no_op_when_certified")
 
 set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,app/matter_gpu/bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,app/matter_gpu/compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,app/matter_gpu/terrain_endpoint_response_and_complete_boundary_search,app/matter_gpu/wave_boundary_search_matches_serial_for_full_mixed_groups,app/matter_gpu/moving_body_static_limit_translation_rotation_and_one_way_contact,app/matter_gpu/body_admission_rejection_and_same_epoch_contact_publication,app/matter_gpu/predicted_body_slices_select_distinct_substep_rows,app/matter_gpu/guardian_blocks_normal_and_halves_tangent_analytically")
 
-set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication,app/matter_gpu/shared_grid_coupling_precedes_support_contact_diagnostic,app/matter_gpu/mean_occupancy_gate_blind_spot_census_diagnostic")
+set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication,app/matter_gpu/shared_grid_coupling_precedes_support_contact_diagnostic,app/matter_gpu/mean_occupancy_gate_blind_spot_census_diagnostic,app/matter_gpu/sand_history_phase_a_characterization")
 
 # The iteration schedule owns its own entry: the admitted-count admission leaf and
 # the two schedule leaves prove the stage roles, the single integration per

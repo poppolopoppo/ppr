@@ -1,7 +1,7 @@
 # PB-MPM baseline and multi-layer results
 
 **Plan:** [PB-MPM baseline correction and multi-layer plan](../../.opencode/plan/2026-11-15-pbmpm-baseline-and-multilayer.md)
-**Status:** Phase A in progress. A0, A2 (constitutive and precision), A3 and A4 complete; A1 stage 1 complete with stage 2 unbuilt; A5 blocked pending a plan-owner decision; A6 pending.
+**Status:** Phase A in progress. A0, A2 (constitutive and precision), A3 and A4 complete; A1 stage 1 complete with stage 2 unbuilt; A5 closed as a documented rejection for Phase A, reconsider at B1; A6 pending.
 **Identity:** branch `pbmpm/phase-a` in worktree `/home/bek/.local/share/opencode/worktree/4bb70a/pbmpm-phase-a`, base `61df61b954dc804fdf571e10ee42222e6be7fbbd`. Solver, matter, shader and game-factory sources are identical to the planning pin `07b9801ca3fc0b8792978eea42dbbd631560d9d7`; later commits in this checkout are renderer/lighting work.
 
 ## Host and configuration
@@ -87,7 +87,7 @@ No test was removed. The census found no entry whose contract is proven elsewher
 ## Open items
 
 - A zero-particle tick dispatches zero-size compute groups (validation error) and completes without a particle snapshot; this pre-existing issue is independent of K and should be rejected at admission or handled explicitly.
-- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator) is not started. A2 precision is characterized but its supported-motion-range question remains open; A5 is blocked on a plan-owner decision. See the sections below.
+- A1 stage 2 (Elastic/Sand/Visco, K5/K10, N-substep snapshots, committed generator) is not started. A2 precision is characterized but its supported-motion-range question remains open; A5 is rejected for Phase A and reopens at B1. See the sections below.
 - D3D12/Windows verification is unavailable on this host and remains an unrun gate.
 - Only the Debug/ASan/validation configuration has been measured; Release timing and cost evidence is pending.
 
@@ -307,17 +307,46 @@ Rows are single particles or affine patches with no contacts, so the measurement
 - The leaf asserts no motion magnitude; a green exit code establishes that the structure runs and stays finite, not that motion is correct.
 - The supported motion range remains an **open question**: slow motion below the half-ULP floor is lost, and quantization costs about 0.4 % per substep at 0.1 m/s. Neither limit is characterized as acceptable for any gameplay range yet.
 
-## A5 — sand history derivation
+## A5 — documented rejection for Phase A; reconsider at B1
 
-`docs/pbmpm-sand-history-derivation.md` is the A5 gate artifact. Its conclusions, in the terms it states them:
+[Sand history derivation](pbmpm-sand-history-derivation.md) is the A5 gate artifact. Its original blocked recommendation is superseded by this plan-owner disposition: **A5 is closed as a documented rejection for Phase A; the current law is retained.** Its analytical conclusions remain:
 
 - The candidate conserves the `Σ log σ + H` ledger on the unclipped domain; the identity holds in every return branch, but only for that constitutive return.
 - Dissipativity needs explicit constitutive assumptions: `μ > 0`, `K₂ > 0`, `c ≥ 0`, `H ≥ 0`, and the Hencky energy with no extra stored energy in the history. It is not unconditional, and negative imported history breaks it.
 - `elasticityRatio` is not justified as a modulus ratio. In `constraint` it is a blend weight between a singular-value target and the determinant-normalized target, not a measured `λ/μ`; the yield coefficient needs an explicit or calibrated value instead.
 - The `logJp == 0` constraint branch interacts: for every `t < 0` output the clamp necessarily changes at least one singular value, so the ledger cannot be assumed unchanged across the combined constraint/return step.
-- Implementation is **blocked pending a plan-owner decision** on the yield coefficient (effective 2D versus true plane strain, friction calibration, and the modulus ratio or calibrated `c`) and on the physical meaning and admissible domain of `H`.
+- Replacement requires decisions on the yield coefficient (effective 2D versus true plane strain, friction calibration, and the modulus ratio or calibrated `c`) and on the physical meaning and admissible domain of `H`. Phase A does not make these constitutive choices implicitly.
 
-No A5 code was written: the artifact is analysis only, with no shader, host, test or build change.
+The retained limitation is exact: at zero deformation, positive history obeys
+`H_n = H_0 * 2^-n`, so `logJp` is **not conserved plastic log-volume**.
+`eHat = log(Sigma) - (sum(log(Sigma)) + H)/2` has trace `-H`, not zero.
+The measured sand response is K-dependent: the original settling top heights
+were 17.79/20.42/21.44 at K2/K5/K10; the rotation-free measurement retains
+distortion at K2 while K5/K10 project every row (see A4). Neither result
+establishes physical refinement or sand correctness.
+
+`app/matter_gpu/sand_history_phase_a_characterization` now pins the retained
+law through the production resident path: isolated positive histories 0.2 and
+1.0 halve exactly for eight substeps at K2/K5/K10, with the committed `F`
+remaining identity within the transfer allowance. The internal `eHat` is not
+read back: the observable assertion is the committed `(F, logJp)` pair and
+its ledger loss, not a direct measurement of the internal trace. An anisotropic
+`F=diag(1,0.5), H=0.2` case pins the current projection and rejects the
+candidate's conserved ledger. Three-substep ticks also pin three halvings but
+only one epoch advancement per tick. The leaf is registered exactly once in
+`matter_material_gpu` (`matter_fast`). It is authored, not yet built or executed
+in this edit-only handoff; no shader or host law was changed.
+
+The conformance amplification finding strengthens the case for **replacement
+rather than repair**: sub-ulp differences grow by 2–4 orders even without a
+branch flip; sand K10 `D.c0x` diverged by 2.34e-3 against a 7.1e-4 cap and
+its numerical comparison is structural-only. This evidence does not exclude
+a transcription defect or justify silently widening a correctness claim.
+
+**Reopen at B1, before sand property semantics are frozen, or earlier on a
+demonstrated supported-workload failure.** The gate artifact above and the
+differential trace are inputs to that decision. Success here means the
+characterization catches a silent change; it does not certify the retained law.
 
 ## A6 — acceptance at frozen identity
 
@@ -341,7 +370,7 @@ All four runs inside their ceilings (fast ≤ 420 s, long ≤ 3120 s). Format ch
 | A2 constitutive domains + precision | complete; precision limits characterized (see above) and the supported motion range remains open |
 | A3 schedule + persistence | complete; K ∈ {2,5,10}, envelope v7, fresh worlds K5 |
 | A4 operating point | decided: K5 by reference-baseline decision, caveats recorded |
-| A5 sand history | **blocked pending a plan-owner decision** (yield coefficient convention and the admissible domain/meaning of `H`) |
+| A5 sand history | **closed as a documented rejection for Phase A; current law retained, reconsider at B1** (characterization added after this frozen identity; execution pending) |
 | A6 acceptance | Linux/Debug+Release gates green at the frozen identity; **Windows/D3D12 unrun** |
 
 Not claimed: upstream K5/K10 conformance, gameplay-range acceptance for the precision limits, A5 correction, and cross-platform validation.
@@ -606,7 +635,7 @@ branch**. Divergence grows without a branch flip; widening the tolerance again
 would make comparison meaningless. **Sand K10 word comparison is therefore
 disabled rather than tolerated.** This is the strongest evidence so far that
 the sand law needs **replacement rather than repair**, feeding directly into
-the **blocked A5 decision**; it does not rule out a transcription defect.
+the **A5 rejection for Phase A and B1 reconsideration**; it does not rule out a transcription defect.
 
 Sand K10 is **structural-only**: the case executes, every hot/cold word must be
 finite, inventory (mass, volume, material, colour, enabled) remains exact, and
@@ -656,7 +685,8 @@ edit-only task and does not establish a conformance pass.
 | Ruling | Rationale | Envelope / scope | Cost if wrong |
 |---|---|---|---|
 | Decision B — retain measured constitutive-state bound for remaining comparisons | Initial elastic/sand divergence exceeds derived caps; investigation remains open | `5e-4 * max(1, abs(expected))`, in addition to the derived cap, for elastic K2/K5/K10 and sand K2/K5 solid `F`, `D`, and sand `logJp`; flipped words bypass the budget, with at most 2 flipped rows | A real defect below the budget can pass; differential trace remains B1's first task |
-| Exclude sand K10 from word comparison; structural-only | K2 `F` 7.75e-6; K5 one flipped row; K10 same-branch `F` 2.58e-4 and `D` 2.34e-3 exceed defensible comparison; replacement rather than repair feeds blocked A5 | Execute, require finite words and exact inventory, bound branch flips to 2 rows, report maximum divergence without asserting it; explicit exclusion log every run | A sand K10 transcription error would go undetected until the differential trace or a gameplay symptom; native execution of this ruling remains pending |
+| Exclude sand K10 from word comparison; structural-only | K2 `F` 7.75e-6; K5 one flipped row; K10 same-branch `F` 2.58e-4 and `D` 2.34e-3 exceed defensible comparison; replacement rather than repair supports B1 reconsideration | Execute, require finite words and exact inventory, bound branch flips to 2 rows, report maximum divergence without asserting it; explicit exclusion log every run | A sand K10 transcription error would go undetected until the differential trace or a gameplay symptom; native execution of this ruling remains pending |
+| A5 closed as a documented rejection for Phase A; retain current sand law | Candidate needs constitutive/constraint-policy choices; history halves at rest, eHat has trace -H, measured sand response depends on K, and conformance shows same-branch amplification | `sand_history_phase_a_characterization` pins the production committed pair and anisotropic projection at K2/K5/K10; reopen at B1 before sand property semantics freeze, or earlier on demonstrated supported-workload failure; gate artifact: `pbmpm-sand-history-derivation.md` | A wrong law stays shipped until B1. Success is a regression that catches a silent change, not certification of correctness; build/runtime validation of the new leaf remains pending |
 
 ### Registration and execution handoff
 
@@ -709,6 +739,6 @@ Conformance: `App.MatterFork.Upstream.h` (199 KB) carries 15 upstream cases — 
 
 Measured solid divergence: sand `F.c0x` 7.75e-6 at K2, 2.58e-4 at K10; sand `D.c0x` 2.34e-3 at K10; elastic `F.c1x` 1.51e-5 at K2. The 5e-4 measured bound covers elastic and sand K2/K5; sand K10 is excluded from word comparison because its return amplifies sub-ulp differences by 2–4 orders **without a branch flip**, which no tolerance can honestly cover. Each run logs `upstream sand-k10 comparison=structural-only reason=ill-conditioned-return`.
 
-**This is the strongest evidence so far that the sand law needs replacement rather than repair**, and it feeds the blocked A5 decision.
+**This is the strongest evidence so far that the sand law needs replacement rather than repair**, supporting the documented A5 rejection for Phase A and reconsideration at B1.
 
 Gate note: after A1 the fast gate is green (24/24) but measured 551 s, with entries uniformly ~2× their exclusive reference (terrain 85→178 s, material 33→92 s) while another session held the GPU. The 420 s ceiling is therefore unchanged and unproven at this identity; an exclusive re-measurement is required before quoting it.

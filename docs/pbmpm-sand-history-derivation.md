@@ -1,6 +1,11 @@
 # A5 gate: sand plastic-history law
 
-**Disposition: blocked pending constitutive and constraint-policy choices.** The
+**Disposition: rejected for Phase A; current law retained, reconsider at B1.**
+The plan owner's [ruling and characterization](pbmpm-baseline-and-multilayer-results.md#a5--documented-rejection-for-phase-a-reconsider-at-b1)
+supersede this artifact's original blocked recommendation. Reopen before sand
+property semantics are frozen at B1, or earlier on a demonstrated
+supported-workload failure. Constitutive and constraint-policy choices remain
+prerequisites for replacement. The
 candidate conserves a scalar log-volume ledger and is dissipative under the
 conditions below. Those results do not establish compatibility with the current
 PB-MPM constraint. This is an analysis artifact only; no implementation or
