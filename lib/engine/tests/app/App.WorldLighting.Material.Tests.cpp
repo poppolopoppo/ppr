@@ -2025,18 +2025,53 @@ namespace pP::tests::detail::WorldLightingMaterial {
         palette[4u].m_emissive_strength = 1.0f;
         palette[5u].m_emissive_strength = 1.0f;
 
-        const std::array<u32, 7u> cells{1u, 2u, 3u, 4u, 0u, 1u, 5u};
-        const std::array<u32, 7u> winners{
-            0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0u, 0xffffffffu};
-        const std::array<std::array<float, 2u>, 10u> positions{
-            {{0.5f, 0.5f}, {1.5f, 0.5f}, {2.5f, 0.5f}, {3.5f, 0.5f}, {4.5f, 0.5f}, {5.5f, 0.5f}, {6.5f, 0.5f},
-                {-0.001f, 0.5f}, {1024.0f, 0.5f}, {0.5f, 1024.0f}}};
+        // Separate 3x3 neighbourhoods keep the original centre-cell cases
+        // independent. Every untouched neighbour is valid opaque terrain.
+        constexpr u32 kCoverageProbeCount = 28u;
+        constexpr u32 kWorldEdge = WorldLightingPass::kWorldEdge;
+        std::vector<u32> cells(WorldLightingPass::kCellCount, 1u);
+        std::vector<u32> winners(WorldLightingPass::kCellCount, 0xffffffffu);
+        std::array<std::array<float, 2u>, kCoverageProbeCount> positions{};
+        for (u32 index = 0u; index < positions.size(); ++index) {
+            positions[index] = {static_cast<float>(4u + 4u * index) + 0.5f, 4.5f};
+        }
+
+        const auto probe_cell = [](const u32 probe) { return 4u * kWorldEdge + 4u + 4u * probe; };
+        constexpr std::array<u32, 7u> centre_materials{1u, 2u, 3u, 4u, 0u, 1u, 5u};
+        for (u32 index = 0u; index < centre_materials.size(); ++index) {
+            cells[probe_cell(index)] = centre_materials[index];
+        }
+
+        winners[probe_cell(5u)] = 0u;
+        positions[7u] = {-0.001f, 4.5f};
+        positions[8u] = {1024.0f, 4.5f};
+        positions[9u] = {4.5f, 1024.0f};
+
+        // Reject each of the nine positions independently, including all eight
+        // neighbours of an opaque centre. Diagonal omissions must also draw.
+        for (u32 offset = 0u; offset < 9u; ++offset) {
+            const i32 dx = static_cast<i32>(offset % 3u) - 1;
+            const i32 dy = static_cast<i32>(offset / 3u) - 1;
+            const i32 cell = static_cast<i32>(probe_cell(10u + offset)) + dy * static_cast<i32>(kWorldEdge) + dx;
+            cells[static_cast<u32>(cell)] = 0u;
+        }
+
+        cells[probe_cell(19u) + 1u] = 2u;
+        winners[probe_cell(20u) + kWorldEdge] = 0u;
+        cells[probe_cell(21u) - 1u] = 3u;
+        cells[probe_cell(22u) - kWorldEdge] = 4u;
+        positions[23u] = {0.5f, 100.5f};
+        positions[24u] = {1023.5f, 100.5f};
+        positions[25u] = {100.5f, 0.5f};
+        positions[26u] = {100.5f, 1023.5f};
+        cells[probe_cell(27u) + kWorldEdge + 1u] = 5u;
+
         auto &device = fixture.device();
         auto visuals = makeBuffer(device, sizeof(palette), sizeof(GridTerrainVisual), palette.data());
-        auto resolved_cells = makeBuffer(device, sizeof(cells), sizeof(u32), cells.data());
-        auto best_rows = makeBuffer(device, sizeof(winners), sizeof(u32), winners.data());
+        auto resolved_cells = makeBuffer(device, cells.size() * sizeof(u32), sizeof(u32), cells.data());
+        auto best_rows = makeBuffer(device, winners.size() * sizeof(u32), sizeof(u32), winners.data());
         auto points = makeBuffer(device, sizeof(positions), sizeof(positions[0]), positions.data());
-        auto results = makeBuffer(device, 10u * sizeof(u32), sizeof(u32), nullptr, true);
+        auto results = makeBuffer(device, kCoverageProbeCount * sizeof(u32), sizeof(u32), nullptr, true);
 
         auto program = fixture.makeProgram(
             std::filesystem::current_path() / "shaders" / "tests" / "background_coverage_probe.slang",
@@ -2084,12 +2119,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
             encoder->setBufferState(results, rhi::ResourceState::CopySource);
             fixture.submit(*encoder);
-            std::array<u32, 10u> observed{};
+            std::array<u32, kCoverageProbeCount> observed{};
             PPR_TEST_ASSERT(not make_error_code(device.readBuffer(results, 0u, sizeof(observed), observed.data())));
 
             for (u32 index = 0u; index < observed.size(); ++index) {
-                const bool expected = (scenario == 0u or scenario == 3u) and
-                                      (index == 0u or index == 6u or (scenario == 3u and index == 5u));
+                const bool expected =
+                    (scenario == 0u or scenario == 3u) and
+                    (index == 0u or index == 6u or index == 27u or (scenario == 3u and (index == 5u or index == 20u)));
                 PPR_TEST_ASSERT(observed[index] == static_cast<u32>(expected));
             }
         }
