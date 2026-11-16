@@ -318,3 +318,30 @@ Rows are single particles or affine patches with no contacts, so the measurement
 - Implementation is **blocked pending a plan-owner decision** on the yield coefficient (effective 2D versus true plane strain, friction calibration, and the modulus ratio or calibrated `c`) and on the physical meaning and admissible domain of `H`.
 
 No A5 code was written: the artifact is analysis only, with no shader, host, test or build change.
+
+## A6 — acceptance at frozen identity
+
+Identity: HEAD `5355f3ee9716d77cdeecb9feca6e0a74b4fefcd2`; shader source set sha256 `4154830028c2a0a634c9144d03be466237efb451c7fc2a33c1fb5207da225b0b`; `engine.tests.app` dev `bcbfbdf666c55795`, Release `26a0cfc50e4978a7`; `game.tests` `2acf41eee25c2955`. GPU utilisation 6 % before and 19 % after (no competing compute).
+
+| Run | Result | Wall |
+|---|---|---:|
+| `matter_fast` #1 | 24/24 passed | 316 s |
+| `matter_fast` #2 | 24/24 passed | 315 s |
+| `matter_fast` #3 | 24/24 passed | 330 s |
+| `matter_long` | 2/2 passed | 2378 s |
+
+All four runs inside their ceilings (fast ≤ 420 s, long ≤ 3120 s). Format check clean; semantic style 0 blocking on all 16 changed C++ files. Both presets build (`clang-dev`, `clang-rel`).
+
+**Phase A status at this identity**
+
+| Task | State |
+|---|---|
+| A0 suite census, gates, budgets | complete, green |
+| A1 upstream harness | stage 1+2 harness complete and deterministic **outside** the repo; in-repo generator and K5/K10 conformance fixtures not yet provided |
+| A2 constitutive domains + precision | complete; precision limits characterized (see above) and the supported motion range remains open |
+| A3 schedule + persistence | complete; K ∈ {2,5,10}, envelope v7, fresh worlds K5 |
+| A4 operating point | decided: K5 by reference-baseline decision, caveats recorded |
+| A5 sand history | **blocked pending a plan-owner decision** (yield coefficient convention and the admissible domain/meaning of `H`) |
+| A6 acceptance | Linux/Debug+Release gates green at the frozen identity; **Windows/D3D12 unrun** |
+
+Not claimed: upstream K5/K10 conformance, gameplay-range acceptance for the precision limits, A5 correction, and cross-platform validation.
