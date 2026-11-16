@@ -1503,10 +1503,14 @@ export namespace pP {
         [[nodiscard]] std::error_code admitParticleSeeds_(rhi::IDevice &device);
         // Liveness of the retained committed view and the world it belongs to.
         [[nodiscard]] bool retainedGpuParticleCurrent_() const noexcept;
+        // Counts this frame's liveness outcome in the hold window and reports the
+        // two transitions the window can prove: saturation, and recovery from it.
+        // Neither the ordinary alternating lag nor its end prints a line.
+        void noteParticleHold_(bool held);
         // The held preparation: no pack, no solver buffer read, and the retained
         // packed rows and stable IDs stay drawable. A never-packed hold presents no
-        // particles. The per-frame detail is debug; a hold that persists past
-        // `kParticleHoldWarnFrames` warns exactly once per episode.
+        // particles. A contiguous hold past `kParticleHoldWarnFrames` warns exactly
+        // once per episode, and a saturated window warns once more.
         [[nodiscard]] std::error_code holdGpuParticles_(const PreRenderContext &context);
         // Held-view recull: reruns the existing rank/scan/scatter against the
         // retained packed rows and their retained count with the current camera
@@ -2084,11 +2088,17 @@ export namespace pP {
             // world-scoped so a world swap cannot inherit another world's hold.
             EParticlePresentation m_particle_presentation{EParticlePresentation::seeds};
             // Consecutive held preparations since the last current publication.
-            // While the solver runs this is normally a one-frame lag, so the
-            // per-frame entry/exit is debug detail; a hold that persists past
-            // `kParticleHoldWarnFrames` warns once and recovers with one info.
-            // Expiry is a publication, a world event or matter detach (no timeout).
+            // While the solver runs this is normally a one-frame lag, so the streak
+            // only catches a contiguous stall; `kParticleHoldWindowFrames` judges
+            // the lag that never grows a streak. Expiry is a publication, a world
+            // event or matter detach (no timeout).
             u64 m_particle_hold_attempts{};
+            // Rolling liveness window: frames observed, of those held, and whether
+            // the last complete window was saturated. World-scoped like the streak,
+            // so a world swap cannot inherit another world's verdict.
+            u64 m_particle_hold_window_frames{};
+            u64 m_particle_hold_window_held{};
+            bool m_particle_hold_saturated{};
             // The one admitted density lane, derived from this world's palette and
             // the published metadata at every particle preparation.
             ParticleSurfaceLane m_particle_surface{};

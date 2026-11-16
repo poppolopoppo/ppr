@@ -1595,11 +1595,6 @@ struct ParticleVertexOutput {
     // normalisation. Only the splat entry reads it; the direct entries leave the
     // neutral identity.
     nointerpolation float4 conic:TEXCOORD11;
-    // The row's own reference radius r in world metres, the r of V = pi r^2, the
-    // reference area the density kernel normalises to. Only the presence marker
-    // reads it, to project that area into content pixels for the record's energy
-    // channel; every other entry carries it without using it.
-    nointerpolation float radius_m:TEXCOORD12;
 };
 
 // Shared particle quad expansion. `surface` selects the surface reconstruction
@@ -1740,19 +1735,50 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     output.surface_tangent=surface_tangent;
     output.surface_strength=surface_strength;
     output.conic=conic;
-    output.radius_m=particle.m_radius_m;
     return output;
 }
 
 StructuredBuffer<uint> g_particle_ids;
 
-ParticleVertexOutput particleVertex(uint vertex,uint instance) {
-    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0,0.0);
+// The three direct class draws (standard, reactive and spatial) all read the
+// clip position, the native-cell offset, the material word, the seeded texture
+// context and the quad-local offset, and nothing else. Their shared vertex entry
+// therefore declares only those: every output of the stage interface is consumed
+// by the fragment, so no write is discarded and the unwritten fields cost no
+// interpolation. The quad itself is still the one shared expansion.
+struct ParticleDirectVertexOutput {
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 uv:TEXCOORD1;
+    nointerpolation uint material:TEXCOORD2;
+    nointerpolation uint uv_seed:TEXCOORD3;
+    float2 local_m:TEXCOORD4;
+};
+
+ParticleDirectVertexOutput particleVertex(uint vertex,uint instance) {
+    ParticleVertexOutput expanded=particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0,0.0);
+    ParticleDirectVertexOutput output;
+    output.position=expanded.position;
+    output.fine_position=expanded.fine_position;
+    output.uv=expanded.uv;
+    output.material=expanded.material;
+    output.uv_seed=expanded.uv_seed;
+    output.local_m=expanded.local_m;
+    return output;
 }
 
 [shader("vertex")]
-ParticleVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+ParticleDirectVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
     return particleVertex(vertex,g_particle_ids[instance]);
+}
+
+// The solid and liquid fragments read the whole attribute set, so their pipeline
+// needs a vertex entry that declares all of it. Sharing the reduced direct output
+// above would leave those fragments reading locations the vertex never writes,
+// which the Vulkan interface rule forbids outright rather than warning about.
+[shader("vertex")]
+ParticleVertexOutput vertexParticleIndirectFull(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0,0.0);
 }
 
 // ------------------------------------------------------------------
@@ -1812,7 +1838,7 @@ float particleOpaqueCoverage(ParticleTerrainFootprint footprint, bool point_samp
     return nativeOpaqueMaterial(cell) != 0u ? 1.0 : 0.0;
 }
 
-float4 shadeParticleReactive(ParticleVertexOutput input,
+float4 shadeParticleReactive(ParticleDirectVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
     geometric_support=0;
@@ -1871,7 +1897,7 @@ float4 shadeParticleReactive(ParticleVertexOutput input,
     return float4(point_sample?color*opacity:color,opacity);
 }
 
-float4 shadeParticle(ParticleVertexOutput input,
+float4 shadeParticle(ParticleDirectVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample) {
     float unused_reactive;
@@ -1879,14 +1905,14 @@ float4 shadeParticle(ParticleVertexOutput input,
 }
 
 [shader("fragment")]
-float4 fragmentParticleMain(ParticleVertexOutput input,
+float4 fragmentParticleMain(ParticleDirectVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler):SV_Target {
     return shadeParticle(input,g_textures,g_sampler,false);
 }
 
 [shader("fragment")]
-float4 fragmentParticleSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+float4 fragmentParticleSpatial(ParticleDirectVertexOutput input,uint index:SV_SampleIndex,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler):SV_Target {
     // Evaluate the entry's actual varyings before mutating either member.
@@ -1902,7 +1928,7 @@ float4 fragmentParticleSpatial(ParticleVertexOutput input,uint index:SV_SampleIn
 }
 
 [shader("fragment")]
-GridReactiveOutput fragmentParticleReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+GridReactiveOutput fragmentParticleReactive(ParticleDirectVertexOutput input,uint index:SV_SampleIndex,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler){
     // Evaluate the entry's actual varyings before mutating either member.
@@ -2327,10 +2353,29 @@ bool terrainExcludesDensity(float2 fine_position) {
 // screen-space floor, because the reconstruction support is narrower than a pixel
 // as soon as the field can no longer resolve the row: a candidate must exist even
 // where no density texel does.
+
+// The marker fragment reads the centre offset, the material word and the
+// reference radius, so its vertex entry declares exactly those and SV_Position.
+// Every declared output is consumed: the stage interface carries no attribute the
+// fragment would discard. The geometry is still the one shared expansion.
+struct ParticleSurfaceMarkerVertexOutput {
+    float4 position:SV_Position;
+    nointerpolation uint material:TEXCOORD0;
+    float2 local_m:TEXCOORD1;
+    nointerpolation float radius_m:TEXCOORD2;
+};
+
 [shader("vertex")]
-ParticleVertexOutput vertexParticleSurfaceMarker(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
-    return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_phase_mask,
-        g_particle_surface.m_pixel_world,kParticleMarkerQuadRadius*g_particle_surface.m_pixel_world);
+ParticleSurfaceMarkerVertexOutput vertexParticleSurfaceMarker(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    ParticleVertexOutput expanded=particleVertexCommon(vertex,g_particle_ids[instance],true,
+        g_particle_surface.m_phase_mask,g_particle_surface.m_pixel_world,
+        kParticleMarkerQuadRadius*g_particle_surface.m_pixel_world);
+    ParticleSurfaceMarkerVertexOutput output;
+    output.position=expanded.position;
+    output.material=expanded.material;
+    output.local_m=expanded.local_m;
+    output.radius_m=g_particles[g_particle_ids[instance]].m_radius_m;
+    return output;
 }
 
 struct ParticleSurfaceMarkerOutput {
@@ -2349,7 +2394,7 @@ struct ParticleSurfaceMarkerOutput {
 // marker that it applies to the field, so an occluded dot cannot cross an opaque
 // cell, and a marker never influences the label or the density.
 [shader("fragment")]
-ParticleSurfaceMarkerOutput fragmentParticleSurfaceMarker(ParticleVertexOutput input) {
+ParticleSurfaceMarkerOutput fragmentParticleSurfaceMarker(ParticleSurfaceMarkerVertexOutput input) {
     ParticleSurfaceMarkerOutput output;
     output.m_record=float4(0.0);
     output.m_depth=1.0;
@@ -2393,13 +2438,52 @@ ParticleSurfaceMarkerOutput fragmentParticleSurfaceMarker(ParticleVertexOutput i
 // label selection
 // ------------------------------------------------------------------
 
-// One shared splat vertex for the selection and accumulation passes: the two
-// passes rasterise exactly the same rows, so the label the second pass reads is
-// the winner the first pass stored for that same footprint.
+// The selection and accumulation passes rasterise exactly the same rows, so the
+// label the second pass reads is the winner the first pass stored for that same
+// footprint. They read different attributes, though, so each declares only its
+// own: an auxiliary pass must not publish an output its fragment discards.
+struct ParticleSurfaceSelectVertexOutput {
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 local_m:TEXCOORD1;
+    nointerpolation uint material:TEXCOORD2;
+    nointerpolation float4 conic:TEXCOORD3;
+};
+
 [shader("vertex")]
-ParticleVertexOutput vertexParticleSurfaceSplat(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
-    return particleVertexCommon(vertex,g_particle_ids[instance],true,g_particle_surface.m_phase_mask,
-        g_particle_surface.m_pixel_world,0.0);
+ParticleSurfaceSelectVertexOutput vertexParticleSurfaceSelect(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    ParticleVertexOutput expanded=particleVertexCommon(vertex,g_particle_ids[instance],true,
+        g_particle_surface.m_phase_mask,g_particle_surface.m_pixel_world,0.0);
+    ParticleSurfaceSelectVertexOutput output;
+    output.position=expanded.position;
+    output.fine_position=expanded.fine_position;
+    output.local_m=expanded.local_m;
+    output.material=expanded.material;
+    output.conic=expanded.conic;
+    return output;
+}
+
+struct ParticleSurfaceAccumulateVertexOutput {
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 local_m:TEXCOORD1;
+    nointerpolation uint uv_seed:TEXCOORD2;
+    nointerpolation uint canonical:TEXCOORD3;
+    nointerpolation float4 conic:TEXCOORD4;
+};
+
+[shader("vertex")]
+ParticleSurfaceAccumulateVertexOutput vertexParticleSurfaceSplat(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    ParticleVertexOutput expanded=particleVertexCommon(vertex,g_particle_ids[instance],true,
+        g_particle_surface.m_phase_mask,g_particle_surface.m_pixel_world,0.0);
+    ParticleSurfaceAccumulateVertexOutput output;
+    output.position=expanded.position;
+    output.fine_position=expanded.fine_position;
+    output.local_m=expanded.local_m;
+    output.uv_seed=expanded.uv_seed;
+    output.canonical=expanded.canonical;
+    output.conic=expanded.conic;
+    return output;
 }
 
 // One fragment per raster texel. A candidate is eligible only if at least one of
@@ -2416,7 +2500,7 @@ struct ParticleSurfaceSelectionOutput {
 };
 
 [shader("fragment")]
-ParticleSurfaceSelectionOutput fragmentParticleSurfaceSelect(ParticleVertexOutput input) {
+ParticleSurfaceSelectionOutput fragmentParticleSurfaceSelect(ParticleSurfaceSelectVertexOutput input) {
     ParticleSurfaceSelectionOutput output;
     output.m_label=input.material;
     output.m_depth=1.0;
@@ -2476,7 +2560,7 @@ struct ParticleSurfaceGradients {
 // context, never at the quadrature points (those integrate weight only) and never
 // through the response (lighting, emission and refraction are deferred to the
 // composite). No CH, BRDF or backdrop input is read here.
-ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput input,uint label,
+ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleSurfaceAccumulateVertexOutput input,uint label,
     ParticleSurfaceGradients gradients,StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler) {
     ParticleSurfaceAttributeOutput output;
@@ -2530,7 +2614,7 @@ ParticleSurfaceAttributeOutput particleSurfaceAccumulate(ParticleVertexOutput in
 }
 
 [shader("fragment")]
-ParticleSurfaceAttributeOutput fragmentParticleSurfaceAccumulate(ParticleVertexOutput input,
+ParticleSurfaceAttributeOutput fragmentParticleSurfaceAccumulate(ParticleSurfaceAccumulateVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) {
     // Derivatives first, unconditionally: the label below is per texel and may

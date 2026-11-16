@@ -468,7 +468,7 @@ namespace pP {
         // so each entry declares only the inputs it reads.
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
-            create("vertexParticleSurfaceSplat", "fragmentParticleSurfaceSelect", m_particle_surface_select_program));
+            create("vertexParticleSurfaceSelect", "fragmentParticleSurfaceSelect", m_particle_surface_select_program));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass,
             create("vertexParticleSurfaceMarker", "fragmentParticleSurfaceMarker", m_particle_surface_marker_program));
