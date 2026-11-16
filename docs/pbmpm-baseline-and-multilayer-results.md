@@ -694,3 +694,21 @@ reconstructed all five seed arrays, and matched all fifteen seed/hot/cold
 projections against source JSON. A source census matched all eleven
 fork leaves to the eleven unique CMake tokens. These are artifact/style checks,
 not GPU numerical-conformance evidence.
+
+## A1 — landed: vendored generator and K2/K5/K10 conformance
+
+`scripts/pbmpm/` (276 KB, 31 files) now holds the offline oracle tool: upstream sources vendored byte-identically at `61749b6c2d2631ed243f86882752ba43196f2de7` with per-file sha256 in `upstream/README.md`, the BSD-3-Clause notice, the compute-only `src/gpu.js` replacement marked as modified, `run.mjs`/`stage2.mjs` runners with no absolute host paths, pinned `webgpu@0.6.2` in `package.json`, and the invocation/determinism contract in the README. Generation is offline and never part of a build or gate.
+
+Conformance: `App.MatterFork.Upstream.h` (199 KB) carries 15 upstream cases — four families plus one interacting mixed case (liquid 4×4 adjacent to sand 4×4 with an overlapping elastic patch, one-cell spacing against a 1.5-cell support radius) at K2/K5/K10 — consumed by five `app/matter_fork/upstream_*` leaves that run PPR's **no-adapter** path with upstream parameters (`dt = 1/120`, `Q = 1e7`, gravity 2.5, relaxations 1.5, viscosity .01, friction 30°, plasticity .9).
+
+| Case group | K2 | K5 | K10 |
+|---|---|---|---|
+| liquid, visco, mixed | word-exact | word-exact | word-exact |
+| elastic | bounded | bounded | bounded |
+| sand | bounded | bounded (1 flipped row) | **structural only** |
+
+Measured solid divergence: sand `F.c0x` 7.75e-6 at K2, 2.58e-4 at K10; sand `D.c0x` 2.34e-3 at K10; elastic `F.c1x` 1.51e-5 at K2. The 5e-4 measured bound covers elastic and sand K2/K5; sand K10 is excluded from word comparison because its return amplifies sub-ulp differences by 2–4 orders **without a branch flip**, which no tolerance can honestly cover. Each run logs `upstream sand-k10 comparison=structural-only reason=ill-conditioned-return`.
+
+**This is the strongest evidence so far that the sand law needs replacement rather than repair**, and it feeds the blocked A5 decision.
+
+Gate note: after A1 the fast gate is green (24/24) but measured 551 s, with entries uniformly ~2× their exclusive reference (terrain 85→178 s, material 33→92 s) while another session held the GPU. The 420 s ceiling is therefore unchanged and unproven at this identity; an exclusive re-measurement is required before quoting it.
