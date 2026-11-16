@@ -137,6 +137,10 @@ report unavailable tooling without treating its checks as passed.
 - Use the custom logger and public macros in `include/pP/Macros.h` for engine
   diagnostics; see [logging and error propagation](docs/logging-and-errors.md)
   for category setup, structured fields, filtering, and macro semantics.
+- A `warning` reports a state the program must not sustain, so it is a defect to
+  fix, not output to quiet. Remove the condition or make it impossible; never
+  demote or filter it away. A warning whose trigger can no longer fire is worse
+  than none, so keep it reachable and cover it with a test.
 - Error-returning functions must use the applicable `PPR_RETURN_ERROR_ON_FAIL`,
   `PPR_RETURN_UNEXPECTED_ON_FAIL`, or `PPR_RETURN_ON_FAIL` macro for ordinary
   failure propagation and immediate error returns. This includes locally

@@ -42,6 +42,15 @@ not make the producer synchronous.
 
 ## Filtering, queueing, and flushing
 
+A `warning` is a defect signal, not noise. It says the program reached a state it
+is not designed to sustain; the fix is to remove the condition or make it
+impossible, never to silence the message. Demoting a level to hide a warning
+converts a known fault into an unknown one, and a warning that can no longer
+fire — because the counter it watches is reset before it increments, or the
+window it samples is always fresh — is worse than none, so keep its trigger
+reachable and test it. If a condition is genuinely expected, it is not a warning:
+encode it as `debug`/`verbose` detail, or fix the check.
+
 CMake's `PPR_LOGGING_LEVEL` supplies numeric `PPR_LOG_LEVEL_THRESHOLD`: `DEBUG`
 through `FATAL` map to 0 through 6; `OFF` is 7. The header defaults to `WARNING`
 when no threshold is supplied. Below-threshold macro calls erase their message
