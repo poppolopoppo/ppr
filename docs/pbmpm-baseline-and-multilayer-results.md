@@ -951,3 +951,24 @@ Identical released state, only compacting history reset (`φ = φ₀`, `C = 0`),
 | history reset | 7.457 | 0.389 | 0.442 | 8.00 |
 
 With every other input identical, the retained-history column ends **denser (φ 0.496 vs 0.389), shorter (7.29 vs 7.46) and lower** — the reload resistance difference is attributable to the compaction history rather than to scene differences.
+
+## B1 increment 2 — execution ledger
+
+Authoritative execution record for the calibrated-law evidence. Any earlier "authored-only / pending execution" statement in this document or in the proposal is superseded by this table.
+
+| Item | Value |
+|---|---|
+| Source state | `d347c50f547986b6ec0b95b12497a02e86f42614` (`pbmpm/phase-a`, clean tree at run start) |
+| Shader source set | sha256 `77c54bf7ee212177…` over `assets/shaders/pbmpm/*.slang` |
+| `engine.tests.app` (clang-dev) | sha256 `67f56355b570948f…` |
+| `game.tests` (clang-dev) | sha256 `05a333897b39e289…` |
+| GPU state | 4 % utilisation before, 5 % after (exclusive) |
+
+| Command | Result |
+|---|---|
+| `ctest --test-dir out/build/clang-dev -L matter_fast -j4 --output-on-failure` | **26/26 passed, 357 s** |
+| `PPR_PBMPM_COST_DIAGNOSTIC=1 ctest -R 'matter_(calibrated_laws|calibrated_loaded|elastic_recovery|properties)_gpu'` | 4/4 passed |
+
+Logs: `/tmp/opencode/b18-fast.log` (full gate), `/tmp/opencode/b17-diag.log` (loaded-scene series), `/tmp/opencode/b1-increment2-acceptance.log` (identity and GPU state).
+
+Coverage of this revision: the matched-history snow control, the loaded clay/granular and snow scenes, the elastic recovery diagnostic and the property-table leaves are all inside the executed set. The measured clay result (settles to 6.54 vs granular 10.92) is recorded as a **provisional default** observation, not as intended gameplay behaviour; the snow history comparison is a **diagnostic**, and no "increased resistance" claim is made from it. Elastic recovery remains undemonstrated, so rock and ore stay granular. No upstream oracle exists for these families; their acceptance rests on the authored analytical leaves plus these executed scenes.
