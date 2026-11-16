@@ -58,6 +58,7 @@ target_sources(engine.tests.app
         App.MatterGpu.Tests.cpp
         App.MatterFork.Tests.cpp
         App.MatterFork.Oracle.h
+        App.MatterFork.Upstream.h
         App.MatterRuntime.Tests.cpp
         App.WorldLighting.Backend.Tests.cpp
         App.WorldLighting.Codec.Tests.cpp
@@ -132,9 +133,12 @@ ppr_stage_assets(engine.tests.app shaders fonts lighting)
 # holds long-horizon stability and runs at phase-end/delivery. Every retained
 # simulation correctness entry belongs to one of the two; moving an entry to
 # `matter_long` does not weaken it.
+# Exact-once fork inventory: six frozen/production leaves plus five upstream-family leaves.
+set(ppr_matter_fork_filter "app/matter_fork/actual_wgsl_stages_and_exact_semantic_restart,app/matter_fork/guards_reject_before_shared_signed_accumulation,app/matter_fork/production_k2_stages_tick2_and_restored22_match_actual_wgsl,app/matter_fork/radial_force_reflection_and_codegen_preserve_scalar_layout_on_spirv_and_hlsl,app/matter_fork/resident_radial_force_preserves_zero_path_pushes_pulls_and_rejects_invalid_inputs,app/matter_fork/inventory_replacements_preserve_terrain_ownership_accounting_and_contact,app/matter_fork/upstream_liquid_k2_k5_k10,app/matter_fork/upstream_elastic_k2_k5_k10,app/matter_fork/upstream_sand_k2_k5_k10,app/matter_fork/upstream_visco_k2_k5_k10,app/matter_fork/upstream_mixed_k2_k5_k10")
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_fork_gpu
-    FILTER "app/matter_fork"
+    FILTER "${ppr_matter_fork_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300

@@ -1,0 +1,24 @@
+{
+  "name": "ppr-pbmpm-oracle",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Offline upstream oracle for the EA PB-MPM WebGPU demo: emits byte-comparable simulation traces (stage 1 single Liquid case, stage 2 material/iteration/substep matrix) from a headless Dawn device. Offline analysis tool only: CMake never runs it and no build or test gate depends on it.",
+  "pbmpm": {
+    "role": "offline trace generator; not a build, runtime, or test dependency",
+    "dependency": "webgpu is pinned exactly to 0.6.2; node_modules is not vendored",
+    "postinstall": "webgpu's install script downloads a prebuilt Dawn (node-webgpu) binary for the host platform, so a first `npm install` needs network access; the tool itself runs offline afterwards",
+    "lockfile": "no lockfile is committed; the exact version pin in dependencies is authoritative"
+  },
+  "scripts": {
+    "trace": "node run.mjs --out out/liquid-k2-s1.json",
+    "determinism": "node run.mjs --out out/run-a.json && node run.mjs --out out/run-b.json && cmp out/run-a.json out/run-b.json",
+    "stage2": "node stage2.mjs",
+    "verify:stage1": "bash verify.sh",
+    "verify:stage2": "bash verify-stage2.sh",
+    "compare": "node tools/compare-dirs.mjs out/stage2 out/stage2-repeat"
+  },
+  "dependencies": {
+    "webgpu": "0.6.2"
+  }
+}

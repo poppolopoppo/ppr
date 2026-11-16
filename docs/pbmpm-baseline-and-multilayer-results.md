@@ -345,3 +345,352 @@ All four runs inside their ceilings (fast ≤ 420 s, long ≤ 3120 s). Format ch
 | A6 acceptance | Linux/Debug+Release gates green at the frozen identity; **Windows/D3D12 unrun** |
 
 Not claimed: upstream K5/K10 conformance, gameplay-range acceptance for the precision limits, A5 correction, and cross-platform validation.
+
+## A1 executable checkpoint fixtures — edit-only handoff
+
+**Pending native execution, not a conformance pass.** Twelve homogeneous and three
+interacting mixed-family reference cases are encoded in
+`lib/engine/tests/app/App.MatterFork.Upstream.h` and consumed by five new
+`App.MatterFork` leaves. The mixed upstream traces were generated offline; native
+builds, conformance runs and timing measurements remain with the orchestrator.
+
+### Provenance and offline reproduction
+
+The producer is `scripts/pbmpm/stage2.mjs`, with the compute-only seed/copy
+instrumentation in `scripts/pbmpm/src/gpu.js`. Its upstream WGSL is pinned to
+`61749b6c2d2631ed243f86882752ba43196f2de7`; see the vendored generator README for
+runtime installation and invocation. Generation is **offline and never part of
+CTest, matter_fast, builds, or other gates**. Tests consume only compiled word
+arrays and do not require Node, Dawn, network access, or the external trace tree.
+
+This extraction consumed `/tmp/opencode/pbmpm-harness/out/stage2/index.json` and
+its twelve case files. Each file's SHA256 was checked against the index before
+extraction. Each case has 64 particles and eight genuinely simulated substeps;
+`meta.verification.allStepsDidWork` was required. The producer's per-dispatch
+`workProof` distinguishes its zero-work bootstrap substep from the K nonzero
+dispatches in each reported substep. Producer: Node 22.23.5, webgpu 0.6.2/Dawn,
+RTX 2080/Turing, NVIDIA 620.70.06.
+
+#### Interacting mixed-family extension
+
+The mixed seed has 36 rows, in y-major/x-minor order within the same (8,8)–(16,16)
+footprint: 16 liquid centres at x=8.5..11.5, y=8.5..11.5; 16 sand centres at
+x=12.5..15.5, y=8.5..11.5; four elastic centres at x=9.5..10.5, y=12.5..13.5.
+Spacing is one cell, including across both interfaces. Quadratic support has
+radius 1.5 cells per axis (3×3 nodes): the liquid/sand boundary rows share node
+columns 11 and 12, and liquid/elastic rows share node rows 11 and 12 with positive
+weights. Thus they exchange momentum through the same grid, rather than evolving
+as isolated blocks. All rows use the homogeneous cases' velocity field, gravity,
+mass, volume, F, D, J and history initialization and parameter profile.
+
+Offline invocation from the checkout root (the existing external dependency
+installation is selected by NODE_PATH; no install or network access was needed):
+
+```sh
+NODE_PATH=/tmp/opencode/pbmpm-harness/node_modules node scripts/pbmpm/stage2.mjs \
+  --families mixed --iterations 2,5,10 --steps 8 --out-dir /tmp/opencode/a1-mixed/run-a
+NODE_PATH=/tmp/opencode/pbmpm-harness/node_modules node scripts/pbmpm/stage2.mjs \
+  --families mixed --iterations 2,5,10 --steps 8 --out-dir /tmp/opencode/a1-mixed/run-b
+```
+
+These use vendored `scripts/pbmpm/upstream` unchanged. Two separate processes
+produced byte-identical case files (and index); timings are intentionally excluded.
+
+| Mixed case | JSON SHA256 |
+|---|---|
+| mixed-k2-s8 | `1a59048d0694a3a5bd8db60fa853c20401dd58a2b078e953e7bffcd8d569455d` |
+| mixed-k5-s8 | `0f18983c5c8f73c5a3bd55eb31dd4127241c740d8ff27f0fa589b192c72dd3b6` |
+| mixed-k10-s8 | `edc935eb40c5916d9d6c5fcd1326b3ef96847f5fc6b8c63ae9449d484606f2b3` |
+
+For every K, `workProof` has eight entries: each entry has K bootstrap zeros,
+followed by K workgroup counts of 3 for steps 0–2 and 4 for steps 3–7.
+`bootstrapAllZero`, `simulatedAllNonZero` and `allStepsDidWork` are true.
+Finite/frozen-field checks and the separate liquid, elastic and sand signatures
+also pass for each mixed trace.
+
+Regression check: all twelve homogeneous cases were regenerated using the vendored
+driver and `PBMPM_UPSTREAM=/tmp/opencode/pbmpm-upstream2` into
+`/tmp/opencode/a1-mixed/homogeneous-original-path`; `diff -q` against each original
+`/tmp/opencode/pbmpm-harness/out/stage2/*-s8.json` succeeded with no differences.
+The override preserves the original trace's provenance-path string. A separate
+vendored-default run in `homogeneous` also matched every step, but its JSON differs
+in that pre-existing provenance-path convention; no metadata normalization was
+used for the byte-identical check. The default generator still selects only the
+original four families; mixed is explicit opt-in.
+
+Extraction is bit transport, not a second solver: round each JSON number to
+IEEE binary32, reinterpret as u32, take `meta.seed.rows`, and project
+`steps[7].particleWords` with the hot/cold index lists below. All 64 homogeneous
+or 36 mixed rows are kept.
+The four family seeds are identical across K; all families share the full liquid
+seed except material/RGB word substitutions. The exporter checked that fact for
+every seed word. It also checked that every final cold word equals its seed word,
+so the expected cold array aliases the seed projection instead of repeating it.
+The temporary extraction script for this handoff is
+`/tmp/opencode/export-a1-fixtures.py`; it is not a gate dependency.
+
+The generated header is **199,279 bytes (194.61 KiB)**, SHA256
+`04c565d79b77ed11875dba5d3740e60bb20d80e06c900d40f393882e49dfa847`.
+This is +18,400 bytes over the homogeneous header, with 5,521 bytes remaining
+under the 200 KiB budget. Numeric tables retain eight words per line under
+localized clang-format markers; redundant spaces after commas were dropped to
+fit the mixed seed and three final checkpoints. No case, row or semantic field
+was dropped. Mixed seeds are shared across K and checked against all three traces.
+Including substep 1 hot words would add approximately 162,080 bytes before
+formatting, exceeding the approximately 200 KiB budget. Consequently only
+substep 8 is stored: this detects final divergence but loses early-stage
+localization and transient divergences that reconverge before substep 8. The old
+frozen fixtures and their full stage comparisons remain intact.
+
+Each homogeneous logical fixture is 11,776 bytes: 64 × (24 seed + 16 expected hot + 6 expected
+cold) × 4. The fixture hash below covers that concatenation, each array in row
+order and each word encoded little-endian, independently of header formatting
+and source-level deduplication. Each mixed fixture is 6,624 logical bytes;
+total logical size is 161,184 bytes (+19,872).
+
+| Case | Original case JSON SHA256 (from index.json) | Logical fixture SHA256 |
+|---|---|---|
+| liquid-k2-s8 | `b38d0a0755111580fa2bfd490f6dc693ffe7b4cac4733668f2d66da01330db70` | `257866b23b21161ccef50cc24a7daca5f4e6e6fd1bc183d0c8ec29e2c710befa` |
+| liquid-k5-s8 | `220bd4e37777c89f4f6686321b70bd6dddac353fe53bc22f346702cfb54cd051` | `3ae4ea2df2fb625defb1150a0c69b313b70df1b1468164f9884a4aebd190e642` |
+| liquid-k10-s8 | `fcfc4e8b3971c3aa3eb454a8b6a00f1e059181045afbd3432d389f05f2fbb95a` | `3fd6f1faed6a3733c004f0d5222651c7e49188e9f29214c47509ee60069ae092` |
+| elastic-k2-s8 | `d30f74a374020e5f8f5b77ce4b9d20ca7b29e78619ebebb84d7ee907412752e4` | `7acee302c15309a7e9f5e87ba3f2640a82999ff3292dee553e20bc5f0d2b0e15` |
+| elastic-k5-s8 | `59adf0327c8f6d892febae39865913fc6c6baca6fe409facecc65f1fc2044ad8` | `0141c8af444bc43b55c7b8c09b45c854de33c51b416d3a05414cbd0da549fa8a` |
+| elastic-k10-s8 | `44eb8aea49c0b0801c2343a77ee73eeb984bb849ba1fae1618ab8bb4cbb3e5d7` | `9923e8005b48cd9c9caa498255a9bad53b67caf93ddb08d18b5d560728578749` |
+| sand-k2-s8 | `6651e6dda4cbfdb33e493362eb26b84d9287072a1730fd2402a0d016115e6a5f` | `32b529dc2754ad33e558ca772bf322e765d2ead7fc0ab981b2a379ec580eb5ff` |
+| sand-k5-s8 | `bca5c0cf484338fd15aa3043afdaf2caf0e89b4a778a187c262d758d4234928f` | `6267da10eec8b0bba83f0d83db6c9473ce79956672ed3f4c4a3eb1500290bc42` |
+| sand-k10-s8 | `abf6a0a12256315d7cf15503e357c5271c645eb032bef3eb0dab05147cfa4bda` | `7471bfbb274a88608e6a6d00854a6aa8f13603523f3ff890955a7b4b6fc2b772` |
+| visco-k2-s8 | `05919d905c154835790d89ad0127609e5db484162c592b33897ab74192f566d4` | `877bd1130a3a661d4ff46b4b7833de228206d2d3ac4bdfb46ece22a314db438f` |
+| visco-k5-s8 | `01f2e293ce16e00470b10a590b809bcd19485a2b4e5c8898510479f69940160f` | `8daf64b3c8f05b9d124cd7687a5102b6085e0b122cb53602e8b240c91f0bc2b9` |
+| visco-k10-s8 | `841c519ba07da2274bbb42503c2b8e0ae64f12d285e5a7117501eecd571cf962` | `05ab3301f9816e546c74a1b03d5fa7f70a5c48fa0f2f496aa9f9262b192c2376` |
+
+### Exact storage mapping
+
+Offsets below are 32-bit **word** indices. Every semantic word remains FP32;
+material and enabled are not integer-reinterpreted enumerators. F and D retain
+WGSL column order, with no transpose, axis flip, unit scaling, or remapping.
+
+| Upstream word(s) | Meaning | PPR device word(s) |
+|---|---|---|
+| 0, 1 | position x, y | Hot 0, 1 |
+| 2, 3 | displacement x, y (cells/substep) | Hot 2, 3 |
+| 4, 5, 6, 7 | F: col0.x, col0.y, col1.x, col1.y | Hot 4, 5, 6, 7 |
+| 8, 9, 10, 11 | D: col0.x, col0.y, col1.x, col1.y | Hot 8, 9, 10, 11 |
+| 12 | liquidDensity / J | Hot 12 |
+| 13 | mass | Cold 0 |
+| 14 | material (liquid=0, elastic=1, sand=2, visco=3) | Cold 2 |
+| 15 | volume | Cold 1 |
+| 16 | lambda | Hot 14 |
+| 17 | logJp | Hot 13 |
+| 18, 19 | vec3 alignment padding, zero in seeds | omitted; restored as zero |
+| 20, 21, 22 | color r, g, b | Cold 3, 4, 5 |
+| 23 | enabled | Hot 15 |
+
+No upstream semantic particle field is dropped. PPR omits only the two upstream
+padding words. `State` internally uses the older eight-word oracle-cold
+transport (padding at 3 and 7), then compacts it to the actual six-word Cold
+buffer; those two compatibility padding words are not device data. Each case
+uploads its seed, reads both device buffers back, restores all 24 upstream words,
+and asserts bit-for-bit equality before dispatch. This GPU round-trip assertion
+is authored but awaits execution.
+
+### Matched profile and execution path
+
+| Parameter | Conformance value |
+|---|---|
+| Domain / rows | 32 × 32 / 64 homogeneous, 36 mixed |
+| dt | binary32(1/120) seconds |
+| Fixed-point multiplier Q | 10,000,000 |
+| Gravity strength | 2.5 (source applies gridHeight × gravity × dt²) |
+| Liquid / elastic relaxation | 1.5 / 1.5 |
+| Elasticity ratio | 1 |
+| Liquid viscosity | 0.01 |
+| Friction angle | 30 degrees (source conversion uses 3.14159) |
+| Plasticity | 0.9 |
+| Grid-volume liquid channel | enabled (1) |
+| Border friction | 0.5, already hard-coded in the no-adapter shader |
+| Iterations / substeps | K=2,5,10 / 8 |
+| Shapes, terrain, bodies, mouse/radial force | absent |
+
+The seed has F=identity, D=zero, J=mass=volume=enabled=1, lambda=logJp=0.
+Its 8×8 cell-centre block starts at (8,8); displacement is
+`(0.02*(x-12)+0.30*(y-12), 0.02*(y-12))`, rounded once to binary32 by the producer.
+The test does not recompute that field. Production defaults instead use dt=1/480,
+liquid relaxation=1, plasticity=0, and `GpuParticle` defaults logJp=1; none of
+those defaults may replace the explicit upstream profile/seed here. The harness
+rhoZeroMultiplier is not a SimConstants member and does not reach either GPU.
+
+The new leaves use `Fixture`/`State` and `fork_conformance.slang`, which includes
+`fork_core.slang` without `PBMPM_ENGINE_ADAPTERS`. They do not use the game adapter
+or the production `solver.slang` path. The latter has a runtime final-stage K
+comparison; the no-adapter shader expresses the same schedule with selector 0
+for initial scatter, selector 2 for each intermediate gather/scatter, and
+selector 1 for the final gather/integrate/scatter. Every substep resets the grid
+frontier and re-bucketizes, matching stage2's fresh per-update grid buffers.
+
+### Comparison policy and assertions
+
+All cold words, enabled, lambda, liquid F, and non-sand logJp are bit-exact.
+These fields never consume grid-derived state. Integer error-status words are
+exactly `{0, UINT_MAX, UINT_MAX, 0, 0, 0}` after bucketization and every stage;
+admitted row count is exactly 64 (homogeneous) or 36 (mixed). Numerical grid accumulators are not stored by
+this compact fixture and are not claimed bit-exact. The original frozen grid
+comparisons remain unchanged.
+
+Except for structural-only sand K10, grid-dependent float state requires finite values and
+`abs(actual-reference) <= r * max(1, abs(reference))`, where
+`r=max(8*FLT_EPSILON, 6*s*(K-1)/Q)`. At s=8 this gives K2: 4.8e-6,
+K5: 1.92e-5, K10: 4.32e-5. Derivation of the transfer scale: a normalized PIC
+gather carries one decoded quantum q=1/Q; D=4*B and the quadratic stencil has
+|offset|≤1.5, giving 6q per D entry per gather; there are s*(K-1) gathers.
+The reference-relative factor and unit floor are an explicit acceptance policy,
+not a proof that nonlinear F/SVD/plasticity feedback remains within this bound.
+Eight FP32 epsilons supply a local arithmetic-rounding floor. This policy was
+chosen before native execution and must not be widened merely to make failures
+pass; the execution owner must investigate any failure and obtain a bounded
+policy/design decision if nonlinear amplification invalidates it.
+
+Mismatch diagnostics identify case, substep, particle row, field name, actual
+and expected words, delta and allowed cap. Every seed checks 1,536 exact words;
+every final snapshot checks 1,024 hot and 512 compatibility-cold words (384
+semantic cold words). Family leaves also require exactly one K2, K5 and K10 case.
+The mixed leaf checks 864 seed words, 576 final hot words and 288 compatibility
+cold words (216 semantic) per K, using the same per-row material-aware exactness
+rules and derived numerical bounds. Decision B below adds a measured upper bound
+only for homogeneous elastic K2/K5/K10 and sand K2/K5 constitutive state. Sand K10
+checks structure and reports numerical divergence without asserting parity. An explicit family identifier prevents its leading
+liquid row from accidentally selecting it into the homogeneous liquid leaf.
+
+### Decision B — solid constitutive-state measured upper bound under open investigation
+
+Native execution exposed these first failures under the derived policy at substep 8:
+
+| Case | Row | Field | Absolute divergence | Derived cap |
+|---|---:|---|---:|---:|
+| `sand-k2-s8` | 5 | `F.c0x` | 7.75e-6 | 4.8e-6 |
+| `elastic-k2-s8` | 19 | `F.c1x` | 1.51e-5 | 8.27e-6 |
+| `sand-k2-s8` | 5 | `D.c0x` | 7.13e-6 | 4.8e-6 |
+
+The source comparison found no equation difference: the SVD, normalisation,
+blend, projection and reconstruction are the same; only PPR's degenerate
+`atan2` guard differs. This does not establish the cause of the divergence.
+
+Decision B retains the derived policy above and adds
+`kSolidConstitutiveOpenInvestigationMeasuredUpperBound = 5e-4` only for elastic K2/K5/K10 and sand K2/K5 solid
+constitutive state: deformation gradient `F` (words 4–7), deformation-displacement
+`D` (words 8–11), and sand `logJp` (word 13), using
+`max(derived_relative, 5e-4) * max(1, abs(expected))`. Initial observed divergences were
+`F` 7.75e-6 and 1.51e-5 and `D` 7.13e-6, against 4.8–8.3e-6 derived caps.
+This is a **measured upper bound for the solid constitutive state under an open
+investigation**, not a derived tolerance or a per-field envelope. Liquid, visco, mixed
+(including its solid rows), and every other solid field retain their existing
+derived caps; exact-field classification is unchanged. For same-branch rows the budget still
+rejects non-finite state and any divergence above `5e-4` relative to
+`max(1, abs(expected))` across the covered K values. Exact fields still reject any bit
+difference. Failure lines retain `upstream divergence` and identify
+`policy=derived|known-divergence` and `owner=gradient|displacement|history`
+for constitutive-state fields (`owner=other` for other fields). The budget
+does not apply to any other field or family.
+
+Earlier device evidence after the gradient-only budget established that
+`upstream_elastic_k2_k5_k10` passes; the subsequent sand evidence is recorded below.
+The leaves report per-K start/pass lines; an unreported pass is not evidence of
+success. No new native run is claimed by this edit.
+
+### Sand branch-aware classification and same-branch amplification
+
+The measured sand ladder at substep 8 is K2 `F.c0x` **7.75e-6**, K5
+**1 flipped row (13 words, within the 2-row bound)**, and K10 same-branch
+`F.c0x` **2.58e-4**, followed by `D.c0x` **2.34e-3 against a 7.1e-4 cap**.
+Sand's return amplifies sub-ulp differences by **2–4 orders even within a
+branch**. Divergence grows without a branch flip; widening the tolerance again
+would make comparison meaningless. **Sand K10 word comparison is therefore
+disabled rather than tolerated.** This is the strongest evidence so far that
+the sand law needs **replacement rather than repair**, feeding directly into
+the **blocked A5 decision**; it does not rule out a transcription defect.
+
+Sand K10 is **structural-only**: the case executes, every hot/cold word must be
+finite, inventory (mass, volume, material, colour, enabled) remains exact, and
+the branch-flip count must stay within 2 rows. Existing exact hot fields also
+remain exact. The measured maximum absolute hot-word divergence, with row and
+field, is reported but not asserted. Each run explicitly logs
+`upstream sand-k10 comparison=structural-only reason=ill-conditioned-return`.
+The remaining comparison still proves bounded numerical agreement under the
+stated policies for sand K2/K5 and all liquid/elastic/visco/mixed K2/K5/K10 cases
+(**14 remaining combinations**), plus exact seed/inventory and execution-status
+contracts. It does not prove sand K10 numerical parity or physical validity.
+For sand K2/K5, a flipped word is classified as a flip and bypasses the numerical
+budget; these policies never double-count a word. The differential trace remains
+the first B1 task to localize amplification and possible transcription errors.
+
+For each expected/actual `F`, reproduce `forkSvd`: with matrix entries
+`(a,b,c,d) = (c0x,c0y,c1x,c1y)`, set `E=(a+d)/2`, `F0=(a-d)/2`,
+`G=(b+c)/2`, `H=(b-c)/2`, `Q=sqrt(E²+H²)`, `R=sqrt(F0²+G²)`.
+Clamp signed singular values `(Q+R,Q-R)` to `[0.1,10000]` as integration
+does, then compute `eDiag=log(max(abs(Sigma),1e-6))`,
+`traceE=eDiag.x+eDiag.y+logJp`, `frobenius=length(eDiag-traceE/2)`, and
+`deltaGamma=frobenius+(elasticityRatio+1)*traceE*alpha`, where
+`alpha=sqrt(2/3)*2*sin(frictionAngle/180*3.14159)/(3-sin(...))`.
+The tuple is `(traceE>=0, deltaGamma>0, logJp==0)`; the last predicate
+selects the constraint-stage singular-value clamp.
+
+A tuple difference reports both tuples and derived values, labels every
+bit-diverging hot word in that row `policy=branch-flip`, and counts rows
+and words. **At most 2 branch-flip rows per case** are allowed; exceeding
+that bound fails with `policy=branch-flip-count`. Sub-ulp perturbations
+should change decisions only near a boundary, so a handful is expected;
+many flips signal a systematic discrepancy requiring investigation. All
+such rows must be finite, exact hot fields remain exact, and all cold
+inventory words (mass, volume, material, colour and padding) remain exact.
+The branch classification and its 2-row bound are unchanged; liquid/visco/mixed
+policies are unchanged.
+
+Discrete branch selection alone does not explain the same-branch K10 result.
+Post-projection checkpoint predicates do not recover earlier GPU branch history;
+the differential trace must localize the amplification as well as the first
+actual flip. The K5 classification and K10 failure above are supplied device
+evidence. This structural-only exclusion has not been built or executed in this
+edit-only task and does not establish a conformance pass.
+
+### Phase A decision ledger
+
+| Ruling | Rationale | Envelope / scope | Cost if wrong |
+|---|---|---|---|
+| Decision B — retain measured constitutive-state bound for remaining comparisons | Initial elastic/sand divergence exceeds derived caps; investigation remains open | `5e-4 * max(1, abs(expected))`, in addition to the derived cap, for elastic K2/K5/K10 and sand K2/K5 solid `F`, `D`, and sand `logJp`; flipped words bypass the budget, with at most 2 flipped rows | A real defect below the budget can pass; differential trace remains B1's first task |
+| Exclude sand K10 from word comparison; structural-only | K2 `F` 7.75e-6; K5 one flipped row; K10 same-branch `F` 2.58e-4 and `D` 2.34e-3 exceed defensible comparison; replacement rather than repair feeds blocked A5 | Execute, require finite words and exact inventory, bound branch flips to 2 rows, report maximum divergence without asserting it; explicit exclusion log every run | A sand K10 transcription error would go undetected until the differential trace or a gameplay symptom; native execution of this ruling remains pending |
+
+### Registration and execution handoff
+
+New full tokens are:
+
+```
+app/matter_fork/upstream_liquid_k2_k5_k10
+app/matter_fork/upstream_elastic_k2_k5_k10
+app/matter_fork/upstream_sand_k2_k5_k10
+app/matter_fork/upstream_visco_k2_k5_k10
+app/matter_fork/upstream_mixed_k2_k5_k10
+```
+
+`lib/engine/tests/app/CMakeLists.txt` adds the header as a PRIVATE source and
+changes `matter_fork_gpu` from the `app/matter_fork` prefix to an explicit list:
+the six existing leaves plus these five, exactly once each. The list is 688
+characters, below 1,024; the entry retains GPU resource lock, 300 s timeout,
+GPU-validation label and `matter_fast` membership. The mixed extension adds one
+token and one group recurse entry; the source census now matches 11 leaves to
+11 unique tokens, each registered exactly once (previously 10 / 647 characters).
+
+Expected work is five shader/device fixture initializations, 120 substeps, 360
+bucket dispatches, and 680 fused dispatches over the fifteen cases. There are
+per-stage waits/status readbacks, so kernel counts alone do not predict wall
+time. No measured seconds are available; the existing 300 s shard and 420 s
+matter_fast ceilings are acceptance gates, not timing claims. The execution
+owner must build `engine.tests.app`, run the five leaves (and retained fork
+shard), then measure the affected `matter_fast` gate. Windows/D3D12 remains a
+separate unrun compatibility gate.
+
+Edit-lane checks: format check passed on both touched C++ files; semantic style
+reported zero blocking findings (two advisory B-CMP findings); scoped
+`git diff --check` passed. An independent parser re-read the formatted header,
+reconstructed all five seed arrays, and matched all fifteen seed/hot/cold
+projections against source JSON. A source census matched all eleven
+fork leaves to the eleven unique CMake tokens. These are artifact/style checks,
+not GPU numerical-conformance evidence.
