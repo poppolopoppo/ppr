@@ -4124,9 +4124,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 std::array<float, 16u> fields{};
             };
             struct Cold {
-                std::array<float, 6u> fields{};
+                std::array<float, 7u> fields{};
             };
-            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 24u);
+            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 28u);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
             // The restored liquid disk's support is R = 2.0 r, where the retired
@@ -5697,7 +5697,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                     std::array<float, 16u> hot{};
                     hot[0u] = hot[1u] = 3.0f;
                     hot[15u] = 1.0f;
-                    std::array<float, 6u> cold{};
+                    std::array<float, 7u> cold{};
                     cold[0u] = 1.0f;
                     cold[1u] = std::numbers::pi_v<float> * 0.25f;
                     cold[2u] = static_cast<float>(particle_material);
