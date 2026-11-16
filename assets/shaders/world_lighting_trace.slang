@@ -121,24 +121,34 @@ SegmentHit traceSegmentDetailed(
 
     // Slab-clip to [0, 1024) in both axes. A zero direction component is a
     // parallel slab: no epsilon perturbation and no 0*infinity.
+    //
+    // A segment whose two endpoints are both inside the domain is already
+    // wholly inside it. Every axis then has min(lower, upper) < 0 and
+    // max(lower, upper) > 1, so the exact clip leaves the (0, 1) defaults
+    // untouched and its per-axis divisions and boundary tests are skipped. The
+    // result is bit-identical; only the discarded work is removed.
+    bool interior = all(start >= float2(0.0)) && all(start < float2(float(kTraceEdge))) &&
+                    all(end >= float2(0.0)) && all(end < float2(float(kTraceEdge)));
     float enter = 0.0;
     float exit = 1.0;
-    if (delta.x == 0.0) {
-        if (start.x < 0.0 || start.x >= float(kTraceEdge)) return traceClear();
-    } else {
-        float lower = (0.0 - start.x) / delta.x;
-        float upper = (float(kTraceEdge) - start.x) / delta.x;
-        enter = max(enter, min(lower, upper));
-        exit = min(exit, max(lower, upper));
-    }
+    if (!interior) {
+        if (delta.x == 0.0) {
+            if (start.x < 0.0 || start.x >= float(kTraceEdge)) return traceClear();
+        } else {
+            float lower = (0.0 - start.x) / delta.x;
+            float upper = (float(kTraceEdge) - start.x) / delta.x;
+            enter = max(enter, min(lower, upper));
+            exit = min(exit, max(lower, upper));
+        }
 
-    if (delta.y == 0.0) {
-        if (start.y < 0.0 || start.y >= float(kTraceEdge)) return traceClear();
-    } else {
-        float lower = (0.0 - start.y) / delta.y;
-        float upper = (float(kTraceEdge) - start.y) / delta.y;
-        enter = max(enter, min(lower, upper));
-        exit = min(exit, max(lower, upper));
+        if (delta.y == 0.0) {
+            if (start.y < 0.0 || start.y >= float(kTraceEdge)) return traceClear();
+        } else {
+            float lower = (0.0 - start.y) / delta.y;
+            float upper = (float(kTraceEdge) - start.y) / delta.y;
+            enter = max(enter, min(lower, upper));
+            exit = min(exit, max(lower, upper));
+        }
     }
 
     if (!(exit > enter)) return traceClear();

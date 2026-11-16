@@ -97,7 +97,6 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
     // weights, whose sum remains one.
     int2 base = int2(floor(relative));
     float2 fraction = relative - float2(base);
-    int2 offsets[4] = {int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1)};
     int2 last = int2(int(cascadeProbeEdge(1u)) - 1);
     uint directions = cascadeDirections(1u);
     float direction_weight = kChTwoPi / float(directions);
@@ -116,7 +115,8 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
 
     CHAccumulator accumulator = chAccumulator();
     for (uint tap = 0u; tap < 4u; ++tap) {
-        int2 offset = offsets[tap];
+        // Bilinear tap offset in the order the CH field sample uses.
+        int2 offset = int2(int(tap % 2u), int(tap / 2u));
         float tap_weight =
             (offset.x == 0 ? 1.0 - fraction.x : fraction.x) * (offset.y == 0 ? 1.0 - fraction.y : fraction.y);
         if (tap_weight <= 0.0) continue;
@@ -129,6 +129,13 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
         uint trace_low = frame.m_valid ? frame.m_trace_low : g_fine.m_frame_low;
         float2 center = (float2(l1) + 0.5) * float(cascadeSpacing(1u));
 
+        // The connector box distances from this tap's L1 centre and the sample
+        // weight belong to the tap. Only the direction and the exit point vary
+        // per connector, so both are formed once here.
+        float2 positive_extent = box_max - center;
+        float2 negative_extent = box_min - center;
+        float connector_weight = tap_weight * direction_weight;
+
         for (uint phi = 0u; phi < directions; ++phi) {
             float2 direction = cascadeProbeDirection(phi, directions, trace_low);
 
@@ -136,16 +143,19 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
             // direction is the actual connector f->e, never the L1 schedule
             // direction, except for an exactly zero connector length.
             float2 slip = float2(kTraceFar, kTraceFar);
-            if (direction.x > 0.0) slip.x = (box_max.x - center.x) / direction.x;
-            else if (direction.x < 0.0) slip.x = (box_min.x - center.x) / direction.x;
-            if (direction.y > 0.0) slip.y = (box_max.y - center.y) / direction.y;
-            else if (direction.y < 0.0) slip.y = (box_min.y - center.y) / direction.y;
+            if (direction.x > 0.0) slip.x = positive_extent.x / direction.x;
+            else if (direction.x < 0.0) slip.x = negative_extent.x / direction.x;
+            if (direction.y > 0.0) slip.y = positive_extent.y / direction.y;
+            else if (direction.y < 0.0) slip.y = negative_extent.y / direction.y;
 
             float exit_parameter = min(slip.x, slip.y);
             float2 exit_point = center + direction * exit_parameter;
             float2 connector = exit_point - fine_center;
             float connector_length = length(connector);
-            float2 basis = connector_length == 0.0 ? direction : connector / connector_length;
+            // One reciprocal shared by both components. A zero length still
+            // takes the schedule direction; its discarded infinity never
+            // reaches the fit.
+            float2 basis = connector_length == 0.0 ? direction : connector * (1.0 / connector_length);
 
             // Near segment against the current resolved occupancy and cached
             // source. An occupied cell of the probe's own/neighbour block is a
@@ -169,7 +179,7 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
             }
 
             Interval merged = cascadeMerge(near_hit.m_interval, far_interval);
-            chAccumulateDirection(accumulator, merged.m_radiance, basis, tap_weight * direction_weight);
+            chAccumulateDirection(accumulator, merged.m_radiance, basis, connector_weight);
         }
     }
 
