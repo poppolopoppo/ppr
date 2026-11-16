@@ -64,7 +64,10 @@ redesign merely because its implementation looks wasteful.
 The pinned official release in `local-services/pix/version.txt` is the default
 deployment. A source build is an explicit tooling experiment: verify both live
 capabilities and result compatibility in the intended client before adopting it.
-Building another checkout does not replace `local-services/pix/pix-mcp.exe`.
+Building another checkout does not replace
+`local-services/pix/pix-mcp.exe`. On the Windows capture host, verify that
+deployed executable; its absence on a Linux agent host does not establish the
+Windows deployment state.
 Compare path, hash, and timestamp; Cargo package versions can stay unchanged,
 and the idempotent installer can retain an existing executable at the pin.
 Record the MCP server release and executable identity separately from the

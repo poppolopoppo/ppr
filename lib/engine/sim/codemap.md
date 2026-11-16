@@ -87,7 +87,7 @@ the selected upper bound and map to its final active chunk.
   non-finite temperature). `setCell` sets the box on first write in a clean chunk, then grows it
   (`DirtyBounds`, superset semantics; clean chunks have no bounds via `dirtyBounds()`)
   (Sim.ChunkGrid.cpp:32-43); `markDirty` sets the full-chunk
-  box; `clearDirty`/`clearAllDirty` write 0,0,0,0 and rely on `m_dirty==false` for 
+  box; `clearDirty`/`clearAllDirty` write 0,0,0,0 and rely on `m_dirty==false` for
 ullopt`
   (Sim.ChunkGrid.cpp:147-166,198-209); `setCells` is the bulk whole-chunk
   writer (`Array&&` adopt overload: validated move-adoption with no copy; pre-materialization is the caller's duty for concurrent use). `markDirty` returns void because
@@ -261,9 +261,13 @@ snapshot.
   re-exported by `:worldgen` (and thus the sim umbrella).
 - `CMakeLists.txt` — `engine.sim` target registration (see Integration).
 
+## Generation execution and noise
+
 World generation accepts an explicit chunk scheduler, cancellation context and atomic current-stage/chunk progress. Independent chunks use bounded batches of admitted tasks, and all admitted tasks drain before generation returns or rethrows. Serial execution remains explicit and deterministic. Production uses compiled numeric recipes.
 
 The `:worldgen.noise` partition exports numeric `NoiseFieldDesc` and a move-only compiled `NoiseField`. FastNoiseLite v1.1.1 is privately pinned behind `Sim.WorldGen.Noise.cpp`; sampling is immutable and allocation-free. OpenSimplex2, Perlin, squared-Euclidean cellular distance, cellular site values, fBm, ridged noise and progressive domain warp are supported. Compilation validates finite settings, octave/work limits and signed lattice-coordinate bounds. Compiled numeric content recipes use this adapter.
+
+## Frozen capture and chunk rollback
 
 `captureFull(grid[, registry], seed, context)` is the additive full-residency
 capture boundary for an exclusively frozen world. It copies all resident chunks
@@ -273,10 +277,14 @@ snapshot. Game checkpoint identity stays outside sim.
 
 `ChunkGrid::captureChunk` and allocation-free `exchangeChunk` provide an owned per-chunk rollback/candidate seam, including residency and exact dirty/activity metadata. The caller excludes observation during exchange; ordinary writes remain monotonic in residency.
 
+## Production generation and legacy fixtures
+
 Production generation accepts owned validated numeric plans. The former seed-only
 hard-coded generator and its archetype/pinned-hash tests now live in the game's
 explicit legacy fixture, outside engine.sim and engine.tests.sim. This preserves
 smoke/many-agent fixture coverage without an implicit normal generation fallback.
+
+## Terrain filtering and certification
 
 The numeric worldgen plan owns the shared surface/bedrock/depth helpers and
 surface-relative start resolution. Raster uses global tile pore seeds and the
@@ -290,6 +298,8 @@ finishing discovers at most 4096 supported formation records against the frozen
 grid, applies them in stable order, and certifies selected backbone connectivity
 and actor clearance. Sky, continuous bedrock, reservations and connection cores
 remain protected through all filters.
+
+## Bounded biome samples
 
 Explicit biome-sample layout/geometry factories select one biome and omit global
 start/features/connections while reusing blob and worm generation. A shared

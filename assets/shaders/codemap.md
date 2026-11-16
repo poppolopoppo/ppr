@@ -143,11 +143,12 @@ scan/compaction dispatches produce ordered IDs and indirect arguments without
 reordering solver storage. The packed row's fourth word is the stable-identity
 material-UV seed; the palette tint is decoded from the row's own element at
 shading time. `grid_tiles.slang` shares the particle quad helper.
-The only remaining particle draw is the sampled disk for gases and explicit
-legacy phase fixtures; Task 11 retired the smooth solid/liquid splat, filter and
-composite entries together with `grid_liquid_kernel.slang`,
-`grid_solid_kernel.slang` and `grid_fluid_filter.slang`. Solids and liquids are
-shaded through the world-lighting resolved-cell terrain path instead.
+Historical: Task 11 retired the old smooth solid/liquid splat, filter and composite
+route (`grid_liquid_kernel.slang`, `grid_solid_kernel.slang`, `grid_fluid_filter.slang`).
+That retirement does not describe the current liquid surface lane: `grid_tiles.slang`
+now supplies marker, selection, accumulation and deferred composite entries, owned by
+`App.Renderer.GridPass.ParticleSurface.cpp`; see Key Files below. Direct gas/solid
+draws and categorical resolved-cell world lighting coexist with that lane.
 
 `world_lighting_material.slang` is the include-only visible response:
 `diffuseIrradiance(CH, float3)` and `specularRadiance(CH, float3, float)` implement
@@ -293,8 +294,9 @@ bloom and metering cohorts are reused only through accepted-submit fences.
 ## Key Files
 
 - `mesh_bindless.slang` - the live bindless static-mesh vertex/fragment program.
-- `grid_tiles.slang` - the live debug-grid tile vertex/fragment program (`vertexGridMain` + `fragmentGridMain`)
-  and the particle lanes: direct gas/solid classes plus the surface reconstruction's minimum-presence marker
+- `grid_tiles.slang` - the live debug-grid tile vertex/fragment program
+  (`vertexGridMain` + `fragmentGridMain`) and particle lanes: direct gas/solid classes
+  plus the current liquid surface reconstruction's minimum-presence marker
   (`vertexParticleSurfaceMarker` + `fragmentParticleSurfaceMarker`), label selection
   (`fragmentParticleSurfaceSelect`), attribute accumulation (`fragmentParticleSurfaceAccumulate`) and
   per-scene-sample deferred composite (`fragmentParticleSurfaceComposite`).

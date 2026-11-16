@@ -1,56 +1,116 @@
 # lib/engine/app/platform/glfw
 
-## Responsibility
-The `engine.app:platform.glfw` module provides the GLFW implementation of `IPlatform` (`GlfwPlatform`), plus `GlfwWindow` (implements `IWindowService`), `GlfwInput` (implements `IInputService`), and `GlfwPlayer` (implements `IPlayerService`). It handles GLFW init/terminate, custom GLFW allocator hooks, error-callback routing, domain-gated service creation, window/monitor lifecycle (state/geometry callbacks dispatch dual-level, input callbacks dispatch window-level only), context-routed input polling, joystick hot-plugging, and graph-backed player lifecycle.
+## Responsibility and navigation
 
-## Design
-- **GlfwPlatform** implements `IPlatform` — owns `std::unique_ptr<GlfwWindow/GlfwInput/GlfwPlayer>` plus `safe_ptr<Application> m_application`; exposes `getApplication/getInputService/getWindowService/getPlayerService` as non-owning `safe_ptr` views, `getPlatformName() == "GLFW"`, `getPlatformVersion()` via `glfwGetVersion()`
-- `initialize(app)`: asserts empty `m_application`, caches `&app`, installs GLFW error callback (`PPR_LOG` error), installs process-lifetime `GLFWallocator` (malloc/realloc/free; intentionally never cleared), `glfwInit()` (failure → clear callback + `initialization_failed`), then `PPR_DEFER` rollback (`shutdown(app)` unless `success`); domain-gated creation — `!m_is_headless → GlfwWindow + insert_or_assign<IWindowService>`, `m_is_interactive → GlfwInput + insert_or_assign<IInputService>`, `m_needs_presence → GlfwPlayer::initialize(*m_input_service) + insert_or_assign<IPlayerService>`
-- `shutdown(app)`: idempotent (early success return when `!m_application.isValid()`; otherwise asserts identity, `PPR_DEFER m_application.reset()`); reverse-order erase + shutdown (`player → input → window`), `reset()` each service, then `glfwTerminate()` + clear error callback; unregisters only services whose publication completed (partial-init safe), attempts all cleanup and propagates the retained per-service `first_err`
-- `update(dt)`: `GlfwInput::pollInputDevices(dt)` FIRST (clears/flushes transient device state; gamepad polling is event-pump independent), then `GlfwWindow::pollEvents()` (`glfwPollEvents()`); `PPR_RETURN_ERROR_ON_FAIL` on each
-- `platform::GlfwErrorCategory` (`App.Platform.Glfw.cpp`): name `"glfw"`, `message()` per `errc`, `default_error_condition()` maps `invalid_argument → std::errc::invalid_argument`; `make_error_code(int result)` maps `GL_TRUE → success` else `errc::fail`. Linux/clang bring-up: the category instance is `static const` (not `static constexpr`) because `std::error_category` is not a literal type on Clang/libc++
-- Native headers (`App.Platform.Glfw.include.hpp`): `GLFW_EXPOSE_NATIVE_*` is gated per OS (`WIN32 → WIN32`, `__APPLE__ → COCOA`, Linux/X11 exposes nothing) and `glfw3native.h` is included only on Windows/Apple — Linux builds see plain `glfw3.h` only, so no missing-native-header error
-- Complete-type partition imports (replacing fragile forward declarations): `:platform.glfw.window` imports `:application` + `:service.window` + `:window.handle/monitor/viewport`; `:platform.glfw.player` imports `:platform.glfw.input` so `GamepadDevice` is complete; `:platform.glfw` (umbrella) imports `:application` + `:platform` + all three backend partitions instead of forward-declaring `GlfwInput/GlfwPlayer/GlfwWindow`
-- **GlfwWindow** implements `IWindowService` — no public singleton; file-static `g_glfw_window` (`safe_ptr<GlfwWindow>`) routes static GLFW C-callbacks to the instance. State: `m_windows`/`m_monitors` (`Array<unique_ptr<…>>`), `m_primary_monitor`/`m_main_window`/`m_focused_window`/`m_main_viewport`, `SharedApplication m_application` view; service-level `m_when_monitor_connected/disconnected`, `m_when_window_created/destroyed/closed/focused/iconified/moved/resized/scaled` sinks. Events pumped via `pollEvents()` (`glfwPollEvents()`) and `waitEvents()` (`glfwWaitEvents()`); positive timed waits on Windows use an owned high-resolution waitable timer together with the native message queue, preserving posted-event wakeups; other platforms use GLFW timed waits. Timer creation and wait failures propagate, and shutdown closes the handle with retain-first-error cleanup; `getWindowFromGlfwHandle_` resolves `Window&` from `glfwGetWindowUserPointer`
-- Window init/teardown: `initialize(app)` sets `g_glfw_window` + `initializeMonitors_()` then caches `m_application`; `initializeMonitors_()` stages `glfwGetMonitors` (null/empty → `no_such_device`) → `glfwCreateMonitor_` (name, physical size, virtual pos, current video mode, primary flag) → commit + per-monitor `glfwSetMonitorUserPointer` + `glfwSetMonitorCallback`; `shutdown()` defers clearing viewport/focused/main/primary + arrays, clears monitor callback + `g_glfw_window` + `m_application`, fires `m_when_window_destroyed` per window before `glfwDestroyWindow(release())`, fires `m_when_monitor_disconnected` per monitor before clearing its user pointer, retain-first-error
-- Monitor callbacks: `glfwMonitorCallback_` — `GLFW_CONNECTED` creates/publishes monitor (updates `m_primary_monitor` when primary, fires `m_when_monitor_connected`), `GLFW_DISCONNECTED` fires `m_when_monitor_disconnected` then erases; queries `enumerateMonitors/getPrimaryMonitor/enumerateMonitorVideoModes (glfwGetVideoModes + glfwVideoMode_)/setMonitorGamma (glfwSetGamma)`
-- Window creation (`createWindow(WindowModel&&, safe_ptr<Window>*)`): sets FOCUSED/VISIBLE/DECORATED/RESIZABLE hints, `glfwCreateWindow` in RAII guard (fullscreen monitor + share handles resolved from strong handles, null → `invalid_argument`), syncs DECORATED/RESIZABLE attribs, snapshots framebuffer size / window pos / window size / content scale, registers 14 callbacks (close, focus, iconify, pos, size [disabled — framebuffer callback is the single `m_when_resized` driver], framebuffer-size, content-scale, key, char, mouse-button, cursor-pos, cursor-enter, scroll, drop), captures platform native handle (`glfwGetWin32Window` on Win32, `glfwGetCocoaWindow` on Apple, else null), constructs `Window` then overwrites content-scale/framebuffer/pos/size snapshots, sets user pointer, publishes to `m_windows`, fires `m_when_window_created` (failure → `destroyWindow` rollback)
-- Window event routing: state/geometry callbacks resolve `Window&` via `glfwGetWindowUserPointer` then fire window-level sink + service-level sink — close (`m_visible=false`, clears focused/main, `m_when_closed` + `m_when_window_closed`, plus `m_application->requestExit` when the main window closes), focus (`m_focused` + `m_when_focused`, tracks `m_focused_window`), iconify (`m_iconified` + `m_when_iconified`), pos (`m_window_position` + `m_when_moved(old)`), framebuffer-size (`m_framebuffer_size` + `m_when_resized(old)`), content-scale (`m_content_scale` + `m_when_scaled(old)`); `glfwWindowSizeCallback_` only syncs `m_window_size` (`#if 0` dispatch kept disabled so framebuffer stays the single resize driver). Input/drag callbacks fire window-level sinks only (no service-level fan-out): key via `glfwToKeyboardKey_` (printable passthrough incl. space/A–Z case fold, named-key switch, nullopt → drop; PRESS/RELEASE → `m_when_keyboard_pressed(window, key, pressed)`, REPEAT → `m_when_keyboard_repeated`, else assert) → `m_when_keyboard_pressed/repeated`; char filters surrogates/>0x10FFFF → `m_when_character_input` (`checked_cast<hal::native::char_t>`); cursor-enter → `m_when_hovered`; mouse-button 0–4 → `EMouseButton` → `m_when_mouse_clicked`; cursor-pos → `m_when_mouse_moved`; scroll → `m_when_mouse_scrolled`; drop span → `m_when_drag_and_dropped`
-- Window management: `destroyWindow` (find by identity, extract, null caller handle, defer resetting main/focused + `glfwDestroyWindow`, return `m_when_window_destroyed`); `setMainWindow` (asserts membership, swaps `m_main_window`, returns old; currently no viewport/focus side-effect)/`getMainWindow`/`getFocusedWindow`; `getWindowMonitor` (`glfwGetWindowMonitor` + `glfwAllocation_` lookup with `PPR_ENSURE`)/`setWindowMonitor` (`glfwSetWindowMonitor`, GLFW_DONT_CARE refresh; clears stale GLFW error state, consumes the call's error via `glfwGetError`, logs its description, returns empty `std::error_code` on success or existing platform failure mapping on apply/rollback failure); `getWindowShouldClose/setWindowShouldClose`; `setWindowCursorMode` (normal/captured/disabled/hidden → GLFW_CURSOR_*); `moveWindow/resizeWindow/renameWindow/showWindow/hideWindow/iconifyWindow/restoreWindow/focusWindow/swapWindowBuffers`; `getWindowNativeHandle` (same platform-conditional helper as creation); clipboard `setWindowClipboardString/getWindowClipboardString` (`glfwSet/GetClipboardString`); eight `whenWindow*` subscription adders. Linux/clang bring-up: `createMonitor_` returns the `Monitor` by value (`return monitor`, no `std::move`) to satisfy `-Werror=return-std-move`
-- **GlfwInput** implements `IInputService` — file-static `g_glfw_input` routes `glfwJoystickCallback_`. Hot state: `KeyboardDevice m_keyboard{"Keyboard"}`, `MouseDevice m_mouse{"MouseJoy"}`, `std::array<GamepadDevice,4> m_gamepads{"GamePad0".."GamePad3"}`, `m_global_context`, `m_all_contexts`, `m_devices_by_id`, `m_context_by_device`, `m_timestamp`/`m_delta_time`, `m_gamepads_ever_connected` flag, cold `m_when_device_connected/disconnected`
-- Input init/teardown: `initialize()` asserts empty `m_devices_by_id`, sets `g_glfw_input`, registers keyboard+mouse in `m_devices_by_id` firing `m_when_device_connected` each, installs joystick callback, defer-rollback to `shutdown()` on failure; `shutdown()` defers resetting timing/flags/device states and clearing all registries, clears joystick callback + `g_glfw_input`, fires `m_when_device_disconnected` per registered device
-- Devices/contexts: `getKeyboard/getMouse/getGamepad(i)/getInputDeviceByID/enumerateInputDevices (m_devices_by_id.values())/enumerateInputKeysSupported (fan-out)`; `getGlobalInputContext/hasInputContext (global identity or m_all_contexts)/addInputContext/removeInputContext/assignInputContextToDevice (valid context → insert, null → erase)/clearInputContextDeviceAssignments/enumerateInputContexts (global + m_all_contexts + m_context_by_device values)/enumerateInputContextDeviceAssignments`
-- Per-frame events: `pollInputDevices(dt)` — `m_timestamp += dt`, `m_keyboard.pollInputMessages(dt)`, `m_mouse.pollInputMessages(dt)`, per connected gamepad resolve context (`m_context_by_device` else `m_global_context`) → `pollInputGamepad_`; `resetInputDevices()` resets keyboard/mouse/all pads; `post*` delegate to `KeyboardDevice/MouseDevice` with `m_delta_time` and the caller's `InputContext`, or — while `m_collecting_native_batch` — stage owned records into `PendingInputBatch` (`:input.batch`) with zero client dispatch; `dispatchCollectedBatches(focus, device)` replays the batch in order through the real devices PLUS the deferred focus/hotplug client halves through the platform appliers, then clears (exactly-once); `shutdown()` also clears the batch + flag
-- Gamepads: `glfwJoystickCallback_` ignores non-gamepad jids; CONNECTED stamps `m_controller_id`/`m_friendly_name (glfwGetGamepadName)`, registers in `m_devices_by_id`, fires connected; DISCONNECTED fires disconnected, erases registration, clears id/name. `pollInputGamepad_` reads `glfwGetGamepadState` (not-connected/busy errors), posts left/right sticks (2D), left/right triggers (1D), start/back/A/B/X/Y/dpad/shoulder/thumb buttons, then `pollInputMessages(dt)`; rumble unsupported (GLFW issue #57 TODO). Linux/clang bring-up: GLFW joystick ids (`int jid`) are converted with `checked_cast<std::size_t>` before indexing `m_gamepads`, closing the `int`-vs-`u32` sign-conversion warning at the mango/container boundary
-- **GlfwPlayer** implements `IPlayerService` — state `safe_ptr<GlfwInput> m_glfw_input`, `PlayerGraph m_graph`, `std::mt19937_64 m_id_generator` seeded from `randomNumberGenerator()`; `initialize(glfw_input)` caches pointer, `shutdown()` clears it; `getPlayer/enumeratePlayers` delegate to graph; `getOrCreateKeyboardPlayer()` reuses player found by keyboard device ID else `m_graph.getOrCreateKeyboardPlayer(*this, fresh PlayerId, keyboard, mouse)` (unified keyboard+mouse); `addGamepadPlayer(i)` bounds-checks, stamps `gamepad.m_controller_id`, reuses existing or `m_graph.addGamepadPlayer(*this, fresh PlayerId, gamepad)`; `removePlayer/whenPlayerAdded/whenPlayerRemoved/resetPlayers (m_graph.clear())` delegate
+`engine.app:platform.glfw` implements the platform, window, input and player
+services. `../App.Platform.cppm` owns the platform contract;
+`../../CMakeLists.txt` owns backend registration.
 
-## Flow
-Windows monitor identities use `EnumDisplayDevicesW(..., EDD_GET_DEVICE_INTERFACE_NAME)` matched to GLFW's native adapter and monitor names. The persisted token is `win32-monitor:<DeviceID>`; other backends leave identity empty and support only unambiguous friendly-name preferences. Failed native identity lookup prevents publication and is logged; callback exceptions are contained and request application exit.
-1. `IPlatform::create()` → `GlfwPlatform` instance; `initialize(app)` → error callback + allocator + `glfwInit()` → domain-gated `GlfwWindow::initialize()` (monitor enumeration) → `GlfwInput::initialize()` (keyboard/mouse registration, joystick callback) → `GlfwPlayer::initialize(*m_input_service)` → each inserted into `app.getServices()`
-2. Per-frame `GlfwPlatform::update(dt)` → `GlfwInput::pollInputDevices(dt)` (timestamp advance, keyboard/mouse flush, per-pad `glfwGetGamepadState` → context dispatch) → `pumpNativeEvents()` (collection-only: flag around `GlfwWindow::pollEvents()` so key/char/mouse callbacks stage owned batch records, zero client dispatch; repeatable) → `GlfwInput::dispatchCollectedBatches(focus, device)` (exactly-once ordered replay + clear at the defined update point, input replay and deferred control halves interleaved in collection order). Focus callbacks split into an immediate platform half (flags + focused-window tracking, synchronous) and a deferred client half (window + service broadcasts via the batch record); joystick hotplug splits into an immediate half (registry + id/name bookkeeping) and a deferred half (connected/disconnected broadcasts). State/geometry callbacks fan out to window-level `Window::m_when_*` + service-level `GlfwWindow::m_when_*` sinks, while key/char/mouse/scroll/drop fire window-level `Window::m_when_*` sinks only for `InputListener` consumers; closing the main window additionally calls `m_application->requestExit`
-3. Gamepad hot-plug: `glfwJoystickCallback_` → `m_devices_by_id` register/erase + device callbacks → `GlfwPlayer`/`PlayerGraph` creates/removes the pad's player (`addGamepadPlayer/removePlayer`)
-4. Presentation: window service owns `Window` handles consumed by `Renderer::renderAndPresent(window, …)` (surface keyed by `WindowHandle`)
-5. `shutdown(app)` → erase + shutdown player → input → window → `glfwTerminate()` + clear error callback; safe to re-enter (second call returns success)
+| Files (`.cppm/.cpp`) | Owner and responsibility |
+|---|---|
+| `App.Platform.Glfw` | `GlfwPlatform`: factory, domain-gated services, lifecycle, admitted update and native pumping; `.cpp` also owns `GlfwErrorCategory` |
+| `App.Platform.Glfw.Window` | `GlfwWindow`: windows/monitors, native callbacks, display geometry, clipboard, waits and surface handles |
+| `App.Platform.Glfw.Input` | `GlfwInput`: devices, global/per-device contexts, hotplug, polling and collected input replay |
+| `App.Platform.Glfw.Player` | `GlfwPlayer`: `PlayerGraph` adapter, keyboard/mouse player and gamepad player lifecycle |
+| `App.Platform.Glfw.include.hpp` | OS-gated GLFW/native includes |
 
-## Integration
-- Windowed placement: `centerDisplayWindow` centers the decorated outer rectangle in the selected monitor work area after final size/mode application, with a bounded destination-DPI correction. Oversized windows retain their client size and align outer right/top edges. Native errors propagate and observed geometry refreshes the model. Startup uses this operation; runtime uses it only for a changed explicit windowed monitor preference, preserving ordinary resize and rollback positions.
-- Display switching: `configureDisplayWindow` supports windowed (null monitor) and exclusive fullscreen,
-  optional explicit refresh, and error-reporting native apply/rollback. `displayWindowGeometry` queries logical
-  and framebuffer extents plus exclusive monitor/refresh without guessing windowed observations. Monitor
-  enumeration refreshes current-mode telemetry from GLFW. Application coordinates these main-thread calls
-  with owner-lane surface requests; see `../../DisplayControls.md`.
-- **Consumers**: owning application shell (factory + initialize/update/shutdown), `GlfwInput`/`GlfwWindow`/`GlfwPlayer` cross-links (player reads `GlfwInput::m_keyboard/m_mouse/m_gamepads`; platform update drives input then window), `ImGuiService`-style listeners registering contexts with `GlfwInput`
-- **Depends on**: `engine.core` (safe_object/safe_ptr, IService, TimeSpan/TimePoint, collectors, FlatMap/FlatSet), `engine.math` (int2/float2), `:service.window/:window.handle/:window.monitor/:window.viewport` (Window/Monitor models), `:input.device/:input.key/:input.listener` (devices, contexts), `:player.graph` + `:service.player` (PlayerGraph, IPlayerService), GLFW C API (`App.Platform.Glfw.include.hpp`)
-- **Provides**: `engine.app:platform.glfw`, `:platform.glfw.window`, `:platform.glfw.input`, `:platform.glfw.player` partitions with `GlfwPlatform`, `GlfwWindow`, `GlfwInput`, `GlfwPlayer`, plus `platform::GlfwErrorCategory/error_category/make_error_code` and `IPlatform::create()`
-- **Used by**: application startup/teardown/frame pump, `ServicesStore` (`IWindowService/IInputService/IPlayerService` registration), renderer surfaces (Window handles), gameplay/UI input routing
+## Service ownership and teardown
 
-## Key Files
-- `App.Platform.Glfw.cppm` — `GlfwPlatform` declaration (owns window/input/player unique_ptrs + application view)
-- `App.Platform.Glfw.cpp` — platform lifecycle (domain-gated initialize, idempotent shutdown, update ordering), `GlfwErrorCategory`, `IPlatform::create()`
-- `App.Platform.Glfw.Window.cppm` — `GlfwWindow` declaration (window/monitor stores, focused/main/viewport views, service + per-event sinks)
-- `App.Platform.Glfw.Window.cpp` — monitor enumeration/callbacks, window create/destroy, 14 GLFW callbacks (state/geometry dual-level, input window-only), manipulation/clipboard/subscriptions
-- `App.Platform.Glfw.Input.cppm` — `GlfwInput` declaration (hot devices, global/registry/per-device contexts, timing, device callbacks)
-- `App.Platform.Glfw.Input.cpp` — initialize/shutdown, device/context enumeration, `pollInputDevices/pollInputGamepad_`, `post*` delegates, joystick hot-plug
-- `App.Platform.Glfw.Player.cppm` — `GlfwPlayer` declaration (input view, PlayerGraph, id generator)
-- `App.Platform.Glfw.Player.cpp` — keyboard/gamepad get-or-create, removal, callback delegation, reset
-- `App.Platform.Glfw.include.hpp` — GLFW native-include helper header
+`GlfwPlatform` owns the three services; application/service accessors are
+non-owning views. Window service creation requires a non-headless domain, input
+an interactive domain, and player service presence support. Initialization
+publishes each service only after its initialization succeeds and rolls back
+partial setup. GLFW allocator hooks have process lifetime and are intentionally
+not cleared. GLFW errors go through the engine logger and platform error category.
+`GlfwErrorCategory` maps invalid arguments to the standard condition;
+`make_error_code(int)` treats `GL_TRUE` as success and other results as failure.
+
+Shutdown is idempotent and releases player, input, then window before GLFW
+termination and error-callback removal. It unregisters only successfully
+published services, attempts independent cleanup and returns the first error.
+`GlfwWindow` and `GlfwInput` use file-static non-owning callback routers, not
+public singleton ownership; shutdown detaches native callbacks and routers
+before releasing their owned state. Window/monitor destruction notifications
+precede native handle/user-pointer release. Input teardown clears batches,
+collection mode, timing, device state and registrations.
+
+`GlfwInput` owns keyboard/mouse/gamepads and context assignments; unassigned
+gamepads use the global context. `GlfwPlayer` borrows input and delegates player
+ownership/events to `PlayerGraph`; keyboard and mouse share a player, existing
+device players are reused, and gamepad indices are bounds-checked. GLFW rumble
+remains unsupported (the source retains GLFW issue #57 as a TODO).
+
+## Admitted update and callback routing
+
+`GlfwPlatform::update` advances devices once, collects native events, then calls
+`GlfwInput::dispatchCollectedBatches` for exactly-once ordered replay. Device
+polling precedes native text delivery so transient clearing cannot erase the
+frame's characters; gamepad sampling is event-pump independent. Additional
+`pumpNativeEvents`/`waitNativeEvents` calls collect owned records without client
+advancement. See [input contracts](../../input/codemap.md).
+
+Focus and hotplug split immediate platform bookkeeping from deferred client
+broadcasts. Replay interleaves those broadcasts with input in collection order;
+focus broadcasts use the captured value, not a newer live flag. State/geometry
+events reach window and service sinks; input/drag events reach window sinks
+only. The framebuffer callback alone drives resize notifications; logical
+window-size changes still update the model. Closing the main window requests
+application exit. Key translation drops unmapped keys; character delivery
+rejects surrogates and values above Unicode's maximum.
+
+Window/display operations belong on main, coordinated with owner-lane surface
+requests. `postEmptyEvent` is the any-thread wake operation and the render lane's
+only legal platform call. Positive Windows waits use an owned high-resolution
+timer plus the native message queue, preserving posted-event wakeups; other
+platforms use GLFW timed waits. Timer creation/wait errors propagate, and timer
+release participates in retain-first-error shutdown. Wait bounds are best-effort;
+the caller owns the absolute deadline. They are not pure blocked-time measures
+because native callbacks may run inside the wait.
+
+## Native platform and compiler constraints
+
+The include helper exposes Win32/Cocoa native APIs only on their platforms;
+Linux gets plain `glfw3.h` there. Native-handle/display helpers in
+`App.Platform.Glfw.Window.cpp` also contain an X11-conditional branch, usable
+only when `GLFW_EXPOSE_NATIVE_X11` is supplied. Wayland does not receive a foreign
+XID. `createWindow` rejects an unavailable native handle with `not_supported`
+before publication and releases the temporary GLFW owner. Native surface support
+must be established from the active build, not inferred from that dormant branch.
+
+Windows monitor identities use `EnumDisplayDevicesW(..., EDD_GET_DEVICE_INTERFACE_NAME)`
+matched to GLFW adapter/monitor names and persist as `win32-monitor:<DeviceID>`.
+Other backends leave identity empty and support only unambiguous friendly-name
+preferences. Failed native identity lookup prevents publication and is logged;
+callback exceptions are contained and request application exit.
+
+Linux/Clang bring-up constraints: the error category is `static const`, not
+`constexpr` (`std::error_category` is non-literal); partition imports must provide
+complete service/device types; joystick indices use checked unsigned conversion.
+The earlier map also recorded return-by-value/no-redundant-move monitor handling
+for `-Werror=return-std-move`; the current monitor factory returns an owned
+expected result, so consult `glfwCreateMonitor_` rather than the old value-return
+recipe. These notes are historical compatibility context, not current build evidence.
+
+## Display and renderer integration
+
+`GlfwWindow::createWindow` owns native creation and rolls back failed publication.
+`setMainWindow` changes identity without an implicit viewport/focus side effect.
+Renderer surfaces consume its `WindowHandle`; the service retains window ownership.
+
+`centerDisplayWindow` centers the decorated outer rectangle in the selected
+work area after final size/mode application, with bounded destination-DPI
+correction. Oversized windows retain client size and align outer right/top
+edges. Native errors propagate and observed geometry refreshes the model.
+Startup uses this operation; runtime uses it only for a changed explicit
+windowed monitor preference, preserving ordinary resize and rollback positions.
+
+`configureDisplayWindow` supports windowed (null monitor) and exclusive
+fullscreen, optional explicit refresh, and error-reporting native apply/rollback.
+`setWindowMonitor` consumes the call's GLFW error rather than stale error state.
+`displayWindowGeometry` reports logical/framebuffer extents and exclusive
+monitor/refresh without guessing windowed observations; monitor enumeration
+refreshes current-mode telemetry. See `../../DisplayControls.md`.
+
+The backend depends on core/math, app service/window/input/player partitions and
+GLFW. The application owns startup, pumping and teardown; service consumers
+include renderer surfaces and UI/gameplay listeners.

@@ -14,11 +14,19 @@ The root first runs CPU image, mesh, resilience and observe groups. The `asset/r
 
 ## Running
 
-All entries use `--loop ${PPR_TEST_LOOPS}`, default 1. `engine.tests.asset.cpu` runs `asset` with `--skip-test asset/render` and TIMEOUT 450. Routine GPU correctness runs as five responsibility shards under `RESOURCE_LOCK gpu` and TIMEOUT 450: `gpu_caches` (the `caches` and `sharedmesh` groups), `gpu_picture` (picture controls, both HDR leaves, both MSAA4 spatial leaves, background magnification and both temporal motion-quality leaves), `gpu_grid_particles` (particle support/resources, candidate activation, compute visibility, stochastic world UVs/mips and surface inventory), `gpu_grid_surface` (the retained translucent boundary leaf), and `gpu_misc` (renderer/pipeline/MSAA/attachment contracts, GPU timestamps, pre-render ordering, plus the `draws` and `quarantine` groups). Each shard is an explicit leaf or group token list in `CMakeLists.txt` rather than a broad suffix match, so the union is auditable. Task 11 retired the smooth solid/liquid catalog-texture, large-offset, nominal-density, liquid-surface, liquid-optics, solid-envelope and solid-interface leaves with their shaders and entries; replacement material evidence lives in `app/world_lighting_material/`. Together these entries cover every remaining `asset/render` leaf exactly once; only the opt-in `*_gpu_validation` entries re-select leaves. ASan does not select three loops automatically. Configure `PPR_TEST_LOOPS=3` for stress and restore 1 afterward.
+`CMakeLists.txt` owns the current CPU exclusion, explicit GPU leaf/group filters,
+ordinary/validation pairs, deadlines and resource locks. The CPU entry excludes
+`asset/render`; GPU selection is split by responsibility, with separate spatial
+integration entries. Consult those tokens rather than a copied shard inventory.
 
-Run the routine entries with `ctest --test-dir out/build/<preset> -R '^engine[.]tests[.]asset[.]' --output-on-failure -LE gpu_validation`. The opt-in `gpu_validation`, `resident_particles_gpu`, `picture_hdr_gpu_validation` and `picture_spatial_gpu_validation` entries set `PPR_TEST_GPU_VALIDATION=1` and claim `RESOURCE_LOCK gpu` with TIMEOUT 300. They cover the representative grid visibility gate, resident-circle gate, both HDR policy/encoding gates and both indexed spatial resolve gates respectively; run them separately with the same target regex and `-L gpu_validation`. For focused groups, invoke the executable with the shared runner's `--run-test`/`--skip-test` filters matching current group paths; run from its staged executable directory. GPU groups require the documented platform/GPU environment.
+Select this suite with the CTest regex `^engine[.]tests[.]asset[.]`. For focused
+groups, invoke the shared runner's `--run-test`/`--skip-test` filters from the
+staged executable directory. GPU groups require the documented platform/GPU
+environment. The qualification sections below describe what each fixture proves.
 
-See [root test policy](../../../../codemap.md#test-infrastructure) for machine exclusivity, required asset gates and loop selection.
+See [root test policy](../../../../codemap.md#test-infrastructure) and
+[validation](../../../../.opencode/skills/validation/SKILL.md) for routine versus
+GPU-validation invocations, machine exclusivity, required gates and loop selection.
 
 For explicit Vulkan readbacks, set the test-only environment variable
 `PPR_ASSET_TEST_VULKAN=1` in the serialized build shell, invoke the existing
@@ -55,9 +63,11 @@ the exact raster-pixel top-left positions (3/8,1/8), (7/8,3/8), (1/8,5/8),
 sample-position evidence. Normal shader-directory staging includes the
 new asset. The frozen MIT source and deliberate lower-bucket correction are
 documented in `third_party/HableMSAA/README.md`. This is sampling/filter
-qualification; runtime pattern admission, actual contour sample colours, temporal
-history and 1080p-to-4K cost remain unqualified. Task 12 owns the reconstruction
-integration; Task 2 removed the old runtime selector.
+qualification; this fixture alone does not qualify runtime pattern admission,
+actual contour sample colours, temporal history or 1080p-to-4K cost. Task 12
+historically owned reconstruction integration; current ownership is described in
+the [renderer map](../../app/renderer/codemap.md#reconstruction-route-history).
+Task 2 removed the old runtime selector.
 
 The threshold leaf additionally exercises the authored Slang-RHI MSAA capability
 and scoped allocation-query recipe included by `SlangRHI.cmake`. It
@@ -67,16 +77,15 @@ unsupported extents and normalized mip rules. The recipe is now included;
 its configure/include-path and execution gates must pass before claiming runtime
 admission. See `third_party/SlangRHI/README.md` for the bounded descriptor scope.
 
-## Routine GPU correctness shards
+## GPU coverage and historical execution evidence
 
-The former single `engine.tests.asset.gpu` aggregate selected all of
+Historical execution evidence: the former single `engine.tests.asset.gpu` aggregate selected all of
 `asset/render` and could not finish its 450 s deadline: it accumulated ordinary
 correctness leaves together with measurement loops, so the deadline was reached
-before later correctness leaves ran at all. Routine correctness is now sharded
-by responsibility (`gpu_caches`, `gpu_picture`, `gpu_grid_particles`,
-`gpu_grid_surface`, `gpu_misc`), each with an explicit token list, the same GPU
-lock and the same 450 s deadline. Nothing was moved into a longer deadline and
-no leaf was dropped to make a shard fit.
+before later correctness leaves ran at all. The responsibility split preserved
+the deadline and coverage; no leaf was dropped to make a shard fit. This is the
+historical reason for the split, not evidence of a current passing run. Current
+scheduling is authoritative in `CMakeLists.txt`.
 
 The surface shard now covers only `grid_categorical_resolved_boundary_and_translucency`:
 it publishes resolved cells and a uniform CH field, then asserts the opaque and

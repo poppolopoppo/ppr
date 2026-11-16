@@ -152,12 +152,12 @@ result without writing a push-plan artifact.
 | 3 | Current plan snapshot still matches | Re-run the range enumeration | Yes for rewrites |
 | 4 | Surviving messages follow the canonical convention | Step 3 review | Yes |
 | 5 | No credentials appear in the push range | Step 3 scan | Yes |
-| 6 | Relevant build and tests pass | Run the applicable validation commands | Yes |
+| 6 | Relevant build and tests pass | Reuse current evidence; run only missing or invalidated checks under `validation` | Yes |
 | 7 | Dry-run succeeds | `git push --dry-run` | Yes |
 | 8 | Branch protections and merge strategy are understood | Confirm repository requirements | Conditional |
 
-Adapt validation commands to the affected platform and targets. Use the
-`validation` skill when a full project validation pass is required.
+Use `validation` to judge evidence applicability and select missing or invalidated
+checks for the affected platform, targets, and delivery scope.
 
 ## Edge cases
 

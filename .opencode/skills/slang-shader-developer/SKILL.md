@@ -26,6 +26,20 @@ This is not a static inventory of every shader. Before an edit, inspect the
 current shader and its C++ consumer. Shader assets and Slang-RHI behavior change
 faster than this contract.
 
+## Task selection
+
+Read the matching reference before implementing or reviewing the selected
+task. The authoring, ABI, cursor/reflection, and validation rules below apply
+to every shader task.
+
+| Task | Required reference |
+|---|---|
+| Mesh-specific work: `mesh_bindless.slang`, `TrianglePass`, mesh mirrors, payload grouping, heaps, bindings, or failures | [Current bindless mesh seam](references/bindless-mesh.md); load only for mesh-specific work |
+| Language/compiler features, matrix layout, resource or cursor semantics, target portability | [Official sources](references/official-sources.md); use official documentation for features not covered here |
+| Creating/loading shader programs or pipelines, new/moved shader assets, runtime staging, failure triage | [Programs and staging](references/programs-and-staging.md) |
+| Rendering ownership and camera boundaries | [AGENTS.md rendering/camera contract](../../../AGENTS.md#rendering-and-camera-contract) |
+| Shader authoring, CPU/GPU ABI, binding/reflection changes, validation | Entry sections below |
+
 ## Mandatory first pass
 
 Before changing shader code or its C++ integration:
@@ -82,13 +96,10 @@ exercise reflection may not execute the transform.
 
 ## Architecture and ownership
 
-- `Renderer` remains content-free. It owns device-facing frame orchestration,
-  surfaces, command submission, and presentation.
-- A render pass owns its content-specific shader program, pipeline variants,
-  buffers, textures, samplers, and encoding logic.
-- Scene, camera, player, and UI state remain client/editor-owned. Passes consume
-  immutable snapshots such as `CameraSnapshot`; shaders do not justify moving
-  scene ownership into `Renderer`.
+Apply [AGENTS.md's rendering and camera contract](../../../AGENTS.md#rendering-and-camera-contract)
+for Renderer/pass/client ownership and snapshot boundaries. Pass-owned shader
+resources include textures, samplers, and pipeline variants.
+
 - Shader loading is synchronous through `IShaderService`. Asset shaders are
   compiled at runtime from the staged content directory; embedded shaders use
   `loadModuleFromSource`.
@@ -128,9 +139,10 @@ float4 fragmentMain(VertexOutput input) : SV_Target { ... }
   for their defined stage roles. User varyings use explicit, matching semantics
   such as `TEXCOORD0`, `NORMAL`, or `COLOR0`.
 - Entry-point parameters are varying unless marked `uniform`. The mesh pass uses
-  `uniform` entry-point parameters for its bindless texture-heap buffer and its
-  shared sampler handle; per-draw ordinary data is a module-scope global there
-  (see "Current bindless mesh seam").
+  fragment entry-point uniforms for its texture heap and shared sampler, and a
+  vertex entry-point uniform for `g_payload_base`; it has no module-scope
+  ordinary data. Per-draw ordinary data as a module global breaks D3D12 root
+  signature creation; see [Current bindless mesh seam](references/bindless-mesh.md).
 - A pass using fixed-function vertex buffers must keep its input layout and
   shader vertex input synchronized. A pass using `SV_VertexID` plus
   `StructuredBuffer` fetch must not also add fixed-function geometry bindings.
@@ -202,123 +214,7 @@ Rules:
   layout plus reflection is usually more portable, and manual claims can
   collide with generated layout.
 
-## Current bindless mesh seam
-
-`assets/shaders/mesh_bindless.slang` is the live bindless mesh program; loaded by
-`TrianglePass::createShaderProgram_` from
-`<content_dir>/shaders/mesh_bindless.slang`. It contains deliberate,
-dependency-version-specific rules:
-
-- Global scope contains one `ConstantBuffer` (`g_frame`) plus structured buffers
-  (`g_vertices`, `g_indices`, `g_materials`, `g_payloads`) and NO ordinary data.
-  This is not stylistic: a module-scope ordinary global makes
-  `D3D12SerializeRootSignature` fail, because Slang emits it into a generated
-  `globalParams` CBV at b0 that overlaps the shifted `g_frame` at b1, and program
-  creation fails for every D3D12 test. Verified with the vendored slangc
-  2026.17.1: the base-as-global form emitted `globalParams`@b0 + `g_frame`@b1;
-  the base-as-entry-point form emits `g_frame`@b0 + `entryPointParams`@b1 with no
-  collision. Never promote per-draw ordinary data to a global to "clean up" the
-  entry point — that reintroduces this failure.
-- Per-instance payload data rides `StructuredBuffer<InstancePayload> g_payloads`.
-  The deleted `vertexMain` seam used `uniform float4x4 g_model` plus a scalar
-  `PushScalars` entry-point parameter; both are gone.
-- `g_payload_base` is the one per-draw uniform, and it is a `uniform` parameter on
-  the `vertexIndirectMain` entry point — not a global. Globals and entry-point
-  `uniform` params resolve through the SAME flat cursor, so the binding call is
-  identical either way and did not change when this moved:
-  `shader_cursor["g_payload_base"].setData(&base, sizeof(base))`. Precedent is
-  the deleted `g_model`/`g_push` pair, bound identically at
-  `shader_cursor["g_model"].setData(&m_model, sizeof(float4x4))` and
-  `shader_cursor["g_push"].setData(&scalars, sizeof(scalars))` (commit
-  `5d65612`, `App.Renderer.TrianglePass.cpp`). The cursor is one
-  `rhi::ShaderCursor(shader_object)` over the bound pipeline's shader object, not
-  a per-entry-point cursor. Plain data needs bare `setData`; only a container such
-  as `g_frame` needs `getDereferenced` first.
-- `g_payload_base` is mandatory, not an optimization. `SV_InstanceID` is
-  draw-local on D3D12, SPIR-V, and Metal alike, so the CPU's
-  `startInstanceLocation` never reaches the shader. Indexing
-  `g_payloads[sv_instance_id]` therefore makes every instanced draw read
-  payload 0, and makes a single-instance indirect draw (always instance 0)
-  render payload 0 for the whole scene. C++ encodes `startInstanceLocation = 0`
-  and sets `g_payload_base` per draw group to the group's first payload index;
-  the shader computes `g_payloads[g_payload_base + sv_instance_id]` with a plain
-  `u32` addition, which matches the payload index domain exactly. If C++ ever
-  reinstates a nonzero `startInstanceLocation`, these two must change together.
-- The texture heap and the shared sampler are FRAGMENT entry-point `uniform`
-  parameters: `StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures`
-  and one scalar `SamplerState.Handle g_sampler`. Textures are a heap in one
-  `StructuredBuffer`, not one `Texture2D<float4>.Handle` parameter per material
-  slot. Do not "simplify" this back to per-slot handle parameters or to a
-  handle array without checking current Slang-RHI support on every required
-  backend.
-- Missing texture slots use `0xFFFFFFFF` in `GpuMaterial`. The white fallback is
-  in-heap slot 0: `resolveTextureSlot` maps `0xFFFFFFFF` to slot 0, and C++
-  writes the fallback descriptor into heap slot 0 at cache initialization and
-  allocates host texture slots from 1. C++ does not bind a fallback per material
-  slot. Because albedo, ORM, and emissive MULTIPLY the factor values, an absent
-  map must read as white (1.0), not black.
-- Heap residency is not one-slot-per-load, and the caches differ here. Texture
-  slots ARE content-deduped and refcounted, so one heap slot serves many loads.
-  Material slots are NOT deduped: one slot per `pack` call, allocated from slot 0
-  (material slot 0 is a real material, not a fallback), and `release` rewrites the
-  slot to a zeroed `GpuMaterial` so a stale index still samples the fallback.
-  Mesh bags are never content-deduped either, so a `vb_offset`/`ib_start` pair
-  always identifies exactly one bag region.
-- Draw grouping, and therefore payload layout: C++ groups staged draws by
-  `(variant, bag bucket, vb_offset, ib_start, count, base_vertex)` and lays each
-  group's payloads out contiguously in first-group-first order, so one draw's
-  instances are `base .. base + count - 1`. That grouping key is the contract the
-  shader's `g_payload_base + sv_instance_id` arithmetic relies on.
-- The heap buffer is created with a null init payload and holds
-  `rhi::kBindlessTextureBudget` (4096) entries, so a never-written slot reads
-  back a garbage handle. `resolveTextureSlot` therefore maps any out-of-bounds
-  slot — anything other than a valid resident slot or the `0xFFFFFFFF` sentinel —
-  to slot 0, so a bad index degrades to defined factor-only rendering instead of
-  aliasing the last heap slot. That fallback is an explicit fail-safe decision,
-  not silent clamping, and it is unreachable today because host slots are
-  bump-allocated below the budget.
-- The material's metallic/roughness texture is ORM: R is occlusion, G is
-  roughness, and B is metallic. Albedo, ORM, and emissive all MULTIPLY the
-  factor values, so an absent texture must read as white (1.0), not black.
-- Descriptor handles and classic resource arrays indexed with
-  `NonUniformResourceIndex` are different bindless models. Do not mix their
-  rules. They are also not symmetric in support, which is easy to get backwards:
-  `nonuniform()` is a function over `DescriptorHandle<T>` ONLY, so it cannot
-  wrap a `StructuredBuffer` element read at all; the classic-SRV counterpart is
-  `NonUniformResourceIndex`. But with the vendored Slang 2026.17.1 that
-  counterpart FAILS to compile in the fragment stage for the `metal` and `wgsl`
-  targets ("uses features that are not available in 'fragment' stage"), while
-  the plain index compiles for `spirv`, `hlsl`, `metal`, and `wgsl`. Since
-  `input.material` indexes a `StructuredBuffer` — which tolerates a divergent
-  index on every backend — the mesh seam deliberately leaves `g_materials`
-  unannotated. Do not "make it consistent" with the heap reads: doing so with
-  `nonuniform()` is a type error, and doing so with `NonUniformResourceIndex`
-  trades a working shader on Metal/WGSL for a D3D12/SPIR-V-only build. Re-verify
-  across backends before changing either form.
-- `mul(vector, model)` for directions is exact for a rigid transform or a
-  uniform scale only. The shader states that contract in a comment; do not add
-  an inverse-transpose without also changing `InstancePayload`'s size and the
-  CPU-side `static_assert`s that lock it.
-
-Treat comments naming a Slang-RHI revision or upstream bug as evidence of a
-workaround, not a permanent language rule. Reproduce the problem before
-removing the workaround, and test the replacement before generalizing it.
-
-## Shader compilation and programs
-
-PPR's normal graphics-program flow is:
-
-1. Initialize `IShaderService`; its session fixes row-major matrix layout.
-2. Initialize RHI; it maps the created device type and selects the Slang compile
-   target through `IShaderService::setTargetFormat`.
-3. Load the module from a file or source string and capture diagnostics.
-4. Find explicitly attributed entry points by name.
-5. Build a `ShaderProgramDesc` with `LinkingStyle::SingleProgram`, the module as
-   global scope, and the selected entry points.
-6. Create the shader program through the RHI device.
-7. Create pass-owned render/compute pipeline variants from that program.
-8. Bind the pipeline, obtain its shader object, and populate it through
-   `ShaderCursor` before encoding work.
+## Compilation and staging invariants
 
 Do not bypass `IShaderService` with an unrelated compiler session. The RHI
 device receives PPR's global Slang session, and target selection/lifetime must
@@ -329,31 +225,9 @@ When adding a new cursor or program operation, inspect the exact dependency
 source/API used by the configured build instead of relying on examples from a
 different revision.
 
-## Source placement and staging
-
-- Runtime shader assets belong under `assets/shaders/`.
-- Small implementation-local shaders may remain embedded when there is a clear
-  reason, as with the current ImGui integration. Do not move shaders between
-  assets and C++ strings without considering deployment and rebuild behavior.
-- Asset shaders are staged beside executables by CMake. When adding a new
-  shader, confirm the relevant app/test target copies the containing shader
-  directory and that the pass builds its path from the supplied content root.
-- Avoid maintaining a hard-coded shader inventory in this skill. Inspect
-  `assets/shaders/**/*.slang` because the inventory can outpace documentation.
-
-## Common failure signatures
-
-| Symptom | First checks |
-|---|---|
-| geometry clipped or behind camera | `mul(vector, matrix)`, `view * projection`, point `w`, no transpose/Y flip |
-| parameter silently unchanged | exact reflected name, cursor level, `uniform`, `getDereferenced` for constant buffer |
-| corrupted vertices/materials | CPU offsets, signedness, `elementSize`, structured-buffer stride |
-| every instance draws the first instance's model/material | `g_payload_base` bound per draw group, `startInstanceLocation` (must be 0), `SV_InstanceID` assumed draw-local |
-| pipeline creation failure | diagnostics blob, entry-point names/stages, target compatibility, attachment signature |
-| works on one backend only | explicit bindings, unsupported feature, target profile, non-uniform indexing, layout assumption |
-| wrong texture sampled | material slot mapping, fallback sentinel, descriptor handle, sampler, ORM channel convention |
-| shader file missing at runtime | asset path, content root, CMake staging, working directory |
-| shutdown crash/double release | `SharedModule` ownership, pass/RHI/shader teardown order |
+Read [program creation, source placement/staging, and failure signatures](references/programs-and-staging.md)
+for the selected integration task. Runtime assets belong under `assets/shaders/`;
+new or moved shaders require checking content-root paths and CMake staging.
 
 ## Change workflow
 
@@ -382,19 +256,8 @@ pipeline creation, binding, and execution prove different parts of the path.
 
 ## Official references
 
-Prefer these official sources over search snippets or HLSL folklore:
-
-- Matrix layout: <https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/a1-01-matrix-layout.html>
-- Conventional language and resource features: <https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/02-conventional-features.html>
-- Compilation API: <https://shader-slang.org/docs/compilation-api/>
-- Compilation and targets: <https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/08-compiling.html>
-- Shader cursor model: <https://docs.shader-slang.org/en/latest/shader-cursors.html>
-- Parameter blocks: <https://docs.shader-slang.org/en/latest/parameter-blocks.html>
-- SPIR-V target behavior: <https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/a2-01-spirv-target-specific.html>
-- Metal target behavior: <https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a2-02-metal-target-specific.html>
-- Bindless convenience features: <https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/03-convenience-features.html>
-- Slang target compatibility: <https://github.com/shader-slang/slang/blob/master/docs/target-compatibility.md>
-- Slang-RHI status and source: <https://github.com/shader-slang/slang-rhi>
+Prefer the [official sources](references/official-sources.md) over search
+snippets or HLSL folklore.
 
 When an official statement conflicts with observed behavior in PPR's current
 Slang-RHI revision, record the minimal reproducer and treat the local behavior

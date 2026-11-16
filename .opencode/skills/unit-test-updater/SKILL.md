@@ -50,10 +50,9 @@ directly.
   then assert result ownership/errors separately. A zero-valued query after
   consumption cannot prove that no work was admitted or remained active.
 - Use `PPR_TEST_ASSERT` for test assertions in every build configuration; do not use raw `new`/`delete` where engine allocator or lifetime rules apply.
-- Follow the test group convention (thematic private `.cpp` group files in
-  the owning suite directory, never new `.cppm`
-  partitions), umbrella registration, and matching CMake source registration.
-  Refer to `AGENTS.md`, `module-architect`, and `code-reviewer` for shared policy.
+- Use the [registration contract](#step-4--register-the-new-tests) for test groups,
+  suite roots, CMake sources, and exact-path shards. Refer to `AGENTS.md`,
+  `module-architect`, and `code-reviewer` for shared policy.
 
 ---
 
@@ -69,15 +68,8 @@ at every handoff. Read the test group file(s) corresponding to the modified sour
   e.g. `lib/engine/tests/core/Core.Allocator.Tests.cpp` (allocator group)
 - Source `lib/engine/app/...` → leaves in the matching group file,
   e.g. `lib/engine/tests/app/App.Player.Tests.cpp` (player group)
-- Test layout: each suite keeps ONE exported root (for example `core`, `sim`, `app`, `asset`, or `game`) and a set of
-  thematic private group `.cpp` files (the owning suite module impl units,
-  `namespace detail` leaves, one TU-local `const UnitTest` plus one
-  non-exported `const UnitTest &<node>Tests() noexcept` accessor per
-  root-visible node; file-local sub-groups need no accessor; `memory`/`containers`
-  assembled in `Core.Tests.cpp`). A new leaf joins its thematic file; a
-  new file only for a new thematic area.
-  If no group file covers the area, note that a new group file must be created
-  (PRIVATE SOURCES + 1 accessor forward-declare + 1 recurse call per root-visible node).
+- Locate the owning suite root and thematic group; if no group covers the area,
+  plan a new thematic group under [Step 4](#step-4--register-the-new-tests).
 
 ---
 
@@ -122,13 +114,12 @@ For each changed observable behavior, classify the required test action:
 4. **Namespace:** follow the owning suite: engine leaves use `pP::tests::detail` and groups use `pP::tests`; game uses `pP::game::tests` and its `detail` namespace.
 5. **Nested grouping:** Use inner namespaces under `detail` for sub-grouping
 6. **Leaf tests:** `PPR_UNIT_TEST(descriptive_name) { PPR_TEST_ASSERT(...); };` (non-exported, in `detail`). The macro expands to a variable declaration, so every body ends with `};` — a bare `}` is a syntax defect that cascades into misparsed-declaration errors far from the site.
-7. **Parent tests:** one TU-local group plus one accessor per root-visible node: `const UnitTest <group> = UnitTest::Named("<group>") / [](UnitTest::IRun &_) -> void { _.recurse({detail::...}); };` then `const UnitTest &<group>Tests() noexcept { return <group>; }` — file-local sub-groups need no accessor; direct-root singleton leaves use `const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`; never spell `extern` except for the exported suite root
-8. **Top-level registration:** In the suite root `.cpp` (e.g. `Core.Tests.cpp`, `Sim.Tests.cpp`, `App.Tests.cpp`, `Asset.Tests.cpp`, or `Game.Tests.cpp`), forward-declare the accessor (`const UnitTest &<group>Tests() noexcept;`) and call it in the root `_.recurse({...})` in fixed order; register a new group `.cpp` in CMake PRIVATE SOURCES (never FILE_SET) in the same change
-9. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
-10. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
-11. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
-12. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... };` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
-13. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... };` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
+7. **Parent/root registration:** follow the single contract and example in [Step 4](#step-4--register-the-new-tests).
+8. **Assertions:** Use `PPR_TEST_ASSERT()` only — it throws in ALL build configs, including release (engine `PPR_ASSERT`/`PPR_VERIFY` compile to `[[assume]]` in release and are unusable in tests)
+9. **Code style:** Follow `AGENTS.md`; this skill owns test behavior and registration, not repository-wide style policy.
+10. **Expected-fail tests:** `PPR_UNIT_TEST(name, UnitTest::expect_fail) { ... };` — test body is expected to throw an assertion or exception. If it throws, the test passes; if it returns normally, the test fails. Use for precondition/guard validation.
+11. **Expected-crash tests:** `PPR_UNIT_TEST(name, UnitTest::expect_crash) { ... };` — test body is expected to crash/terminate the process (e.g., ASAN violation, segfault). Runs in a forked child process; non-zero exit = pass, zero exit = fail.
+12. **Fork-only tests:** `PPR_UNIT_TEST(name, UnitTest::fork) { ... };` — runs in a child process but expects success (zero exit). Use when the test must be isolated from the parent process state.
 
 ### Behavioral test selection
 
@@ -171,6 +162,13 @@ Rules:
 
 ## Step 4 — Register the new tests
 
+Each suite keeps one exported root (`core`, `sim`, `app`, `asset`, or `game`)
+and thematic private `.cpp` group files, never new `.cppm` partitions. Leaves
+live in `detail`; each root-visible node has one TU-local `const UnitTest` and
+one non-exported `const UnitTest &<node>Tests() noexcept` accessor. File-local
+sub-groups need no accessor; `memory`/`containers` are assembled in
+`Core.Tests.cpp`. Never spell `extern` except for the exported suite root.
+
 ### In the group file:
 
 Ensure every leaf test is aggregated via its group node:
@@ -186,9 +184,10 @@ const UnitTest subsystem = UnitTest::Named("subsystem") / [](UnitTest::IRun &_) 
 const UnitTest &subsystemTests() noexcept { return subsystem; }
 ```
 
-New leaf in an existing group file = edit that file only. New thematic
-group = new `.cpp` (CMake PRIVATE SOURCES in the same change) + 1 accessor
-forward-declare + 1 recurse call per root-visible node in the suite root `.cpp`.
+For a new leaf, update its existing thematic group and any exact-path shard below.
+Create a new `.cpp` only for a new thematic area; register it in CMake PRIVATE
+SOURCES (never FILE_SET) in the same change, then wire each root-visible node
+into the suite root as below.
 Direct-root singleton leaves use a TU-local copy plus accessor
 (`const UnitTest <leaf> = detail::<leaf>;` + `const UnitTest &<leaf>Tests() noexcept { return <leaf>; }`),
 called as `<leaf>Tests()` — never wrap one in a `Named` group (that would add a

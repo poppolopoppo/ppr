@@ -35,9 +35,10 @@ construction. Client/editor code owns
 scene, player, camera, viewport, and UI state; it submits work to the renderer
 rather than transferring that ownership to it.
 
-For presets, exclusions, and gates see `codemap.md` and **`build-system`**.
-Read the root `codemap.md` before working; read a directory's `codemap.md` for
-work in that area.
+For presets, exclusions, and gates see `codemap.md`, **`build-system`**, and
+**`validation`**. Read the root `codemap.md` once for navigation. For work in an
+area, read only the relevant sections of its `codemap.md`; unrelated sections and
+linked maps are not required. Reuse context you already read while it stays valid.
 
 ## Agent host and platform support
 
@@ -364,19 +365,29 @@ Both platforms use `python scripts/format_cpp.py` and
 `python scripts/check_semantic_style.py`. Resolve a missing Python/clang-format
 prerequisite before claiming validation complete; do not skip these gates because
 PowerShell is unavailable. Whole-repository formatting is an explicit audit only:
-`python scripts/format_cpp.py --all --mode fix --jobs 8` replaces the former
-separate bulk-format wrapper.
+`python scripts/format_cpp.py --all --mode fix --jobs 8`.
+
+Run the three commands below in one shell invocation per coherent C++ edit set,
+stopping at the first nonzero exit:
 
 - `python scripts/format_cpp.py --mode fix` rewrites the lines the
   working tree changes, including untracked sources in full.
 - `python scripts/format_cpp.py` (Check) is the gate. It exits 0
   only when the working tree already holds the canonical output, the case-sensitive
   code token stream (including string and char literal contents) is unchanged, and
-  repeated formatting is a fixed point. Run it on touched C++ before finishing.
+  repeated formatting is a fixed point.
 - `python scripts/check_semantic_style.py --files a.cpp b.cpp`
   checks the alternative-token rules on those files. Blocking classes are
   A-STRANDED, B-OP, and C-LEADING; `--strict` also fails on advisory findings.
-  Run it repo-wide only as a deliberate audit, never as a per-change gate.
+  Never omit `--files` for a per-change run; a repo-wide scan is a deliberate audit.
+
+Send their output to a batch log. Report each phase's exit status, marking unrun
+phases skipped after the first failure. On failure, show a bounded excerpt from
+that log and preserve the failing code. Do not spend one turn per command, and do
+not pipe a command straight into `tail`: the formatter can emit a multi-kilobyte
+rewrite log. Reuse a passing batch until later edits change its inputs; do not
+re-run it solely for a handoff or a new report, and format once the batch is
+coherent rather than after each small edit.
 
 `ColumnLimit` is `120`, so the formatter wraps and reflows expressions and
 normalizes brace placement. It does not determine semantic group boundaries;
@@ -390,18 +401,18 @@ Division of labour:
 - **`code-reviewer` owns** verifying those boundaries and headers in the formatted
   source. Passing mechanical checks does not establish this acceptance criterion.
 
-Do not use the CLion `reformat_file` router or hand-tune mechanical formatting;
-run the script after semantic edits. CLion's internal engine does not
-consistently apply the project style, reflows `and`/`or`/`not` chains away from the
-trailing-operator rule, and injects namespace end-comments; non-idempotent
-reformatting is a confirmed upstream defect class. The IDE is configured to
-delegate C/C++ formatting to the external `clang-format` binary so the script and
-the editor cannot disagree.
+Do not use the CLion `reformat_file` router or hand-tune mechanical formatting.
+It does not consistently apply the project style, reflows `and`/`or`/`not` chains
+away from the trailing-operator rule, injects namespace end-comments, and inherits
+a confirmed upstream non-idempotency defect. The IDE is configured to delegate
+C/C++ formatting to the external `clang-format` binary so the script and the
+editor cannot disagree.
 
 Expression wrapping remains script-owned, but the alternative-token rules above
 are not fully enforced by the formatter: clang-format re-flows these chains but has no option to
 normalise their spacing or operator placement. `scripts/check_semantic_style.py` is
-that enforcement. Run it on any file where you wrote or changed `and`/`or`/`not`.
+that enforcement. Include every file where you wrote or changed `and`/`or`/`not`
+in the batch semantic check.
 
 ## Specialist authorities and workflow
 
@@ -466,5 +477,5 @@ decisions. These responsibilities do not grant additional tools or permissions.
 
 ## Repository Map
 
-Read the root `codemap.md` before working and a directory's `codemap.md` for
-work in that area (use the linked maps and current `.codegraph/` index).
+Follow the selective-reading guidance under Repository facts; use the current
+`.codegraph/` index to locate and inspect symbols.

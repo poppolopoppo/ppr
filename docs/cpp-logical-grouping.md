@@ -35,19 +35,6 @@ Removing these blank lines is a readability defect even though the tokens,
 behavior, nesting, and formatter acceptance may be identical. Apply the same
 reasoning inside the outer loop, not just between top-level function phases.
 
-Other boundaries in the same authored implementation:
-
-| Location | Steps separated by blank lines |
-|---|---|
-| `assignRequired` | Build demands; sort; allocate search scratch; register deferred peak accounting; search; publish assignments. |
-| Nested augmenting search | Reject ineligible sites; record a parent/check a free site; handle an occupied site; validate search success; reassign the path. |
-| `BiomeLayout::append` | Define the local bin helper; use it to update the index and sites. |
-| `BiomeLayout::nearest` | Check input invariants; define bin conversion; initialize search state; define visitor; traverse rings; check final result. |
-| Ring traversal | Top row; side columns; bottom row; calculate unvisited bounds; test termination. Independent bounds checks are also visually separated. |
-| `restoreBiomeLayout` | Check collection shape; validate entries; construct the layout; return the completed result. |
-| `generationBiomeAt` | Fast paths; start-reservation lookup; warped-field lookup. |
-| Weighted assignment | Skip assigned sites; sum weights; reject an empty choice; draw/select; check the selected biome. |
-
 A single statement can be a paragraph: sorting demands or calling
 `assignRequired` marks a phase transition. Even the nested weighted-choice loop
 separates skipping an ineligible constraint, updating `cumulative`, and testing

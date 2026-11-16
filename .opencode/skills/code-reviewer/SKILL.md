@@ -110,31 +110,17 @@ targeted fix deltas and reopen broader scope only when those deltas affect it.
   service, and HAL boundaries retain their documented roles.
 - Framework hooks and callbacks are thin glue that delegates to engine logic;
   functions do not mix orchestration with unrelated low-level work.
-- Read complete touched function, lambda, loop, branch, and test bodies as a
-  sequence of logical paragraphs under
-  [AGENTS.md](../../../AGENTS.md#semantic-control-flow), including nested steps.
-  One overall responsibility does not imply one paragraph. Check search/count
-  versus result validation, rejection versus accepted-item work, independent
-  passes/cases, and preparation versus mutation/bookkeeping. Check guards where
-  their inputs become available; do not require moving them to function entry.
-  Contiguous fall-through describes control flow, not the absence of blank lines.
-  Continue checking excessive nesting and repeated early exits that obscure the
-  successful path.
-- A semantic separation finding must identify the adjacent responsibilities and
-  the missing or misplaced blank-line boundary. Clear violations of AGENTS.md
-  are blocking Warnings even when formatting passes; neither function length nor
-  statement counts establish a violation. Keep related instructions together
-  and do not demand a blank line after every statement, guard, or control block.
-  Named helpers should express a distinct domain operation or reuse rather than
-  an arbitrary line-count threshold, and side effects and submissions stay in
-  the caller. Structured logging fields remain one logical block and do not
-  justify flattening surrounding control flow. Use the
-  [authored examples](../../../docs/cpp-logical-grouping.md) when a boundary needs
-  calibration; do not demand a new helper or explanatory comment instead of a
-  missing blank line.
+- Inspect complete touched bodies, including nested bodies, for
+  [AGENTS.md's semantic separation contract](../../../AGENTS.md#semantic-control-flow);
+  calibrate boundaries with the [authored examples](../../../docs/cpp-logical-grouping.md).
+  Findings must identify the adjacent responsibilities and missing or misplaced
+  boundary. Confirmed violations are blocking Warnings even when formatting passes;
+  length or statement counts are not evidence. Continue checking nesting and
+  repeated early exits that obscure the successful path; side effects and
+  submissions stay in the caller.
 - Reuse the lexical tripwire's blocker result; do not promote heuristic
   advisories directly into findings. When density is a concern, inspect the
-  relevant bodies or request scoped `-ShowAdvisories` output. Resolve a D-DENSE
+  relevant bodies or request scoped `--show-advisories` output. Resolve a D-DENSE
   advisory as either a coherent group or a specific semantic separation issue;
   an advisory alone is not a violation and its absence does not prove readability.
 
@@ -182,13 +168,9 @@ evidence without treating successful capture or no-fault tests as sufficient.
   comment conventions. The mechanical gates own indentation, spacing, and
   alignment and expression wrapping; this review owns logical paragraph and
   declaration boundaries and [section headers](../../../AGENTS.md#section-headers).
-- Inspect adjacent definitions, class state/API groups, and attached declaration
-  comments as well as bodies. Verify the named major sections in interfaces,
-  implementations, and test suites, including the first substantive section.
-  Missing required headers are blocking Warnings: identify the unlabeled section
-  and its scope. Blank lines, braces, and `public:` alone do not name a section;
-  a banner does not excuse missing paragraphs inside it. Do not require a banner
-  per function or extend review to unrelated source merely to restyle it.
+- Inspect touched declaration groups and major sections against that contract.
+  Missing required headers are blocking Warnings; cite the unlabeled section and
+  its scope. Mechanical gate results do not establish semantic compliance.
 
 ## Proportional gates
 

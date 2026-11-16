@@ -15,7 +15,9 @@ selects and runs the requested checks, records exact results, and treats the
 `code-reviewer` verdict as a release gate rather than duplicating review
 dimensions. In-plan implementation defects go to `@fixer`; unexplained compiler
 ICEs and plan/feasibility blockers go through the coordinator to `@oracle` under
-AGENTS.md's delegated-implementation contract. Only affected checks are repeated.
+AGENTS.md's delegated-implementation contract. Only affected checks are repeated,
+and the C++ format phases plus the touched-file semantic check run as one batch
+rather than after individual edits.
 
 ## Execution flow
 
@@ -33,12 +35,13 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    Consult a specialist before coding only when
    unresolved architectural or domain uncertainty could cause substantial
    rework; routine work needs no separate design approval or planning artifact.
-3. Once a coherent batch is ready, run Format Fix then Check and the touched-file
-   semantic-style gate before expensive execution. Confirm the author inspected
-   the formatted bodies, declaration groups, and section headers against that
-   contract. Route missing boundaries/headers to the author/fixer, then
-   rerun affected gates. Mechanical formatting is script-owned; semantic blank
-   lines and headers are author-owned. Do not format or recheck after every small edit.
+3. Once a coherent batch is ready, run the C++ format gate and the touched-file
+   semantic-style gate as one shell invocation (Fix, Check, then the semantic
+   check) before expensive execution. Confirm the author inspected the formatted
+   bodies, declaration groups, and section headers against that contract. Route
+   missing boundaries/headers to the author/fixer, then rerun the batch gate once.
+   Mechanical formatting is script-owned; semantic blank lines and headers are
+   author-owned. Do not format or recheck after every small edit.
 4. For completed behavior, use one context-owning independent reviewer under
    `code-reviewer`. Stable-code review may precede or overlap long execution so
    findings arrive early; it need not wait for the last build, test, or CLion
@@ -63,7 +66,7 @@ AGENTS.md's delegated-implementation contract. Only affected checks are repeated
    boundary/performance checks once; do not substitute a tiny fixture for a claim
    that requires production parity or stress. Collect the evidence required by
    the data-member layout contract through these checks. Discover current IDE capabilities
-   when needed and perform the staged touched-file CLion inspection below when
+    when needed and perform the staged touched-file CLion inspection when
    available. Report unavailable or timed-out inspection honestly.
 6. Reuse passed evidence when the checked source/dependency closure, configuration,
    tools, and workload remain applicable. After a fix, rerun failed and affected
@@ -152,6 +155,12 @@ case-sensitive code token stream (including literal contents) is unchanged, the
 result is a fixed point within a bounded pass budget, and in Check mode the working tree already holds the
 canonical output.
 
+Fix, Check, and the semantic check in the next section run as one batch in a
+single shell invocation per coherent change set, stopping at the first failure.
+Send their output to a log. Report each phase's exit status, marking unrun phases
+skipped after the first failure. On failure, show only a bounded excerpt; never
+pipe a phase straight into `tail`.
+
 - Fix, once over the change set:
   `python scripts/format_cpp.py --mode fix`
 - Gate:
@@ -200,10 +209,10 @@ This gate is deterministic only. Design-level readability is not, and lives with
   Default output contains blocker details and advisory counts; use
   `--show-advisories` for detailed advisory inspection. Counts do not prove semantic
   readability, and a single arbitrary blank line is not a readability fix.
-- Route blocking findings to the orchestrator for a bounded fix, then repeat the
-  formatting and style gates.
-- Track semantic grouping/section-header review separately from the two script
-  exit statuses, using author self-review for local batches and the existing
+- Route blocking findings to the orchestrator for a bounded fix. Batch the
+  corrections, then rerun the combined gate once.
+- Track semantic grouping/section-header review separately from the three gate
+  phase results, using author self-review for local batches and the existing
   independent reviewer at completion. A green script result or absent D-DENSE
   advisory cannot mark that review passed. Apply AGENTS.md's contract through
   `code-reviewer`, without another review pass or a numeric density threshold;
@@ -211,64 +220,22 @@ This gate is deterministic only. Design-level readability is not, and lives with
 
 ## CLion inspection gate
 
-Applies to touched C++ files when CLion is available. Tool access follows the
-`AGENTS.md` guard and the CLion facts recorded in `build-system`; this section
-states the procedure and how those results enter the validation record.
-
-- Before every `get_file_problems` router call, open the exact target file with
-  `execute_tool(command="open_file_in_editor ...")`. Inspect files
-  sequentially; never batch or run inspections concurrently. Every
-  `execute_tool` call (e.g. `command="open_file_in_editor ..."` /
-  `command="get_file_problems ..."`) must retain
-  the discovered project path on the IDE host (which may differ from the agent host).
-- Wait for CLion indexing, project-model, and resolve-configuration activity to
-  settle. There is no MCP index-ready endpoint; the IDE indexing indicator is
-  authoritative. Do not inspect during active scans or model updates.
-- Use a bounded timeout and exactly one attempt per inspection mode per file.
-  An initial fast `errorsOnly=true` pass after open/readiness is optional; omit
-  it when edits and formatting are complete. After all edits and
-  formatting are complete, run one final `errorsOnly=false` pass per touched C++
-  file. The final warnings-inclusive result is authoritative.
-- `timedOut=true` means inspection unavailable, not clean. Do not immediately
-  retry. After readiness settles, perform the single final pass. If analyzer
-  exceptions or instability recur, restart CLion, wait for the post-restart scan
-  to settle, and use the one permitted final retry; do not loop or add more
-  attempts. Reindex or invalidate caches only if restart does not stabilize the
-  model.
-- If the final inclusive pass still times out, record the file as
-  inspection-unavailable/skipped, include the timeout evidence, and do not
-  claim it passed. Do not automatically substitute direct clang-tidy.
-- CLion/JetBrains/ReSharper remains the primary inspection gate. Direct
-  clang-tidy does not replace it here because module jobs have failed with the recorded
-  MSVC/C++23 module setup; that observation does not establish Linux tool support. Do not disable the broad profile or clang-tidy first;
-  profile reduction is only a later fallback for clean, settled inspections that
-  remain slow.
+For touched C++ files when CLion is available, load and follow
+[the staged inspection procedure](references/clion-inspection.md). Its final
+warnings-inclusive pass and bounded recovery rules are required; retain unavailable
+or timed-out results in final reconciliation rather than claiming a pass.
 
 ## Native execution diagnostics
 
-For native debugging/profiling requested during validation, use the
-[execution-tools runbook](../../../docs/debugging/execution-tools.md) before a
-new reproduction. Keep status connectivity, target control, useful stack/capture
-evidence and application outcome as separate results. Prefer native MCP control
-over the known failed RTK/PTY CDB interrupt path. Validate watchdog/cleanup bounds
-and preserve failed diagnostic attempts separately from solver/test failures.
+When native debugging/profiling is requested during validation, load and follow
+[native diagnostics](references/native-diagnostics.md) before a new reproduction.
 
 ## Official WinDbg MCP gate
 
-Applies to WinDbg client wiring, skill/runbook, and crash-preparation changes.
-Otherwise record `windbg_gate: not_applicable`.
-
-- Parse changed PowerShell and JSON. Check the `WinDbg` entry invokes the
-  supplied official proxy without arguments, grants resolve, and retired daemon
-  commands are absent. Check that the executable exists on the Windows host.
-- Verify Codex recognizes the new server entry and preserves unrelated settings.
-- When a user-owned WinDbg MCP session is available, discover tools, select the
-  intended session, and verify `get_target_state`. Configuration or proxy startup
-  alone does not prove a connected session or a completed dump investigation.
-- Exercise crash preparation with a fixture manifest and missing-input cases.
-  It must preserve reports and must not claim preparation is completed triage.
-- Disclose unavailable sessions and sampling/security blockers. Do not change
-  debugger protections to make validation pass.
+For WinDbg client wiring, skill/runbook, or crash-preparation changes, load and
+follow [the WinDbg gate](references/native-diagnostics.md#official-windbg-mcp-gate).
+Otherwise record `windbg_gate: not_applicable`. Windows-host checks remain unrun
+when that host is unavailable; Linux results do not establish them.
 
 ## Triage
 

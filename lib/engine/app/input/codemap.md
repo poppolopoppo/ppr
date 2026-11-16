@@ -1,53 +1,107 @@
 # lib/engine/app/input
 
 ## Responsibility
-The `engine.app:input.*` partitions define the input abstraction layer for the PPR game engine. It provides the type definitions and interfaces for keyboard, mouse, and gamepad devices, along with the `safe_object` action/mapping system (`InputAction` + `InputMapping` with `StableVectorInplace` keymap), modifier/trigger events with elapsed-time + repeat-count state, exponentially filtered analog shaping (`InputAxisState`/`FilteredAnalog`), and the `InputListener`/`InputContext` listener-routing tree (index-indirected keybindings, priority + parent-chain propagation, `WindowInputContext` window-delegate bridge) that higher-level systems (player service, UI, gameplay) use to consume input in a device-agnostic way.
 
-Recent refactor: the per-device `device/` subdirectory (`Gamepad`/`Keyboard`/`Mouse` partitions) was removed and consolidated into the unified `engine.app:input.device` partition; the standalone `App.Input.Mapping` partition was removed and merged into `engine.app:input.action`; `App.Input.Replay` was removed entirely; `App.Input.FilteredAnalog` and `App.Input.Device.cpp` were added; `engine.app:input.routing` (`InputBackgroundLatch` background-drag latch) was added.
+The `engine.app:input.*` partitions own device-agnostic keys, values, actions,
+mapping, analog shaping and listener/context routing. Player, UI and gameplay
+code own the actions and mappings consumed through non-owning `safe_ptr` views.
 
-## Design
-- **Owned native input batching** (`App.Input.Batch.cppm/.cpp`, `:input.batch`): `PendingInputBatch` carries character/key/mouse/focus/device records collected while frame admission is busy or main is waiting. Collection does not advance devices or dispatch client callbacks. GLFW replays the ordered records once at the next admitted update, then clears the batch. See [platform flow](../platform/glfw/codemap.md).
-- **InputValue** variant type (`digital`, `axis_1d`, `axis_2d`, `axis_3d`) carries per-key state with absolute/relative values; `modulate(float/float2/float3)` uses `std::visit` + `overloaded`: digital gates the constant (`input ? value : 0`), same-rank axes scale componentwise, cross-rank composes (`1D+1D→2D`, `1D+1D+1D→3D`, `2D×float2`, `3D.xz` projection, `float3(x,0).xzy` lift); `modulate(dt, v)` scales by `time::seconds(dt)`; `hashValue`/`opaqueValue` visit the payload; `relocatable<InputValue>` is `true_type`. Linux/clang bring-up: `InputKey`/`InputValue` each get namespace-scope forward declarations plus `[[nodiscard]]` `hashValue`/`opaqueValue` declarations, while the in-class `friend` declarations carry no attribute (Clang rejects `[[nodiscard]]` on friend declarations); 2D/3D opaque helpers pass explicit dims (`opaqueValue<float, 2u/3u>`) so mango `int`-vs-`u32` overloads resolve deterministically
-- **InputKey** wraps `InputKeyCode` (variant of `EAnyKey`/keyboard/gamepad/mouse enums) plus `InputValueType` to classify the value kind; equality/ordering/hash key on `m_code` only; `isKeyboard/isGamepad/isMouse` visit the code; `from(device-enum)` maps to canonical static aliases (unmapped `stick2/3`, `trigger2/4` → `nullopt`, otherwise `unreachable`); `enumerateAll` combines the five per-device enumerators; static aliases (`any_digital`, `any_axis_1d/2d/3d`, `mouse_2d`, wheel axes, gamepad sticks/triggers, full keyboard set) are the only bindable identities
-- **InputAction** (`safe_object`) holds `m_description` (asserted non-empty), `m_value_type`, `m_flags` (default `consume_input`, plus `disabled` — skipped at dispatch via `isDisabled()` — and `trigger_when_paused`), optional action-wide `m_modifier`, and per-transition `m_when_started/_triggered/_completed`; setters `setStarted/setCompleted/setTriggered`, predicates `hasConsumeInput/hasTriggerWhenPaused`; static `modulate(float/float2/float3)` factories plus generic `GetValueT` overload (`float`/`float2`/`float3` nothrow-invocable) projecting via `output.modulate(dt, get_value())`
-- **InputActionKeyMapping** (key → action binding with optional per-binding `m_modifier`/`m_when_started/_triggered/_completed`) offers four `constexpr` ctors (key+action, +modifier, +when_triggered, +both); `operator==` keys on `(m_key, m_action)` and **InputMapping** (`safe_object` + `StableVectorInplace` keymap) now lives in `engine.app:input.action` (moved from the deleted `:input.mapping` partition); `mapInputKey` `find_if` dedupes by `(action, key)` identity and returns the existing entry, the modifier overload reuses that entry and assigns `m_modifier`; `unmapInputKey` erases by `(&action, key)` (`[[likely]]` hit path), `unmapInputAction` sweeps all entries for the action pointer, `clearKeymap` clears the vector
-- **InputModifierEvent** (`TimeSpan dt, InputValue &value`) — modulates an action's value before triggering; applied action-first then binding-second. Linux/clang bring-up: both modifier + trigger aliases (and the three `InputListener` callbacks below) now use the conditional `std23::move_only_function` alias from `Core.Function.Ref` (move_only_function under MSVC, `std::function` elsewhere) with no `const noexcept` qualifier, so Clang and MSVC agree on the callback type
-- **InputTriggerEvent** (`event, trigger`) — fires on action started/triggered/completed transitions; `EInputTriggerEvent` (`inactive → started → triggered → completed`); `InputActionEvent` carries `SharedInputAction m_source`, optional `m_value`, `m_elapsed_triggered_time`, `m_repeat_count`, `m_trigger_state`, with `isTriggerInactive/Started/Active/Completed` predicates and `getIf*`/`get*` typed accessors (`std::get_if`/`std::get` over the value variant, `2D`/`3D` getters return const refs); `operator==/<=>` vs `InputAction` compare by source pointer
-- **IInputDevice** (`safe_object` base) — `getInputDeviceID()`, `enumerateSupportedInputKeys()`, `pollInputMessages(dt)`, `resetInputState()`; `InputMessage` carries key, value, device id, and event (`pressed`/`released`/`repeat`/`double_click`/`axis`) with `is*`/`get*` accessors
-- **InputAxisState<T>** template — `m_next_raw_absolute` staging; `update(elapsed_seconds)` snaps to zero when `dot2(next_raw) <= dot2(dead_zone)` (zeroes absolute + relative), otherwise commits absolute only when `dot2(relative) > dot2(dead_zone)` (else zeroes relative), then advances the exponential filter `saturate(pow(elapsed, 1/max(sensitivity, eps)))` via `lerp(filtered, raw, blend)`; `postInputMessages(dt, context, device_id, key, enable_filtered, emit_terminal_inactive)` selects raw/filtered and posts `axis` when `dot2(relative) > m_dead_zone`, asserting `input_value.getType() == key.m_value` — or, when `emit_terminal_inactive` is set and output was active, a final zero `axis` message once the signal settles back into the dead zone (`m_has_active_output` tracking; mouse cursor/wheel and gamepad sticks/triggers pass `true`); `reset()` delegates to `reset(zero)` which syncs raw/filtered/next (extern instantiations for `float`, `float2`). Linux/clang bring-up: the `pow` exponent is wrapped in `static_cast<double>` so the `float`/`double` overload resolves without `-Werror` narrowing on Clang
-- **InputDigitalState<ButtonT>** template (constrained to enum/integral) — `FlatSet` pressed-set: `InputKey::from(button)` `nullopt` returns false with no post; pressed inserts and posts `pressed` (new) / `repeat` (already held), erased press posts `released`, redundant release returns false (extern instantiations for `EKeyboardKey`, `EGamepadButton`, `EMouseButton`); verbose `unbound ... received` logging lives in the per-device `post*Pressed` wrappers, not in the state template
-- **KeyboardDevice** (digital keys + `m_character_inputs` text buffer cleared at the top of `pollInputMessages` before window events, forwarded via `postKeyboardCharacterInput` → `context.postCharacterInput`), **MouseDevice** (button set, cursor-pos `float2` axis via `set`/`update(time::seconds(dt))`/`post` as `mouse_2d`, per-axis wheel `float` accumulators via `add`/`update`/`post` gated by opt-in `m_has_axis_filtering`; `pollInputMessages` is a no-op), **GamepadDevice** (button set, stick `float2` axes via `set`/`update`/`post`, trigger `float` axes via `set`/`update`/`post` with per-group `m_has_axis`/`m_trigger_filtering`/`m_has_rumble_filtering`, rumble `float` axes advanced only in `pollInputMessages(elapsed)`; `resetInputState` clears buttons/sticks/triggers/rumbles) — all consolidated in `engine.app:input.device` (moved from the deleted `device/` per-device files)
-- **FilteredAnalog<T>** (`engine.app:input.filtered_analog`) — first-order-lag analog accumulator (`m_raw` + `m_delta` + optional `m_filtered` + `sensitivity` as convergence rate λ in s⁻¹, `alpha = 1−exp(−λ·dt)` with a 150 ms hitch clamp); `add`/`addClamp`/`setRaw` feed raw, `update(dt)` advances (`filtered()` returns raw until primed, `delta()` the per-step change), `reset`/`clear` drop the primed state; `Quaternion` specializes `update` (`slerp`, delta as `conjugate(prev)*current`) and `addClamp` (compose + re-normalize, identity fallback); extern templates for `float`, `float2`, `float3`, `Quaternion`
-- **InputListener** — ctor defaults to `consumed` mode; `PrioritySet` of mappings (heterogeneous pointer-identity `has/add/remove`: `addInputMapping(mapping, priority)` rebuilds only on insert, `removeInputMapping` rebuilds only on erase, `clearInputMappings` clears mappings + action events), `FlatMap<action, InputActionEvent>` live action state, `FlatMultiMap<key, InputBinding>` rebuilt keybindings where `InputBinding` is index indirection (`InputMappingIndex`/`KeyMappingIndex` via `safe_narrowing` over manual `std::size_t` counters, not `views::enumerate` — Clang/libc++ lacks the enumerator); `getKeyMapping_` unwraps via `(m_mappings.begin() + mapping_index)->m_value->m_keymap.at(key_index)`; `isKeyHandledByAction` (`contains`) and `getActionValue` (`at(action).m_value`); callbacks `m_action_callback`/`m_character_input_callback`/`m_raw_key_callback` use the conditional `std23::move_only_function` alias (see modifier/trigger note) with `EInputMessageResponse` mode (`unhandled`/`handled`/`consumed`); response fall-through in the dispatch switch is annotated `[[fallthrough]]` (`handled` accumulates into `unhandled`-break); `postCharacterInput` gates on non-`unhandled` mode + callback, `postKeyEvent` short-circuits on `unhandled` mode, runs the raw-key hook first (non-`unhandled` returns immediately), drops `isAny` keys, misses (`equal_range` empty) return `unhandled`, then per binding refreshes `event.m_value`, applies action-then-binding modifiers (`invokeIFP_(dt, modifier, event, msg)` — `const_cast`s the stored `move_only_function` to invoke on a non-const path since actions/mappings are client-owned and the engine holds only const views), and drives binding-then-action triggers plus `m_action_callback` with verbose `started/completed` and debug `triggered` logs (`m_character_input_callback` is `mutable` because `postCharacterInput` is `const`)
-- **InputContext** — priority-ordered listener set with optional parent chain (`m_parent`, move-only with out-of-line move ctor); `has/add/remove/clearInputListeners` (pointer identity, `emplace(priority, listener)`); `postCharacterInput/postKeyEvent` walk listeners by priority with `consumed`-returns-immediately / `handled`-accumulates semantics, then repeat the same walk on the parent chain
-- **WindowInputContext** — ctor parents its context to the service global context and registers via `addInputContext(SharedInputContext(&m_context))`; `initialize(window)` subscribes the five window delegates (character/keyboard-pressed/mouse-clicked/moved/scrolled) into `IInputService::post*` calls carrying `m_context` (`already_connected`/`invalid_argument` guards); `shutdown()` resets all five delegates and detaches the window (`not_connected` guard); the dtor asserts the window was detached (`not m_window`) then calls `removeInputContext(m_context)`; mouse-moved forwards GLFW client-space positions as-is (documented for ImGui)
-- `IInputService` interface (defined in `engine.app:service.input`) provides the device-agnostic posting contract; all types reside in `namespace pP` and use `safe_ptr`, `string_literal`, `Numeric<T>`
+## Navigation
 
-## Flow
-1. Device front-ends (per-device `post*Pressed/Moved` bridges, `WindowInputContext` window callbacks) call `postKeyEvent(dt, InputMessage{key, value, device_id, event})` / `postCharacterInput(codepoint)` carrying the target `InputContext`
-2. Digital state (`InputDigitalState::postInputMessages`) emits `pressed`/`repeat`/`released` messages; analog state (`InputAxisState::postInputMessages`) emits `axis` messages in raw or filtered form after dead-zone/sensitivity shaping (`update` gates raw, `post` gates the selected signal)
-3. `InputContext::postKeyEvent/postCharacterInput` walks listeners by priority (then parent chain) with consumed-short-circuit/handled-accumulate semantics; each `InputListener::postKeyEvent` runs the raw-key hook, resolves keybindings via `equal_range`, skips `isDisabled()` actions, refreshes `event.m_value`, applies action-then-binding modifiers, and drives trigger state transitions (`pressed → started` with `[[fallthrough]]` into `triggered`; `repeat`/`double_click`/`axis → triggered` with `repeat` accumulating `elapsed += dt` + `++count` and others resetting `elapsed = dt`; `released → completed` with count reset), invoking binding-then-action `when_*` callbacks plus `m_action_callback` per transition
-4. `rebuildKeybindings_` clears keybindings and preserves live `InputActionEvent`s across rebuilds via moved-out `old_action_events` (fresh `InputActionEvent(action)` for new actions); it retains every candidate binding regardless of consume state — consume short-circuits at dispatch time (`postKeyEvent` returns the listener mode once a bound action `hasConsumeInput()`, so toggling `setConsumeInput` needs no rebuild); `AnyKey` bindings expand via `InputKey::enumerateAny` filtered by `m_value` type
-5. Background-drag routing (`:input.routing` + `EInputListenerPriority` in `:service.input`): `ApplicationEditor` owns an `InputBackgroundLatch` constructed `(ui, player-listener, player, detector)` so the chain orders `ui(0) < detector(1) < player(2)`; the detector listener latches left/middle holds while always returning `unhandled`, the UI foreground listener runs at `m_foreground_priority`, the player background listener at `m_background_priority`; focus loss and device disconnect reset both the latch (`resetInputState`) and the camera-controller motion state
-6. Per-frame, `pollInputMessages(dt)` flushes accumulated axis/digital state (keyboard clears the char buffer first before window events; gamepad advances rumbles; mouse poll is a no-op); `resetInputState` clears transient state (keys/buttons, cursor/wheel, sticks/triggers/rumbles, char buffer) on focus loss / device reset
+| Files (`.cppm/.cpp`) | Symbols and responsibility |
+|---|---|
+| `App.Input.Key` | `InputKey`, `InputValue`, device enums: canonical identities, value modulation, hashing and opaque formatting |
+| `App.Input.Action` | `InputAction`, `InputMapping`, `InputActionKeyMapping`, modifier/trigger events: bindings and transition vocabulary |
+| `App.Input.Device` | `IInputDevice`, `InputMessage`, `InputAxisState`, `InputDigitalState`, keyboard/mouse/gamepad devices: state and message production |
+| `App.Input.FilteredAnalog` | `FilteredAnalog`: first-order-lag scalar/vector/quaternion accumulation |
+| `App.Input.Listener` | `InputListener`, `InputContext`, `WindowInputContext`: action dispatch, priority/parent routing and window delegates |
+| `App.Input.Routing` | `InputBackgroundLatch`: background-origin left/middle drag routing |
+| `App.Input.Batch` | `PendingInputBatch`: owned native input/control collection and ordered replay |
+
+`../CMakeLists.txt` owns registration. The former `device/` partitions were
+consolidated into `:input.device`; Mapping moved into `:input.action`; Replay
+was removed. Do not look for standalone Mapping/Replay files.
+
+## Identity and dispatch contracts
+
+- `InputKey` equality, ordering and hashing use the code only; canonical aliases
+  are the bindable identities. Unsupported device-enum mappings return `nullopt`.
+  `InputValue` owns absolute/relative digital or axis values; use its `modulate`
+  overloads for rank projection and explicit-time scaling, not a second conversion path.
+- `InputAction` requires a nonempty description and defaults to consuming input.
+  Disabled actions are skipped; pause-trigger intent is part of the action flags.
+  `InputMapping` deduplicates by action/key identity; adding a modifier to an
+  existing pair updates that binding. Unmapping an action removes all its bindings.
+- `InputListener::postKeyEvent` owns the trigger state machine. Modifiers run
+  action-first, binding-second; transition callbacks run binding-first,
+  action-second, followed by the listener callback. Press starts then triggers;
+  repeats accumulate elapsed time/count; release completes and clears the count.
+  Axis/double-click triggering resets elapsed time to the supplied delta.
+- Listeners default to consumed mode. Unhandled mode suppresses dispatch; a
+  handled/consumed raw-key hook intercepts before action lookup. Any-key identities
+  are binding selectors, not posted device events. Unmatched keys stay unhandled.
+- `rebuildKeybindings_` preserves surviving action state and expands AnyKey by
+  value type. All compatible bindings remain candidates: consumption is checked
+  against live action flags at dispatch, so toggling it needs no rebuild.
+- `InputContext` visits listeners by priority, then its parent chain. Consumed
+  stops propagation; handled accumulates without stopping. Actions and mappings
+  remain client-owned even when callbacks are invoked through const views.
+
+## Device state and frame admission
+
+`InputDigitalState` owns pressed/repeat/release classification; unsupported keys
+and redundant releases do not post. Device wrappers own unbound-key diagnostics.
+`InputAxisState` owns dead-zone/sensitivity shaping and raw/filtered selection;
+mouse cursor/wheel and gamepad sticks/triggers emit a final inactive zero once
+an active signal settles. Reset synchronizes raw, filtered and staged state.
+
+Keyboard polling clears text before native events append the frame's characters;
+mouse polling is a no-op; gamepad polling advances rumble state. Mouse axis
+filtering is opt-in. Focus loss/device reset clears transient digital, analog,
+rumble and text state. `FilteredAnalog` is the separate convergence-rate filter
+(sensitivity in seconds⁻¹, 150 ms hitch clamp); unprimed output is raw, reset/clear
+drop priming, and quaternion operations preserve normalized rotations with an
+identity fallback. See the implementation for filter equations and instantiations.
+
+`PendingInputBatch` collects character/key/mouse/focus/device records while main
+waits or admission is busy, without advancing devices or dispatching clients.
+The next admitted GLFW update replays records once in order and clears them;
+extra native pumps do not advance the client. See [platform flow](../platform/glfw/codemap.md).
+
+## Window and background-drag lifetime
+
+`WindowInputContext` registers its context with `IInputService` and parents it to
+the global context. `initialize` connects window delegates; `shutdown` disconnects
+them before destruction, which requires a detached window and unregisters the
+context. Already-connected, invalid-window and not-connected errors remain
+explicit. Cursor positions stay in GLFW client space for ImGui.
+
+`ApplicationEditor` owns `InputBackgroundLatch`. Priority must satisfy
+foreground < detector < background (UI, detector, player); a background listener
+is required. The detector always returns unhandled and ignores repeats, preserving
+background-origin left/middle holds until release. Focus loss/disconnect resets
+both latch and camera motion. Initialization registers detector/background
+listeners; shutdown removes both with retain-first-error cleanup and clears the
+foreground view. Destruction detaches its callback before destroying state.
+
+## Compiler constraints
+
+Linux/Clang bring-up constraints are retained in the owning declarations and
+implementations: namespace-scope hash/opaque declarations keep `[[nodiscard]]`
+off non-defining friends; explicit Mango opaque dimensions and a double `pow`
+exponent avoid overload/narrowing ambiguity. Listener keybinding indices use
+manual counters rather than unavailable `views::enumerate`. Modifier, trigger
+and listener callbacks use `std23::move_only_function` from `Core.Function.Ref`
+(MSVC move-only implementation, `std::function` elsewhere), without a
+`const noexcept` signature. These are compatibility constraints, not fresh
+cross-compiler validation evidence.
 
 ## Integration
-- **Consumers**: `GlfwInput` (hot devices + global/per-device contexts), `GlfwPlayer`/`PlayerGraph` (per-player listeners), `ImGuiService` (foreground listener at the latch's foreground priority + pending-deselect raw-key hook), `ApplicationEditor` (owns the `InputBackgroundLatch` actuator), `Application` (per-frame poll), camera controllers (`provideInputActionKeyMappings` + `setTriggered/setStarted/setCompleted` callbacks); `PPR_LOG` categories `Input` (verbose/debug per transition) and `InputDevice` (verbose unbound keys/buttons)
-- **Depends on**: `engine.core` (Numeric, `safe_ptr`/`safe_object`, `FlatSet`/`FlatMap`/`FlatMultiMap`/`PrioritySet`/`StableVectorInplace`/`Array`, `TimeSpan` + `time::seconds`, `Collector`, `safe_narrowing`, `overloaded`, opaque), `engine.math` (`float2`/`float3`/`Quaternion` vector types, `dot2`/`lerp`/`saturate`), `engine.app:service.input` (posting contract + global context), `engine.app:window.handle` (Window delegates), `hal.native` (`char_t` codepoints), `std` (`move_only_function`, ranges `find_if`/`enumerate`, `optional`/`variant` access)
-- **Provides**: `engine.app:input.action`, `engine.app:input.device`, `engine.app:input.filtered_analog`, `engine.app:input.key`, `engine.app:input.listener`, `engine.app:input.routing` module namespaces (no `:input.mapping`, `:input.replay`, or `device/` sub-partitions remain)
-- **Used by**: `IInputService` (service.locator), `Application.update()` → per-frame device poll, `ImGuiService` for ImGui integration
 
-## Key Files
-- `App.Input.Action.cppm` — `InputAction`, `InputModifierEvent`, `InputTriggerEvent`, `EInputActionFlags`, `EInputTriggerEvent`, `InputActionEvent`, `InputActionKeyMapping`, `InputMapping` (mapping types merged here after `App.Input.Mapping` removal)
-- `App.Input.Action.cpp` — InputAction/InputActionEvent/InputMapping method implementations
-- `App.Input.Device.cppm` — `IInputDevice`, `InputMessage`, `EInputMessageEvent`, `EInputMessageResponse`, `InputAxisState<T>`, `InputDigitalState<ButtonT>`, `KeyboardDevice`, `MouseDevice`, `GamepadDevice` (unified here after `device/` removal)
-- `App.Input.Device.cpp` — device/state method implementations (update/postInputMessages/reset, per-device post* bridges, dead-zone + exponential filter)
-- `App.Input.FilteredAnalog.cppm` — `FilteredAnalog<T>` exponentially filtered analog accumulator (added)
-- `App.Input.FilteredAnalog.cpp` — FilteredAnalog method implementations + extern template instantiations
-- `App.Input.Key.cppm` — `EKeyboardKey`, `EGamepadAxis`, `EGamepadButton`, `EMouseAxis`, `EMouseButton`, `InputKey`, `InputValue`, `InputDigital`, `InputAxis1D/2D/3D`
-- `App.Input.Key.cpp` — InputValue modulate/hash/opaque implementations, InputKey device predicates, `from`/enumerate/canonical aliases
-- `App.Input.Listener.cppm` — `InputListener`, `InputContext`, `WindowInputContext`, action/raw-key/character callbacks
-- `App.Input.Listener.cpp` — InputListener/InputContext/WindowInputContext implementations (trigger state machine, rebuildKeybindings_ with consume-shadowing + AnyKey expansion, parent-chain propagation, window delegate bridges)
-- `App.Input.Routing.cppm` — `InputBackgroundLatch` background-drag latch: owned `m_detector_listener` + non-owning `m_foreground_listener` view + const non-owning `m_background_listener` view with `m_foreground_priority`/`m_detector_priority`/`m_background_priority` (ordering `foreground < detector < background`, enforced by `validate()`); per-button held counts + background-origin flags for left/middle (`isBackgroundDragButton`); `initialize`/`shutdown` register/unregister detector + background listeners, `isEngaged`, `resetInputState`, `notifyPress`/`notifyRelease`
-- `App.Input.Routing.cpp` — latch implementations: ctor installs an always-`unhandled` detector raw-key callback latching `pressed`/`released` (repeats ignored so one release clears); dtor clears the callback (detach-before-destroy); `validate` rejects a null background listener or priority-order violations; `initialize` stores the foreground view then adds detector + background listeners; `shutdown` removes both and resets the foreground view with retain-first-error `not_connected`; `isEngaged` = held + background-origin on either button; `notifyPress` marks background-origin on first press and counts, `notifyRelease` counts down and clears origin at zero
-- Deleted, not present: `App.Input.Mapping.cpp/.cppm` (merged into Action), `App.Input.Replay.cpp/.cppm` (removed), `device/` subdirectory with per-device Gamepad/Keyboard/Mouse files (consolidated into Device)
+`IInputService` in `:service.input` owns the posting/service boundary. GLFW owns
+hot devices and global/per-device contexts; player graphs own player listeners;
+ImGui consumes foreground input and its pending-deselect raw-key hook; camera
+controllers provide action mappings. Application drives the admitted update.
+Dependencies are core containers/lifetimes/functions/time and math values, plus
+the input service and window delegate contracts. Types live in `namespace pP`;
+`Input` and `InputDevice` are the transition/unbound-key log categories.

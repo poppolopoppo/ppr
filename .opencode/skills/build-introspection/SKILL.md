@@ -191,12 +191,18 @@ The command above is Windows-specific; on Linux use `cmake --preset clang-dev`
 in the environment defined by `build-system`. Use this only to refresh File API replies or when the build tree is missing.
 Do not build targets just to answer introspection questions.
 
-## Proportional verification for this skill
+## Proportional verification for skill/helper changes
+
+Apply this checklist when changing this skill or its helper, with scope under
+`validation`. Ordinary introspection reuses the requested query's path, reply,
+and staleness evidence; do not repeat discovery or run extra summary/drilldown
+queries when that query already supplies the evidence needed for the answer.
 
 1. Validate path existence for the skill directory and helper script.
 2. Validate script syntax by executing a non-destructive read-only view.
-3. If `out/build/msvc-dev/.cmake/api/v1/reply/index-*.json` exists, run a dry
-   summary and one target drilldown against that existing reply set.
+3. If `<build>/.cmake/api/v1/reply/index-*.json` exists in the requested or host
+   default tree (`out/build/clang-dev` on Linux, `out/build/msvc-dev` on Windows),
+   run a dry summary and one target drilldown against that existing reply set.
 4. Otherwise report clearly: `existing configured build tree required for live
    introspection; no configure performed by this skill validation`.
 

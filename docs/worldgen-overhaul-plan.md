@@ -1,5 +1,8 @@
 # World-generation overhaul — implementation plan
 
+> **Implemented / historical:** This plan's phase gates, named agent assignments,
+> and remaining-gate language are historical records, not instructions for current work.
+
 Status: implemented; executable validation passed with the scopes recorded below.
 CLion inspection was unavailable. GPT-6 Luna surveyed the
 repository and external references. GPT-6 Astra prepared the plan and provides
@@ -498,15 +501,18 @@ aggregate, 189.5128 seconds wall; `out/worldgen-overhaul/retirement-app.log`).
 Post-repair resource-leaf checks passed all three same-process loops on both
 D3D12 (135.5070 seconds wall) and Vulkan (10.6402 seconds wall). The exact filter,
 backend selector, loop counts and successful exit codes are in
-[retirement-check-results.json](../out/worldgen-overhaul/retirement-check-results.json);
+`out/worldgen-overhaul/retirement-check-results.json` (historical artifact
+unavailable in this checkout);
 leaf logs are `retirement-resource-d3d12.log` and
 `retirement-resource-vulkan.log`.
 
 All six Live targets built successfully in 52.2001 seconds:
-[final-live-build.json](../out/worldgen-overhaul/final-live-build.json) records
+`out/worldgen-overhaul/final-live-build.json` (historical artifact unavailable in
+this checkout) records
 the command and `final-live-build.log`. Focused Live app, optical/resource/mip
 and checkpoint checks passed in 0.4893 / 4.4235 / 5.1434 seconds wall respectively.
-[final-live-focused-results.json](../out/worldgen-overhaul/final-live-focused-results.json)
+`out/worldgen-overhaul/final-live-focused-results.json` (historical artifact
+unavailable in this checkout)
 retains their exact filters and successful exit codes; logs are
 `final-live-app.log`, `final-live-asset.log` and `final-live-checkpoint.log`.
 These are focused Live rechecks, not a second full canonical matrix.

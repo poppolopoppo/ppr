@@ -62,7 +62,7 @@ presets explicitly select a Linux triplet and are not proof of Darwin readiness.
 
 - Windows requires VS 18 Insiders MSVC 14.51 for `import std` /
   `CXX_MODULE_STD` (see `lib/engine/tests/core/Core.Tests.cppm:9`).
-- `CMakePresets.json:52` injects `$env{VSINSTALLDIR}...SegmentHeap.cmake`;
+- `CMakePresets.json:56` injects `$env{VSINSTALLDIR}...SegmentHeap.cmake`;
   `VSINSTALLDIR` must point at Insiders.
 - **One long-lived shell, vcvars paid once.** Open a single `cmd` shell and
   call Insiders vcvars at start-up:
@@ -71,49 +71,13 @@ presets explicitly select a Linux triplet and are not proof of Darwin readiness.
   call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat"
   ```
 
-  Keep that shell open for the whole session: every configure, build, and test
-  then runs inside it, carrying `VSINSTALLDIR` (load-bearing for
-  `CMakePresets.json:52`) along. Reference single-vcvars patterns:
-  `.slim/tmp/configure-msvc-dev.cmd` (vcvars, then `cmake --preset msvc-dev`)
-  and `.slim/tmp/build2a.bat` (vcvars, then configure, then
-  `cmake --build --target ...`).
-- A saved execution-session ID can expire. If the executor reports an unknown
-  process, retain that evidence and replace the unavailable shell once through
-  the same approved activation helper. Verify the new child directory and
-  toolchain before resuming; an expired session is not evidence of toolchain
-  contamination. Avoid creating an idle replacement far ahead of the batch.
-- **A shell that skips Insiders vcvars fails fast.** The MSVC pre-project
-  guard rejects the configure with the required `vcvars64.bat` recovery
-  (historically, before the guard, configure silently picked VS 2022
-  Community 14.44 plus a bad vcpkg toolchain path and the build tree was
-  unusable — see `.slim/deepwork/msvc-dev-compile-recovery.md:57-58`). Never spawn
-  a fresh shell per command unless it repeats the Insiders `vcvars64.bat` call
-  before touching CMake.
-- Toolchain inheritance in a generic/ad-hoc shell is UNVERIFIED: JetBrains
-  documentation is silent on whether terminal tools inherit the IDE toolchain.
-  Policy (not documented fact): an ad-hoc terminal is never a build path and
-  never where toolchain discovery happens; builds run in the persistent vcvars
-  shell above.
-- Observed: vcvars alone is insufficient if an inherited `PATH` or an existing
-  CMake cache selects LLVM-MinGW `ld`/`ar`. MSVC-only presets pin `cl`, `link`,
-  and `lib` on first configure (the configuration writer handles the preset
-  values). Vcpkg detects its compiler separately and may select installed VS
-  2022 even with CMake correctly pinned to VS 18; MSVC-only presets set
-  `VCPKG_VISUAL_STUDIO_PATH` from the activated `VSINSTALLDIR` for initial
-  configure. Ninja auto-regeneration on a separate `cmake --build` invokes
-  CMake without preset environment; vcvars supplies `VSINSTALLDIR` but not
-  `VCPKG_VISUAL_STUDIO_PATH`. When the override is absent, the helper derives
-  the normalized vcpkg path from `VSINSTALLDIR` before vcpkg install: vcpkg
-  rejected `.../18/Insiders/` while detecting `.../18/Insiders`. On the first
-  fresh configure, check vcpkg's `Compiler found:` output points to VS 18.
-  Verify `CMAKE_CXX_COMPILER`,
-  `CMAKE_LINKER`, and `CMAKE_AR` in `out/build/<preset>/CMakeCache.txt` and
-  the generated archive rule: they must use the MSVC tools, not LLVM-MinGW.
-  For a contaminated *existing* `msvc-dev` tree, run
-  `cmake --fresh --preset msvc-dev` in the same VS 18 Insiders vcvars shell,
-  then recheck; `--fresh` is a one-time stale-cache
-  recovery, not the normal configure route. Compilation errors from an active
-  source refactor are separate from toolchain contamination.
+  Keep that shell open for the session's configure, build, and test commands so
+  it carries `VSINSTALLDIR` (load-bearing for `CMakePresets.json:56`). Use the
+  commands in Build authority below; session-local scratch helpers are not
+  repository prerequisites.
+- For a first fresh Windows configure, shell loss, or suspected toolchain/cache
+  contamination, load and follow [Windows verification and recovery](references/windows-recovery.md).
+  Ordinary commands stay in this persistent activated shell, not an ad-hoc IDE terminal.
 
 ## Build authority
 
@@ -185,61 +149,9 @@ claim; broad import/re-export/header dependency changes; module/source splitting
 target-graph, compiler/linker flag, custom-command, or scheduling changes; or
 unexpected fan-out, repeated regeneration, or unexplained slowdown.
 
-The build hot-path is edit-to-ready latency for a named edit class, target closure,
-and preset, not the slowest TU.
-
-| Change under investigation | Representative workload |
-|---|---|
-| Implementation-local | Warm implementation edit → affected executable/test |
-| Interface/import/dependency | Interface edit → dependent closure; clean build if topology changes |
-| Flags, scheduling, source organization | Clean configured-tree build plus representative incremental build |
-| CMake/custom commands | Configure/regenerate and no-op behavior |
-| Release code generation/LTCG | `msvc-rel`, not extrapolated Debug results |
-| Edit-and-Continue | `msvc-live` |
-
-Default to the host Dev preset (`msvc-dev` on Windows, `clang-dev` on Linux);
-select other presets by risk. Separate dependency
-acquisition and configure from compilation. Distinguish clean outputs from cold
-OS cache. Use an isolated tree for cleaning/source-mutation experiments; NEVER
-clean the developer's active tree.
-
-Retain artifacts in `out/build-perf/<case>/<baseline-or-candidate>/<run>/`:
-`manifest.json`, `build.log`, `ninja.before.log`, `ninja.after.log`, `summary.md`,
-and conditional `compiler.json`, `raw.etl`, or `configure.json`. The manifest
-records revision/dirty identity, exact commands, working/build directories,
-preset/targets/parallelism, toolchain versions, edit/reset and cache preparation,
-wall time, exit codes, capture status, and artifact paths. The summary separates
-measured from pending evidence and records samples/spread, executed-edge count,
-top-five attributable costs, proposed cause, and verdict. Read summaries first.
-
-Isolate the current Ninja invocation; detect log compaction and deduplicate
-multi-output edges. Never sum nested compiler spans into wall time or call a long
-TU the critical path without dependency evidence. `vcperf` remaps process/thread
-IDs for visualization: they are not physical-concurrency evidence. The builder
-owns a unique capture session and stops only that session even on build failure;
-preserve build failure separately from capture/conversion failure. Unsupported
-tools/permissions mean profiling unavailable, not success.
-
-### First worked example — Packet
-
-Measured-dev: revision `bb546b05f107d54e8163970e78e908c018681a3a`
-(2026-10-09), warm single-TU mtime edit of
-`lib/engine/app/frame/App.Frame.Packet.cpp`, `engine.app`, `msvc-dev`, parallelism
-8. Evidence: `out/build-perf/packet/baseline/run1/summary.md` and `manifest.json`.
-Readiness no-op ~4.99s (dyndep regeneration only); measured build wall 609.62s,
-Packet.obj Ninja 608.09s, FrontEndPass 607.81s, BackEndPass 0.163s → 99.97%
-frontend. Build and `/level2` capture exited 0; no dropped events/buffers. This
-passes the plan §2 actionable workflow gate, not the full pilot ladder or §8 fix
-gate. Frontend mechanism and RAM-phase attribution remain unresolved.
-
-Pending-live: `msvc-live` trace; also pending are the interface-rebuild ladder,
-failure-teardown validation, and paired uninstrumented comparisons. The existing
-live repro without ASan rejects ASan as primary, but is not a measured live trace
-or a speedup. The next experiment is `/showIncludes` inventory, then one
-`/level3` + `/templates` capture with unchanged workload.
-
-Non-goals: new presets, always-on ETW, GUI automation, telemetry, compiler
-upgrades, module-cache enablement, or disabling checks/weakening build semantics.
+When a trigger applies, load and follow [the measurement workflow](references/build-performance.md)
+for representative workloads, artifact retention, capture ownership, and evidence
+limits. Apply `validation`'s triggered build-performance gate to claims.
 
 ## Target setup
 

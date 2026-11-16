@@ -210,6 +210,11 @@ required for MSVC to emit them as selectable symbols across the two units.
 
 ## Diagnostic procedure
 
+For delegated implementation, [AGENTS.md's Delegated implementation and plan changes](../AGENTS.md#delegated-implementation-and-plan-changes)
+requires a `BLOCKED_PLAN` handoff for an unexplained ICE. These steps guide an
+authorized investigation; they do not authorize changing the accepted design or
+building outside the assigned role.
+
 1. Read the full build log and find the **first** `C1001`, not the last.
 2. Extract the note chain. If it names a template instantiation, treat that
    instantiation as the target.
@@ -273,8 +278,10 @@ The resolved tree was verified with:
   | `engine.tests.asset.cpu` | Passed | 2.26 s |
   | `game.tests` | Passed | 143.07 s |
 
-- `scripts/Format-Cpp.ps1` Check: PASS on every touched file.
-- `scripts/Check-SemanticStyle.ps1`: no blocking findings.
+- `Format-Cpp.ps1` Check (historical PowerShell gate, since ported to
+  `scripts/format_cpp.py`): PASS on every touched file.
+- `Check-SemanticStyle.ps1` (historical, since ported to
+  `scripts/check_semantic_style.py`): no blocking findings.
 
 ### Checkpoint split verification
 
@@ -286,9 +293,9 @@ After the checkpoint translation unit split:
   compiled, no `C1001`.
 - `game.tests.exe`: linked after marking the shared `Fixture` members `inline`.
 - `ctest --test-dir out\build\msvc-dev -R '^game.tests$'`: Passed, 203.92 s.
-- `scripts/Format-Cpp.ps1` Check on the three checkpoint files: PASS.
-- `scripts/Check-SemanticStyle.ps1` on the three checkpoint files: no blocking
-  findings; the reported B-CMP advisories are in the moved expressions.
+- `Format-Cpp.ps1` Check on the three checkpoint files (historical gate): PASS.
+- `Check-SemanticStyle.ps1` on the three checkpoint files (historical): no
+  blocking findings; the reported B-CMP advisories are in the moved expressions.
 
 The engine suite timings above predate this test-only split; those translation
 units were not changed by it.
@@ -319,8 +326,8 @@ units were not changed by it.
   `preparation_detail::State`.
 - [Asset.Image.Preparation.Tests.cpp](../lib/engine/tests/asset/Asset.Image.Preparation.Tests.cpp):
   the rewritten T10 assertions.
-- [WorldGen.Fixture.cpp](../game/colony/WorldGen.Fixture.cpp) and
-  [ColonyDriver.cpp](../game/colony/ColonyDriver.cpp): follow-up call sites.
+- Historical follow-up call sites: `game/colony/WorldGen.Fixture.cpp`
+  (no longer present) and [ColonyDriver.cpp](../game/colony/ColonyDriver.cpp).
 - [Checkpoint.Tests.cpp](../game/colony/Checkpoint.Tests.cpp),
   [Checkpoint.Tests.Support.h](../game/colony/Checkpoint.Tests.Support.h), and
   [Checkpoint.Gpu.Tests.cpp](../game/colony/Checkpoint.Gpu.Tests.cpp): the split

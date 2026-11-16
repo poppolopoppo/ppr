@@ -87,7 +87,7 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 | `lib/engine/physics/`           | Box2D boundary — box2d types never leak past it: `Scene` world, indexed/diffed `ChunkColliders` rebuild, `Coupling` publish (used by `engine.tests.sim` only). | [View Map](lib/engine/physics/codemap.md)           |
 | `lib/engine/matter/`            | Pinned PB-MPM GPU owner: `:gpu.types` scalar ABI and source defaults, `:gpu` checked transfers, asynchronous working batches and explicit publication. | [View Map](lib/engine/matter/codemap.md)            |
 | `lib/engine/app/`               | Application umbrella: slim Application base + ApplicationEditor subclass (IClientService), re-exports all app submodules. | [View Map](lib/engine/app/codemap.md)               |
-| `lib/engine/app/input/`         | Input action/key/listener + FilteredAnalog/device message layer + Routing background-drag latch (12 files, 6 partitions).                      | [View Map](lib/engine/app/input/codemap.md)         |
+| `lib/engine/app/input/`         | Input action/key/listener, analog/device state, background-drag routing and owned native input batching. | [View Map](lib/engine/app/input/codemap.md)         |
 | `lib/engine/app/platform/`      | IPlatform 9-method interface + create() factory, platform errc/version helpers.                        | [View Map](lib/engine/app/platform/codemap.md)      |
 | `lib/engine/app/platform/glfw/` | GLFW backend: IPlatform + IInputService + IPlayerService + IWindowService.                            | [View Map](lib/engine/app/platform/glfw/codemap.md) |
 | `lib/engine/app/player/`        | IPlayerService, Player::Graph state machine.                                                          | [View Map](lib/engine/app/player/codemap.md)        |
@@ -120,22 +120,22 @@ game/main.cpp → game.application → game.config / game.display / game.colony.
 
 ## Test Infrastructure
 
-Tests exist unless `BUILD_TESTING` is explicitly OFF (`msvc-rel` and inherited `msvc-profile`). `PPR_TEST_LOOPS` defaults to 1 even under ASan; configure 3 for stress and restore 1 explicitly when reusing the build directory.
-
-Current CMake registers entries named `<target>[.<qualifier>]` by `ppr_add_test_entry` (`cmake/Tests.cmake`): core/sim suites, app/asset shards, game tests, and `app.game.worldgen_*` profile validations. Inspect the configured inventory with `ctest -N` rather than relying on a fixed entry count. The profile entries perform CPU-only pack load/compile validation. The matter entries cover GPU kernels, separately locked transfer/contact/pool/dam observations, CPU unit/ownership adapters, full-domain runtime lifecycle, dig/coverage/restore integration sustained dug-sand continuation, and seed42 liquid-pressure/5x7-dig regression; their evidence and the final integration matrix are separate gates. The 32 `app/matter_gpu` leaves are partitioned exactly once across four device entries by responsibility (`matter_terrain_gpu`, `matter_contact_gpu`, `matter_material_gpu`, `matter_grid_gpu`), the resident entry keeps its exact union (three `app/matter_gpu` leaves plus one `app/matter_runtime_gpu` leaf), and the runtime lifecycle entry is split the same way at its own 180 s deadline, so no entry inherits a former aggregate deadline; those lists are explicit tokens, so a new leaf must be added to exactly one of them. GPU cases keep private shader/device/queue lifetimes because a group-shared Slang session measured 10x slower program creation on this host.
-Routine CTest excludes the opt-in GPU validation entries with `-LE gpu_validation`. The app frame-fence, radiance, world-lighting backend/projection/trace and asset grid, resident-particle and HDR validation entries set `PPR_TEST_GPU_VALIDATION=1` for the RHI debug layers. Radiance leaves are partitioned identically across routine and validation shards, with separate deadlines for each terrain leaf; grid/pixel readbacks remain in `functional_gpu`. GPU/window shards use `RESOURCE_LOCK gpu`/`window` instead of global `RUN_SERIAL`; only the short `frame_stages` timing entry remains serialized. `game.tests.worldgen_preview` declares `PROCESSORS 4` so its heavy leaves reserve scheduler capacity. Use `clang-dev` on Linux or `msvc-dev` on Windows for `<preset>`. Run `ctest --test-dir out/build/<preset> --parallel --output-on-failure -LE gpu_validation` for the routine suite and a separate `-L gpu_validation` pass for validation. Only one independent matrix invocation per machine may run at once, without competing profiling/game workloads. Core/sim are GLFW-free; app and GPU asset tiers require platform/GPU facilities.
-
-- `lib/engine/tests/CMakeLists.txt`: shared loop setting, engine suites, aggregate engine-test target. The aggregate does not run game tests; full CTest includes them.
-- `lib/engine/tests/app/CMakeLists.txt`: exact shard filters, timeouts and resource locks. Filter matching is prefix-based both ways; use complete group paths (`app/player/` avoids sibling matches) and full run-gate leaf tokens. GPU-backed shards claim `gpu`; display/window shards also claim `window`, while CPU-only shards run unlocked.
-- `lib/engine/tests/core/`: memory, containers, concurrency, I/O, configuration, services and other foundation behavior.
-- `lib/engine/tests/sim/`: chunks, fixed timestep, snapshots, ECS, world generation and physics; physics links privately. GPU matter tests live in the app tier (`matter_gpuTests()`).
-- [asset tests](lib/engine/tests/asset/codemap.md): CPU image/mesh processing and GPU caches/render integration.
-- `game/CMakeLists.txt`: the `game.tests` entry, the split `game.tests.worldgen_preview` heavy-leaf entry, the bounded `game.tests.lighting_lab` entry, and the two `app.game.worldgen_*` profile validations, covering invocation and game display model/persistence without an upward engine-test dependency.
-- `lib/engine/tests/shared/`: shared invocation/run harness. `--run-test` selects a subtree and `--skip-test` excludes one; tests use `PPR_TEST_ASSERT`, not engine assumptions/assertions.
-
-Suite interfaces export declaration-only `extern const UnitTest` roots; implementations assemble private groups through `Tests()` accessors. Use `unit-test-updater` for test changes and owning CMake files for current file/group inventories rather than old counts.
-
-Validation scope and review timing are defined by [validation](.opencode/skills/validation/SKILL.md) and [build-system](.opencode/skills/build-system/SKILL.md). Local batches default to an affected Dev build and focused behavioral checks; coherent completion, shared render transactions, and merge/stress gates expand coverage as specified there. Reuse applicable passed evidence and rerun only invalidated checks. Documentation and script changes use proportionate reference, syntax, and behavior checks rather than unrelated C++ builds or CTest. No automatic retries masking flakes; preserve failure seeds.
+Start with [asset tests](lib/engine/tests/asset/codemap.md) for fixture and GPU-gate
+navigation, [AGENTS.md](AGENTS.md#tests-and-delivery-readiness) for contracts, and
+[validation](.opencode/skills/validation/SKILL.md) / [build-system](.opencode/skills/build-system/SKILL.md)
+for execution scope, loop selection and machine exclusivity. Owning CMake files under
+`lib/engine/tests/{core,sim,app,asset}` and `game/` define current filters, deadlines and
+resource locks; `cmake/Tests.cmake` registers `<target>[.<qualifier>]` entries through
+`ppr_add_test_entry` (`ctest -N` shows the configured inventory). The engine aggregate
+excludes game tests; full CTest includes them and CPU-only `app.game.worldgen_*` pack
+load/compile validations. Core/sim are GLFW-free; app/GPU asset tests need platform/GPU
+facilities, and GPU matter tests live in the app tier. Matter observation evidence and
+the final integration matrix remain separate gates. Historical host evidence: a shared
+Slang session measured 10x slower program creation, motivating private GPU-case lifetimes.
+`lib/engine/tests/shared/` owns subtree `--run-test` / `--skip-test` invocation; filters
+match prefixes both ways, so use complete group paths and full run-gate leaf tokens.
+Suite interfaces export declaration-only `extern const UnitTest` roots, with private
+`Tests()` group accessors; use `unit-test-updater` for changes.
 
 ## Map maintenance
 

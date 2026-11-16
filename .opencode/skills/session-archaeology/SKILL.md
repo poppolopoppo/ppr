@@ -13,10 +13,11 @@ description: >
 This is a thin, repository-local execution extension for Reflect. It is not a
 second Reflect workflow and does not replace the general Reflect guidance.
 
-Before any analysis, load and follow the original global `reflect` skill. If
-that original skill is unavailable, stop with a clear message: `The original
-global reflect skill is unavailable; session archaeology cannot run.` Do not
-duplicate or improvise its workflow here.
+Before any analysis, load the `reflect` skill through the current harness's
+available skill catalog. A cached `SKILL.md` or a plugin-cache path does not
+establish that it is exposed or permitted in this session. If it is unavailable,
+stop with: `The required reflect workflow is unavailable; session archaeology
+cannot run.` Do not duplicate or improvise its workflow here.
 
 The original `reflect` skill remains authoritative for inventory, evidence
 selection, confidence, conservative recommendations, report format, and

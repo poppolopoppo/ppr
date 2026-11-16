@@ -33,6 +33,7 @@ are not Linux prerequisites or evidence of Linux validation.
 ## Design and historical material
 
 - [Closed PBMPM granular investigation: findings, restored baseline and evidence](pbmpm-granular-investigation.md)
+- [World-generation overhaul: implemented historical plan](worldgen-overhaul-plan.md) — recorded agent assignments and remaining-gate language are historical, not current task instructions.
 
 `plans/`, `clone/` and `physics/` contain designs and proposals, including partially implemented designs. Their imperatives, phase gates and proposed modules apply only to work that adopts that design. They do not establish current functionality or authorize expanding an unrelated task.
 
@@ -41,5 +42,7 @@ are not Linux prerequisites or evidence of Linux validation.
 ## Keep documentation useful
 
 Update the owning map when changing public boundaries, entry points or registration. Prefer symbol/file links over brittle source line ranges and copied inventories. Put operational policy in its owning skill and link it instead of repeating it. Clearly distinguish implemented behavior, intended contract, proposal and measured evidence. Do not turn an obsolete TODO into a new task for the next agent.
+
+Run `python scripts/check_doc_refs.py` after changing agent-facing documentation. It reports missing local links and skill references in current authority documents; historical plan trees require `--include-historical`.
 
 The October 2026 documentation audit corrected application/render handoff, demo behavior, test registration/loop defaults and key navigation guidance against source/CMake. It did not re-run runtime/performance gates or certify every historical design claim.

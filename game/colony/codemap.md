@@ -42,6 +42,8 @@ availability are explicit. Terrain edits request a current snapshot for the
 existing exact double coverage check, copy old rows GPU-to-GPU, and upload only
 new deterministic-ID rows before the copy-fence/joint publication boundary.
 
+## Content descriptors and selected-world assembly
+
 Named descriptor addition: `Content.Descriptors.cpp` implements the owned
 `ContentDescriptorCatalog` declared in `Content.cppm`. Composed schemas reuse
 sim definitions and existing appearance metadata, pin immutable pack metadata,
@@ -59,6 +61,8 @@ World context. Numeric identity excludes asset linkage names and appearance;
 presentation descriptor identity includes selected appearance and texture
 settings, with source-byte identity deferred to explicit image preparation.
 `game/world_assembly` covers this seam and shipped definitions-only parity.
+
+## Frozen GPU diagnostic capture
 
 `WorldGen.Capture.cpp` implements the `game.colony.smoke` blocking GPU diagnostic
 entry point. The invocation boundary passes an exclusively owned initialized
@@ -470,4 +474,3 @@ visual subset. Unknown models remain unavailable, not substituted. WorldJob's
 pre-Matter source is provisional: known world/content association is retained,
 and actual job/Matter terrain identity is bound later at the Editor staging
 boundary without cloning/reuploading static arrays.
-

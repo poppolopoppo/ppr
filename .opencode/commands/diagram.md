@@ -8,12 +8,12 @@ If the request is empty or whitespace-only, ask what to visualize and stop until
 the user supplies a scope. Otherwise infer reasonable defaults; ask only when
 missing information materially affects correctness, disclosure, or diagram choice.
 
-Load `plantuml-skill` from `.opencode/skills/plantuml-skill` and the user-global
-`verification-planning` skill before drawing. If `plantuml-skill` cannot load,
-stop and explain. If verification-planning is unavailable or denied, use an
-explicit proportionate verification plan through the orchestrator; if no
-orchestrator is available, state and apply that plan directly. Report the
-substitution.
+Load `plantuml-skill` before drawing. Load `verification-planning` only if it is
+exposed and permitted in the current skill catalog; if it is unavailable or
+denied, state and apply an explicit proportionate verification plan through the
+orchestrator, or directly when no orchestrator is available. Report the
+substitution. If `plantuml-skill` cannot load, stop and explain. Do not search
+historical plugin caches to bypass availability.
 
 Use the skill for PlantUML syntax and rendering guidance. This command overrides
 its defaults for scope, theme, palette, SVG deliverables, backend selection,

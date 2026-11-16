@@ -2,14 +2,20 @@
 
 ## Responsibility
 
-The `engine.app:renderer` module provides the content-free generic `Renderer` (surface registry + graphics
-queue + validated submission only; multi-surface capable, single main window in production). Scene content lives in `engine.app:renderer.triangle_pass` (`TrianglePass`) and `engine.app:renderer.grid_pass` (`GridPass`, chunk-sized tile quads over the cell world); `engine.app:renderer.presentation` supplies checked W/P/R/S/B values and `ResolvedHdrView`, and `engine.app:renderer.post_process_pass` (`PostProcessPass`) owns exposure adaptation, ceil-sized bloom, the single AgX treatment, the display-referred presentation sharpen and fixed-P presentation.
+`Renderer` owns only the surface registry, graphics queue and validated submission
+(multi-surface capable, single main window in production). `TrianglePass` and `GridPass`
+own scene content; `:renderer.presentation` supplies checked W/P/R/S/B values and `ResolvedHdrView`.
+`PostProcessPass` owns exposure, ceil-sized bloom, AgX and fixed-P presentation.
+See Key Files for their module/source inventory.
+
 Post-processing runs at the resolved content extent after the scene image; final
 nearest enlargement, cropping, the resolved-space contrast-adaptive sharpen and the
 single sRGB decision live in `present_scene.slang` / `PostProcessPass::present`, and
 native UI remains last.
 Pixelization is a rendering-resolution control (P1..8, default 3), not a
 post-effect filter; there is no AA selector or legacy runtime alternative.
+
+### Reconstruction and post-processing
 
 `PostProcessPass` consumes an immutable resolved scene-linear HDR view with
 strong allocation ownership (`ResolvedHdrView{view, world, backing, valid}`).
@@ -40,10 +46,10 @@ lattice reference is a valid sample, dispatched through a fixed seven-load stenc
 code) and `Hable.Resolve.Border` (the complementary backing pixels, unchanged generic lattice and
 nearest-valid fallback) inside one stage-B submission.
 
-Camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
-`ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in
-`engine.app:renderer.types`. There is no `App.Renderer.Types.cpp` — the partition is fully inline in
-`App.Renderer.Types.cppm`.
+### Submission boundary
+
+Camera-free RHI submission types live entirely inline in `App.Renderer.Types.cppm`
+(`engine.app:renderer.types`); there is no matching `.cpp`. See Key Files for the API names.
 
 `PreRenderContext/Callback` is the optional synchronous preparation seam on
 surface passes and offscreen rendering. It borrows the same command encoder
@@ -59,6 +65,8 @@ numeric status copies observe the draws. A tail failure abandons the encoder, so
 the frame is definitely unsubmitted and its credit returns immediately. Surface
 passes still carry only `m_prepare`; the presentation-stage numeric-status tail
 is wired by the editor's stage-C settlement (Task 14), not by this seam.
+
+### Grid publication and world lifetime
 
 Grid staged frames carry owned catalog visuals and an explicit cell metric.
 Supported scales are one metre for legacy fixtures and one third metre for
@@ -127,24 +135,17 @@ world-lighting integration. GridPass retains only scalar material validation,
 filtered texture means, texture residency, normal decoding, texture bombing and
 particle admission.
 
-`engine.app:renderer.world_lighting` is the current lightweight record-codec
-partition (not the removed optical oracle). It defines the byte-exact published
-records `PackedInterval` (stride 8), `PackedCH` (stride 32) and `SourceMaterial`
-(stride 8), the decoded CPU values `Interval`/`CH`, the checked codecs
-`packCell`, `packRGB9E5`/`unpackRGB9E5`, `packInterval`/`unpackInterval`,
-`packCH`/`unpackCH`, `makeSourceMaterial` and `lastTraceFrame`, the approved
-coarse-cascade geometry (`cascadeSpacing`, `cascadeDirections`,
-`cascadeProbeEdge`, `cascadeGroupEdge`, and `cascadeIntervalStart`, whose
-`kCascadePenumbraWidth` derivation yields 1.024..262.144 cells), and the
-5x1,048,576-record/40 MiB interval store, 4 MiB RGB9E5 source-cache and
-512-square/8 MiB fine-CH constants, plus the committed thermal table shape
-constants. The fixed four-frame schedule, atlas addressing and terminal sky
-derivation live in their shaders; `lastTraceFrame` is the retained-direction
-interface fine reconstruction consumes. It has no device or pass ownership. The shader
-mirrors are `assets/shaders/world_lighting_codec.slang` and
-`assets/shaders/thermal_emission.slang`; the schedule and sky live in
-`assets/shaders/world_lighting_cascade.slang` and
-`assets/shaders/world_lighting_sky.slang`.
+### World-lighting ownership and ordering
+
+`engine.app:renderer.world_lighting` is the current record-codec partition, with no
+device/pass ownership (not the removed optical oracle). `App.Renderer.WorldLighting.cppm/.cpp`
+owns checked codecs, cascade geometry and thermal-table shapes; shader mirrors live in
+`world_lighting_codec.slang` and `thermal_emission.slang`. Published strides are 8 bytes
+for `PackedInterval`/`SourceMaterial` and 32 for `PackedCH`. Storage is five 1,048,576-record
+cascades (40 MiB), a 4 MiB RGB9E5 source cache and a 512-square fine-CH field (8 MiB).
+Cascade penumbra widths span 1.024..262.144 cells. The shaders own the four-frame schedule,
+atlas addressing and terminal sky; `lastTraceFrame` supplies retained-direction identity
+to fine reconstruction. See the [shader map](../../../../assets/shaders/codemap.md).
 
 `engine.app:renderer.world_lighting_pass` is the per-world lighting owner
 (`WorldLightingPass`, `WorldLightingFrame`, `WorldLightingInputs`). One instance
@@ -152,11 +153,10 @@ lives in `GridPass::WorldResources` with the world's resolved cells, reusable
 winner scratch and status tickets; GridPass exposes
 `prepareWorldLighting`/`finalizeWorldLighting`/`bindWorldLighting` and the
 submission/collection forwards, and no renderer or global service owns lighting
-state. `prepare` retains the exact `lighting::WorldLightingInputs` owners,
-allocates one 4 MiB resolved-cell grid and two 4 MiB uint32 scratch grids
-(`best_key`, `best_row`), then encodes four entries of
-`assets/shaders/world_lighting_projection.slang` with UAV barriers between them:
-`clearWinners` clears both grids, `reduceKeys` atomic-mins the class/distance key
+state. `prepare` retains the exact `lighting::WorldLightingInputs` owners and the
+resolved-cell/winner/fill grids. The four barrier-separated entries of
+`world_lighting_projection.slang` own clear, key reduction, row reduction and resolve;
+`reduceKeys` atomic-mins the class/distance key
 of every enabled moving solid/liquid particle, `reduceRows` atomic-mins the
 metadata-row rank of exact-key candidates, and `resolveCells` overwrites every
 cell with terrain, the selected particle's `packCell` material/temperature word,
@@ -168,34 +168,28 @@ coordinates come from committed hot64 positions minus the published origin; the
 exact closed maximum endpoint belongs to cell 1023 and nonfinite/outside
 positions are rejected (never clamped).
 
-`App.Renderer.WorldLightingPass.Transport.cpp` then rebuilds the full domain
-with two dispatches over the resolved cells and the admitted visible palette:
-`buildVisibility` (32x32 groups, 256 threads) owns one 32x32 native tile per
-group, ORs occupancy into 160 bytes of group-shared storage and writes the
-three levels of one 21,504-record structured uint2 buffer (stride 8, 172,032
-bytes, level offsets `{0,16384,20480}`, pitches `{128,64,32}`); `buildJump`
-(64x64 groups) reads at most three masks per native cell and writes one
-`R8Uint` texel. Both dispatches run over reused per-attempt-slot allocations
-with ordered resolved-write -> visibility-read -> jump-write -> trace-read
-dependencies and no host wait, per-frame allocation or global reduction. The
-`assets/shaders/world_lighting_trace.slang` helper traces a finite segment with
-slab clipping, aligned-block jump advance, resolved classification and the
-cached per-cell source; nonfinite face parameters or a non-progressing
-traversal report the numeric status failure instead of a clear interval, and
-`traceAdvanceAxis` rebuilds the entered cell from the original ray so a
-corner/block-boundary crossing always has its next face ahead.
+`App.Renderer.WorldLightingPass.Transport.cpp` rebuilds full-domain visibility and
+the R8Uint jump map from resolved cells and the admitted palette. Per-attempt-slot
+allocations are reused; resolved-write -> visibility-read -> jump-write -> trace-read
+ordering requires no host wait, per-frame allocation or global reduction. Dispatch
+geometry and mask layout live in `world_lighting_visibility.slang`.
+`world_lighting_trace.slang` owns slab-clipped finite-segment traversal, aligned-block
+jumps and cached-source reads. Nonfinite face parameters or non-progress report numeric
+failure, never a clear interval; rebuilding entered cells from the original ray keeps
+the next face ahead at corner/block crossings.
 
-`App.Renderer.WorldLightingPass.Transport.cpp` then prepares the cached source
-and transports the coarse cascades. One ordered 4 MiB RGB9E5 word per native
-cell is `authored_emission + thermal_emission(temperature) + diffuse *
-previous_angular_mean`; the previous mean is the prior fine-CH DC field
-bilinearly sampled at `(cell+0.5)/2-0.5` and scaled by `Y0`, with no extra pi,
-cosine, normal, roughness or Fresnel factor. Empty, pure-metal-diffuse and
-receive-only/gas cells contribute exactly zero; the pass binds its own
-zero-initialized in-place 8 MiB fine-CH field. The source dispatch is ordered
-before tracing and before every fine write.
-`updateTerminal` fills L5 over the 512-square quarter-probe domain (16x16
-threads): four terminal sub-sectors per stored direction with `D=16,384` trace
+The same transport owner prepares the cached source before tracing and every fine write.
+`world_lighting_source.slang::prepareSource` stores one RGB9E5 word per native cell:
+physical fill scales authored + thermal emission + diffuse * prior angular mean.
+Terrain and legacy unavailable-fill rows retain full strength; particle fill saturates
+at one. Empty/receive-only/gas cells contribute zero; zero diffuse removes feedback,
+not emission. `priorAngularMean` samples prior fine-CH DC at `(cell+0.5)/2-0.5` with
+`Y0` normalization, excluding fully occupied probe blocks and renormalizing surviving
+weights (none means zero). No extra pi, cosine, normal, roughness or Fresnel factor
+applies. Production uses the pass's zero-initialized in-place fine-CH field; diagnostics
+may supply a checked prior field.
+`updateTerminal` fills L5 over the 512-square quarter-probe domain:
+four terminal sub-sectors per stored direction with `D=16,384` trace
 to the actual forward map exit (slab clip; exterior clear), closing every path
 with the analytic fixed-intensity sky and zero transmittance. A miss returns
 the sky-sector mean, a hit the cached source. `updateCascade` fills L4..L1 with
@@ -208,27 +202,18 @@ retain zero radiance and zero transmittance (never vacuum). Explicit global
 barriers order source -> L5 -> L4 -> ... -> L1 and the final SRV transition;
 nothing is reallocated per frame and there is no CPU wait or readback.
 
-`encodeFine_` then reconstructs the single in-place 512x512x32-byte fine CH
-field (8 MiB, zero-initialized per world) with one 8x8-thread dispatch. Fine
-centre `f=(p+0.5)*2` owns the connector box `[f-4,f+4]`; four L1 probes are
-gathered at `f/4-0.5` after clamping each index to the L1 domain, before that
-index derives its centre, group, validity, trace frame or storage address.
-Each of the 16 L1 directions uses the probe's own retained trace frame (the
-current frame only for a never-initialized tap), exits the box at `e`, and
-projects on `v=normalize(e-f)`. The near segment starts at `f+0.001*v`; the
-merge is `L=Lnear+Tnear*Lfar`, `T=Tnear*Tfar` with a never-initialized far
-interval `(0,0)`. Samples carry `bilinear_weight*2*pi/16`, are fit to the
-orthonormal circular basis (`Y0=1/sqrt(2*pi)`, `cos/sin(m*theta)/sqrt(pi)`,
-mean subtracted, Lanczos window `sinc(m*pi/5)` applied once), then all nine
-decoded FP32 RGB coefficients are blended by
-`1-exp(-2*delta_seconds)` and encoded exactly once. The first field bypasses
-the blend. Each invocation reads and overwrites only its own 32-byte record;
-the pass has no neighbouring CH read, history copy or ping-pong field. Explicit
-barriers order source reads before fine writes and fine writes before scene
-readers across successive submitted frames. The accepted submission commits
-the phase and active-time baseline; rejected/unsubmitted work commits neither.
-`angularMean(float2)` samples the decoded field at a world-cell position with
-the same `Y0` normalization for later visible/gas use.
+`encodeFine_` owns the in-place fine-CH update; `world_lighting_fine.slang` and
+`world_lighting_ch.slang` own connector geometry, weighted orthonormal circular fitting
+and the once-applied Lanczos window. L1 indices clamp before deriving any probe identity;
+each direction uses its probe's retained trace frame (current only for uninitialized taps).
+Uninitialized far intervals are `(0,0)`, not vacuum. All nine decoded FP32 RGB coefficients
+blend by `1-exp(-2*delta_seconds)` before one encode; the first field bypasses blending.
+Each invocation reads/writes only its own 32-byte record: no neighbouring CH read,
+history copy or ping-pong field. Barriers order source reads -> fine writes -> scene
+readers across submitted frames. Only accepted submissions commit phase and active time.
+`angularMean(float2)` samples the decoded field in world-cell space with the same
+`Y0=1/sqrt(2*pi)` normalization for visible/gas use. See the shader map for the numerical
+algorithm and its qualification probes.
 
 Each numeric stage owns one 32-byte `NumericStatusRecord` in the attempt's
 fixed-record status buffer: four projection stages, source preparation,
@@ -249,6 +234,8 @@ thermal table and `g_numeric_status` to material and inspection shaders. A secon
 submitted or discarded is rejected with `operation_not_permitted` before it
 touches the armed attempt's slot, constants or recorded bindings; callers
 settle that attempt with `notifySubmitted` or `discardUnsubmitted` first.
+
+### Lighting inspection
 
 `renderInspection` is the retained C-stage overlay: one fullscreen draw of
 `assets/shaders/world_lighting_inspect.slang` after post-presentation and before
@@ -280,16 +267,15 @@ owners through the existing frame fence, including world retirement.
 `App.Renderer.GridPass.Particles.cpp` owns `grid_particle_prepare.slang`: one pack
 dispatch on source changes, then three stable frustum-compaction dispatches per
 frame. Scratch is O(N), bounded by the global 1M-particle capacity; numerical
-rows never reorder. The only remaining indirect particle draw is the sampled
-disk used for gas and explicit legacy phase fixtures. Gas retains cold24/palette
-RGB and multiplies it by the current fine-CH angular mean; it alpha-composites
+rows never reorder. Direct particle draws coexist with the liquid surface lane
+below; the sampled disk remains for gas and explicit legacy phase fixtures. Gas retains
+cold24/palette RGB and multiplies it by the current fine-CH angular mean; it alpha-composites
 over the already shaded scene without relighting the background, adding an
 ambient floor, or contributing authored/thermal transport emission. Phase flags
 are derived for every material, including terrain elements that become particles
 after digging. Radius in metres remains `cell_size_m * sqrt(volume_cells / pi)`.
-Reconstructed solids and liquids are no longer drawn as smooth envelopes: the
-world-lighting projection selects one categorical material per native cell and
-the resolved-cell terrain draw shades it with the same material path.
+World-lighting projection selects one categorical material per native cell for
+the resolved-cell terrain path; it does not retire the current liquid surface lane.
 
 `App.Renderer.GridPass.ParticleSurface.cpp` owns the liquid surface lane over the
 same prepared rows and indirect arguments: a minimum-presence marker pass
@@ -305,7 +291,7 @@ its synthetic depth, the two attribute sums, the marker record and the two
 smoothing bundles live in one completion-fenced ring slot and are rewritten every
 rendered frame.
 
-Task 11 retired `App.Renderer.GridPass.Fluids.cpp`, `App.Renderer.GridPass.Solids.cpp`,
+Historical: Task 11 retired `App.Renderer.GridPass.Fluids.cpp`, `App.Renderer.GridPass.Solids.cpp`,
 `grid_liquid_kernel.slang`, `grid_solid_kernel.slang`, `grid_fluid_filter.slang`,
 their screen-space attachments, splat/filter/composite pipelines and spatial
 variants after checking their callers. Particle publication, pack/cull/scatter,
@@ -642,9 +628,12 @@ validation requirements; user visual acceptance is separate.
 - `App.Renderer.GpuCaches.cpp` — cache implementations (uploads, dedup, pack, teardown)
 - `App.Renderer.Types.cppm` — boundary types (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`, `ColorAttachmentOps`, depth policy, `SurfaceRenderPass`); header-only, no matching `.cpp`
 - `App.Renderer.WorldLighting.cppm/.cpp` — published world-lighting record words, CPU interval/CH values, RGB9E5/half/AC codecs, source-material admission and retained-direction scheduled frame identity
-- `App.Renderer.WorldLightingPass.cppm/.cpp` — per-world categorical projection owner: resolved cells, two winner-scratch grids, numeric status ring, settlement and diagnostics
+- `App.Renderer.WorldLightingPass.cppm/.cpp` — per-world categorical projection owner:
+  resolved cells, winner/fill scratch, numeric status ring, settlement and diagnostics
 - `App.Renderer.WorldLightingPass.Projection.cpp` — `encodeProjection_` clear/reduce/resolve encoding with the shared coordinate/key contract
 - `App.Renderer.WorldLightingPass.Transport.cpp` — full-domain visibility/R8 jump rebuild, per-attempt-slot acceleration storage, cached-source preparation, continuously scheduled L5-L1 cascade encoding and the persistent cascade/source/fine-CH storage
+
+## Grid surface ownership and publication
 
 The shared contour surface is enabled for catalog sessions. GridPass uploads
 `math::contourPoints/contourCases` and completion-safe per-slot global chunk maps;
@@ -663,6 +652,8 @@ one admitted 2048-square RGBA image per update; canceled uploads remain retained
 until a subsequent accepted frame fence covers initialization. Coordinator-side
 capture produces owned u16 cell uploads without copying full simulation cells.
 
+## Renderer and grid telemetry
+
 Opt-in `GridPassObservations` snapshots are captured only on the render owner and
 carried by value in the existing frame result. The editor mirrors them for game
 acceptance reports. They count encoded GPU terrain draw/dispatch commands, atlas
@@ -678,12 +669,15 @@ The pool follows the same proven-idle/confirmed-removal release rules as other
 Renderer resources. Delayed `GpuFrameTiming` observations retain their submission
 identity when transported to the main thread in `RenderFrameResult`.
 
+## Surface profiles
+
 GridPass retains an optional immutable numeric surface profile with each world
 bundle. Its background-only 16 KiB height constant buffer selects sky above the
 exact fine-column surface and authored parallax below. The 304-byte frame ABI
 uses its former padding word for the surface enable flag; tile and particle
 frames keep their size. Surface data shares candidate publication and retirement.
 
+## Optical material bridge and historical qualification
 
 The authored material optical bridge appends versioned model/sigma to the existing
 `GridTerrainVisual` palette (96 bytes, previous offsets unchanged). Tags 0/0x101/
@@ -696,11 +690,13 @@ optics; shader and particle-carrier reflection plus actual upload stride checks
 cover all same-palette consumers. Dense palette storage is 6 MiB per owner rather
 than 5 MiB, with overlap under existing fence retirement. A qualification-only
 compute probe in grid_tiles reads the real 96-byte layout without entering draws.
-The bridge passed independent source review and focused Debug/Release schema,
-numeric/GPU ABI, terrain/particle raster and shipped-profile gates. Debug's
+Historical qualification: the bridge passed independent source review and focused
+Debug/Release schema, numeric/GPU ABI, terrain/particle raster and shipped-profile gates. Debug's
 opt-in radiance entry confirmed system Khronos Core and GPU Assisted validation;
 the earlier broad asset GPU timeout remains unresolved. Terrain/matter
-reconstruction and scene lighting activation remain separate work. The prior deterministic half-storage stage
+reconstruction and scene lighting activation were separate work at that milestone;
+current world-lighting and liquid-surface ownership are described above. This historical
+evidence does not qualify those later paths. The prior deterministic half-storage stage
 passed Debug ordinary/real GPUAV and focused Release CPU/GPU gates.
 
 
@@ -711,13 +707,16 @@ partition remains; the retained contour roundness construction is the shared
 Slang code in `grid_contour_math.slang`.
 
 
-## Retired reconstruction route
+## Reconstruction route history
 
 `RetroSettings`, `RetroPass`, palette quantization, the temporal selector and the
 opt-in spatial integration were removed in Task 2. `Resolution` pixelization P1..8
 is carried on the owned frame request; `PostProcessPass` has no AA mode or
-enable/disable combination. The spatial sample-rate kernel and its Hable
-qualification remain the subject of Task 12, not a runtime alternative.
+enable/disable combination. The Task 12 spatial prerequisite is historical:
+`spatial_msaa4.slang` remains an independent kernel/sample-pattern qualification asset,
+not a runtime alternative. Current `ReconstructionPass::createPrograms_` loads
+`hable_temporal.slang` for always-on temporal reconstruction; source presence does not
+establish current runtime or performance qualification.
 
 The retained contour roundness construction lives in
 `assets/shaders/grid_contour_math.slang` and serves the raster/terrain consumers.
@@ -758,5 +757,3 @@ no normal-frame wait, queue, dense world allocation or optical solver is added.
 Census readback accepts only the two fence values; mapping uses the selected slot's
 actual allocation device, so a foreign device cannot be supplied. Returned rows
 include a weak metadata identity token without taking GPU-resource ownership.
-
-
