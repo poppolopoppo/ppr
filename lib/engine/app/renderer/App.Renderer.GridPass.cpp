@@ -2700,6 +2700,7 @@ namespace pP {
                 for (const auto &slot: particles.m_slots) {
                     out.m_particle_buffer_bytes += slot.m_ids ? slot.m_ids->getDesc().size : 0u;
                     out.m_particle_buffer_bytes += slot.m_args ? slot.m_args->getDesc().size : 0u;
+                    out.m_particle_buffer_bytes += slot.m_conic ? slot.m_conic->getDesc().size : 0u;
                     if (slot.m_census) {
                         out.m_particle_buffer_bytes += slot.m_census->m_projected->getDesc().size +
                                                        slot.m_census->m_readback->getDesc().size;

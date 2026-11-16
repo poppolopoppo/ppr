@@ -3991,13 +3991,40 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f);
             }
             const auto stable = grid.observations();
-            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 380u);
+            const auto log_particle_resources = [&](const char *phase, const GridPassObservations &observed) {
+                const auto buffers = grid.particleBuffersForTest();
+                const auto bytes = [](const rhi::IBuffer *buffer) {
+                    return buffer ? const_cast<rhi::IBuffer *>(buffer)->getDesc().size : 0u;
+                };
+
+                _.log(
+                    std::format(
+                        "grid particles {} instances={} bytes={} packed_bytes={} selected_ids_bytes={} "
+                        "selected_args_bytes={} selected_conic_bytes={} orientation_bytes={} retained_metadata_bytes={} "
+                        "fixture: capacity=2 slots=3 blocks=1 hot_stride=72 cold_stride=28 metadata_stride=32 "
+                        "packed_stride=24 index_stride=4 orientation_roles=2 orientation_stride=4 census=0 "
+                        "source_rows=max(1,instances)",
+                        phase, observed.m_particle_instances, observed.m_particle_buffer_bytes, bytes(buffers[0]),
+                        bytes(buffers[2]), bytes(buffers[1]), bytes(grid.particleConicForTest()),
+                        observed.m_particle_orientation_bytes, observed.m_particle_retained_metadata_bytes));
+            };
+
+            // Exact live descriptor-byte budget: seed hot/cold + metadata + packed/ranks +
+            // block counts/prefix + three slots (IDs/args/pair-packed conics) + two orientation roles.
+            // 2*(72+28+32) + 2*(24+4) + (1+2)*4 + 3*(2*4+16+12) + 2*2*4 = 456.
+            // History/draw alias a role; accepted metadata aliases the publication. No census is requested.
+            // Pins bounded storage and once-only accounting across repeats and world retirement.
+            constexpr u64 kTwoParticleBytes = 456u;
+            log_particle_resources("stable", stable);
+            PPR_TEST_ASSERT(stable.m_particle_instances == 2u);
+            PPR_TEST_ASSERT(stable.m_particle_buffer_bytes == kTwoParticleBytes);
             PPR_TEST_ASSERT(stable.m_background_targets == 3u);
             PPR_TEST_ASSERT(stable.m_background_target_bytes == 3u * 128u * 128u * 8u);
             for (u32 frame = 0u; frame < 6u; ++frame) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f);
             }
             PPR_TEST_ASSERT(grid.observations().m_particle_uploads == stable.m_particle_uploads);
+            PPR_TEST_ASSERT(grid.observations().m_particle_buffer_bytes == stable.m_particle_buffer_bytes);
             PPR_TEST_ASSERT(grid.observations().m_texture_entries == stable.m_texture_entries);
             PPR_TEST_ASSERT(grid.observations().m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
             u32 forced_background_waits = 0u;
@@ -4017,7 +4044,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u);
             }
             const auto empty = grid.observations();
-            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 260u);
+            // Empty publication allocates one dummy hot/cold/metadata row; capacity stays two:
+            // (72+28+32) + 2*(24+4) + (1+2)*4 + 3*(2*4+16+12) + 2*2*4 = 324.
+            log_particle_resources("empty", empty);
+            PPR_TEST_ASSERT(empty.m_particle_instances == 0u);
+            PPR_TEST_ASSERT(empty.m_particle_buffer_bytes == 324u);
             PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 9u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
@@ -4073,7 +4104,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u, nullptr, &admitted);
                 PPR_TEST_ASSERT(admitted);
                 const auto settled = grid.observations();
-                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 380u);
+                // The retired world has drained; the replacement owns the same two-row cohort.
+                log_particle_resources("settled replacement", settled);
+                PPR_TEST_ASSERT(settled.m_particle_instances == 2u);
+                PPR_TEST_ASSERT(settled.m_particle_buffer_bytes == kTwoParticleBytes);
                 PPR_TEST_ASSERT(settled.m_texture_entries == stable.m_texture_entries);
                 PPR_TEST_ASSERT(settled.m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
                 PPR_TEST_ASSERT(settled.m_background_target_bytes == empty.m_background_target_bytes);
