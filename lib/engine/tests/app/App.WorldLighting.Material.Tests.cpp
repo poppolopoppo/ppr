@@ -8928,6 +8928,31 @@ namespace pP::tests::detail::WorldLightingMaterial {
     inline constexpr double kMarkerQuadRadiusPx = kMarkerRadiusPx + 0.7071067811865476;
     inline constexpr double kMarkerRecordScale = 8.0;
     inline constexpr double kMarkerMaterialScale = 65535.0;
+    // grid_particle_density.slang's marker ENERGY, which lives in the winner record's
+    // fourth channel: presence is not radiance, so a row whose projected reference
+    // area is below one content pixel fades with that area instead of shading a
+    // sub-pixel dot at full material radiance. The shader names the reference in
+    // kParticleMarkerEnergyAreaContentPx2 and the projection in
+    // particleMarkerReferenceAreaContentPx2; the mirror restates both.
+    inline constexpr double kMarkerEnergyAreaContentPx2 = 1.0;
+
+    // E = saturate(A_content_px2 / kMarkerEnergyAreaContentPx2), restated from
+    // particleMarkerEnergy: zero area is zero energy and the reference and everything
+    // above it is exactly one.
+    [[nodiscard]] double markerEnergyAtAreaContentPx2(const double reference_area_content_px2) {
+        return std::clamp(reference_area_content_px2 / kMarkerEnergyAreaContentPx2, 0.0, 1.0);
+    }
+
+    // The projected reference area V = pi r^2 in CONTENT pixels squared, restated from
+    // particleMarkerReferenceAreaContentPx2: `pixel_world` is the world metres of one
+    // RASTER sample, and one raster sample is kMarkerContentPixelsPerRasterSample
+    // content pixels, so r_content = 2 r_m / pixel_world. The shader projects through
+    // the fragment's own world-per-raster Jacobian instead of a per-draw pixel scale;
+    // for these orthographic cohorts the two are the same number.
+    [[nodiscard]] double markerReferenceAreaContentPx2(const double radius_m, const double pixel_world) {
+        const double radius_content_px = kMarkerContentPixelsPerRasterSample * radius_m / pixel_world;
+        return kPi * radius_content_px * radius_content_px;
+    }
 
     struct DensityParticleSpec {
         double m_x_m{};
@@ -8997,7 +9022,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         std::vector<std::array<float, 4u>> m_filtered_normal_alpha{};
         // The minimum-presence winner record per raster texel, DECODED: .xy is the
         // nearest liquid particle's centre as an offset in pixels from that texel's
-        // centre, .z is its material id and .w is unused. Zero material is empty.
+        // centre, .z is its material id and .w is its linear energy factor (one at or
+        // above one content pixel of projected reference area, the area ratio below
+        // it). Zero material is empty.
         std::vector<std::array<double, 4u>> m_marker{};
         std::vector<float> m_composite{}; // premultiplied RGBA per composite pixel
         u32 m_raster{};
@@ -9010,6 +9037,12 @@ namespace pP::tests::detail::WorldLightingMaterial {
         float m_samples_per_cell{};
         u32 m_halo{};
     };
+
+    // E for one cohort frame and one row radius: the marker energy the shader writes
+    // into that frame's winner records, restated from the frame's own projected area.
+    [[nodiscard]] double markerEnergyForFrame(const DensityFrameResult &frame, const double radius_m) {
+        return markerEnergyAtAreaContentPx2(markerReferenceAreaContentPx2(radius_m, double(frame.m_pixel_world)));
+    }
 
     [[nodiscard]] DensityFrameResult readDensityFrame(
         rhi::IDevice &device, const GridPass::ParticleSurfaceTargetsForTest &targets, rhi::ITexture &composite,
@@ -11209,10 +11242,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
                 std::array<double, 4u> record_here = frame.m_marker[index];
                 record += std::format(
                     " [({},{}) label={} accumulated_label={} q_a={:.6f} filtered_q_a={:.6f} "
-                    "marker=({:.3f},{:.3f},material={})]",
+                    "marker=({:.3f},{:.3f},material={},energy={:.4f})]",
                     x, y, frame.m_filtered_label[index], frame.m_label[index], double(frame.m_density[index]),
                     double(frame.m_filtered_density[index]), record_here[0u], record_here[1u],
-                    static_cast<u32>(record_here[2u]));
+                    static_cast<u32>(record_here[2u]), record_here[3u]);
             }
         }
 
@@ -11382,6 +11415,13 @@ namespace pP::tests::detail::WorldLightingMaterial {
             const double peak_marker = markerCoverageAtSample(frame, particle_x, particle_y, 0.0, 0.0);
             PPR_TEST_ASSERT(peak_marker >= 1.0 - 1.0e-3);
 
+            // The row's energy, from the fragment's own projected area: the record
+            // carries it (unorm quantum 1/65535) and the composite scales the dot by
+            // it. It is a property of the row, not of the sample's phase, so every
+            // record of this one row stores the same value.
+            const double energy = markerEnergyForFrame(frame, radius_m);
+            PPR_TEST_ASSERT(std::abs(record[3u] - energy) <= 2.0e-5);
+
             // The record field in the units the shader measures in. A raster texel
             // holds a record exactly when its own centre is inside the candidate
             // bound, its stored offset is that centre's distance to the particle (unorm
@@ -11445,27 +11485,37 @@ namespace pP::tests::detail::WorldLightingMaterial {
             _.log(
                 std::format(
                     "WORLD_LIGHTING_MATERIAL particle_surface_marker_span samples_per_cell={:.6f} span_cells={:.3f} "
-                    "centre_offset={:.5f} marker_peak={:.4f} resolved=({:.4f},{:.4f},{:.4f}) records={} "
-                    "record_gap={:.6f} offset_gap={:.6f} covered={} labelled={} alpha_sum={:.4f} {}",
-                    samples_per_cell, 540.0 / samples_per_cell, offset, peak_marker, resolved_axis[0u],
+                    "centre_offset={:.5f} marker_peak={:.4f} energy={:.6f} resolved=({:.4f},{:.4f},{:.4f}) "
+                    "records={} record_gap={:.6f} offset_gap={:.6f} covered={} labelled={} alpha_sum={:.4f} {}",
+                    samples_per_cell, 540.0 / samples_per_cell, offset, peak_marker, energy, resolved_axis[0u],
                     resolved_axis[1u], resolved_axis[2u], records, worst_record_gap, worst_offset_gap, covered,
                     labelled, sum_alpha, describeLabelledTexels(frame, 4u)));
-            return std::array<double, 6u>{
-                peak_marker, resolved_axis[0u], resolved_axis[1u], resolved_axis[2u], double(covered),
-                double(labelled)};
+            return std::array<double, 7u>{
+                peak_marker, resolved_axis[0u], resolved_axis[1u], resolved_axis[2u], double(covered), double(labelled),
+                energy};
         };
 
         const auto span64 = measure(kSpan64SamplesPerCell);
         const auto span220 = measure(kSpan220SamplesPerCell);
         const auto far = measure(kSpan2048SamplesPerCell);
 
-        // The nearest resolved pixel is fully covered at every zoom. This is the
-        // survival guarantee: at span2048 the density field is empty (asserted
-        // below), so only the marker can produce it.
+        // The nearest resolved pixel keeps its full COVERAGE at every zoom - the
+        // survival guarantee, which is geometry and does not move - and its radiance
+        // is that coverage times the row's energy. At the two resolving spans the
+        // particle's projected reference area is far above a content pixel, so the
+        // energy is exactly one and the dot is the previous full-radiance dot; at the
+        // far span the field is empty (asserted below), the dot is the marker alone
+        // and it fades with the row's sub-pixel area instead of burning at full
+        // radiance.
         for (const auto &measured: {span64, span220, far}) {
-            PPR_TEST_ASSERT(measured[1u] >= 1.0 - 1.0e-3);
+            PPR_TEST_ASSERT(measured[1u] >= (1.0 - 1.0e-3) * measured[6u]);
+            PPR_TEST_ASSERT(measured[1u] <= (1.0 + 1.0e-3) * measured[6u]);
             PPR_TEST_ASSERT(measured[0u] >= 1.0 - 1.0e-3);
         }
+
+        PPR_TEST_ASSERT(span64[6u] == 1.0);
+        PPR_TEST_ASSERT(span220[6u] == 1.0);
+        PPR_TEST_ASSERT(far[6u] > 0.0 and far[6u] < 0.25);
 
         // At the far span the surface support is 0.1135 px and the nearest texel's
         // quadrature points are 0.948 cell away (rho = 2.203): the field must be
@@ -11496,8 +11546,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
             PPR_TEST_ASSERT(peak_density == 0.0);
             PPR_TEST_ASSERT(far[0u] >= 1.0 - 1.0e-3);
             // The marker is the ONLY contributor here, so a resolved pixel's alpha is
-            // the mean of its four per-sample coverages of the one profile (the
-            // material is opaque, so opacity multiplies by one).
+            // the row's energy times the mean of its four per-sample coverages of the
+            // one profile (the material is opaque, so opacity multiplies by one). The
+            // energy is applied exactly once, at the sample, and never to the coverage
+            // - the dot's extent is the geometry the guarantee fixed.
             double worst_dot_gap = 0.0;
             for (u32 y = 0u; y < raster; ++y) {
                 for (u32 x = 0u; x < raster; ++x) {
@@ -11507,15 +11559,16 @@ namespace pP::tests::detail::WorldLightingMaterial {
                     }
 
                     const double alpha = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
-                    worst_dot_gap = (std::max) (worst_dot_gap, std::abs(alpha - resolved * 0.25));
+                    worst_dot_gap = (std::max) (worst_dot_gap, std::abs(alpha - far[6u] * resolved * 0.25));
                 }
             }
 
             PPR_TEST_ASSERT(worst_dot_gap <= 2.0e-3);
             // The resolved dot along +x: fully covered at the centre, a partial outer
             // fringe at +1 raster sample (two content pixels) and nothing at +2 raster
-            // samples (four content pixels), never a larger blob.
-            PPR_TEST_ASSERT(far[2u] > 0.05 and far[2u] < 0.95);
+            // samples (four content pixels), never a larger blob. Both ends carry the
+            // same energy, so the fringe is measured against the centre.
+            PPR_TEST_ASSERT(far[2u] / far[1u] > 0.05 and far[2u] / far[1u] < 0.95);
             PPR_TEST_ASSERT(far[3u] <= 1.0e-6);
             PPR_TEST_ASSERT(far[4u] >= 1.0 and far[4u] <= 25.0);
         }
@@ -11524,6 +11577,141 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // 1.9-sample body cannot cover, it does not replace the field.
         PPR_TEST_ASSERT(span220[5u] > 0.0);
         PPR_TEST_ASSERT(span64[5u] > 0.0);
+    };
+
+    PPR_UNIT_TEST (particle_surface_marker_energy_fades_only_a_subpixel_particle) {
+        // Presence is not radiance. The marker guarantees a MARK, not a full-radiance
+        // pixel: the winner record's fourth channel carries
+        // E = saturate(pi r^2 in content pixels / kMarkerEnergyAreaContentPx2) and the
+        // composite applies it only where the marker is the sample's SOLE source. The
+        // curve is pinned first, then the far dot is measured against it, and the two
+        // resolving spans are pinned at exactly one - which is what leaves a resolved
+        // body's premultiplied output bit-identical to the previous expression.
+        constexpr double radius_m = 0.28209479177387814;
+        constexpr u32 raster = 256u;
+
+        // --- the curve: zero area, one content pixel^2, saturation ----------
+        PPR_TEST_ASSERT(kMarkerEnergyAreaContentPx2 == 1.0);
+        PPR_TEST_ASSERT(markerEnergyAtAreaContentPx2(0.0) == 0.0);
+        PPR_TEST_ASSERT(markerEnergyAtAreaContentPx2(kMarkerEnergyAreaContentPx2) == 1.0);
+        PPR_TEST_ASSERT(markerEnergyAtAreaContentPx2(4.0 * kMarkerEnergyAreaContentPx2) == 1.0);
+        PPR_TEST_ASSERT(markerEnergyAtAreaContentPx2(0.25 * kMarkerEnergyAreaContentPx2) == 0.25);
+        // Exactly one content pixel^2 at r = 1/sqrt(pi) = .5641896 px: the fade start,
+        // derived from the reference rather than restated.
+        const double one_pixel_radius = std::sqrt(kMarkerEnergyAreaContentPx2 / kPi);
+        PPR_TEST_ASSERT(std::abs(one_pixel_radius - kInvSqrtPi) <= 1.0e-15);
+        PPR_TEST_ASSERT(
+            std::abs(markerEnergyAtAreaContentPx2(kPi * one_pixel_radius * one_pixel_radius) - 1.0) <= 1.0e-15);
+
+        // Monotone, continuous and exactly flat above the reference: no step at the
+        // fade start, so a particle cannot pop as it crosses it.
+        double previous = 0.0;
+        for (u32 step = 0u; step <= 100u; ++step) {
+            const double energy = markerEnergyAtAreaContentPx2(0.02 * double(step));
+            PPR_TEST_ASSERT(energy >= previous);
+            PPR_TEST_ASSERT(energy >= 0.0 and energy <= 1.0);
+            previous = energy;
+        }
+
+        PPR_TEST_ASSERT(previous == 1.0);
+
+        // The fade at representative projected radii, so the fade-start can be judged
+        // without a capture: r in content pixels, its area, and the energy there.
+        std::string curve;
+        for (const double radius_content_px: {0.1, 0.25, 0.56, kInvSqrtPi, 1.0}) {
+            const double area = kPi * radius_content_px * radius_content_px;
+            curve += std::format(
+                " [r={:.5f}px area={:.6f}px2 energy={:.6f}]", radius_content_px, area,
+                markerEnergyAtAreaContentPx2(area));
+        }
+
+        _.log(std::format("WORLD_LIGHTING_MATERIAL particle_surface_marker_energy_curve{}", curve));
+
+        const auto run = [&](const double samples_per_cell) {
+            DensityCohortSpec cohort{};
+            cohort.m_raster = raster;
+            cohort.m_world_extent_m = static_cast<float>(double(raster) / samples_per_cell);
+            cohort.m_particles.push_back(
+                DensityParticleSpec{
+                    .m_x_m = 128.5 / samples_per_cell,
+                    .m_y_m = (double(raster) - 127.5) / samples_per_cell,
+                    .m_radius_m = radius_m});
+            return runDensityCohort(cohort, 1u);
+        };
+
+        // --- far: the marker is the sole source, so the dot fades -----------
+        const auto far_frames = run(kSpan2048SamplesPerCell);
+        PPR_TEST_ASSERT(far_frames.size() == 1u);
+        {
+            const auto &frame = far_frames[0];
+            const double energy = markerEnergyForFrame(frame, radius_m);
+            // 0.149 content pixels of radius: a dim mark instead of a hot dot, and
+            // strictly between vanished and full radiance.
+            PPR_TEST_ASSERT(energy > 0.0 and energy < 0.25);
+
+            const std::size_t centre = std::size_t{127u} * raster + 128u;
+            const std::array<double, 4u> &record = frame.m_marker[centre];
+            PPR_TEST_ASSERT(record[2u] == 1.0);
+            PPR_TEST_ASSERT(std::abs(record[3u] - energy) <= 2.0e-5);
+
+            // The energy belongs to the ROW, not to the sample's sub-pixel phase, so
+            // every record of the row's 3x3 candidate block stores the same value.
+            u32 records = 0u;
+            for (u32 y = 126u; y <= 128u; ++y) {
+                for (u32 x = 127u; x <= 129u; ++x) {
+                    const std::array<double, 4u> &here = frame.m_marker[std::size_t{y} * raster + x];
+                    if (here[2u] <= 0.0) {
+                        continue;
+                    }
+
+                    ++records;
+                    PPR_TEST_ASSERT(std::abs(here[3u] - energy) <= 2.0e-5);
+                }
+            }
+
+            PPR_TEST_ASSERT(records == 9u);
+
+            // The composite is that one energy factor times the four-sample coverage:
+            // the brightness changed and the extent did not.
+            double worst_gap = 0.0;
+            for (u32 y = 0u; y < raster; ++y) {
+                for (u32 x = 0u; x < raster; ++x) {
+                    double coverage = 0.0;
+                    for (const auto &offset: kMarkerSampleOffsets) {
+                        coverage += markerCoverageAtSample(frame, x, y, offset[0u], offset[1u]);
+                    }
+
+                    const double alpha = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
+                    worst_gap = (std::max) (worst_gap, std::abs(alpha - energy * coverage * 0.25));
+                }
+            }
+
+            PPR_TEST_ASSERT(worst_gap <= 2.0e-3);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_MATERIAL particle_surface_marker_energy_far samples_per_cell={:.6f} "
+                    "radius_content_px={:.6f} energy={:.6f} centre_alpha={:.6f} alpha_gap={:.6f} records={}",
+                    kSpan2048SamplesPerCell,
+                    kMarkerContentPixelsPerRasterSample * radius_m / double(frame.m_pixel_world), energy,
+                    double(frame.m_composite[centre * 4u + 3u]), worst_gap, records));
+        }
+
+        // --- near: the resolving spans carry energy exactly one -------------
+        // A resolved body is the field's own data, and the shader's resolved path
+        // multiplies by the literal 1.0, so its premultiplied value is the previous
+        // expression unchanged. At these zooms the row's projected area is several
+        // content pixels squared, so the factor is exactly one: nothing near the
+        // camera moves.
+        for (const double samples_per_cell: {kSpan64SamplesPerCell, kSpan220SamplesPerCell}) {
+            const auto frames = run(samples_per_cell);
+            PPR_TEST_ASSERT(frames.size() == 1u);
+            const auto &frame = frames[0];
+            PPR_TEST_ASSERT(markerEnergyForFrame(frame, radius_m) == 1.0);
+            const std::size_t centre = std::size_t{127u} * raster + 128u;
+            PPR_TEST_ASSERT(frame.m_marker[centre][3u] == 1.0);
+            // The near dot is still the full-coverage pixel it was.
+            PPR_TEST_ASSERT(double(frame.m_composite[centre * 4u + 3u]) >= 1.0 - 1.0e-3);
+        }
     };
 
     PPR_UNIT_TEST (particle_surface_marker_is_a_union_and_never_a_second_draw) {
@@ -11594,7 +11782,10 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // camera like the field, and a held publication at an unchanged camera
         // reproduces it bit for bit. The cohort is the same past-extinction far
         // reference as the union probe, so every measured alpha belongs to the marker
-        // alone.
+        // alone. That row's energy is far below one at this zoom, so it is a uniform
+        // scale on the whole image: the measurements below divide it out (after
+        // asserting it against the CPU mirror) to keep pinning the profile, the
+        // extent and the phase stability, which the energy must never touch.
         constexpr double radius_m = 0.28209479177387814;
         constexpr u32 raster = 256u;
 
@@ -11612,8 +11803,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
         };
 
         // The dot's own measurements: integrated alpha, peak alpha, the count of
-        // half-covered pixels and the alpha-weighted centroid.
+        // half-covered pixels and the alpha-weighted centroid. Every value is reported
+        // with the row's ENERGY divided out, because the energy is a property of the
+        // row (one factor for the whole frame) while the coverage profile is what
+        // these windows pin; the energy itself is asserted against the CPU mirror
+        // first, so dividing it out cannot hide a wrong brightness.
         const auto measure = [&](const DensityFrameResult &frame) {
+            const double energy = markerEnergyForFrame(frame, radius_m);
+            PPR_TEST_ASSERT(energy > 0.0);
             double area = 0.0;
             double peak = 0.0;
             double weight = 0.0;
@@ -11623,9 +11820,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
             for (u32 y = 0u; y < raster; ++y) {
                 for (u32 x = 0u; x < raster; ++x) {
                     const double alpha = double(frame.m_composite[(std::size_t{y} * raster + x) * 4u + 3u]);
-                    area += alpha;
-                    peak = (std::max) (peak, alpha);
-                    if (alpha >= 0.5)
+                    area += alpha / energy;
+                    peak = (std::max) (peak, alpha / energy);
+                    if (alpha >= 0.5 * energy)
                         ++half_covered;
                     weight += alpha;
                     centroid_x += alpha * (double(x) + 0.5);
@@ -11834,6 +12031,7 @@ namespace pP::tests {
                 // Revision 8 minimum-presence marker: the survival guarantee at every
                 // span, the union that never double-draws, and its subpixel stability.
                 detail::WorldLightingMaterial::particle_surface_marker_keeps_an_isolated_particle_at_every_span,
+                detail::WorldLightingMaterial::particle_surface_marker_energy_fades_only_a_subpixel_particle,
                 detail::WorldLightingMaterial::particle_surface_marker_is_a_union_and_never_a_second_draw,
                 detail::WorldLightingMaterial::particle_surface_marker_is_stable_under_subpixel_translation,
                 detail::WorldLightingMaterial::particle_classes_declare_their_state_and_draw_once_per_class,

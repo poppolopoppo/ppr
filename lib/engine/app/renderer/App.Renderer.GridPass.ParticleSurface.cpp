@@ -262,9 +262,12 @@ namespace pP {
         // The minimum-presence winner record, one texel per raster pixel. Eight
         // bytes per texel: .xy is the nearest centre's offset from the texel centre
         // over +/-4 pixels (unorm quantum 1.22e-4 px), .z is the winner's material
-        // as m/65535 and .w is unused. Unorm rather than float because the offset
-        // needs an absolute quantum; the composite evaluates the distance at its own
-        // scene sample, so no coverage is ever stored here.
+        // as m/65535 and .w is the winner's linear energy factor for the sample
+        // (one at or above one content pixel of projected reference area, the area
+        // ratio below it, so a sub-pixel row fades instead of rendering a hot dot).
+        // Unorm rather than float because the offset needs an absolute quantum; the
+        // composite evaluates the distance at its own scene sample, so no coverage
+        // is ever stored here.
         desc.format = rhi::Format::RGBA16Unorm;
         desc.usage = static_cast<rhi::TextureUsage>(
             static_cast<u32>(rhi::TextureUsage::RenderTarget) | static_cast<u32>(rhi::TextureUsage::ShaderResource));

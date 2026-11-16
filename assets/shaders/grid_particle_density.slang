@@ -213,6 +213,22 @@ static const float kParticleMarkerRecordScale = 8.0;
 // The record's third channel carries the winner's material id as m/65535, which
 // every 16-bit integer round-trips exactly through unorm. Zero is the empty record.
 static const float kParticleMarkerMaterialScale = 65535.0;
+// The record's fourth channel carries the sample's linear ENERGY, because presence
+// is not radiance. A marker sample is shaded at its material's full radiance, which
+// is truthful only while the particle's projected reference area V = pi r^2 covers
+// a content pixel; below that the dot is a sub-pixel speck and the full-radiance
+// shading is a hot pixel. The factor is
+//
+//   E = saturate(V_content_px2 / kParticleMarkerEnergyAreaContentPx2)
+//
+// and the composite multiplies its premultiplied colour and alpha by it. At this
+// reference exactly one content pixel of projected area is fully bright, so the
+// fade starts at r = 1/sqrt(pi) = 0.5641896 content pixels and is continuous
+// everywhere: a distant particle becomes a dim mark instead of a hot dot, and
+// nothing pops as it crosses the threshold. This is the ONE fade-start knob: it
+// changes brightness, never the radii, the spatial extent (2..4 content pixels) or
+// the union C = max(B, F).
+static const float kParticleMarkerEnergyAreaContentPx2 = 1.0;
 
 // One linear ramp between the two pinned endpoints: F is 1 up to the opaque core,
 // falls one coverage unit per CONTENT pixel - two per raster sample - and reaches
@@ -221,6 +237,26 @@ static const float kParticleMarkerMaterialScale = 65535.0;
 float particleMarkerCoverage(float distance_px) {
     float span=max(kParticleMarkerRadius-kParticleMarkerCoreRadius,kParticleDensityEpsilon);
     return saturate((kParticleMarkerRadius-distance_px)/span);
+}
+
+// The projected reference area in CONTENT pixels squared: pi r^2 projected through
+// the local world-area-per-raster-sample Jacobian and converted by the marker's own
+// content-pixel factor. One raster sample is two content pixels, so an area
+// converts by that factor squared. `raster_area_m2` is |det J| of the world-plane
+// map at the sample, so the projection is exact there and needs no per-draw pixel
+// scale; the divide guard only keeps a degenerate Jacobian finite, and it saturates
+// that case at the fully bright end.
+float particleMarkerReferenceAreaContentPx2(float radius_m,float raster_area_m2) {
+    float content_area_scale=
+        kParticleMarkerContentPixelsPerRasterSample*kParticleMarkerContentPixelsPerRasterSample;
+    return 3.141592653589793*radius_m*radius_m*content_area_scale/max(raster_area_m2,kParticleDensityEpsilon);
+}
+
+// The marker's energy factor at one projected reference area in content pixels
+// squared: zero area is zero energy, and the reference area and everything above it
+// is exactly 1.
+float particleMarkerEnergy(float reference_area_content_px2) {
+    return saturate(reference_area_content_px2/kParticleMarkerEnergyAreaContentPx2);
 }
 
 // Recording a centre offset relative to the texel's own centre, not in absolute

@@ -1595,6 +1595,11 @@ struct ParticleVertexOutput {
     // normalisation. Only the splat entry reads it; the direct entries leave the
     // neutral identity.
     nointerpolation float4 conic:TEXCOORD11;
+    // The row's own reference radius r in world metres, the r of V = pi r^2, the
+    // reference area the density kernel normalises to. Only the presence marker
+    // reads it, to project that area into content pixels for the record's energy
+    // channel; every other entry carries it without using it.
+    nointerpolation float radius_m:TEXCOORD12;
 };
 
 // Shared particle quad expansion. `surface` selects the surface reconstruction
@@ -1735,6 +1740,7 @@ ParticleVertexOutput particleVertexCommon(uint vertex,uint instance,bool surface
     output.surface_tangent=surface_tangent;
     output.surface_strength=surface_strength;
     output.conic=conic;
+    output.radius_m=particle.m_radius_m;
     return output;
 }
 
@@ -2367,7 +2373,18 @@ ParticleSurfaceMarkerOutput fragmentParticleSurfaceMarker(ParticleVertexOutput i
     // unorm offset inside its +/-4-pixel range when the density support quad is the
     // larger of the two.
     if (!(distance_px<=kParticleMarkerQuadRadius)) discard;
-    output.m_record=float4(particleMarkerEncodeCentre(offset),particleMarkerEncodeMaterial(input.material),0.0);
+
+    // The record's fourth channel is this sample's ENERGY, not a free slot: the dot
+    // exists so a row the field cannot resolve keeps a mark, but presence is not
+    // radiance. The row's reference area is projected through this fragment's own
+    // world-per-raster Jacobian - the determinant that already inverts to the
+    // centre offset above - and converted to content pixels, so the factor follows
+    // the camera exactly and no per-draw pixel scale is involved. The size of the
+    // record does not change and no coverage is stored: the composite still
+    // recomputes F from the decoded centre distance.
+    float reference_area_content_px2=particleMarkerReferenceAreaContentPx2(input.radius_m,abs(determinant));
+    float energy=particleMarkerEnergy(reference_area_content_px2);
+    output.m_record=float4(particleMarkerEncodeCentre(offset),particleMarkerEncodeMaterial(input.material),energy);
     output.m_depth=min(distance_px*0.25,kParticleDensityDepthCeiling);
     return output;
 }
@@ -2669,14 +2686,19 @@ bool particleSurfaceReconstruct(float2 uv,out ParticleSurfaceReconstruction resu
     return true;
 }
 
-// The presence marker of one scene sample: the nearest liquid particle's coverage
-// and the material that owns it, both read from the winner record at this sample's
-// own raster pixel. The stored centre is a pixel offset from that texel's centre,
-// so the sample's sub-pixel position completes the distance; nothing is filtered
-// and no coverage value is stored, which is what a half-resolution presence image
-// could not preserve.
+// The presence marker of one scene sample: the nearest liquid particle's coverage,
+// energy and the material that owns it, all read from the winner record at this
+// sample's own raster pixel. The stored centre is a pixel offset from that texel's
+// centre, so the sample's sub-pixel position completes the distance; nothing is
+// filtered and no coverage value is stored, which is what a half-resolution presence
+// image could not preserve. The energy is stored, because it is a property of the
+// row and not of the sample's sub-pixel phase.
 struct ParticleSurfaceMarker {
     float m_coverage;
+    // The winner's linear energy factor, [0,1]: one at or above one content pixel of
+    // projected reference area, the area ratio below it. Already the factor the
+    // composite applies, so the unorm decode is the value itself.
+    float m_energy;
     uint m_material;
     float2 m_raster;
 };
@@ -2714,6 +2736,10 @@ bool particleSurfaceMarkerAt(float2 uv,out ParticleSurfaceMarker result) {
     float2 sample_offset=raster-(float2(texel)+0.5);
     float distance_px=length(particleMarkerDecodeCentre(record.xy)-sample_offset);
     result.m_coverage=particleMarkerCoverage(distance_px);
+    // Already a linear [0,1] factor, so the unorm channel decodes to the value the
+    // composite multiplies by. The empty record returned above, so an unstored
+    // energy can never be applied.
+    result.m_energy=record.w;
     result.m_material=material;
     result.m_raster=raster;
     return result.m_coverage>0.0;
@@ -2748,15 +2774,18 @@ VisibleSurfaceSample particleSurfaceMarkerSample(uint material) {
 // sample is either occupied or empty and never partially covered. The presence
 // marker F is unioned once as C = max(B, F), and B wins an exact tie, so a resolved
 // body keeps its own coverage and attributes bit for bit and the marker only ever
-// adds the presence a vanished field cannot express. The winning sample's base,
-// normal and alpha then shade ONCE through the shared liquid response at this
-// sample's real world position and palette material, and the result is
-// premultiplied exactly once. No element texture, seed or UV is sampled here. The
-// negligible-coverage floor discards before lighting, which also suppresses the
-// opaque class's plane-depth write, so a body sample writes depth on exactly the
-// same decision that made it occupied. The authoritative terrain exclusion is
-// rechecked at the actual sample, so interpolation can never paint fluid or a
-// marker over opaque terrain.
+// adds the presence a vanished field cannot express. Where the marker is the sole
+// source of a sample its own energy factor scales the shaded radiance, so a
+// sub-pixel row fades with its projected area instead of burning a hot dot; a
+// resolved sample is the field's own body data and is never scaled by it. The
+// winning sample's base, normal and alpha then shade ONCE through the shared liquid
+// response at this sample's real world position and palette material, and the
+// result is premultiplied exactly once. No element texture, seed or UV is sampled
+// here. The negligible-coverage floor discards before lighting, which also
+// suppresses the opaque class's plane-depth write, so a body sample writes depth on
+// exactly the same decision that made it occupied. The authoritative terrain
+// exclusion is rechecked at the actual sample, so interpolation can never paint
+// fluid or a marker over opaque terrain.
 // `uv` and `fine` are evaluated by the entry point: a sample-rate interpolation
 // must read the entry's own varyings, so it cannot be performed inside a helper.
 float4 particleSurfaceComposite(float2 uv,float2 fine,SamplerState.Handle g_sampler) {
@@ -2803,7 +2832,20 @@ float4 particleSurfaceComposite(float2 uv,float2 fine,SamplerState.Handle g_samp
     VisibleSurfaceBackdrop backdrop={raster,float2(0.0),false,float3(0.0)};
     CH no_coefficients={};
     float4 surface=visibleSurfaceResponse(true,false,material,0u,fine,sample,no_coefficients,backdrop,g_sampler);
-    return float4(coverage*surface.rgb*surface.a,coverage*surface.a);
+
+    // The marker's energy is applied ONLY where the marker is the sole source of the
+    // sample (use_marker && !resolved): there the shaded radiance is the marker's own
+    // full-radiance stand-in, and a row whose projected reference area is below a
+    // content pixel must fade with that area rather than render a hot dot at full
+    // material radiance. A resolved sample is the field's own body data the marker
+    // merely raised the coverage of, so it keeps its own premultiplied value - the
+    // factor is exactly one there, and the expression below reduces to the previous
+    // one. That is the documented contract: a resolved body keeps its own coverage
+    // and attributes bit for bit, and dimming it would darken a body the field does
+    // legitimately resolve. !use_marker is always resolved and its record may not
+    // even exist, so the same guard covers it.
+    float energy=use_marker&&!resolved ? marker.m_energy : 1.0;
+    return float4(energy*coverage*surface.rgb*surface.a,energy*coverage*surface.a);
 }
 
 [shader("fragment")]

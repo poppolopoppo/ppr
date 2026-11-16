@@ -1814,8 +1814,11 @@ export namespace pP {
             // The minimum-presence winner record the composite reads beside the
             // filtered field: one RGBA16Unorm texel per raster pixel, 8 bytes. .xy
             // is the nearest liquid particle's centre as an offset from the texel
-            // centre over +/-4 pixels, .z its material id as m/65535, .w unused.
-            // Rewritten by the marker pass every rendered frame.
+            // centre over +/-4 pixels, .z its material id as m/65535 and .w its
+            // linear energy factor (one at or above one content pixel of projected
+            // reference area, the area ratio below it, so a sub-pixel row fades
+            // instead of rendering a hot dot). Rewritten by the marker pass every
+            // rendered frame.
             rhi::ComPtr<rhi::ITexture> m_marker{};
             rhi::ComPtr<rhi::ITextureView> m_marker_view{};
             // Horizontal-pass output, then the final filtered field the composite
