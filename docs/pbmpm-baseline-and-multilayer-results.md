@@ -7,8 +7,7 @@ Coordinator-reported current-revision GREEN: `matter_calibrated_laws_gpu`,
 `matter_properties_gpu`; full `matter_fast` **26/26**. This supersedes the
 historical authored/unrun status below. Snow/clay numbers are recorded in the
 current-revision measured-behaviour section. The matched-history reload control
-added in this edit-only follow-up is **authored-only, unrun**; those passes do
-not cover it. No build or test was run for this follow-up.
+added in this edit-only follow-up was **authored-only, unrun** at the time of writing and is now **executed** — see the execution ledger at identity `d347c50f` below.
 
 The control copies the identical released state, resets only `phi=phi0`, `C=0`,
 and repeats the same reload profile, floor, coefficients, geometry, F, velocities,
