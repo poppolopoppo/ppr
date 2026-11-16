@@ -55,6 +55,42 @@ export namespace pP {
         static constexpr float kMinCurrentWeight{0.05f};
         static constexpr float kMaxCurrentWeight{0.25f};
 
+        // ------------------------------------------------------------------
+        // interior dispatch contract
+        // ------------------------------------------------------------------
+        // A resolved pixel is interior when every source sample its lattice
+        // block references is a valid sample, so it cannot reach the border
+        // fallback. The rectangle is conservative sufficient coverage: it admits
+        // one pixel of lattice neighbourhood at all four sub-pixel positions, so
+        // some fallback-free edge pixels remain in the border domain. The border
+        // kernel owns every backing pixel outside the rectangle, hence the two
+        // dispatch domains are disjoint and exhaustive, including when the
+        // rectangle is empty.
+        //
+        // Mango vectors have a user-provided empty default constructor, so `{}`
+        // leaves their components indeterminate; the zero values below are
+        // explicit and every `InteriorRegion{}` is a canonical empty rectangle.
+        struct InteriorRegion {
+            int2 m_origin{0, 0};
+            int2 m_extent{0, 0};
+
+            [[nodiscard]] bool empty() const noexcept {
+                return m_extent.x <= 0 or m_extent.y <= 0;
+            }
+
+            [[nodiscard]] bool contains(const int2 pixel) const noexcept {
+                const int2 offset{pixel.x - m_origin.x, pixel.y - m_origin.y};
+                return offset.x >= 0 and offset.y >= 0 and offset.x < m_extent.x and offset.y < m_extent.y;
+            }
+        };
+
+        /// Conservative phase-dependent interior rectangle in backing
+        /// coordinates for one frame's jitter, or a canonical zero origin/extent
+        /// when no axis admits a fully valid lattice neighbourhood. `prepare`
+        /// dispatches it ahead of the border domain; the reconstruction tests
+        /// prove it against the independent lattice derivation.
+        [[nodiscard]] static InteriorRegion interiorRegion(const PresentationGrid &grid, float2 jitter) noexcept;
+
         [[nodiscard]] std::error_code initialize(
             IShaderService &shader_service, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code shutdown();
@@ -187,10 +223,21 @@ export namespace pP {
         // ------------------------------------------------------------------
         // program and pass state
         // ------------------------------------------------------------------
+        // One kernel per dispatch domain: the interior entry carries the fixed
+        // stencil without border handling, the border entry the unchanged
+        // generic lattice. Each owns its pipeline and its root objects for the
+        // frame ring slots both kernels share.
+        struct ResolveKernel {
+            rhi::ComPtr<rhi::IShaderProgram> m_program{};
+            rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_roots{};
+        };
 
-        rhi::ComPtr<rhi::IShaderProgram> m_program{};
-        rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
-        std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_roots{};
+        [[nodiscard]] static std::error_code encodeDispatch_(
+            const ResolveKernel &kernel, u32 root, int2 extent, const PreRenderContext &context);
+
+        ResolveKernel m_interior{};
+        ResolveKernel m_border{};
 
         DeferredReleaseQueue m_deferred_releases{};
 

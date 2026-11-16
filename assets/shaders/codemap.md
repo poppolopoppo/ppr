@@ -326,10 +326,15 @@ bloom and metering cohorts are reused only through accepted-submit fences.
   admission and real terrain sample coverage were integrated in Tasks 11–14;
   the standalone shader remains the qualification fixture.
 - `hable_temporal.slang` - always-on temporal Hable reconstruction
-  (`reconstructTemporal`): quarter-pixel lattice, continuous diamond weights,
-  contributing-original-sample bounds, reprojected history rejection and the
-  5%-25% current-frame blend. Scene-linear/unexposed; history reset/reprojection
-  policy lives in `ReconstructionPass`, not in this shader.
+  (`reconstructTemporalInterior` + `reconstructTemporalBorder`): quarter-pixel
+  lattice, continuous diamond weights, contributing-original-sample bounds,
+  reprojected history rejection and the 5%-25% current-frame blend.
+  Scene-linear/unexposed; history reset/reprojection policy lives in
+  `ReconstructionPass`, not in this shader. The interior entry serves a
+  CPU-computed rectangle whose lattice references are all valid samples, using
+  four fixed residue stencils that load seven distinct samples once; the border
+  entry keeps the generic lattice and nearest-valid fallback for the rest of the
+  backing (padding, edges, tiny extents).
 - `tests/reconstruction_probe.slang` - test-only per-sample scene writer and
   MSAA sample dump used by the reconstruction lattice/oracle agreement tests.
 

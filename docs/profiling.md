@@ -324,7 +324,10 @@ reorders it. `WorldLighting.ResolveCells` (projection/resolve),
 through `.L1` (the terminal dispatch is L5, then one dispatch per level),
 `WorldLighting.FineCH`, `Scene.Materials`, `Scene.Gas`, `Hable.Resolve`,
 `Post.Exposure`, `Post.Bloom`, `Post.AgX`, `Present.Scene`, `Present.UI` and the
-existing `PBMPM.Tick`. `WorldLighting.Status` and `Particles.*` remain as
+existing `PBMPM.Tick`. `Hable.Resolve` additionally carries the child ranges
+`Hable.Resolve.Interior` and `Hable.Resolve.Border`, one per reconstruction
+dispatch domain; the parent remains the required contract marker.
+`WorldLighting.Status` and `Particles.*` remain as
 additional production ranges.
 
 The frozen workload pauses before the first simulation tick, so `PBMPM.Tick`

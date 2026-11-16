@@ -28,22 +28,24 @@ namespace pP {
         // Mirrors hable_temporal.slang. The unjittered current inverse
         // view-projection rebuilds the world-plane position for each resolved
         // pixel; the previous accepted unjittered view-projection maps that
-        // position into the previous resolved grid.
+        // position into the previous resolved grid. Mango vectors have a
+        // user-provided empty default constructor, so every vector member is
+        // zeroed explicitly rather than with `{}`; `prepare` assigns them all.
         struct alignas(16) ReconstructionParameters {
             float4x4 m_current_inverse_view_projection{identity_v};
             float4x4 m_previous_view_projection{identity_v};
-            int2 m_resolved_extent{};
-            int2 m_raster_extent{};
-            int2 m_backing_extent{};
-            int2 m_window_extent{};
-            int2 m_previous_window_extent{};
-            float2 m_jitter{};
+            int2 m_resolved_extent{0, 0};
+            int2 m_raster_extent{0, 0};
+            int2 m_backing_extent{0, 0};
+            int2 m_window_extent{0, 0};
+            int2 m_previous_window_extent{0, 0};
+            float2 m_jitter{0.0f, 0.0f};
             u32 m_pixel_scale{};
             u32 m_previous_pixel_scale{};
             u32 m_history_valid{};
             u32 m_reserved0{};
-            float2 m_reserved_padding{};
-            float2 m_reserved_padding1{};
+            int2 m_interior_origin{0, 0};
+            int2 m_interior_extent{0, 0};
         };
         static_assert(sizeof(ReconstructionParameters) == 208u);
         static_assert(alignof(ReconstructionParameters) == 16u);
@@ -52,6 +54,8 @@ namespace pP {
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_jitter) == 168u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_pixel_scale) == 176u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_history_valid) == 184u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_interior_origin) == 192u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_interior_extent) == 200u);
 
         [[nodiscard]] rhi::SubresourceRange baseRange() noexcept {
             return {.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
@@ -105,6 +109,47 @@ namespace pP {
             shader::Diagnose diagnostics;
             PPR_RETURN_ERROR_ON_FAIL(
                 Reconstruction, device.createShaderProgram(description, out.writeRef(), diagnostics.writeRef()));
+            return {};
+        }
+
+        // Both entries include the same parameter block and bindings; verifying
+        // the reflected layout once per program keeps the ABI check honest for
+        // each compiled target.
+        [[nodiscard]] std::error_code validateParameterLayout(slang::IModule *const module) {
+            auto *const layout = parameterLayout(module, "g_reconstruction");
+            const bool size_matches = layout != nullptr and layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) ==
+                                                                sizeof(ReconstructionParameters);
+            const bool fields_match =
+                size_matches and
+                hasFieldOffset(
+                    layout, "m_resolved_extent", PPR_OFFSETOF(ReconstructionParameters, m_resolved_extent)) and
+                hasFieldOffset(
+                    layout, "m_previous_window_extent",
+                    PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent)) and
+                hasFieldOffset(layout, "m_jitter", PPR_OFFSETOF(ReconstructionParameters, m_jitter)) and
+                hasFieldOffset(layout, "m_history_valid", PPR_OFFSETOF(ReconstructionParameters, m_history_valid)) and
+                hasFieldOffset(
+                    layout, "m_interior_origin", PPR_OFFSETOF(ReconstructionParameters, m_interior_origin)) and
+                hasFieldOffset(layout, "m_interior_extent", PPR_OFFSETOF(ReconstructionParameters, m_interior_extent));
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                Reconstruction, fields_match ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            return {};
+        }
+
+        // Both kernels read one parameter block and one binding set; only the
+        // root object differs.
+        [[nodiscard]] std::error_code configureResolveRoot(
+            rhi::IShaderObject &root, const ReconstructionParameters &parameters,
+            const rhi::ComPtr<rhi::ITextureView> &scene, const rhi::ComPtr<rhi::ITextureView> &previous,
+            const rhi::ComPtr<rhi::ITextureView> &next) {
+            rhi::ShaderCursor cursor{&root};
+            rhi::ShaderCursor constants;
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_reconstruction"].getDereferenced(constants));
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, constants.setData(&parameters, sizeof(parameters)));
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_scene"].setBinding(rhi::Binding(scene)));
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_history_previous"].setBinding(rhi::Binding(previous)));
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_history_next"].setBinding(rhi::Binding(next)));
             return {};
         }
     }
@@ -164,6 +209,97 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // interior dispatch region
+    // ------------------------------------------------------------------
+    // A block references only the source pixels within one lattice pixel of its
+    // floor-divided origin, at any of the four sub-pixel sample positions. The
+    // reconstruction tests re-derive that reach, and the fallback reachability
+    // of the remaining pixels, from the independent lattice enumeration.
+
+    namespace {
+        constexpr i32 kLatticeReach{1};
+        constexpr std::array<float, 4> kAxisSampleOffsets{1.0f / 8.0f, 3.0f / 8.0f, 5.0f / 8.0f, 7.0f / 8.0f};
+
+        // Mirrors the shader's sourceSampleValid for one axis: an origin is
+        // interior only when its whole neighbourhood is inside the raster and
+        // every sample position lands inside the resolved extent.
+        [[nodiscard]] bool latticeAxisReferenceValid(
+            const i32 origin, const i32 raster, const i32 resolved, const float jitter) noexcept {
+            for (i32 reach = -kLatticeReach; reach <= kLatticeReach; ++reach) {
+                const i32 pixel = origin + reach;
+                if (pixel < 0 or pixel >= raster) {
+                    return false;
+                }
+
+                for (const float offset: kAxisSampleOffsets) {
+                    const float stationary = 2.0f * (static_cast<float>(pixel) + offset - jitter);
+                    if (stationary < 0.0f or stationary >= static_cast<float>(resolved)) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        // The valid origins form one interval: the lower and upper constraints
+        // are monotone, so the first admissible origin and the last describe
+        // every admissible one. Both scans stop within a few steps for a legal
+        // grid; only a grid with no interior at all inspects the full axis.
+        [[nodiscard]] std::optional<std::pair<i32, i32>> latticeAxisInterior(
+            const i32 raster, const i32 resolved, const float jitter) noexcept {
+            std::optional<i32> low;
+            for (i32 origin = 0; origin <= raster and not low.has_value(); ++origin) {
+                if (latticeAxisReferenceValid(origin, raster, resolved, jitter)) {
+                    low = origin;
+                }
+            }
+            if (not low.has_value()) {
+                return std::nullopt;
+            }
+
+            std::optional<i32> high;
+            for (i32 origin = raster - 1; origin >= *low and not high.has_value(); --origin) {
+                if (latticeAxisReferenceValid(origin, raster, resolved, jitter)) {
+                    high = origin;
+                }
+            }
+            if (not high.has_value()) {
+                return std::nullopt;
+            }
+
+            return std::pair{*low, *high};
+        }
+    }
+
+    ReconstructionPass::InteriorRegion ReconstructionPass::interiorRegion(
+        const PresentationGrid &grid, const float2 jitter) noexcept {
+        const auto x = latticeAxisInterior(grid.m_raster.x, grid.m_resolved.x, jitter.x);
+        const auto y = latticeAxisInterior(grid.m_raster.y, grid.m_resolved.y, jitter.y);
+        if (not x.has_value() or not y.has_value()) {
+            return {};
+        }
+
+        // A block origin maps to resolved pixels 2*o - shift/2 through
+        // 2*o + 1 - shift/2, where shift = int(4*jitter) is the integral phase
+        // displacement the shader's lattice base applies.
+        const i32 shift_x = static_cast<i32>(4.0f * jitter.x) / 2;
+        const i32 shift_y = static_cast<i32>(4.0f * jitter.y) / 2;
+        const i32 low_x = std::max(0, 2 * x->first - shift_x);
+        const i32 low_y = std::max(0, 2 * y->first - shift_y);
+        const i32 high_x = std::min(grid.m_backing.x - 1, 2 * x->second + 1 - shift_x);
+        const i32 high_y = std::min(grid.m_backing.y - 1, 2 * y->second + 1 - shift_y);
+        if (low_x > high_x or low_y > high_y) {
+            return {};
+        }
+
+        return InteriorRegion{
+            .m_origin = int2{low_x, low_y},
+            .m_extent = int2{high_x - low_x + 1, high_y - low_y + 1},
+        };
+    }
+
+    // ------------------------------------------------------------------
     // initialization and teardown
     // ------------------------------------------------------------------
 
@@ -215,35 +351,34 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction, shader_service.loadModuleFromFile(
                                 content_dir / "shaders" / "hable_temporal.slang", "hable_temporal", module.writeRef()));
+        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, validateParameterLayout(module.get()));
 
-        auto *const layout = parameterLayout(module.get(), "g_reconstruction");
+        // Both entries share the module's parameter block and bindings, but each
+        // gets its own program and pipeline so neither kernel inherits the
+        // other's register allocation.
+        const auto create_kernel = [&device, module = module.get()](
+                                       const char *const entry, const char *const label,
+                                       ResolveKernel &kernel) -> std::error_code {
+            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, createProgram(device, module, entry, kernel.m_program));
+
+            rhi::ComputePipelineDesc pipeline{};
+            pipeline.program = kernel.m_program;
+            pipeline.label = label;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Reconstruction, device.createComputePipeline(pipeline, kernel.m_pipeline.writeRef()));
+
+            for (auto &root: kernel.m_roots) {
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Reconstruction, device.createRootShaderObject(kernel.m_program, root.writeRef()));
+            }
+
+            return {};
+        };
+
         PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction,
-            layout != nullptr and layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(ReconstructionParameters)
-                ? std::error_code{}
-                : std::make_error_code(std::errc::invalid_argument));
+            Reconstruction, create_kernel("reconstructTemporalInterior", "Hable reconstruction interior", m_interior));
         PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction,
-            hasFieldOffset(layout, "m_resolved_extent", PPR_OFFSETOF(ReconstructionParameters, m_resolved_extent)) and
-                    hasFieldOffset(
-                        layout, "m_previous_window_extent",
-                        PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent)) and
-                    hasFieldOffset(layout, "m_jitter", PPR_OFFSETOF(ReconstructionParameters, m_jitter)) and
-                    hasFieldOffset(layout, "m_history_valid", PPR_OFFSETOF(ReconstructionParameters, m_history_valid))
-                ? std::error_code{}
-                : std::make_error_code(std::errc::invalid_argument));
-
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, createProgram(device, module.get(), "reconstructTemporal", m_program));
-
-        rhi::ComputePipelineDesc pipeline{};
-        pipeline.program = m_program;
-        pipeline.label = "Hable temporal reconstruction";
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, device.createComputePipeline(pipeline, m_pipeline.writeRef()));
-
-        for (auto &root: m_roots) {
-            PPR_RETURN_ERROR_ON_FAIL(Reconstruction, device.createRootShaderObject(m_program, root.writeRef()));
-        }
-
+            Reconstruction, create_kernel("reconstructTemporalBorder", "Hable reconstruction border", m_border));
         return {};
     }
 
@@ -362,10 +497,9 @@ namespace pP {
         std::ignore = m_deferred_releases.drainAll();
         m_committed = FrameResources{};
         m_tentative.reset();
-        m_roots = {};
+        m_interior = ResolveKernel{};
+        m_border = ResolveKernel{};
         m_root_use = {};
-        m_program.setNull();
-        m_pipeline.setNull();
 
         m_history_grid = {};
         m_history_camera = CameraSnapshot{};
@@ -465,6 +599,17 @@ namespace pP {
     // reconstruction encoding and resolved binding
     // ------------------------------------------------------------------
 
+    std::error_code ReconstructionPass::encodeDispatch_(
+        const ResolveKernel &kernel, const u32 root, const int2 extent, const PreRenderContext &context) {
+        auto *const pass = context.m_encoder.beginComputePass();
+        PPR_RETURN_ERROR_ON_FAIL(
+            Reconstruction, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+        pass->bindPipeline(kernel.m_pipeline, kernel.m_roots[root]);
+        pass->dispatchCompute((static_cast<u32>(extent.x) + 7u) / 8u, (static_cast<u32>(extent.y) + 7u) / 8u, 1u);
+        pass->end();
+        return {};
+    }
+
     std::error_code ReconstructionPass::prepare(const PreRenderContext &context) {
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction, m_ready ? std::error_code{} : std::make_error_code(std::errc::not_connected));
@@ -482,6 +627,7 @@ namespace pP {
         const rhi::ComPtr<rhi::ITextureView> &previous_view = resources.m_history_views[pending.m_previous_index];
         const rhi::ComPtr<rhi::ITextureView> &next_view = resources.m_history_views[pending.m_write_index];
 
+        const float2 jitter = phaseJitter_(pending.m_phase);
         ReconstructionParameters parameters{};
         parameters.m_current_inverse_view_projection = pending.m_camera.m_invert_view_projection;
         parameters.m_previous_view_projection = pending.m_history_valid ? m_history_camera.m_view_projection
@@ -492,39 +638,54 @@ namespace pP {
         parameters.m_window_extent = pending.m_grid.m_window;
         parameters.m_previous_window_extent = pending.m_history_valid ? m_history_grid.m_window
                                                                       : pending.m_grid.m_window;
-        parameters.m_jitter = phaseJitter_(pending.m_phase);
+        parameters.m_jitter = jitter;
         parameters.m_pixel_scale = pending.m_grid.m_pixel_scale;
         parameters.m_previous_pixel_scale = pending.m_history_valid ? m_history_grid.m_pixel_scale
                                                                     : pending.m_grid.m_pixel_scale;
         parameters.m_history_valid = pending.m_history_valid ? 1u : 0u;
+        const InteriorRegion interior = interiorRegion(pending.m_grid, jitter);
+        parameters.m_interior_origin = interior.m_origin;
+        parameters.m_interior_extent = interior.m_extent;
 
-
-        rhi::ShaderCursor cursor{m_roots[pending.m_root]};
-        rhi::ShaderCursor constants;
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_reconstruction"].getDereferenced(constants));
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, constants.setData(&parameters, sizeof(parameters)));
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_scene"].setBinding(rhi::Binding(scene_view)));
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_history_previous"].setBinding(rhi::Binding(previous_view)));
-        PPR_RETURN_ERROR_ON_FAIL(Reconstruction, cursor["g_history_next"].setBinding(rhi::Binding(next_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Reconstruction, configureResolveRoot(
+                                *m_interior.m_roots[pending.m_root], parameters, scene_view, previous_view, next_view));
+        PPR_RETURN_ERROR_ON_FAIL(
+            Reconstruction,
+            configureResolveRoot(*m_border.m_roots[pending.m_root], parameters, scene_view, previous_view, next_view));
 
         const rhi::SubresourceRange range = baseRange();
         context.m_encoder.setTextureState(scene, range, rhi::ResourceState::ShaderResource);
         context.m_encoder.setTextureState(previous, range, rhi::ResourceState::ShaderResource);
         context.m_encoder.setTextureState(next, range, rhi::ResourceState::UnorderedAccess);
 
+        // The interior rectangle and the rest of the backing are disjoint and
+        // together cover every backing pixel, so each pixel is written once.
         const hal::ProfileScope scope{"Hable.Resolve"};
         context.m_encoder.pushDebugGroup("Hable.Resolve", {});
         PPR_DEFER {
             context.m_encoder.popDebugGroup();
         };
-        auto *const pass = context.m_encoder.beginComputePass();
-        PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        pass->bindPipeline(m_pipeline, m_roots[pending.m_root]);
-        pass->dispatchCompute(
-            (static_cast<u32>(pending.m_grid.m_backing.x) + 7u) / 8u,
-            (static_cast<u32>(pending.m_grid.m_backing.y) + 7u) / 8u, 1u);
-        pass->end();
+
+        if (not interior.empty()) {
+            const hal::ProfileScope interior_scope{"Hable.Resolve.Interior"};
+            context.m_encoder.pushDebugGroup("Hable.Resolve.Interior", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                Reconstruction, encodeDispatch_(m_interior, pending.m_root, interior.m_extent, context));
+        }
+
+        {
+            const hal::ProfileScope border_scope{"Hable.Resolve.Border"};
+            context.m_encoder.pushDebugGroup("Hable.Resolve.Border", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                Reconstruction, encodeDispatch_(m_border, pending.m_root, pending.m_grid.m_backing, context));
+        }
 
         // Post-processing in the same stage-B submission reads the written
         // history as a shader resource.

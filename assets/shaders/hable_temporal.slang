@@ -3,6 +3,22 @@
 // algorithm described by "Temporal Super Resolution via Multisampling", not
 // the earlier spatial absolute-gradient snippet. Scene-linear and unexposed:
 // exposure, bloom and display encoding belong to PostProcessPass.
+//
+// Two entries share one parameter block and one binding set:
+//
+//   reconstructTemporalInterior  the proven-interior rectangle. Its block
+//                                residue selects one of four static stencils
+//                                whose seven distinct source samples are
+//                                loaded once and reused. No validation, no
+//                                fallback search, no border code.
+//   reconstructTemporalBorder    every other backing pixel, including B
+//                                padding and every extent too small to have an
+//                                interior. Unchanged generic lattice
+//                                derivation with the nearest-valid fallback.
+//
+// ReconstructionPass computes the rectangle on the CPU from the actual phase,
+// dispatches it first, then dispatches the border over the whole backing; the
+// border entry returns early for pixels the interior entry owns.
 
 struct ReconstructionParameters {
     float4x4 m_current_inverse_view_projection;
@@ -17,8 +33,8 @@ struct ReconstructionParameters {
     uint m_previous_pixel_scale;
     uint m_history_valid;
     uint m_reserved0;
-    float2 m_reserved_padding;
-    float2 m_reserved_padding1;
+    int2 m_interior_origin;
+    int2 m_interior_extent;
 };
 ConstantBuffer<ReconstructionParameters> g_reconstruction;
 
@@ -26,6 +42,9 @@ Texture2DMS<float4, 4> g_scene;
 Texture2D<float4> g_history_previous;
 RWTexture2D<float4> g_history_next;
 
+// ------------------------------------------------------------------
+// sample pattern and lattice arithmetic
+// ------------------------------------------------------------------
 // Standard 4x pattern in raster top-left pixel coordinates, in sample-index
 // order. Node (1,0) is sample 0 at (3/8,1/8), and so on.
 float2 sampleOffset(int index) {
@@ -90,6 +109,14 @@ int knownYResidueForColumn(int column_residue) {
     return 0;
 }
 
+// Shifted quarter-raster-pixel block base of one resolved pixel, with the
+// projection's +4j displacement applied. Shared by both entries.
+int2 latticeBase(int2 pixel) {
+    const int2 jitter_shift = int2(int(4.0 * g_reconstruction.m_jitter.x),
+                                   int(4.0 * g_reconstruction.m_jitter.y));
+    return int2(2 * pixel.x + jitter_shift.x, 2 * pixel.y + jitter_shift.y);
+}
+
 float2 stationaryPoint(int2 pixel, int sample, float2 jitter) {
     return 2.0 * (float2(pixel) + sampleOffset(sample) - jitter);
 }
@@ -102,6 +129,9 @@ bool sourceSampleValid(int2 pixel, int sample, out float2 stationary) {
            stationary.y < float(g_reconstruction.m_resolved_extent.y);
 }
 
+// ------------------------------------------------------------------
+// border sample resolution
+// ------------------------------------------------------------------
 // Nearest valid sample among the clamped source pixel and its clipped 3x3
 // neighbourhood, measured in stationary resolved space. Ties use source
 // row-major pixel then sample index. Positive extents always provide a
@@ -171,6 +201,9 @@ bool resolveKnownNode(int2 node, out float3 color) {
     return true;
 }
 
+// ------------------------------------------------------------------
+// border generic lattice
+// ------------------------------------------------------------------
 // One lattice node. Known nodes load their sample directly; otherwise the
 // closest known node on each side of the row and column supplies L,R,U,D.
 // Bounds union every contributing original sample, including both gradients.
@@ -215,9 +248,7 @@ bool reconstructNode(int2 node, out float3 color, out float3 minimum, out float3
 // +4j shift removed, averaged. Their original-sample bounds are unioned for
 // history clamping.
 bool reconstructResolved(int2 pixel, out float3 color, out float3 minimum, out float3 maximum) {
-    const int2 jitter_shift = int2(int(4.0 * g_reconstruction.m_jitter.x),
-                                   int(4.0 * g_reconstruction.m_jitter.y));
-    const int2 base = int2(2 * pixel.x + jitter_shift.x, 2 * pixel.y + jitter_shift.y);
+    const int2 base = latticeBase(pixel);
 
     color = float3(0.0, 0.0, 0.0);
     minimum = float3(3.402823466e+38, 3.402823466e+38, 3.402823466e+38);
@@ -241,6 +272,162 @@ bool reconstructResolved(int2 pixel, out float3 color, out float3 minimum, out f
     return true;
 }
 
+// ------------------------------------------------------------------
+// interior fixed stencil
+// ------------------------------------------------------------------
+// A block's residue (base & 3 per axis) fixes which of its four nodes is a
+// known sample and which row/column brackets the other three need. Each
+// residue therefore has one static stencil whose seven distinct source
+// samples are loaded once and reused by every diamond and by the bounds.
+// Origins are the block's floor-divided source pixel, so every load is
+// `origin + <constant offset>` at a constant sample index.
+//
+// Residue tables, offsets relative to the block origin and sample index:
+//
+//   (0,0)  (-1,0)s0  (0,0)s0  (0,-1)s2  (0,0)s2  (-1,0)s1  (0,0)s1  (0,1)s0
+//   (2,0)  (0,0)s0   (1,0)s0  (0,-1)s3  (0,0)s3  (0,-1)s1  (0,0)s1  (-1,0)s1
+//   (0,2)  (0,0)s2   (1,0)s2  (0,0)s0   (0,1)s0  (-1,0)s3  (0,0)s3  (0,1)s2
+//   (2,2)  (0,0)s2   (1,0)s2  (0,-1)s3  (0,0)s3  (0,0)s1   (0,1)s1  (1,0)s3
+//
+// Node order is the generic loop's: (0,0), (1,0), (0,1), (1,1) in (dx,dy).
+
+struct Reconstructed {
+    float3 m_color;
+    float3 m_minimum;
+    float3 m_maximum;
+};
+
+Reconstructed knownValue(float3 color) {
+    Reconstructed value;
+    value.m_color = color;
+    value.m_minimum = color;
+    value.m_maximum = color;
+    return value;
+}
+
+// Same diamond as the generic node: the luminance gradient across the row and
+// the column chooses the horizontal/vertical mean, and the bounds cover all
+// four contributing original samples.
+Reconstructed diamondValue(float3 left, float3 right, float3 up, float3 down) {
+    const float horizontal = max(1.0e-5, abs(luminance(left) - luminance(right)));
+    const float vertical = max(1.0e-5, abs(luminance(up) - luminance(down)));
+    const float weight = vertical / (horizontal + vertical);
+
+    Reconstructed value;
+    value.m_color = weight * 0.5 * (left + right) + (1.0 - weight) * 0.5 * (up + down);
+    value.m_minimum = min(min(left, right), min(up, down));
+    value.m_maximum = max(max(left, right), max(up, down));
+    return value;
+}
+
+Reconstructed accumulateNode(Reconstructed accumulated, Reconstructed node) {
+    accumulated.m_color = accumulated.m_color + node.m_color;
+    accumulated.m_minimum = min(accumulated.m_minimum, node.m_minimum);
+    accumulated.m_maximum = max(accumulated.m_maximum, node.m_maximum);
+    return accumulated;
+}
+
+// Four node values averaged, with their bounds unioned, in lattice order.
+Reconstructed latticeValue(
+    Reconstructed node0, Reconstructed node1, Reconstructed node2, Reconstructed node3) {
+    Reconstructed result;
+    result.m_color = float3(0.0, 0.0, 0.0);
+    result.m_minimum = float3(3.402823466e+38, 3.402823466e+38, 3.402823466e+38);
+    result.m_maximum = float3(-3.402823466e+38, -3.402823466e+38, -3.402823466e+38);
+
+    result = accumulateNode(result, node0);
+    result = accumulateNode(result, node1);
+    result = accumulateNode(result, node2);
+    result = accumulateNode(result, node3);
+    result.m_color = result.m_color * 0.25;
+    return result;
+}
+
+// Residue (0,0): known sample 0 at block node (1,0).
+Reconstructed interiorResidue00(int2 origin) {
+    const float3 d0 = g_scene.Load(origin + int2(-1, 0), 0).rgb;
+    const float3 d1 = g_scene.Load(origin, 0).rgb;
+    const float3 d2 = g_scene.Load(origin + int2(0, -1), 2).rgb;
+    const float3 d3 = g_scene.Load(origin, 2).rgb;
+    const float3 d4 = g_scene.Load(origin + int2(-1, 0), 1).rgb;
+    const float3 d5 = g_scene.Load(origin, 1).rgb;
+    const float3 d6 = g_scene.Load(origin + int2(0, 1), 0).rgb;
+
+    return latticeValue(
+        diamondValue(d0, d1, d2, d3),
+        knownValue(d1),
+        diamondValue(d4, d5, d2, d3),
+        diamondValue(d4, d5, d1, d6));
+}
+
+// Residue (2,0): known sample 1 at block node (1,1).
+Reconstructed interiorResidue20(int2 origin) {
+    const float3 d0 = g_scene.Load(origin, 0).rgb;
+    const float3 d1 = g_scene.Load(origin + int2(1, 0), 0).rgb;
+    const float3 d2 = g_scene.Load(origin + int2(0, -1), 3).rgb;
+    const float3 d3 = g_scene.Load(origin, 3).rgb;
+    const float3 d4 = g_scene.Load(origin + int2(0, -1), 1).rgb;
+    const float3 d5 = g_scene.Load(origin, 1).rgb;
+    const float3 d6 = g_scene.Load(origin + int2(-1, 0), 1).rgb;
+
+    return latticeValue(
+        diamondValue(d0, d1, d2, d3),
+        diamondValue(d0, d1, d4, d5),
+        diamondValue(d6, d5, d2, d3),
+        knownValue(d5));
+}
+
+// Residue (0,2): known sample 2 at block node (0,0).
+Reconstructed interiorResidue02(int2 origin) {
+    const float3 d0 = g_scene.Load(origin, 2).rgb;
+    const float3 d1 = g_scene.Load(origin + int2(1, 0), 2).rgb;
+    const float3 d2 = g_scene.Load(origin, 0).rgb;
+    const float3 d3 = g_scene.Load(origin + int2(0, 1), 0).rgb;
+    const float3 d4 = g_scene.Load(origin + int2(-1, 0), 3).rgb;
+    const float3 d5 = g_scene.Load(origin, 3).rgb;
+    const float3 d6 = g_scene.Load(origin + int2(0, 1), 2).rgb;
+
+    return latticeValue(
+        knownValue(d0),
+        diamondValue(d0, d1, d2, d3),
+        diamondValue(d4, d5, d0, d6),
+        diamondValue(d4, d5, d2, d3));
+}
+
+// Residue (2,2): known sample 3 at block node (0,1).
+Reconstructed interiorResidue22(int2 origin) {
+    const float3 d0 = g_scene.Load(origin, 2).rgb;
+    const float3 d1 = g_scene.Load(origin + int2(1, 0), 2).rgb;
+    const float3 d2 = g_scene.Load(origin + int2(0, -1), 3).rgb;
+    const float3 d3 = g_scene.Load(origin, 3).rgb;
+    const float3 d4 = g_scene.Load(origin, 1).rgb;
+    const float3 d5 = g_scene.Load(origin + int2(0, 1), 1).rgb;
+    const float3 d6 = g_scene.Load(origin + int2(1, 0), 3).rgb;
+
+    return latticeValue(
+        diamondValue(d0, d1, d2, d3),
+        diamondValue(d0, d1, d4, d5),
+        knownValue(d3),
+        diamondValue(d3, d6, d4, d5));
+}
+
+// Interior resolved pixel: the block residue selects its static stencil.
+// Every referenced sample is valid by the dispatch contract, so this path
+// never validates an address and cannot fail.
+Reconstructed reconstructInterior(int2 pixel) {
+    const int2 base = latticeBase(pixel);
+    const int2 origin = int2(floorDiv(base.x, 4), floorDiv(base.y, 4));
+    const uint residue = uint(((base.x >> 1) & 1) | (base.y & 2));
+
+    if (residue == 0) { return interiorResidue00(origin); }
+    if (residue == 1) { return interiorResidue20(origin); }
+    if (residue == 2) { return interiorResidue02(origin); }
+    return interiorResidue22(origin);
+}
+
+// ------------------------------------------------------------------
+// temporal tail
+// ------------------------------------------------------------------
 // Current unjittered world-plane position of a resolved pixel centre, then the
 // previous accepted unjittered camera/padded-grid mapping.
 bool reprojectPrevious(float2 current_pixel, out float2 previous_pixel) {
@@ -302,21 +489,9 @@ bool sampleHistory(float2 previous_pixel, out float3 color) {
     return true;
 }
 
-[numthreads(8, 8, 1)]
-void reconstructTemporal(uint3 id : SV_DispatchThreadID) {
-    if (any(id.xy >= uint2(g_reconstruction.m_backing_extent))) { return; }
-    const int2 pixel = int2(id.xy);
-
-    float3 current;
-    float3 minimum;
-    float3 maximum;
-    if (!reconstructResolved(pixel, current, minimum, maximum)) {
-        // Positive extents and the stated pattern always provide a candidate;
-        // a miss is a contract error and is marked invalid.
-        g_history_next[pixel] = float4(0.0, 0.0, 0.0, 0.0);
-        return;
-    }
-
+// Reprojected history clamp and blend, then the history write. Shared by both
+// entries so the spatial split cannot change the temporal result.
+void resolveTemporal(int2 pixel, float3 current, float3 minimum, float3 maximum) {
     const float2 current_pixel = float2(pixel) + 0.5;
     float3 result = current;
     if (g_reconstruction.m_history_valid != 0) {
@@ -333,4 +508,46 @@ void reconstructTemporal(uint3 id : SV_DispatchThreadID) {
     const bool valid = pixel.x < g_reconstruction.m_resolved_extent.x &&
                        pixel.y < g_reconstruction.m_resolved_extent.y;
     g_history_next[pixel] = float4(result, valid ? 1.0 : 0.0);
+}
+
+// ------------------------------------------------------------------
+// entries
+// ------------------------------------------------------------------
+
+// Interior dispatch domain, relative to m_interior_origin. The CPU-side
+// contract guarantees every stencil load is a valid sample.
+[numthreads(8, 8, 1)]
+void reconstructTemporalInterior(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= uint2(g_reconstruction.m_interior_extent))) { return; }
+
+    const int2 pixel = g_reconstruction.m_interior_origin + int2(id.xy);
+    const Reconstructed current = reconstructInterior(pixel);
+    resolveTemporal(pixel, current.m_color, current.m_minimum, current.m_maximum);
+}
+
+// Every backing pixel the interior dispatch does not own: the border strips,
+// B padding and all tiny extents. Unchanged generic lattice and fallback.
+[numthreads(8, 8, 1)]
+void reconstructTemporalBorder(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= uint2(g_reconstruction.m_backing_extent))) { return; }
+
+    const int2 pixel = int2(id.xy);
+    const int2 interior_offset = pixel - g_reconstruction.m_interior_origin;
+    if (interior_offset.x >= 0 && interior_offset.y >= 0 &&
+        interior_offset.x < g_reconstruction.m_interior_extent.x &&
+        interior_offset.y < g_reconstruction.m_interior_extent.y) {
+        return;
+    }
+
+    float3 current;
+    float3 minimum;
+    float3 maximum;
+    if (!reconstructResolved(pixel, current, minimum, maximum)) {
+        // Positive extents and the stated pattern always provide a candidate;
+        // a miss is a contract error and is marked invalid.
+        g_history_next[pixel] = float4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+
+    resolveTemporal(pixel, current, minimum, maximum);
 }

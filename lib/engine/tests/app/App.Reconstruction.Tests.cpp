@@ -40,16 +40,18 @@ namespace pP::tests::detail {
                 float2{5.0f / 8.0f, 7.0f / 8.0f}};
 
             struct Sample {
-                int2 m_pixel{};
+                int2 m_pixel{0, 0};
                 u32 m_index{};
 
                 [[nodiscard]] bool operator==(const Sample &) const noexcept = default;
             };
 
+            // Mango vectors have a user-provided empty default constructor, so
+            // their components are only defined with explicit values.
             struct Value {
-                float3 m_color{};
-                float3 m_minimum{};
-                float3 m_maximum{};
+                float3 m_color{0.0f, 0.0f, 0.0f};
+                float3 m_minimum{0.0f, 0.0f, 0.0f};
+                float3 m_maximum{0.0f, 0.0f, 0.0f};
             };
 
             [[nodiscard]] i32 floorDiv(const i32 value, const i32 divisor) noexcept {
@@ -169,7 +171,7 @@ namespace pP::tests::detail {
             }
 
             struct KnownNode {
-                int2 m_node{};
+                int2 m_node{0, 0};
                 Sample m_sample{};
             };
 
@@ -193,6 +195,52 @@ namespace pP::tests::detail {
                 }
 
                 return std::nullopt;
+            }
+
+            // Nearest known node in one direction without resolving its sample:
+            // the requested address, so a substituted border sample cannot hide
+            // an invalid reference.
+            [[nodiscard]] std::optional<int2> nearestKnownNode(const int2 node, const int2 direction) noexcept {
+                for (i32 step = 1; step <= 8; ++step) {
+                    const int2 candidate{node.x + direction.x * step, node.y + direction.y * step};
+                    if (knownIndex(candidate) != 4u) {
+                        return candidate;
+                    }
+                }
+
+                return std::nullopt;
+            }
+
+            // Raw source addresses one resolved pixel's block requests, before
+            // any validity substitution: one known sample and four brackets for
+            // each of the three missing nodes. Interior pixels must have all of
+            // them valid, which is what the border fallback exists for.
+            [[nodiscard]] std::vector<Sample> requestedReferences(const int2 pixel, const float2 jitter) {
+                const int2 shift{static_cast<i32>(4.0f * jitter.x), static_cast<i32>(4.0f * jitter.y)};
+                const int2 base{2 * pixel.x + shift.x, 2 * pixel.y + shift.y};
+
+                std::vector<Sample> references;
+                for (i32 dy = 0; dy < 2; ++dy) {
+                    for (i32 dx = 0; dx < 2; ++dx) {
+                        const int2 node{base.x + dx, base.y + dy};
+                        const u32 known = knownIndex(node);
+                        if (known != 4u) {
+                            references.push_back(Sample{int2{floorDiv(node.x, 4), floorDiv(node.y, 4)}, known});
+                            continue;
+                        }
+
+                        for (const int2 &direction: {int2{-1, 0}, int2{1, 0}, int2{0, -1}, int2{0, 1}}) {
+                            const auto bracket = nearestKnownNode(node, direction);
+                            PPR_TEST_ASSERT(bracket.has_value());
+                            const u32 bracket_sample = knownIndex(*bracket);
+                            PPR_TEST_ASSERT(bracket_sample != 4u);
+                            references.push_back(
+                                Sample{int2{floorDiv(bracket->x, 4), floorDiv(bracket->y, 4)}, bracket_sample});
+                        }
+                    }
+                }
+
+                return references;
             }
 
             [[nodiscard]] std::size_t sampleIndex(
@@ -281,6 +329,151 @@ namespace pP::tests::detail {
                 return Value{color, minimum, maximum};
             }
 
+            // ------------------------------------------------------------------
+            // fixed interior stencil mirror
+            // ------------------------------------------------------------------
+            // Literal mirror of hable_temporal.slang's four interior stencils:
+            // seven distinct loads addressed from the block origin, and the load
+            // indices each block node consumes in (left, right, up, down) order.
+            // A known node consumes only its own sample.
+            struct StencilLoad {
+                int2 m_offset{0, 0};
+                u32 m_sample{};
+
+                // Mango's SIMD equality does not instantiate for int2, so the
+                // comparison is written out over the components.
+                [[nodiscard]] bool operator==(const StencilLoad &other) const noexcept {
+                    return m_offset.x == other.m_offset.x and
+                           m_offset.y == other.m_offset.y and
+                           m_sample == other.m_sample;
+                }
+            };
+
+            struct StencilNode {
+                std::array<u32, 4> m_loads{};
+                bool m_known{};
+            };
+
+            struct Stencil {
+                std::array<StencilLoad, 7> m_loads{};
+                std::array<StencilNode, 4> m_nodes{};
+            };
+
+            [[nodiscard]] constexpr u32 stencilResidue(const int2 base) noexcept {
+                return static_cast<u32>(((base.x >> 1) & 1) | (base.y & 2));
+            }
+
+            [[nodiscard]] const Stencil &stencilFor(const u32 residue) noexcept {
+                static const std::array<Stencil, 4> kStencils{
+                    // Residues (0,0): known sample 0 at block node (1,0).
+                    Stencil{
+                        .m_loads =
+                            {StencilLoad{int2{-1, 0}, 0u}, StencilLoad{int2{0, 0}, 0u}, StencilLoad{int2{0, -1}, 2u},
+                                StencilLoad{int2{0, 0}, 2u}, StencilLoad{int2{-1, 0}, 1u}, StencilLoad{int2{0, 0}, 1u},
+                                StencilLoad{int2{0, 1}, 0u}},
+                        .m_nodes =
+                            {StencilNode{{0u, 1u, 2u, 3u}, false}, StencilNode{{1u, 0u, 0u, 0u}, true},
+                                StencilNode{{4u, 5u, 2u, 3u}, false}, StencilNode{{4u, 5u, 1u, 6u}, false}},
+                    },
+                    // Residues (2,0): known sample 1 at block node (1,1).
+                    Stencil{
+                        .m_loads =
+                            {StencilLoad{int2{0, 0}, 0u}, StencilLoad{int2{1, 0}, 0u}, StencilLoad{int2{0, -1}, 3u},
+                                StencilLoad{int2{0, 0}, 3u}, StencilLoad{int2{0, -1}, 1u}, StencilLoad{int2{0, 0}, 1u},
+                                StencilLoad{int2{-1, 0}, 1u}},
+                        .m_nodes =
+                            {StencilNode{{0u, 1u, 2u, 3u}, false}, StencilNode{{0u, 1u, 4u, 5u}, false},
+                                StencilNode{{6u, 5u, 2u, 3u}, false}, StencilNode{{5u, 0u, 0u, 0u}, true}},
+                    },
+                    // Residues (0,2): known sample 2 at block node (0,0).
+                    Stencil{
+                        .m_loads =
+                            {StencilLoad{int2{0, 0}, 2u}, StencilLoad{int2{1, 0}, 2u}, StencilLoad{int2{0, 0}, 0u},
+                                StencilLoad{int2{0, 1}, 0u}, StencilLoad{int2{-1, 0}, 3u}, StencilLoad{int2{0, 0}, 3u},
+                                StencilLoad{int2{0, 1}, 2u}},
+                        .m_nodes =
+                            {StencilNode{{0u, 0u, 0u, 0u}, true}, StencilNode{{0u, 1u, 2u, 3u}, false},
+                                StencilNode{{4u, 5u, 0u, 6u}, false}, StencilNode{{4u, 5u, 2u, 3u}, false}},
+                    },
+                    // Residues (2,2): known sample 3 at block node (0,1).
+                    Stencil{
+                        .m_loads =
+                            {StencilLoad{int2{0, 0}, 2u}, StencilLoad{int2{1, 0}, 2u}, StencilLoad{int2{0, -1}, 3u},
+                                StencilLoad{int2{0, 0}, 3u}, StencilLoad{int2{0, 0}, 1u}, StencilLoad{int2{0, 1}, 1u},
+                                StencilLoad{int2{1, 0}, 3u}},
+                        .m_nodes =
+                            {StencilNode{{0u, 1u, 2u, 3u}, false}, StencilNode{{0u, 1u, 4u, 5u}, false},
+                                StencilNode{{3u, 0u, 0u, 0u}, true}, StencilNode{{3u, 6u, 4u, 5u}, false}},
+                    },
+                };
+                return kStencils[residue];
+            }
+
+            [[nodiscard]] StencilLoad tapOf(const Sample &sample, const int2 origin) noexcept {
+                return StencilLoad{int2{sample.m_pixel.x - origin.x, sample.m_pixel.y - origin.y}, sample.m_index};
+            }
+
+            [[nodiscard]] Value diamondValue(
+                const float3 left, const float3 right, const float3 up, const float3 down) noexcept {
+                const float horizontal = std::max(1.0e-5f, std::abs(luminance(left) - luminance(right)));
+                const float vertical = std::max(1.0e-5f, std::abs(luminance(up) - luminance(down)));
+                const float weight = vertical / (horizontal + vertical);
+                return Value{
+                    weight * 0.5f * (left + right) + (1.0f - weight) * 0.5f * (up + down),
+                    pP::min(pP::min(left, right), pP::min(up, down)), pP::max(pP::max(left, right), pP::max(up, down))};
+            }
+
+            [[nodiscard]] Value accumulateNode(const Value accumulated, const Value node) noexcept {
+                return Value{
+                    accumulated.m_color + node.m_color, pP::min(accumulated.m_minimum, node.m_minimum),
+                    pP::max(accumulated.m_maximum, node.m_maximum)};
+            }
+
+            // Fixed-stencil reconstruction: each distinct sample is loaded once
+            // and reused by every node that references it. Operand order matches
+            // the generic path, so an interior pixel must be bit-identical.
+            [[nodiscard]] std::optional<Value> fixedStencilValue(
+                const int2 pixel, const std::span<const float3> samples, const int2 raster_extent,
+                const int2 resolved_extent, const float2 jitter) noexcept {
+                const int2 shift{static_cast<i32>(4.0f * jitter.x), static_cast<i32>(4.0f * jitter.y)};
+                const int2 base{2 * pixel.x + shift.x, 2 * pixel.y + shift.y};
+                const int2 origin{floorDiv(base.x, 4), floorDiv(base.y, 4)};
+                const Stencil &stencil = stencilFor(stencilResidue(base));
+
+                // Mango's SIMD default constructor is explicit, so this is
+                // default-initialised rather than value-initialised; the loop
+                // assigns every element before use.
+                std::array<float3, 7> loads;
+                for (std::size_t index = 0; index < loads.size(); ++index) {
+                    const StencilLoad &load = stencil.m_loads[index];
+                    const int2 source{origin.x + load.m_offset.x, origin.y + load.m_offset.y};
+                    if (not sourceSampleValid(source, load.m_sample, raster_extent, resolved_extent, jitter)) {
+                        return std::nullopt;
+                    }
+                    loads[index] = loadSample(samples, raster_extent, Sample{source, load.m_sample});
+                }
+
+                Value result{
+                    float3{0.0f, 0.0f, 0.0f},
+                    float3{
+                        std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                        std::numeric_limits<float>::max()},
+                    float3{
+                        -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+                        -std::numeric_limits<float>::max()}};
+                for (const StencilNode &node: stencil.m_nodes) {
+                    const Value value =
+                        node.m_known ? Value{loads[node.m_loads[0]], loads[node.m_loads[0]], loads[node.m_loads[0]]}
+                                     : diamondValue(
+                                           loads[node.m_loads[0]], loads[node.m_loads[1]], loads[node.m_loads[2]],
+                                           loads[node.m_loads[3]]);
+                    result = accumulateNode(result, value);
+                }
+
+                result.m_color = result.m_color * 0.25f;
+                return result;
+            }
+
             [[nodiscard]] float3 probeColor(const int2 pixel, const u32 sample, const float tint) noexcept {
                 const u32 r = static_cast<u32>(pixel.x * 13 + pixel.y * 7 + static_cast<i32>(sample) * 3) & 15u;
                 const u32 g = static_cast<u32>(pixel.x * 5 + pixel.y * 11 + static_cast<i32>(sample) * 7 + 3) & 15u;
@@ -307,6 +500,26 @@ namespace pP::tests::detail {
                 return samples;
             }
 
+            // Wide exponent spread and mixed signs: a dropped contributor or a
+            // changed association in the interior stencil would show in the low
+            // bits of the accumulated colour and bounds.
+            [[nodiscard]] std::vector<float3> makeWideRangeSamples(const int2 raster_extent) {
+                std::vector<float3> samples = makeProbeSamples(raster_extent, 1.0f);
+                for (i32 y = 0; y < raster_extent.y; ++y) {
+                    for (i32 x = 0; x < raster_extent.x; ++x) {
+                        for (u32 sample = 0u; sample < kSamplePositions.size(); ++sample) {
+                            float3 &value = samples[sampleIndex(raster_extent, int2{x, y}, sample)];
+                            const i32 exponent = (x * 3 + y * 5 + static_cast<i32>(sample)) % 7 - 3;
+                            value.x = std::ldexp(value.x + 0.125f, exponent);
+                            value.y = -std::ldexp(value.y + 0.0625f, 5);
+                            value.z = std::ldexp(value.z, -6);
+                        }
+                    }
+                }
+
+                return samples;
+            }
+
             [[nodiscard]] float2 visibleNdc(const float2 resolved, const int2 window, const u32 pixel_scale) {
                 return float2{
                     2.0f * static_cast<float>(pixel_scale) * resolved.x / static_cast<float>(window.x) - 1.0f,
@@ -321,7 +534,7 @@ namespace pP::tests::detail {
             }
 
             struct Reprojection {
-                float2 m_pixel{};
+                float2 m_pixel{0.0f, 0.0f};
                 bool m_valid{};
             };
 
@@ -454,6 +667,35 @@ namespace pP::tests::detail {
         } // namespace Oracle
 
         // ------------------------------------------------------------------
+        // probe diagnostics
+        // ------------------------------------------------------------------
+        // Every reconstruction probe prints the failing tuple before asserting,
+        // so a failure names the frame, pixel and address instead of only a
+        // source line. `reference` is empty when the failure is not one address.
+
+        void reportReference(
+            const char *const probe, const PresentationGrid &grid, const u32 phase, const float2 jitter,
+            const int2 pixel, const ReconstructionPass::InteriorRegion &region, const int2 lattice_origin,
+            const u32 residue, const std::optional<Oracle::Sample> &reference, const char *const detail) {
+            std::cerr << "reconstruction " << probe << " W=(" << grid.m_window.x << ", " << grid.m_window.y
+                      << ") P=" << grid.m_pixel_scale << " R=(" << grid.m_resolved.x << ", " << grid.m_resolved.y
+                      << ") S=(" << grid.m_raster.x << ", " << grid.m_raster.y << ") B=(" << grid.m_backing.x << ", "
+                      << grid.m_backing.y << ") phase=" << phase << " jitter=(" << jitter.x << ", " << jitter.y
+                      << ") pixel=(" << pixel.x << ", " << pixel.y << ") region=origin(" << region.m_origin.x << ", "
+                      << region.m_origin.y << ")+extent(" << region.m_extent.x << ", " << region.m_extent.y
+                      << ") lattice_origin=(" << lattice_origin.x << ", " << lattice_origin.y << ") residue=" << residue
+                      << " reference=";
+            if (reference.has_value()) {
+                std::cerr << "(" << reference->m_pixel.x << ", " << reference->m_pixel.y
+                          << ") sample=" << reference->m_index;
+            } else {
+                std::cerr << "none";
+            }
+
+            std::cerr << " [" << detail << "]\n";
+        }
+
+        // ------------------------------------------------------------------
         // independent camera fixtures
         // ------------------------------------------------------------------
 
@@ -478,10 +720,10 @@ namespace pP::tests::detail {
 
         namespace Gpu {
             struct ProbeParameters {
-                int2 m_extent{};
+                int2 m_extent{0, 0};
                 u32 m_mode{};
                 u32 m_reserved{};
-                float4 m_base{};
+                float4 m_base{0.0f, 0.0f, 0.0f, 0.0f};
             };
             static_assert(sizeof(ProbeParameters) == 32u);
 
@@ -1203,6 +1445,531 @@ namespace pP::tests::detail {
         };
 
         // ------------------------------------------------------------------
+        // interior/border split and fixed stencil
+        // ------------------------------------------------------------------
+
+        PPR_UNIT_TEST (lattice_interior_region_is_fallback_free_and_bounded) {
+            using namespace Oracle;
+
+            // The interior rectangle is where the production interior kernel may
+            // run: every source sample its block requests must already be valid,
+            // so no border resolution or fallback can be reached there. These
+            // pixels are also within one lattice pixel of the block origin, which
+            // is the reach the CPU rule assumes.
+            std::array<int2, 6> windows{
+                int2{37, 21}, int2{33, 17}, int2{23, 15}, int2{19, 13}, int2{40, 24}, int2{5, 5}};
+            u32 interior_frames = 0u;
+            for (const int2 &window: windows) {
+                for (const u32 scale: {1u, 2u, 3u}) {
+                    const auto grid = makePresentationGrid(window, scale);
+                    PPR_TEST_ASSERT(grid.has_value());
+                    for (u32 phase = 0u; phase < 4u; ++phase) {
+                        const float2 jitter = Gpu::phaseJitter(phase);
+                        const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                            *grid, jitter);
+
+                        PPR_TEST_ASSERT(region.m_origin.x >= 0 and region.m_origin.y >= 0);
+                        PPR_TEST_ASSERT(region.m_origin.x + region.m_extent.x <= grid->m_backing.x);
+                        PPR_TEST_ASSERT(region.m_origin.y + region.m_extent.y <= grid->m_backing.y);
+                        if (not region.empty()) {
+                            ++interior_frames;
+                        }
+
+                        // Dispatch partition: model the two entries' rounded-up
+                        // 8x8 domains, their entry guards and the border skip,
+                        // then require exactly one write per backing pixel and
+                        // none outside it. An empty rectangle must contribute no
+                        // interior write at all.
+                        std::vector<u32> writes(
+                            static_cast<std::size_t>(grid->m_backing.x) * static_cast<std::size_t>(grid->m_backing.y),
+                            0u);
+                        u32 outside_writes = 0u;
+                        const auto write = [&](const int2 pixel) {
+                            if (pixel.x < 0 or
+                                pixel.y < 0 or
+                                pixel.x >= grid->m_backing.x or
+                                pixel.y >= grid->m_backing.y) {
+                                ++outside_writes;
+                                return;
+                            }
+
+                            ++writes
+                                [static_cast<std::size_t>(pixel.y) * static_cast<std::size_t>(grid->m_backing.x) +
+                                    static_cast<std::size_t>(pixel.x)];
+                        };
+
+                        u32 interior_dispatch_writes = 0u;
+                        if (not region.empty()) {
+                            const u32 groups_x = (static_cast<u32>(region.m_extent.x) + 7u) / 8u;
+                            const u32 groups_y = (static_cast<u32>(region.m_extent.y) + 7u) / 8u;
+                            for (u32 id_y = 0u; id_y < groups_y * 8u; ++id_y) {
+                                for (u32 id_x = 0u; id_x < groups_x * 8u; ++id_x) {
+                                    if (id_x >= static_cast<u32>(region.m_extent.x) or
+                                        id_y >= static_cast<u32>(region.m_extent.y)) {
+                                        continue;
+                                    }
+
+                                    write(
+                                        int2{
+                                            region.m_origin.x + static_cast<i32>(id_x),
+                                            region.m_origin.y + static_cast<i32>(id_y)});
+                                    ++interior_dispatch_writes;
+                                }
+                            }
+                        }
+
+                        const u32 border_groups_x = (static_cast<u32>(grid->m_backing.x) + 7u) / 8u;
+                        const u32 border_groups_y = (static_cast<u32>(grid->m_backing.y) + 7u) / 8u;
+                        for (u32 id_y = 0u; id_y < border_groups_y * 8u; ++id_y) {
+                            for (u32 id_x = 0u; id_x < border_groups_x * 8u; ++id_x) {
+                                if (id_x >= static_cast<u32>(grid->m_backing.x) or
+                                    id_y >= static_cast<u32>(grid->m_backing.y)) {
+                                    continue;
+                                }
+
+                                const int2 pixel{static_cast<i32>(id_x), static_cast<i32>(id_y)};
+                                if (region.contains(pixel)) {
+                                    continue;
+                                }
+
+                                write(pixel);
+                            }
+                        }
+
+                        PPR_TEST_ASSERT(outside_writes == 0u);
+                        PPR_TEST_ASSERT(
+                            interior_dispatch_writes == (region.empty() ? 0u
+                                                                        : static_cast<u32>(region.m_extent.x) *
+                                                                              static_cast<u32>(region.m_extent.y)));
+                        for (i32 y = 0; y < grid->m_backing.y; ++y) {
+                            for (i32 x = 0; x < grid->m_backing.x; ++x) {
+                                const int2 pixel{x, y};
+                                const std::size_t offset = static_cast<std::size_t>(y) *
+                                                               static_cast<std::size_t>(grid->m_backing.x) +
+                                                           static_cast<std::size_t>(x);
+                                if (writes[offset] != 1u) {
+                                    reportReference(
+                                        "interior-region", *grid, phase, jitter, pixel, region, int2{-1, -1}, 0u,
+                                        std::nullopt, "dispatch partition wrote the pixel a number of times != 1");
+                                }
+                                PPR_TEST_ASSERT(writes[offset] == 1u);
+
+                                // Containment must be the shader's half-open test:
+                                // the border kernel writes exactly the complement.
+                                PPR_TEST_ASSERT(
+                                    region.contains(pixel) == (x >= region.m_origin.x and
+                                                                  y >= region.m_origin.y and
+                                                                  x < region.m_origin.x + region.m_extent.x and
+                                                                  y < region.m_origin.y + region.m_extent.y));
+                                if (not region.contains(pixel)) {
+                                    continue;
+                                }
+
+                                const int2 shift{static_cast<i32>(4.0f * jitter.x), static_cast<i32>(4.0f * jitter.y)};
+                                const int2 base{2 * x + shift.x, 2 * y + shift.y};
+                                const int2 origin{floorDiv(base.x, 4), floorDiv(base.y, 4)};
+                                const u32 residue = stencilResidue(base);
+                                const auto references = requestedReferences(pixel, jitter);
+                                PPR_TEST_ASSERT(references.size() == 13u);
+                                for (const Sample &reference: references) {
+                                    const bool valid = sourceSampleValid(
+                                        reference.m_pixel, reference.m_index, grid->m_raster, grid->m_resolved, jitter);
+                                    if (not valid) {
+                                        reportReference(
+                                            "interior-region", *grid, phase, jitter, pixel, region, origin, residue,
+                                            reference, "interior pixel references an invalid source sample");
+                                    }
+                                    PPR_TEST_ASSERT(valid);
+
+                                    const bool reached = std::abs(reference.m_pixel.x - origin.x) <= 1 and
+                                                         std::abs(reference.m_pixel.y - origin.y) <= 1;
+                                    if (not reached) {
+                                        reportReference(
+                                            "interior-region", *grid, phase, jitter, pixel, region, origin, residue,
+                                            reference, "reference lies outside the one-pixel lattice reach");
+                                    }
+                                    PPR_TEST_ASSERT(reached);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            PPR_TEST_ASSERT(interior_frames > 0u);
+        };
+
+        PPR_UNIT_TEST (lattice_interior_default_region_is_canonical_empty) {
+            // `interiorRegion` answers every empty case with `InteriorRegion{}`.
+            // Mango vectors have a user-provided empty default constructor, so
+            // the zero components must be explicit: an empty region carrying
+            // stale bounds makes the border kernel skip a phantom rectangle.
+            const ReconstructionPass::InteriorRegion fresh{};
+            PPR_TEST_ASSERT(fresh.m_origin.x == 0 and fresh.m_origin.y == 0);
+            PPR_TEST_ASSERT(fresh.m_extent.x == 0 and fresh.m_extent.y == 0);
+            PPR_TEST_ASSERT(fresh.empty());
+            for (const int2 &pixel: {int2{0, 0}, int2{1, 1}, int2{-1, -1}}) {
+                PPR_TEST_ASSERT(not fresh.contains(pixel));
+            }
+
+            // Construction over previously nonempty storage: the same bytes must
+            // come back canonical, so a zeroed stack page cannot hide an omitted
+            // write.
+            const auto populated_grid = makePresentationGrid(int2{33, 17}, 3u);
+            PPR_TEST_ASSERT(populated_grid.has_value());
+            const ReconstructionPass::InteriorRegion populated = ReconstructionPass::interiorRegion(
+                *populated_grid, Gpu::phaseJitter(0u));
+            PPR_TEST_ASSERT(not populated.empty());
+            std::optional<ReconstructionPass::InteriorRegion> reused = populated;
+            reused.emplace();
+            PPR_TEST_ASSERT(reused->m_origin.x == 0 and reused->m_origin.y == 0);
+            PPR_TEST_ASSERT(reused->m_extent.x == 0 and reused->m_extent.y == 0);
+            PPR_TEST_ASSERT(reused->empty());
+
+            // The production empty result is canonical too, not merely empty().
+            const auto empty_grid = makePresentationGrid(int2{5, 5}, 1u);
+            PPR_TEST_ASSERT(empty_grid.has_value());
+            for (u32 phase = 0u; phase < 4u; ++phase) {
+                const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                    *empty_grid, Gpu::phaseJitter(phase));
+                PPR_TEST_ASSERT(region.m_origin.x == 0 and region.m_origin.y == 0);
+                PPR_TEST_ASSERT(region.m_extent.x == 0 and region.m_extent.y == 0);
+                PPR_TEST_ASSERT(region.empty());
+            }
+        };
+
+        PPR_UNIT_TEST (lattice_interior_empty_axes_are_border_only) {
+            // Frames where one axis has no admissible origin: tiny windows, the
+            // P3 asymmetric windows and their transposes (which put the empty
+            // span on X instead of Y). Every such result must be canonically
+            // empty and contain no backing pixel, independent of the previous
+            // call, so a stale rectangle can never route work to the interior
+            // kernel or hide pixels from the border kernel.
+            const auto assert_empty = [](const PresentationGrid &grid, const u32 phase) {
+                const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                    grid, Gpu::phaseJitter(phase));
+                PPR_TEST_ASSERT(region.m_origin.x == 0 and region.m_origin.y == 0);
+                PPR_TEST_ASSERT(region.m_extent.x == 0 and region.m_extent.y == 0);
+                PPR_TEST_ASSERT(region.empty());
+                for (i32 y = 0; y < grid.m_backing.y; ++y) {
+                    for (i32 x = 0; x < grid.m_backing.x; ++x) {
+                        PPR_TEST_ASSERT(not region.contains(int2{x, y}));
+                    }
+                }
+            };
+
+            for (const int2 &window: {int2{1, 1}, int2{2, 2}, int2{3, 3}, int2{5, 5}}) {
+                const auto grid = makePresentationGrid(window, 1u);
+                PPR_TEST_ASSERT(grid.has_value());
+                for (u32 phase = 0u; phase < 4u; ++phase) {
+                    assert_empty(*grid, phase);
+                }
+            }
+
+            // Empty Y span at P3, with a nonempty frame on either side of each
+            // empty one. Phases 0 and 1 keep extent (6, 2).
+            const auto tall = makePresentationGrid(int2{33, 17}, 3u);
+            PPR_TEST_ASSERT(tall.has_value());
+            for (const u32 phase: {0u, 1u, 2u, 3u, 0u, 1u}) {
+                const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                    *tall, Gpu::phaseJitter(phase));
+                if (phase == 0u or phase == 1u) {
+                    PPR_TEST_ASSERT(not region.empty());
+                    PPR_TEST_ASSERT(region.m_extent.x == 6 and region.m_extent.y == 2);
+                } else {
+                    assert_empty(*tall, phase);
+                }
+            }
+
+            // The transpose puts the empty span on X: phases 1 and 3 have no
+            // admissible origin, phases 0 and 2 keep extent (2, 6).
+            const auto wide = makePresentationGrid(int2{17, 33}, 3u);
+            PPR_TEST_ASSERT(wide.has_value());
+            for (const u32 phase: {1u, 0u, 3u, 2u, 1u, 0u}) {
+                const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                    *wide, Gpu::phaseJitter(phase));
+                if (phase == 0u or phase == 2u) {
+                    PPR_TEST_ASSERT(not region.empty());
+                    PPR_TEST_ASSERT(region.m_extent.x == 2 and region.m_extent.y == 6);
+                } else {
+                    assert_empty(*wide, phase);
+                }
+            }
+
+            // Every P3 phase is empty for these window pairs.
+            for (const int2 &window: {int2{23, 15}, int2{15, 23}, int2{19, 13}, int2{13, 19}}) {
+                const auto grid = makePresentationGrid(window, 3u);
+                PPR_TEST_ASSERT(grid.has_value());
+                for (const u32 phase: {0u, 1u, 2u, 3u}) {
+                    assert_empty(*grid, phase);
+                }
+            }
+        };
+
+        PPR_UNIT_TEST (lattice_border_absorbs_invalid_taps) {
+            using namespace Oracle;
+
+            // W=5x5, P1, phase 0 gives R=5, S=3, B=6: no origin has a fully
+            // valid neighbourhood, so the interior rectangle is canonical empty
+            // and pixel (2,3) belongs to the border kernel. Its block still has
+            // reconstructible taps, one of which is invalid: source (1,2)
+            // sample 2 is raster-valid but its stationary Y is 5.25 >= R=5. A
+            // stale interior rectangle would hand this pixel to the fixed
+            // stencil, which correctly refuses it.
+            const auto grid = makePresentationGrid(int2{5, 5}, 1u);
+            PPR_TEST_ASSERT(grid.has_value());
+            PPR_TEST_ASSERT(
+                same(grid->m_resolved, int2{5, 5}) and
+                same(grid->m_raster, int2{3, 3}) and
+                same(grid->m_backing, int2{6, 6}));
+
+            const float2 jitter = Gpu::phaseJitter(0u);
+            const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(*grid, jitter);
+            PPR_TEST_ASSERT(region.empty());
+
+            const int2 pixel{2, 3};
+            PPR_TEST_ASSERT(not region.contains(pixel));
+
+            const auto references = requestedReferences(pixel, jitter);
+            std::optional<Sample> invalid;
+            for (const Sample &reference: references) {
+                if (not sourceSampleValid(
+                        reference.m_pixel, reference.m_index, grid->m_raster, grid->m_resolved, jitter)) {
+                    invalid = reference;
+                }
+            }
+
+            PPR_TEST_ASSERT(invalid.has_value());
+            PPR_TEST_ASSERT(same(invalid->m_pixel, int2{1, 2}) and invalid->m_index == 2u);
+            const float2 stationary = stationaryPoint(invalid->m_pixel, invalid->m_index, jitter);
+            PPR_TEST_ASSERT(
+                stationary.x >= 0.0f and
+                stationary.x < static_cast<float>(grid->m_resolved.x) and
+                stationary.y >= static_cast<float>(grid->m_resolved.y));
+
+            const auto samples = makeProbeSamples(grid->m_raster, 1.0f);
+            const auto fixed = fixedStencilValue(pixel, samples, grid->m_raster, grid->m_resolved, jitter);
+            const auto generic = reconstructResolved(pixel, samples, grid->m_raster, grid->m_resolved, jitter);
+            PPR_TEST_ASSERT(not fixed.has_value());
+            PPR_TEST_ASSERT(generic.has_value());
+        };
+
+        PPR_UNIT_TEST (lattice_border_fallback_stays_reachable) {
+            using namespace Oracle;
+
+            // Border pixels still exercise the nearest-valid substitution the
+            // interior kernel no longer carries. Every such reference must find a
+            // candidate, because positive extents always provide one.
+            u32 fallback_pixels = 0u;
+            for (const int2 &window: {int2{37, 21}, int2{33, 17}, int2{23, 15}, int2{5, 5}, int2{1, 1}}) {
+                const auto grid = makePresentationGrid(window, 2u);
+                PPR_TEST_ASSERT(grid.has_value());
+                for (u32 phase = 0u; phase < 4u; ++phase) {
+                    const float2 jitter = Gpu::phaseJitter(phase);
+                    const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(*grid, jitter);
+                    for (i32 y = 0; y < grid->m_backing.y; ++y) {
+                        for (i32 x = 0; x < grid->m_backing.x; ++x) {
+                            const int2 pixel{x, y};
+                            if (region.contains(pixel)) {
+                                continue;
+                            }
+
+                            const auto references = requestedReferences(pixel, jitter);
+                            bool substituted = false;
+                            for (const Sample &reference: references) {
+                                if (sourceSampleValid(
+                                        reference.m_pixel, reference.m_index, grid->m_raster, grid->m_resolved,
+                                        jitter)) {
+                                    continue;
+                                }
+
+                                substituted = true;
+                                const auto resolved_sample = resolveValidSample(
+                                    reference.m_pixel, reference.m_index, grid->m_raster, grid->m_resolved, jitter);
+                                if (not resolved_sample.has_value()) {
+                                    reportReference(
+                                        "border-fallback", *grid, phase, jitter, pixel, region, int2{-1, -1}, 0u,
+                                        reference, "no valid substitute exists");
+                                }
+                                PPR_TEST_ASSERT(resolved_sample.has_value());
+
+                                const bool substitute_valid = sourceSampleValid(
+                                    resolved_sample->m_pixel, resolved_sample->m_index, grid->m_raster,
+                                    grid->m_resolved, jitter);
+                                if (not substitute_valid) {
+                                    reportReference(
+                                        "border-fallback", *grid, phase, jitter, pixel, region, int2{-1, -1}, 0u,
+                                        *resolved_sample, "the substitute is not a valid sample");
+                                }
+                                PPR_TEST_ASSERT(substitute_valid);
+                            }
+
+                            if (substituted) {
+                                ++fallback_pixels;
+                            }
+                        }
+                    }
+                }
+            }
+
+            PPR_TEST_ASSERT(fallback_pixels > 0u);
+        };
+
+        PPR_UNIT_TEST (lattice_interior_fixed_stencil_matches_generic_bit_exact) {
+            using namespace Oracle;
+
+            // The interior kernel loads each distinct sample once and reuses it
+            // across the block. For an interior pixel this must reproduce the
+            // generic derivation exactly: the same addresses, the same diamond
+            // arithmetic and the same accumulation order.
+            std::array<bool, 4> residue_checked{};
+            for (const int2 &window: {int2{37, 21}, int2{40, 24}, int2{23, 15}}) {
+                for (const u32 scale: {1u, 2u, 3u}) {
+                    const auto grid = makePresentationGrid(window, scale);
+                    PPR_TEST_ASSERT(grid.has_value());
+                    const auto samples = makeWideRangeSamples(grid->m_raster);
+                    for (u32 phase = 0u; phase < 4u; ++phase) {
+                        const float2 jitter = Gpu::phaseJitter(phase);
+                        const ReconstructionPass::InteriorRegion region = ReconstructionPass::interiorRegion(
+                            *grid, jitter);
+                        if (region.empty()) {
+                            continue;
+                        }
+
+                        for (i32 y = 0; y < grid->m_backing.y; ++y) {
+                            for (i32 x = 0; x < grid->m_backing.x; ++x) {
+                                const int2 pixel{x, y};
+                                if (not region.contains(pixel)) {
+                                    continue;
+                                }
+
+                                const int2 shift{static_cast<i32>(4.0f * jitter.x), static_cast<i32>(4.0f * jitter.y)};
+                                const int2 base{2 * x + shift.x, 2 * y + shift.y};
+                                const int2 origin{floorDiv(base.x, 4), floorDiv(base.y, 4)};
+                                const u32 residue = stencilResidue(base);
+
+                                const auto generic = reconstructResolved(
+                                    pixel, samples, grid->m_raster, grid->m_resolved, jitter);
+                                if (not generic.has_value()) {
+                                    reportReference(
+                                        "fixed-stencil", *grid, phase, jitter, pixel, region, origin, residue,
+                                        std::nullopt, "generic reconstruction returned no value");
+                                }
+                                PPR_TEST_ASSERT(generic.has_value());
+
+                                const auto fixed = fixedStencilValue(
+                                    pixel, samples, grid->m_raster, grid->m_resolved, jitter);
+                                if (not fixed.has_value()) {
+                                    // Name the tap the interior contract must have
+                                    // excluded instead of only reporting a miss.
+                                    std::optional<Sample> invalid;
+                                    for (const StencilLoad &load: stencilFor(residue).m_loads) {
+                                        const int2 source{origin.x + load.m_offset.x, origin.y + load.m_offset.y};
+                                        if (not sourceSampleValid(
+                                                source, load.m_sample, grid->m_raster, grid->m_resolved, jitter)) {
+                                            invalid = Sample{source, load.m_sample};
+                                            break;
+                                        }
+                                    }
+
+                                    reportReference(
+                                        "fixed-stencil", *grid, phase, jitter, pixel, region, origin, residue, invalid,
+                                        "fixed stencil returned no value for an interior pixel");
+                                }
+                                PPR_TEST_ASSERT(fixed.has_value());
+
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_color.x) == std::bit_cast<u32>(generic->m_color.x));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_color.y) == std::bit_cast<u32>(generic->m_color.y));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_color.z) == std::bit_cast<u32>(generic->m_color.z));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_minimum.x) == std::bit_cast<u32>(generic->m_minimum.x));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_minimum.y) == std::bit_cast<u32>(generic->m_minimum.y));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_minimum.z) == std::bit_cast<u32>(generic->m_minimum.z));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_maximum.x) == std::bit_cast<u32>(generic->m_maximum.x));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_maximum.y) == std::bit_cast<u32>(generic->m_maximum.y));
+                                PPR_TEST_ASSERT(
+                                    std::bit_cast<u32>(fixed->m_maximum.z) == std::bit_cast<u32>(generic->m_maximum.z));
+
+                                // Pin the literal stencil against the generic
+                                // derivation once per residue class.
+                                if (residue_checked[residue]) {
+                                    continue;
+                                }
+                                residue_checked[residue] = true;
+
+                                const Stencil &stencil = stencilFor(residue);
+                                const auto references = requestedReferences(pixel, jitter);
+
+                                // Seven distinct loads, exactly the generic
+                                // reference set.
+                                std::vector<StencilLoad> distinct;
+                                for (const Sample &reference: references) {
+                                    const StencilLoad load = tapOf(reference, origin);
+                                    if (std::find(distinct.begin(), distinct.end(), load) == distinct.end()) {
+                                        distinct.push_back(load);
+                                    }
+                                }
+                                PPR_TEST_ASSERT(distinct.size() == stencil.m_loads.size());
+                                for (const StencilLoad &load: distinct) {
+                                    PPR_TEST_ASSERT(
+                                        std::find(stencil.m_loads.begin(), stencil.m_loads.end(), load) !=
+                                        stencil.m_loads.end());
+                                }
+
+                                // Node taps are the generic row/column brackets.
+                                for (u32 node_index = 0u; node_index < 4u; ++node_index) {
+                                    const int2 node{
+                                        base.x + static_cast<i32>(node_index & 1u),
+                                        base.y + static_cast<i32>(node_index >> 1u)};
+                                    const StencilNode &stencil_node = stencil.m_nodes[node_index];
+                                    const u32 known = knownIndex(node);
+                                    if (known != 4u) {
+                                        PPR_TEST_ASSERT(stencil_node.m_known);
+                                        PPR_TEST_ASSERT(
+                                            stencil.m_loads[stencil_node.m_loads[0]] ==
+                                            tapOf(
+                                                Sample{int2{floorDiv(node.x, 4), floorDiv(node.y, 4)}, known}, origin));
+                                        continue;
+                                    }
+
+                                    PPR_TEST_ASSERT(not stencil_node.m_known);
+                                    const std::array<int2, 4> directions{
+                                        int2{-1, 0}, int2{1, 0}, int2{0, -1}, int2{0, 1}};
+                                    for (u32 tap = 0u; tap < directions.size(); ++tap) {
+                                        const auto bracket = nearestKnownNode(node, directions[tap]);
+                                        PPR_TEST_ASSERT(bracket.has_value());
+                                        const u32 bracket_sample = knownIndex(*bracket);
+                                        PPR_TEST_ASSERT(bracket_sample != 4u);
+                                        PPR_TEST_ASSERT(
+                                            stencil.m_loads[stencil_node.m_loads[tap]] ==
+                                            tapOf(
+                                                Sample{
+                                                    int2{floorDiv(bracket->x, 4), floorDiv(bracket->y, 4)},
+                                                    bracket_sample},
+                                                origin));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Every residue class was exercised, so all four literal stencils
+            // are pinned against the generic derivation.
+            for (const bool checked: residue_checked) {
+                PPR_TEST_ASSERT(checked);
+            }
+        };
+
+        // ------------------------------------------------------------------
         // GPU: production pass against the independent oracle
         // ------------------------------------------------------------------
 
@@ -1873,6 +2640,12 @@ namespace pP::tests::detail {
                 motion_weight_curve,
                 history_footprint_and_poison_padding_excluded,
                 history_requires_every_nonzero_weight_texel_inside_r,
+                lattice_interior_region_is_fallback_free_and_bounded,
+                lattice_interior_default_region_is_canonical_empty,
+                lattice_interior_empty_axes_are_border_only,
+                lattice_border_absorbs_invalid_taps,
+                lattice_border_fallback_stays_reachable,
+                lattice_interior_fixed_stencil_matches_generic_bit_exact,
             });
         };
 
