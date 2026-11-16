@@ -753,10 +753,10 @@ namespace pP::tests::detail::MatterFork {
     // Measured upper bound for solid constitutive state under open investigation,
     // not a derived tolerance or per-field envelope. Retained for elastic at
     // K2/K5/K10 and sand at K2/K5: solid F (4-7), D (8-11), sand logJp (13).
-    // Flipped words bypass this budget. Sand K10 is structural-only: measured
-    // same-branch F 2.58e-4 and D 2.34e-3 invalidate numerical comparison.
-    // The return amplifies sub-ulp differences by 2-4 orders within a branch;
-    // replacing the law feeds directly into the blocked A5 decision.
+    // Flipped rows and sand K10 are structural-only coverage exclusions, not
+    // numerical conformance. Checkpoint predicates cannot establish branch
+    // equivalence; that needs the deferred differential trace. Measured sand K10
+    // F 2.58e-4 and D 2.34e-3 invalidate numerical comparison under this budget.
     constexpr double kSolidConstitutiveOpenInvestigationMeasuredUpperBound = 5e-4;
 
     GpuParameters upstreamProfile() {
@@ -858,7 +858,7 @@ namespace pP::tests::detail::MatterFork {
             ++branch_flip_rows;
             std::fprintf(
                 stderr,
-                "upstream case=%s substep=%u row=%zu policy=branch-flip "
+                "upstream case=%s substep=%u row=%zu policy=branch-flip comparison=structural-only "
                 "tuple=(traceE>=0,deltaGamma>0,logJp==0) actual=(%u,%u,%u) expected=(%u,%u,%u) "
                 "actual_trace=%.9e expected_trace=%.9e actual_frobenius=%.9e expected_frobenius=%.9e "
                 "actual_gamma=%.9e expected_gamma=%.9e\n",
@@ -909,14 +909,13 @@ namespace pP::tests::detail::MatterFork {
                 std::fprintf(
                     stderr,
                     "upstream divergence case=%s substep=%u row=%zu field=%s actual=%08x expected=%08x "
-                    "policy=branch-flip exact=%u\n",
-                    input.name, substep, row, upstreamHotNames[field], actual[word], input.hot8[word], unsigned(exact));
-                // Branch classification never waives an exact-field contract.
-                PPR_TEST_ASSERT(not exact);
-                continue;
+                    "policy=branch-flip comparison=structural-only delta=%.17e exact=%u\n",
+                    input.name, substep, row, upstreamHotNames[field], actual[word], input.hot8[word],
+                    observed - expected, unsigned(exact));
             }
 
-            if (structural_only) {
+            const bool row_structural_only = structural_only or branch_flips[row];
+            if (row_structural_only) {
                 PPR_TEST_ASSERT(not exact or actual[word] == input.hot8[word]);
                 continue;
             }
@@ -962,8 +961,9 @@ namespace pP::tests::detail::MatterFork {
 
         if (input.family == 2u) {
             std::fprintf(
-                stderr, "upstream case=%s substep=%u policy=branch-flip rows=%zu words=%zu limit=%zu\n", input.name,
-                substep, branch_flip_rows, branch_flip_words, kSandBranchFlipRowLimit);
+                stderr,
+                "upstream case=%s substep=%u policy=branch-flip comparison=structural-only rows=%zu words=%zu limit=%zu\n",
+                input.name, substep, branch_flip_rows, branch_flip_words, kSandBranchFlipRowLimit);
         }
     }
 

@@ -6,6 +6,7 @@ node_modules/
 # generated artifacts and belong outside the source tree.
 out/
 
-# No lockfile is committed: dependencies are pinned exactly in package.json.
+# No lockfile is committed; package.json pins only the direct webgpu version,
+# not transitive dependencies or the downloaded Dawn artifact.
 package-lock.json
 npm-shrinkwrap.json

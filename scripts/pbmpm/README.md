@@ -56,7 +56,9 @@ traces.
 
 `node_modules/` is **not** vendored and must not be committed (see
 [`.gitignore`](.gitignore)). No lockfile is committed either: the exact version
-pin in `package.json` is authoritative, so an install cannot silently drift.
+pin in `package.json` fixes the direct `webgpu` package version only. It does not
+lock transitive dependencies or the Dawn artifact downloaded by its install
+script, so it does not guarantee an identical dependency installation.
 
 ## Invocation
 

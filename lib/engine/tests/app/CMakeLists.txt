@@ -248,8 +248,8 @@ ppr_add_test_entry(TARGET engine.tests.app
 # Iteration-count operating-point evidence (A4): one fixed scene measured at
 # K in {2, 5, 10}. Opt-in through `PPR_PBMPM_COST_DIAGNOSTIC=1`, and deliberately
 # outside `matter_fast` so the repeated-use gate carries no measurement work; the
-# leaf logs an explicit skip when the switch is unset, so a plain run reports it
-# as unrun rather than as gate coverage.
+# leaf logs and returns early when the switch is unset. The harness reports that
+# as a passing test, not a CTest skip; it provides no measurement coverage.
 set(ppr_matter_cost_filter "app/matter_gpu/iteration_count_gpu_cost_diagnostic")
 
 ppr_add_test_entry(TARGET engine.tests.app
