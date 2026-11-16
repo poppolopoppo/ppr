@@ -230,6 +230,12 @@ Skills own procedures and must not duplicate or compete with these rules.
   wallet aggregates; strong types where they prevent misuse). Framework hooks
   (`main`, application hooks, listeners) are thin glue delegating to engine
   logic.
+- **Mango SIMD vectors do not value-initialise.** `float3 v{}` / `int2 p{}` leave
+  every component indeterminate, and `std::array<float3, N> a{}` does not compile.
+  Initialise components explicitly (`{0.0f, 0.0f, 0.0f}`, `int2{0, 0}`, `zero_v`),
+  assign every element of a vector array, and write component-wise `operator==`
+  instead of `= default` on any type containing one. See
+  [Mango vector initialisation](docs/mango-vector-initialization.md).
 - Use `not`/`and`/`or` (on one line when short, otherwise trailing-operator one-operand-per-line per Boolean expressions); use `const T` and `T *const`/`const T *const` where the
   callee must not reseat; order attributes, inline-control macros, `constexpr`,
   return type, name, parameters, `const`, `noexcept`.
