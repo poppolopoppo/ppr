@@ -1456,8 +1456,9 @@ namespace pP::tests::detail {
             // so no border resolution or fallback can be reached there. These
             // pixels are also within one lattice pixel of the block origin, which
             // is the reach the CPU rule assumes.
-            std::array<int2, 6> windows{
-                int2{37, 21}, int2{33, 17}, int2{23, 15}, int2{19, 13}, int2{40, 24}, int2{5, 5}};
+            std::array<int2, 12> windows{
+                int2{37, 21}, int2{33, 17}, int2{23, 15}, int2{19, 13}, int2{40, 24}, int2{5, 5}, int2{17, 33},
+                int2{15, 23}, int2{13, 19}, int2{1, 1}, int2{2, 2}, int2{3, 3}};
             u32 interior_frames = 0u;
             for (const int2 &window: windows) {
                 for (const u32 scale: {1u, 2u, 3u}) {
@@ -1476,7 +1477,7 @@ namespace pP::tests::detail {
                         }
 
                         // Dispatch partition: model the two entries' rounded-up
-                        // 8x8 domains, their entry guards and the border skip,
+                        // 8x8 domains and their local extent guards,
                         // then require exactly one write per backing pixel and
                         // none outside it. An empty rectangle must contribute no
                         // interior write at all.
@@ -1518,22 +1519,42 @@ namespace pP::tests::detail {
                             }
                         }
 
-                        const u32 border_groups_x = (static_cast<u32>(grid->m_backing.x) + 7u) / 8u;
-                        const u32 border_groups_y = (static_cast<u32>(grid->m_backing.y) + 7u) / 8u;
-                        for (u32 id_y = 0u; id_y < border_groups_y * 8u; ++id_y) {
-                            for (u32 id_x = 0u; id_x < border_groups_x * 8u; ++id_x) {
-                                if (id_x >= static_cast<u32>(grid->m_backing.x) or
-                                    id_y >= static_cast<u32>(grid->m_backing.y)) {
-                                    continue;
-                                }
-
-                                const int2 pixel{static_cast<i32>(id_x), static_cast<i32>(id_y)};
-                                if (region.contains(pixel)) {
-                                    continue;
-                                }
-
-                                write(pixel);
+                        const auto borders = ReconstructionPass::borderRegions(grid->m_backing, region);
+                        u32 border_dispatches = 0u;
+                        for (const auto &border: borders) {
+                            if (border.empty()) {
+                                continue;
                             }
+
+                            ++border_dispatches;
+                            PPR_TEST_ASSERT(
+                                border.m_origin.x == 0 or
+                                border.m_origin.y == 0 or
+                                border.m_origin.x + border.m_extent.x == grid->m_backing.x or
+                                border.m_origin.y + border.m_extent.y == grid->m_backing.y);
+
+                            const u32 groups_x = (static_cast<u32>(border.m_extent.x) + 7u) / 8u;
+                            const u32 groups_y = (static_cast<u32>(border.m_extent.y) + 7u) / 8u;
+                            for (u32 id_y = 0u; id_y < groups_y * 8u; ++id_y) {
+                                for (u32 id_x = 0u; id_x < groups_x * 8u; ++id_x) {
+                                    if (id_x >= static_cast<u32>(border.m_extent.x) or
+                                        id_y >= static_cast<u32>(border.m_extent.y)) {
+                                        continue;
+                                    }
+
+                                    const int2 pixel{
+                                        border.m_origin.x + static_cast<i32>(id_x),
+                                        border.m_origin.y + static_cast<i32>(id_y)};
+                                    PPR_TEST_ASSERT(not region.contains(pixel));
+                                    write(pixel);
+                                }
+                            }
+                        }
+
+                        if (region.empty()) {
+                            PPR_TEST_ASSERT(border_dispatches == 1u);
+                            PPR_TEST_ASSERT(same(borders[0].m_origin, int2{0, 0}));
+                            PPR_TEST_ASSERT(same(borders[0].m_extent, grid->m_backing));
                         }
 
                         PPR_TEST_ASSERT(outside_writes == 0u);
@@ -1554,8 +1575,18 @@ namespace pP::tests::detail {
                                 }
                                 PPR_TEST_ASSERT(writes[offset] == 1u);
 
-                                // Containment must be the shader's half-open test:
-                                // the border kernel writes exactly the complement.
+                                // Every frame-edge pixel belongs to a border band.
+                                if (x == 0 or y == 0 or x == grid->m_backing.x - 1 or y == grid->m_backing.y - 1) {
+                                    PPR_TEST_ASSERT(not region.contains(pixel));
+                                    u32 border_owners = 0u;
+                                    for (const auto &border: borders) {
+                                        border_owners += border.contains(pixel) ? 1u : 0u;
+                                    }
+
+                                    PPR_TEST_ASSERT(border_owners == 1u);
+                                }
+
+                                // The border bands write exactly the complement.
                                 PPR_TEST_ASSERT(
                                     region.contains(pixel) == (x >= region.m_origin.x and
                                                                   y >= region.m_origin.y and
@@ -1651,6 +1682,13 @@ namespace pP::tests::detail {
                 PPR_TEST_ASSERT(region.m_origin.x == 0 and region.m_origin.y == 0);
                 PPR_TEST_ASSERT(region.m_extent.x == 0 and region.m_extent.y == 0);
                 PPR_TEST_ASSERT(region.empty());
+                const auto borders = ReconstructionPass::borderRegions(grid.m_backing, region);
+                PPR_TEST_ASSERT(same(borders[0].m_origin, int2{0, 0}));
+                PPR_TEST_ASSERT(same(borders[0].m_extent, grid.m_backing));
+                for (std::size_t index = 1u; index < borders.size(); ++index) {
+                    PPR_TEST_ASSERT(borders[index].empty());
+                }
+
                 for (i32 y = 0; y < grid.m_backing.y; ++y) {
                     for (i32 x = 0; x < grid.m_backing.x; ++x) {
                         PPR_TEST_ASSERT(not region.contains(int2{x, y}));

@@ -91,6 +91,14 @@ export namespace pP {
         /// prove it against the independent lattice derivation.
         [[nodiscard]] static InteriorRegion interiorRegion(const PresentationGrid &grid, float2 jitter) noexcept;
 
+        static constexpr u32 kBorderRegionCount = 4u;
+
+        /// Disjoint top/bottom/left/right complement of an interiorRegion result.
+        /// Empty bands are canonical empty rectangles; an empty interior returns
+        /// the full backing in the first slot and three empty slots.
+        [[nodiscard]] static std::array<InteriorRegion, kBorderRegionCount> borderRegions(
+            int2 backing, const InteriorRegion &interior) noexcept;
+
         [[nodiscard]] std::error_code initialize(
             IShaderService &shader_service, const std::filesystem::path &content_dir);
         [[nodiscard]] std::error_code shutdown();
@@ -230,7 +238,9 @@ export namespace pP {
         struct ResolveKernel {
             rhi::ComPtr<rhi::IShaderProgram> m_program{};
             rhi::ComPtr<rhi::IComputePipeline> m_pipeline{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, kFrameRingSlots> m_roots{};
+            // Allocated once at initialization: one interior or four border
+            // roots per fence-protected frame slot, never mutated after encoding.
+            std::vector<rhi::ComPtr<rhi::IShaderObject>> m_roots{};
         };
 
         [[nodiscard]] static std::error_code encodeDispatch_(

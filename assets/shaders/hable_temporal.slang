@@ -17,8 +17,8 @@
 //                                derivation with the nearest-valid fallback.
 //
 // ReconstructionPass computes the rectangle on the CPU from the actual phase,
-// dispatches it first, then dispatches the border over the whole backing; the
-// border entry returns early for pixels the interior entry owns.
+// dispatches it first, then dispatches up to four disjoint border bands. Top
+// and bottom own the corners; left and right span only the interior's height.
 
 struct ReconstructionParameters {
     float4x4 m_current_inverse_view_projection;
@@ -35,6 +35,8 @@ struct ReconstructionParameters {
     uint m_reserved0;
     int2 m_interior_origin;
     int2 m_interior_extent;
+    int2 m_border_origin;
+    int2 m_border_extent;
 };
 ConstantBuffer<ReconstructionParameters> g_reconstruction;
 
@@ -529,15 +531,10 @@ void reconstructTemporalInterior(uint3 id : SV_DispatchThreadID) {
 // B padding and all tiny extents. Unchanged generic lattice and fallback.
 [numthreads(8, 8, 1)]
 void reconstructTemporalBorder(uint3 id : SV_DispatchThreadID) {
-    if (any(id.xy >= uint2(g_reconstruction.m_backing_extent))) { return; }
+    if (any(id.xy >= uint2(g_reconstruction.m_border_extent))) { return; }
 
-    const int2 pixel = int2(id.xy);
-    const int2 interior_offset = pixel - g_reconstruction.m_interior_origin;
-    if (interior_offset.x >= 0 && interior_offset.y >= 0 &&
-        interior_offset.x < g_reconstruction.m_interior_extent.x &&
-        interior_offset.y < g_reconstruction.m_interior_extent.y) {
-        return;
-    }
+    // The CPU partition excludes the interior and assigns corners exactly once.
+    const int2 pixel = g_reconstruction.m_border_origin + int2(id.xy);
 
     float3 current;
     float3 minimum;

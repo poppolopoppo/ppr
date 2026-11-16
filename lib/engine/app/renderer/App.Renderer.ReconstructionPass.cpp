@@ -46,8 +46,10 @@ namespace pP {
             u32 m_reserved0{};
             int2 m_interior_origin{0, 0};
             int2 m_interior_extent{0, 0};
+            int2 m_border_origin{0, 0};
+            int2 m_border_extent{0, 0};
         };
-        static_assert(sizeof(ReconstructionParameters) == 208u);
+        static_assert(sizeof(ReconstructionParameters) == 224u);
         static_assert(alignof(ReconstructionParameters) == 16u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_resolved_extent) == 128u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_previous_window_extent) == 160u);
@@ -56,6 +58,8 @@ namespace pP {
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_history_valid) == 184u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_interior_origin) == 192u);
         static_assert(PPR_OFFSETOF(ReconstructionParameters, m_interior_extent) == 200u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_border_origin) == 208u);
+        static_assert(PPR_OFFSETOF(ReconstructionParameters, m_border_extent) == 216u);
 
         [[nodiscard]] rhi::SubresourceRange baseRange() noexcept {
             return {.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
@@ -130,7 +134,10 @@ namespace pP {
                 hasFieldOffset(layout, "m_history_valid", PPR_OFFSETOF(ReconstructionParameters, m_history_valid)) and
                 hasFieldOffset(
                     layout, "m_interior_origin", PPR_OFFSETOF(ReconstructionParameters, m_interior_origin)) and
-                hasFieldOffset(layout, "m_interior_extent", PPR_OFFSETOF(ReconstructionParameters, m_interior_extent));
+                hasFieldOffset(
+                    layout, "m_interior_extent", PPR_OFFSETOF(ReconstructionParameters, m_interior_extent)) and
+                hasFieldOffset(layout, "m_border_origin", PPR_OFFSETOF(ReconstructionParameters, m_border_origin)) and
+                hasFieldOffset(layout, "m_border_extent", PPR_OFFSETOF(ReconstructionParameters, m_border_extent));
 
             PPR_RETURN_ERROR_ON_FAIL(
                 Reconstruction, fields_match ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
@@ -300,6 +307,38 @@ namespace pP {
     }
 
     // ------------------------------------------------------------------
+    // border dispatch partition
+    // ------------------------------------------------------------------
+
+    std::array<ReconstructionPass::InteriorRegion, ReconstructionPass::kBorderRegionCount>
+    ReconstructionPass::borderRegions(const int2 backing, const InteriorRegion &interior) noexcept {
+        std::array<InteriorRegion, kBorderRegionCount> regions{};
+        if (interior.empty()) {
+            regions[0] = InteriorRegion{.m_origin = int2{0, 0}, .m_extent = backing};
+            return regions;
+        }
+
+        const int2 low = interior.m_origin;
+        const int2 high{low.x + interior.m_extent.x, low.y + interior.m_extent.y};
+
+        // Full-width top/bottom own the corners. Side bands only cover the
+        // interior's Y interval, so all four half-open rectangles are disjoint.
+        regions[0] = InteriorRegion{.m_origin = int2{0, 0}, .m_extent = int2{backing.x, low.y}};
+        regions[1] = InteriorRegion{.m_origin = int2{0, high.y}, .m_extent = int2{backing.x, backing.y - high.y}};
+        regions[2] = InteriorRegion{.m_origin = int2{0, low.y}, .m_extent = int2{low.x, interior.m_extent.y}};
+        regions[3] = InteriorRegion{
+            .m_origin = int2{high.x, low.y}, .m_extent = int2{backing.x - high.x, interior.m_extent.y}};
+
+        for (auto &region: regions) {
+            if (region.empty()) {
+                region = InteriorRegion{};
+            }
+        }
+
+        return regions;
+    }
+
+    // ------------------------------------------------------------------
     // initialization and teardown
     // ------------------------------------------------------------------
 
@@ -357,7 +396,7 @@ namespace pP {
         // gets its own program and pipeline so neither kernel inherits the
         // other's register allocation.
         const auto create_kernel = [&device, module = module.get()](
-                                       const char *const entry, const char *const label,
+                                       const char *const entry, const char *const label, const u32 regions,
                                        ResolveKernel &kernel) -> std::error_code {
             PPR_RETURN_ERROR_ON_FAIL(Reconstruction, createProgram(device, module, entry, kernel.m_program));
 
@@ -367,6 +406,7 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(
                 Reconstruction, device.createComputePipeline(pipeline, kernel.m_pipeline.writeRef()));
 
+            kernel.m_roots.resize(kFrameRingSlots * regions);
             for (auto &root: kernel.m_roots) {
                 PPR_RETURN_ERROR_ON_FAIL(
                     Reconstruction, device.createRootShaderObject(kernel.m_program, root.writeRef()));
@@ -376,9 +416,11 @@ namespace pP {
         };
 
         PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction, create_kernel("reconstructTemporalInterior", "Hable reconstruction interior", m_interior));
+            Reconstruction,
+            create_kernel("reconstructTemporalInterior", "Hable reconstruction interior", 1u, m_interior));
         PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction, create_kernel("reconstructTemporalBorder", "Hable reconstruction border", m_border));
+            Reconstruction,
+            create_kernel("reconstructTemporalBorder", "Hable reconstruction border", kBorderRegionCount, m_border));
         return {};
     }
 
@@ -650,9 +692,20 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(
             Reconstruction, configureResolveRoot(
                                 *m_interior.m_roots[pending.m_root], parameters, scene_view, previous_view, next_view));
-        PPR_RETURN_ERROR_ON_FAIL(
-            Reconstruction,
-            configureResolveRoot(*m_border.m_roots[pending.m_root], parameters, scene_view, previous_view, next_view));
+
+        const auto borders = borderRegions(pending.m_grid.m_backing, interior);
+        for (u32 index = 0u; index < borders.size(); ++index) {
+            if (borders[index].empty()) {
+                continue;
+            }
+
+            parameters.m_border_origin = borders[index].m_origin;
+            parameters.m_border_extent = borders[index].m_extent;
+            const u32 root = pending.m_root * kBorderRegionCount + index;
+            PPR_RETURN_ERROR_ON_FAIL(
+                Reconstruction,
+                configureResolveRoot(*m_border.m_roots[root], parameters, scene_view, previous_view, next_view));
+        }
 
         const rhi::SubresourceRange range = baseRange();
         context.m_encoder.setTextureState(scene, range, rhi::ResourceState::ShaderResource);
@@ -683,8 +736,15 @@ namespace pP {
             PPR_DEFER {
                 context.m_encoder.popDebugGroup();
             };
-            PPR_RETURN_ERROR_ON_FAIL(
-                Reconstruction, encodeDispatch_(m_border, pending.m_root, pending.m_grid.m_backing, context));
+            for (u32 index = 0u; index < borders.size(); ++index) {
+                if (borders[index].empty()) {
+                    continue;
+                }
+
+                const u32 root = pending.m_root * kBorderRegionCount + index;
+                PPR_RETURN_ERROR_ON_FAIL(
+                    Reconstruction, encodeDispatch_(m_border, root, borders[index].m_extent, context));
+            }
         }
 
         // Post-processing in the same stage-B submission reads the written
