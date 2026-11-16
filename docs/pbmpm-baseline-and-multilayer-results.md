@@ -746,3 +746,20 @@ Measured solid divergence: sand `F.c0x` 7.75e-6 at K2, 2.58e-4 at K10; sand `D.c
 **Replacement remains a hypothesis for B1**, alongside repair of a transcription defect or investigation of compiler differences. The deferred differential trace must distinguish these explanations; the current evidence does not select one.
 
 Gate note: after A1 the fast gate is green (24/24) but measured 551 s, with entries uniformly ~2× their exclusive reference (terrain 85→178 s, material 33→92 s) while another session held the GPU. The 420 s ceiling is therefore unchanged and unproven at this identity; an exclusive re-measurement is required before quoting it.
+
+## Final pre-merge acceptance (identity `3095e1bb`)
+
+Identity: HEAD `3095e1bbbaefe6a68121ae4da52e50e145a284a7`; shader set `4154830028c2a0a6`; `engine.tests.app` `212426a5e0f8ca6d`; `game.tests` `2acf41eee25c2955`. GPU 20 % before / 18 % after, clock 1245 → 1515 MHz (no competing compute).
+
+| Run | Result | Wall |
+|---|---|---:|
+| `matter_fast` #1 | 24/24 passed | 336 s |
+| `matter_fast` #2 | 24/24 passed | 333 s |
+| `matter_fast` #3 | 24/24 passed | 338 s |
+
+Three consecutive runs, all inside the 420 s ceiling, with the new conformance leaves, the sand-history characterization leaf and the corrected structural-only exemptions included. `matter_long` evidence is reused from `5355f3ee` (2/2, 2378 s) because no production source changed between that identity and this one — only tests, docs and the vendored tool.
+
+**Still open at merge time**
+
+- **Windows/D3D12 unrun.** Required by the plan as a compatibility gate; Linux evidence cannot satisfy it.
+- **Merge surface.** Three paths overlap with the current `particles` tip: `game/colony/codemap.md`, `lib/engine/app/renderer/App.Renderer.GridPass.cpp` and `.cppm`. Main has advanced past this branch's base with renderer ownership/reconstruction work, so integration and affected rendering tests are still required.
