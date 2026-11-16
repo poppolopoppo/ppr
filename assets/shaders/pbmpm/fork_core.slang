@@ -190,8 +190,9 @@ Particle constraint(Particle p
             // only integration may advance C/phi.
             float C = p.compaction;
             float phi = p.solidFraction;
-            if (!calibratedReturn(decomposition.Sigma, C, phi, p.logJp, coefficients, false)) {
-                recordError(8u, 0xffffffffu, 22u, row);
+            uint rejection = calibratedReturn(decomposition.Sigma, C, phi, p.logJp, coefficients, false);
+            if (rejection != 0u) {
+                rejectCalibrated(rejection, row, decomposition.Sigma, C, phi, p.logJp, coefficients, false);
                 return p;
             }
         }
@@ -236,11 +237,19 @@ static const float kMaxSandExponent = 88.0;
 // H is the legacy sand reservoir. New-family admission requires H=0 and
 // this return leaves it zero; C and phi are separate irreversible histories.
 // No stress mapping or dissipation claim is implied by these projections.
-bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
+// Flag-8 witness fields (22/23 also name the semantic C/phi words):
+// 22 C domain; 23 phi domain; 24 projected exponent domain (exp(projected));
+// 25 ellipse ratio/radicand; 26 cohesive cap D; 27 singular values; 28 legacy H;
+// 29 trial trace t; 30 trial deviatoric norm n; 31 friction denominator;
+// 32 input void fraction; 33 input porous cap D; 34 phi increment;
+// 35 strength phi; 36 updated void fraction; 37 updated porous cap D;
+// 38 cohesion c/shear edge; 39 projection divisor n. Zero means accepted.
+uint calibratedReturn(inout float2 sigma, inout float C, inout float phi,
                       float H, MaterialProperties a, bool updateHistory = true) {
-    if (!all(isfinite(sigma)) || any(sigma <= 0.0) || H != 0.0 ||
-        !isfinite(C) || C < 0.0 || !isfinite(phi) ||
-        phi < a.solidFraction0 || phi > 1.0-a.denseEpsilon) return false;
+    if (!all(isfinite(sigma)) || any(sigma <= 0.0)) return 27u;
+    if (H != 0.0) return 28u;
+    if (!isfinite(C) || C < 0.0) return 22u;
+    if (!isfinite(phi) || phi < a.solidFraction0 || phi > 1.0-a.denseEpsilon) return 23u;
 
     float2 e = log(sigma);
     float trial = e.x + e.y + H;
@@ -248,7 +257,9 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
     float n = length(dev);
     float sine = sin(a.frictionAngle / 180.0 * 3.14159);
     float denominator = 3.0-sine;
-    if (!isfinite(trial) || !isfinite(n) || !isfinite(denominator) || denominator <= 0.0) return false;
+    if (!isfinite(trial)) return 29u;
+    if (!isfinite(n)) return 30u;
+    if (!isfinite(denominator) || denominator <= 0.0) return 31u;
 
     float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
     float cohesion = a.cohesion;
@@ -260,7 +271,7 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
     bool dense = porous && phi >= 1.0-a.denseEpsilon;
     if (!porous) {
         cap += a.capHardening*C;
-        if (!isfinite(cap) || cap <= 0.0) return false;
+        if (!isfinite(cap) || cap <= 0.0) return 26u;
 
         returned = max(returned, -cap);
         if (updateHistory) nextC = max(C, -min(returned, 0.0));
@@ -268,15 +279,15 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
     } else {
         if (!dense) {
             float voidFraction = 1.0-phi;
-            if (!isfinite(voidFraction) || voidFraction <= 0.0) return false;
+            if (!isfinite(voidFraction) || voidFraction <= 0.0) return 32u;
 
             cap = a.cap/voidFraction;
-            if (!isfinite(cap) || cap <= 0.0) return false;
+            if (!isfinite(cap) || cap <= 0.0) return 33u;
 
             returned = max(returned, -cap);
             if (updateHistory) {
                 float increment = a.compactionRate*max(0.0, returned-trial);
-                if (!isfinite(increment)) return false;
+                if (!isfinite(increment)) return 34u;
 
                 nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
             }
@@ -284,44 +295,52 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
 
         dense = nextPhi >= 1.0-a.denseEpsilon;
         float strengthPhi = dense ? 1.0-a.denseEpsilon : nextPhi;
-        if (!isfinite(strengthPhi) || strengthPhi <= 0.0 || strengthPhi >= 1.0) return false;
+        if (!isfinite(strengthPhi) || strengthPhi <= 0.0 || strengthPhi >= 1.0) return 35u;
 
         // pow on a positive base <=1 with nonnegative finite exponent cannot overflow.
         cohesion *= pow(strengthPhi, a.solidExponent);
         if (!dense) {
             float voidFraction = 1.0-nextPhi;
-            if (!isfinite(voidFraction) || voidFraction <= 0.0) return false;
+            if (!isfinite(voidFraction) || voidFraction <= 0.0) return 36u;
 
             cap = a.cap/voidFraction;
-            if (!isfinite(cap) || cap <= 0.0) return false;
+            if (!isfinite(cap) || cap <= 0.0) return 37u;
         }
     }
 
     float edge = alpha*max(-returned, 0.0)+cohesion;
-    if (!isfinite(cohesion) || !isfinite(edge) || edge < 0.0) return false;
+    if (!isfinite(cohesion) || !isfinite(edge) || edge < 0.0) return 38u;
 
     if (porous && !dense && returned <= 0.0) {
         // The cap denominator is guarded above, before this division.
         float ratio = -returned/cap;
-        if (!isfinite(ratio) || ratio < 0.0 || ratio > 1.0) return false;
+        if (!isfinite(ratio)) return 25u;
 
-        edge *= sqrt(max(0.0, 1.0-ratio*ratio));
+        // Yield-surface membership belongs to the return, not admission.
+        // The axial cap has already projected returned; division can still
+        // round its boundary ratio above one. Project the ratio before squaring,
+        // equivalently to sqrt(max(0, 1-ratio*ratio)) for a finite nonnegative ratio.
+        float projectedRatio = min(ratio, 1.0);
+        float radicand = 1.0-projectedRatio*projectedRatio;
+        if (!isfinite(radicand) || radicand < 0.0) return 25u;
+
+        edge *= sqrt(radicand);
     }
 
     if (n > edge) {
-        if (!isfinite(n) || n <= 0.0) return false;
+        if (!isfinite(n) || n <= 0.0) return 39u;
 
         dev *= edge/n;
     }
 
     float2 projected = dev + returned*0.5;
     if (!all(isfinite(projected)) || any(projected < kMinSandExponent) ||
-        any(projected > kMaxSandExponent)) return false;
+        any(projected > kMaxSandExponent)) return 24u;
 
     sigma = exp(projected);
     C = nextC;
     phi = nextPhi;
-    return true;
+    return 0u;
 }
 #endif
 Particle integration(Particle p, uint row) {
@@ -344,9 +363,10 @@ Particle integration(Particle p, uint row) {
 #ifdef PBMPM_ENGINE_ADAPTERS
         calibrated = p.material == MaterialCohesive || p.material == MaterialCompacting;
         if (calibrated) {
-            if (!calibratedReturn(decomposition.Sigma, p.compaction, p.solidFraction, p.logJp, coefficients)) {
+            uint rejection = calibratedReturn(decomposition.Sigma, p.compaction, p.solidFraction, p.logJp, coefficients);
+            if (rejection != 0u) {
                 p.deformationGradient = stepGradient;
-                recordError(8u, 0xffffffffu, 22u, row);
+                rejectCalibrated(rejection, row, decomposition.Sigma, p.compaction, p.solidFraction, p.logJp, coefficients, true);
                 return p;
             }
         }

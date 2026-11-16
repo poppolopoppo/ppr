@@ -891,3 +891,25 @@ At that handoff the cohesive/compacting laws and pebble coefficients were still
 ahead. Increment 2 now authors those laws and the elastic diagnostic; execution
 and the recovery determination remain pending. The authoritative decisions and
 accepted risks are in `docs/pbmpm-material-laws-proposal.md`.
+
+## B1 increment 2 — measured behaviour (current revision)
+
+Run with `PPR_PBMPM_COST_DIAGNOSTIC=1`, K=5, gravity-loaded welded columns, real solver path (not only `F` comparisons).
+
+**Snow** (`compression` → `release` → `reload`), one continuous history:
+
+| Phase | step | layer_height | mean φ |
+|---|---:|---:|---:|
+| compression | 120 | 10.10 | 0.305 |
+| compression | 240 | 8.95 | 0.342 |
+| reload | 120 | 8.05 | 0.424 |
+| reload | 240 | 7.85 | 0.443 |
+| reload | 360 | 7.65 | 0.461 |
+
+Solid fraction rises monotonically, is never lost on release, and the column keeps compacting on reload — the intended compaction/strengthening direction. A defect surfaced here first: the ellipse **guard rejected yielding trials** (a legitimate state), which was fixed by projecting with a clamped ratio instead of rejecting; diagnostics now name the operand and print its value.
+
+**Clay vs granular control** (same scene, same load): clay settles to `layer_height` 6.54 while the granular control stays at 10.92. That is **consistent with the implemented law** — the cohesive surface admits larger strains before correction than sand's singular-value clamp — but it means the intuitive "clay holds shape better" is **not** what the current defaults produce. No retuning was applied without a gameplay target; the defaults are recorded as placeholders.
+
+**Elastic recovery**: the velocity-driven 1 % shear diagnostic runs and reports objective strain plus rigid-aligned positional RMS against the `1e-3` sustained-window criterion; rock/ore remain granular because recovery is not established.
+
+Remaining review items: a matched-history snow reload control (to separate hardening from settling), and honest wording that the recovery excitation is an initial-velocity kick rather than a maintained drive.

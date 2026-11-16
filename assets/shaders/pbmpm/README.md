@@ -44,6 +44,72 @@ tolerances. These are authored assertions, not an execution claim.
 
 ## Retained numerical profile
 
+### Calibrated-return rejection evidence
+
+The cohesive/compacting `calibratedReturn` distinguishes arithmetic admission
+from yield-surface projection. Flag 8 names the first rejected operand at both the
+constraint and integration call sites. Fields 22/23 coincide with the semantic
+record's C/phi words; 24–39 are derived-operand witness IDs in the existing u32
+field slot, not new particle fields:
+
+| Field | Rejected operand |
+|---|---|
+| 22 | Compaction C domain |
+| 23 | Solid fraction phi domain |
+| 24 | Projected exponent domain, before `exp(projected)` |
+| 25 | Ellipse ratio / cap radicand |
+| 26 | Cohesive cap depth D |
+| 27 | Singular values |
+| 28 | Legacy reservoir H (must be zero) |
+| 29 | Trial log-strain trace t |
+| 30 | Trial deviatoric norm n |
+| 31 | Friction denominator |
+| 32 | Input void fraction `1-phi` |
+| 33 | Input porous cap depth D |
+| 34 | Phi increment |
+| 35 | Strength phi |
+| 36 | Updated void fraction `1-nextPhi` |
+| 37 | Updated porous cap depth D |
+| 38 | Cohesion c / shear edge |
+| 39 | Projection divisor n |
+
+Field 25 rejects a nonfinite axial ratio or a negative/nonfinite square-root
+argument, not a finite ratio above one. The trace is cap-projected first; the
+ratio is then projected with `min(ratio,1)` before forming `1-ratio*ratio`.
+For a nonnegative finite ratio this implements the existing
+`sqrt(max(0,1-ratio*ratio))` edge without rejecting cap-boundary rounding or
+overflowing the square. Excess deviatoric norm still activates the radial return.
+No other guard tests yield-surface membership. C/phi/H guards retain the admitted
+history invariants; zero shear edge is valid because the return never divides by it.
+
+Set **`PPR_PBMPM_RETURN_DIAGNOSTIC=1` before creating solver storage** to
+extend the existing first-error channel from 6 to 31 u32 words (24 to 124 bytes).
+The first-error CAS winner alone captures values; other rejecting particles
+cannot overwrite its witness or payload. `solver.slang::captureCalibratedRejection`
+replays only that rejecting particle's arithmetic prefix through its identified
+guard. `GpuSolver::pollTick` emits the payload through the existing `MatterGpu`
+error logger as **"Calibrated return rejection field=... particle_row=..."**, before the ordinary
+candidate-rejected message. The payload includes singular values, t, trial dev,
+n, input phi/C, D/c, projected ellipse radicand, projected exponents, H, proposed
+phi/C, ratio, denominator, returned t, increment, shear edge, strength phi,
+void fraction and `update_history` (0 constraint, 1 integration).
+Unreached/not-applicable operands are NaN; projected exponents are deliberately
+not evaluated past an earlier rejected guard. Every captured value is included
+in the message text with nine significant digits as well as in structured fields;
+the ratio is the unprojected axial ratio. Replay is diagnostic FP32
+arithmetic, not a claim of bit-identical compiler register capture.
+
+With the switch off, allocation/readback remain six words. With either setting,
+accepted particles execute no capture, replay, buffer-size query, diagnostic
+stores or logging; accepted constitutive arithmetic is unchanged. The switch
+adds status clear/copy bytes when enabled, not per-particle accepted-path work.
+Arithmetic rejection still discards the candidate.
+
+The structural loaded-snow regression uses 600 compression substeps and snapshots
+every committed substep. Its rejection assertion reports `max_committed_phi`,
+including the phase's initial committed snapshot and all successful substeps
+before rejection; a successful phase reports `max_phi` as well.
+
 PPR uses liquid relaxation **1**, inherited from its K2 stability tuning, rather than the
 selected fork's default of1.5. The historical EA pin defaulted to2, which is the
 value the instability analysis below was computed at. The liquid equations

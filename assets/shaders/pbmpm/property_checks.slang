@@ -26,7 +26,7 @@ void inspectCalibratedReturns() {
     for (uint index = 0u; index < count; ++index) {
         Particle p = g_law_input[index];
         float2 sigma = float2(p.deformationGradient.c0x, p.deformationGradient.c1y);
-        bool accepted = calibratedReturn(sigma, p.compaction, p.solidFraction, p.logJp, g_properties[index]);
+        bool accepted = calibratedReturn(sigma, p.compaction, p.solidFraction, p.logJp, g_properties[index]) == 0u;
         p.deformationGradient = diagonal(sigma);
         p.enabled = accepted ? 1.0 : 0.0;
         g_law_output[index] = p;

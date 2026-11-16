@@ -9,7 +9,7 @@
 // ------------------------------------------------------------------
 // engine transaction error and contact adapters
 // ------------------------------------------------------------------
-void recordError(uint flag, uint node, uint field, uint particle, uint body) {
+bool recordError(uint flag, uint node, uint field, uint particle, uint body) {
     InterlockedOr(g_errors[0], flag);
     uint previous;
     InterlockedCompareExchange(g_errors[1], 0u, 1u, previous);
@@ -19,10 +19,154 @@ void recordError(uint flag, uint node, uint field, uint particle, uint body) {
         g_errors[4] = particle;
         g_errors[5] = body;
     }
+
+    return previous == 0u;
 }
 
 void recordError(uint flag, uint node, uint field, uint particle) {
     recordError(flag, node, field, particle, 0xffffffffu);
+}
+
+// ------------------------------------------------------------------
+// opt-in first-rejection operand evidence
+// ------------------------------------------------------------------
+
+// PPR_PBMPM_RETURN_DIAGNOSTIC=1 provisions 31 words instead of six. Only
+// the first-error claimant reaches this replay; accepted particles never call it.
+// Replay the unchanged arithmetic prefix, stopping at the identified guard.
+// NaN means not reached/not applicable, not an invented downstream operand.
+// Payload after marker word 6: sigma.xy,t,dev.xy,n,phi,C,D,c,radicand,
+// projected.xy,H,nextPhi,nextC,ratio,denominator,returned,increment,edge,
+// strengthPhi,voidFraction,updateHistory. Floats use asuint, not conversion.
+void captureCalibratedRejection(uint field, float2 sigma, float C, float phi,
+                                float H, MaterialProperties a, bool updateHistory) {
+    uint words, stride;
+    g_errors.GetDimensions(words, stride);
+    if (words < 31u) return;
+
+    for (uint i = 7u; i < 31u; ++i) g_errors[i] = 0x7fc00000u;
+    g_errors[6] = 1u;
+    g_errors[7] = asuint(sigma.x);
+    g_errors[8] = asuint(sigma.y);
+    g_errors[13] = asuint(phi);
+    g_errors[14] = asuint(C);
+    g_errors[20] = asuint(H);
+    g_errors[30] = asuint(updateHistory ? 1.0 : 0.0);
+    if (field == 27u || field == 28u || field == 22u || field == 23u) return;
+
+    float2 e = log(sigma);
+    float trial = e.x + e.y + H;
+    float2 dev = e - trial*0.5;
+    float n = length(dev);
+    float sine = sin(a.frictionAngle / 180.0 * 3.14159);
+    float denominator = 3.0-sine;
+    g_errors[9] = asuint(trial);
+    g_errors[10] = asuint(dev.x);
+    g_errors[11] = asuint(dev.y);
+    g_errors[12] = asuint(n);
+    g_errors[24] = asuint(denominator);
+    if (field == 29u || field == 30u || field == 31u) return;
+
+    float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
+    float cohesion = a.cohesion;
+    float cap = a.cap;
+    float nextC = C;
+    float nextPhi = phi;
+    float returned = min(trial, a.tension);
+    bool porous = a.family == uint(MaterialCompacting);
+    bool dense = porous && phi >= 1.0-a.denseEpsilon;
+    g_errors[15] = asuint(cap);
+    g_errors[16] = asuint(cohesion);
+    g_errors[21] = asuint(nextPhi);
+    g_errors[22] = asuint(nextC);
+    g_errors[25] = asuint(returned);
+    if (!porous) {
+        cap += a.capHardening*C;
+        g_errors[15] = asuint(cap);
+        if (field == 26u) return;
+
+        returned = max(returned, -cap);
+        if (updateHistory) nextC = max(C, -min(returned, 0.0));
+        cohesion += a.cohesionHardening*nextC;
+    } else {
+        if (!dense) {
+            float voidFraction = 1.0-phi;
+            g_errors[29] = asuint(voidFraction);
+            if (field == 32u) return;
+
+            cap = a.cap/voidFraction;
+            g_errors[15] = asuint(cap);
+            if (field == 33u) return;
+
+            returned = max(returned, -cap);
+            g_errors[25] = asuint(returned);
+            if (updateHistory) {
+                float increment = a.compactionRate*max(0.0, returned-trial);
+                g_errors[26] = asuint(increment);
+                if (field == 34u) return;
+
+                nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
+            }
+        }
+
+        dense = nextPhi >= 1.0-a.denseEpsilon;
+        float strengthPhi = dense ? 1.0-a.denseEpsilon : nextPhi;
+        g_errors[21] = asuint(nextPhi);
+        g_errors[28] = asuint(strengthPhi);
+        if (field == 35u) return;
+
+        cohesion *= pow(strengthPhi, a.solidExponent);
+        g_errors[16] = asuint(cohesion);
+        if (!dense) {
+            float voidFraction = 1.0-nextPhi;
+            g_errors[29] = asuint(voidFraction);
+            if (field == 36u) return;
+
+            cap = a.cap/voidFraction;
+            g_errors[15] = asuint(cap);
+            if (field == 37u) return;
+        }
+    }
+
+    float edge = alpha*max(-returned, 0.0)+cohesion;
+    g_errors[15] = asuint(cap);
+    g_errors[16] = asuint(cohesion);
+    g_errors[21] = asuint(nextPhi);
+    g_errors[22] = asuint(nextC);
+    g_errors[25] = asuint(returned);
+    g_errors[27] = asuint(edge);
+    if (field == 38u) return;
+
+    if (porous && !dense && returned <= 0.0) {
+        float ratio = -returned/cap;
+        g_errors[23] = asuint(ratio);
+        if (!isfinite(ratio)) return;
+
+        float projectedRatio = min(ratio, 1.0);
+        float radicand = 1.0-projectedRatio*projectedRatio;
+        g_errors[17] = asuint(radicand);
+        if (field == 25u) return;
+
+        edge *= sqrt(radicand);
+        g_errors[27] = asuint(edge);
+    }
+
+    if (n > edge) {
+        if (field == 39u) return;
+
+        dev *= edge/n;
+    }
+
+    float2 projected = dev + returned*0.5;
+    g_errors[18] = asuint(projected.x);
+    g_errors[19] = asuint(projected.y);
+}
+
+void rejectCalibrated(uint field, uint row, float2 sigma, float C, float phi,
+                      float H, MaterialProperties a, bool updateHistory) {
+    if (recordError(8u, 0xffffffffu, field, row, 0xffffffffu)) {
+        captureCalibratedRejection(field, sigma, C, phi, H, a, updateHistory);
+    }
 }
 
 void fail(uint flag, uint row, uint field) {

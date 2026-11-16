@@ -5688,7 +5688,7 @@ namespace pP::tests::detail::MatterGpu {
     // loaded calibrated-material geometry diagnostics
     // ------------------------------------------------------------------
 
-    PPR_UNIT_TEST (calibrated_loaded_clay_and_snow_diagnostic) {
+    void runCalibratedLoadedScene(const bool diagnostic) {
         Fixture fixture;
         PPR_DEFER {
             fixture.shutdown();
@@ -5744,21 +5744,72 @@ namespace pP::tests::detail::MatterGpu {
             // if a few grains become geometric outliers during collapse.
             return std::array<double, 4u>{top - bottom, max_x - min_x, top - 12.0, phi};
         };
-        const auto advance = [&](const char *scene, const char *phase) {
+        const auto advance = [&](const char *scene, const char *phase, const GpuMaterialProperties &property,
+                                 const bool sustained_compression = false) {
             Array<GpuParticle> state;
-            for (u32 step = 1u; step <= 480u; ++step) {
-                fixture.finishOneSubstep(kDefaultIterations);
+            const bool snow = property.m_family == ESourceMaterial::compacting;
+            const u32 steps = sustained_compression or (diagnostic and snow) ? 600u : (diagnostic ? 480u : 4u);
+            const u32 snapshot_interval = diagnostic ? 120u : steps;
+            auto previous = snow ? fixture.snapshot() : Array<GpuParticle>{};
+            float max_phi = property.m_solid_fraction0;
+            for (const auto &particle: previous)
+                max_phi = std::max(max_phi, particle.m_solid_fraction);
+
+            for (u32 step = 1u; step <= steps; ++step) {
+                PPR_TEST_ASSERT(not fixture.m_solver.busy());
+                PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(
+                    fixture.m_solver.accounting().m_epoch, 1u, kDefaultIterations));
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+                const auto complete = fixture.m_solver.pollTick();
+                if (not complete or not *complete) {
+                    const auto &failure = fixture.m_solver.failure();
+                    // Use the assertion hook directly: PPR_TEST_ASSERT has no
+                    // message argument. This text survives harness excerpts.
+                    onTestAssertionFailure(
+                        std::format(
+                            "complete and *complete: scene={} phase={} step={} flags={} claimed={} node={} field={} "
+                            "particle_row={} property_table_rows=1 max_committed_phi={} cause={}",
+                            scene, phase, step, failure.m_flags, failure.m_claimed, failure.m_node, failure.m_field,
+                            failure.m_particle, max_phi, failure.m_cause.message())
+                            .c_str(),
+                        std::source_location::current());
+                }
+
                 fixture.m_solver.publishTick();
-                if (step % 120u != 0u)
+                if (not snow and step % snapshot_interval != 0u)
                     continue;
 
                 state = fixture.snapshot();
                 PPR_TEST_ASSERT(state.size() == 48u);
+                if (snow) {
+                    PPR_TEST_ASSERT(previous.size() == state.size());
+                    for (std::size_t row = 0u; row < state.size(); ++row) {
+                        const auto &particle = state[row];
+                        PPR_TEST_ASSERT(validMaterialState(particle, property));
+                        PPR_TEST_ASSERT(particle.m_solid_fraction >= previous[row].m_solid_fraction);
+                        PPR_TEST_ASSERT(particle.m_solid_fraction <= 1.0f - property.m_dense_epsilon);
+                        PPR_TEST_ASSERT(particle.m_compaction == previous[row].m_compaction);
+
+                        max_phi = std::max(max_phi, particle.m_solid_fraction);
+                    }
+
+                    previous = state;
+                }
+
                 const auto g = geometry(state);
+                if (not diagnostic or step % snapshot_interval != 0u)
+                    continue;
+
                 std::printf(
                     "B1 loaded scene=%s phase=%s step=%u layer_height=%.9g width=%.9g top_above_floor=%.9g mean_phi=%.9g\n",
                     scene, phase, step, g[0u], g[1u], g[2u], g[3u]);
             }
+
+            if (snow)
+                std::printf(
+                    "B1 snow admissibility phase=%s substeps=%u max_phi=%.9g upper_phi=%.9g\n", phase, steps,
+                    static_cast<double>(max_phi), static_cast<double>(1.0f - property.m_dense_epsilon));
 
             return state;
         };
@@ -5767,23 +5818,24 @@ namespace pP::tests::detail::MatterGpu {
         property.m_substance_id = 1u;
         property.m_family = ESourceMaterial::cohesive;
         upload(patch(property.m_family), property);
-        const auto clay = geometry(advance("clay", "gravity_column"));
+        const auto clay = geometry(advance("clay", "gravity_column", property));
 
         // Same default coefficients, mass, spacing, support and schedule;
         // only the constitutive family changes for the granular control.
         property.m_family = ESourceMaterial::sand;
         upload(patch(property.m_family), property);
-        const auto sand = geometry(advance("granular_control", "gravity_column"));
-        std::printf(
-            "B1 loaded clay_vs_sand height_delta=%.9g width_delta=%.9g support_height_delta=%.9g verdict=%s\n",
-            clay[0u] - sand[0u], clay[1u] - sand[1u], clay[2u] - sand[2u],
-            clay[0u] > sand[0u] and clay[1u] < sand[1u] ? "greater_column_retention" : "not_established");
+        const auto sand = geometry(advance("granular_control", "gravity_column", property));
+        if (diagnostic)
+            std::printf(
+                "B1 loaded clay_vs_sand height_delta=%.9g width_delta=%.9g support_height_delta=%.9g verdict=%s\n",
+                clay[0u] - sand[0u], clay[1u] - sand[1u], clay[2u] - sand[2u],
+                clay[0u] > sand[0u] and clay[1u] < sand[1u] ? "greater_column_retention" : "not_established");
 
         property.m_family = ESourceMaterial::compacting;
         const auto fresh = patch(property.m_family);
         upload(fresh, property);
         const auto initial = geometry(fresh);
-        auto state = advance("snow", "compression");
+        auto state = advance("snow", "compression", property, true);
         const auto compressed = geometry(state);
 
         // Gravity is immutable in the public profile. Restart only the GPU
@@ -5805,24 +5857,44 @@ namespace pP::tests::detail::MatterGpu {
         };
 
         set_gravity(0.0f);
-        state = advance("snow", "release");
+        state = advance("snow", "release", property);
         const auto released = geometry(state);
         set_gravity(gravity);
-        state = advance("snow", "reload");
+        state = advance("snow", "reload", property);
         const auto reloaded = geometry(state);
 
-        // Equal gravity and one-second load windows: normalized extra axial
+        // Equal gravity and diagnostic load windows: normalized extra axial
         // shortening is a structural compliance proxy, not a stress modulus.
         const double first_shortening = (initial[0u] - compressed[0u]) / initial[0u];
         const double reload_shortening = (released[0u] - reloaded[0u]) / initial[0u];
         const bool retained = compressed[3u] > initial[3u] and released[3u] >= compressed[3u];
         const bool resistant = first_shortening > 0.0 and reload_shortening < first_shortening;
-        std::printf(
-            "B1 loaded snow initial_phi=%.9g compressed_phi=%.9g released_phi=%.9g reloaded_phi=%.9g retained_height_loss=%.9g first_shortening=%.9g reload_shortening=%.9g retained_compaction=%s increased_structural_resistance=%s\n",
-            initial[3u], compressed[3u], released[3u], reloaded[3u], (initial[0u] - released[0u]) / initial[0u],
-            first_shortening, reload_shortening, retained ? "observed" : "not_established",
-            retained and resistant ? "observed" : "not_established");
+        if (diagnostic)
+            std::printf(
+                "B1 loaded snow initial_phi=%.9g compressed_phi=%.9g released_phi=%.9g reloaded_phi=%.9g retained_height_loss=%.9g first_shortening=%.9g reload_shortening=%.9g retained_compaction=%s increased_structural_resistance=%s\n",
+                initial[3u], compressed[3u], released[3u], reloaded[3u], (initial[0u] - released[0u]) / initial[0u],
+                first_shortening, reload_shortening, retained ? "observed" : "not_established",
+                retained and resistant ? "observed" : "not_established");
         // Uncalibrated material outcomes are reported, never assumed as gates.
+    }
+
+    PPR_UNIT_TEST (calibrated_loaded_clay_and_snow_complete_with_finite_state) {
+        // Same geometry, rows, K5 and restart path as the report-only diagnostic;
+        // 600 compression substeps assert each snow row's admissibility and
+        // monotone phi; other phases retain four substeps. Report maximum phi.
+        runCalibratedLoadedScene(false);
+    };
+
+    PPR_UNIT_TEST (calibrated_loaded_clay_and_snow_diagnostic) {
+        const char *const setting = std::getenv("PPR_PBMPM_COST_DIAGNOSTIC");
+        const std::string_view enabled = setting != nullptr ? setting : "0";
+        PPR_TEST_ASSERT(enabled == "0" or enabled == "1");
+        if (enabled != "1") {
+            _.log("CALIBRATED-LOADED skipped: set PPR_PBMPM_COST_DIAGNOSTIC=1");
+            return;
+        }
+
+        runCalibratedLoadedScene(true);
     };
 
     // ------------------------------------------------------------------
@@ -8478,6 +8550,7 @@ namespace pP::tests {
                 detail::MatterGpu::calibrated_caps_hardening_and_two_regime_edges,
                 detail::MatterGpu::calibrated_admission_and_clay_sand_divergence,
                 detail::MatterGpu::calibrated_loaded_clay_and_snow_diagnostic,
+                detail::MatterGpu::calibrated_loaded_clay_and_snow_complete_with_finite_state,
                 detail::MatterGpu::elastic_one_percent_shear_release_diagnostic,
                 detail::MatterGpu::same_family_substances_differ_and_unused_rows_do_not_dispatch,
                 detail::MatterGpu::device_property_guard_reports_out_of_range_and_family_mismatch,

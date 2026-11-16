@@ -1101,8 +1101,11 @@ namespace pP::matter {
 
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, createBuffer(
-                           *state.m_device, replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes, 0u,
-                           nullptr, "PBMPM tick readback", replacement.m_readback, true));
+                           *state.m_device,
+                           replacement.m_hot_bytes +
+                               replacement.m_cold_bytes +
+                               replacement.m_sparse.buffers().m_errors->getDesc().size,
+                           0u, nullptr, "PBMPM tick readback", replacement.m_readback, true));
 
         const u64 row_bytes = sizeof(ParticleWrite) + sizeof(ParticleReadonly);
         state.m_accounting.m_last_particle_upload_bytes = particles.size() * row_bytes;
@@ -1503,7 +1506,7 @@ namespace pP::matter {
                     encoder->setBufferState(state.m_particles.m_readback, rhi::ResourceState::CopyDestination);
                     encoder->copyBuffer(
                         state.m_particles.m_readback, 0u, state.m_particles.m_sparse.buffers().m_errors, 0u,
-                        kErrorBytes);
+                        state.m_particles.m_sparse.buffers().m_errors->getDesc().size);
                     if (timing)
                         timing->mark(*encoder);
                 }
@@ -1634,6 +1637,12 @@ namespace pP::matter {
         state.m_readback_mapped = true;
         std::array<u32, 6u> errors{};
         std::memcpy(errors.data(), mapped, kErrorBytes);
+        const u64 error_bytes = state.m_particles.m_sparse.buffers().m_errors->getDesc().size;
+        std::array<u32, 25u> operands;
+        const bool capture = error_bytes == kErrorBytes + sizeof(operands) and not state.m_injected_verdict;
+        if (capture)
+            std::memcpy(operands.data(), static_cast<const std::byte *>(mapped) + kErrorBytes, sizeof(operands));
+
         if (state.m_injected_verdict)
             errors = *state.m_injected_verdict;
 
@@ -1643,7 +1652,7 @@ namespace pP::matter {
         }
 
         state.m_readback_mapped = false;
-        state.m_accounting.m_last_readback_bytes = kErrorBytes;
+        state.m_accounting.m_last_readback_bytes = error_bytes;
         state.m_failure.m_flags = errors[0];
         state.m_failure.m_claimed = errors[1];
         if (errors[1] != 0u) {
@@ -1669,6 +1678,32 @@ namespace pP::matter {
                 return GpuTickOutcome{EGpuTickVerdict::rejected_terrain_position};
 
             state.m_failure.m_cause = std::make_error_code(std::errc::result_out_of_range);
+
+            if (capture and operands[0u] == 1u) {
+                const auto value = [&](const std::size_t index) { return std::bit_cast<float>(operands[1u + index]); };
+
+                PPR_LOG_RAW(
+                    MatterGpu, error,
+                    std::format(
+                        "Calibrated return rejection field={} particle_row={} sigma=({:.9g},{:.9g}) "
+                        "t={:.9g} dev=({:.9g},{:.9g}) n={:.9g} phi={:.9g} C={:.9g} D={:.9g} c={:.9g} "
+                        "ellipse_radicand={:.9g} projected=({:.9g},{:.9g}) H={:.9g} next_phi={:.9g} next_C={:.9g} "
+                        "ellipse_ratio={:.9g} friction_denominator={:.9g} returned_t={:.9g} phi_increment={:.9g} "
+                        "shear_edge={:.9g} strength_phi={:.9g} void_fraction={:.9g} update_history={:.9g} "
+                        "(unreached operands are NaN)",
+                        errors[3], errors[4], value(0u), value(1u), value(2u), value(3u), value(4u), value(5u),
+                        value(6u), value(7u), value(8u), value(9u), value(10u), value(11u), value(12u), value(13u),
+                        value(14u), value(15u), value(16u), value(17u), value(18u), value(19u), value(20u), value(21u),
+                        value(22u), value(23u)),
+                    {{"field", errors[3]}, {"particle_row", errors[4]}, {"sigma_x", value(0u)}, {"sigma_y", value(1u)},
+                        {"t", value(2u)}, {"dev_x", value(3u)}, {"dev_y", value(4u)}, {"n", value(5u)},
+                        {"phi", value(6u)}, {"C", value(7u)}, {"D", value(8u)}, {"c", value(9u)},
+                        {"ellipse_radicand", value(10u)}, {"projected_x", value(11u)}, {"projected_y", value(12u)},
+                        {"H", value(13u)}, {"next_phi", value(14u)}, {"next_C", value(15u)},
+                        {"ellipse_ratio", value(16u)}, {"friction_denominator", value(17u)}, {"returned_t", value(18u)},
+                        {"phi_increment", value(19u)}, {"shear_edge", value(20u)}, {"strength_phi", value(21u)},
+                        {"void_fraction", value(22u)}, {"update_history", value(23u)}});
+            }
 
             PPR_LOG(
                 MatterGpu, error, "GPU tick candidate rejected",
@@ -1878,7 +1913,7 @@ namespace pP::matter {
         result.m_device_bytes += particles.m_properties ? particles.m_properties->getDesc().size : 0u;
         result.m_device_bytes += particles.m_sparse.capacity().m_lookup_bytes +
                                  particles.m_sparse.capacity().m_dynamic_bytes;
-        result.m_readback_capacity_bytes = particles.m_hot_bytes + particles.m_cold_bytes + kErrorBytes;
+        result.m_readback_capacity_bytes = particles.m_readback ? particles.m_readback->getDesc().size : kErrorBytes;
         if (particles.m_terrain_masks)
             result.m_device_bytes += particles.m_terrain_masks->getDesc().size;
 
@@ -1895,7 +1930,7 @@ namespace pP::matter {
                 result.m_device_bytes += replacement.m_shapes->getDesc().size;
             }
 
-            result.m_readback_capacity_bytes += replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes;
+            result.m_readback_capacity_bytes += replacement.m_readback->getDesc().size;
             if (replacement.m_terrain_masks and replacement.m_terrain_masks != particles.m_terrain_masks)
                 result.m_device_bytes += replacement.m_terrain_masks->getDesc().size;
 

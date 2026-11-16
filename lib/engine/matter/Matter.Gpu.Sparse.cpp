@@ -267,7 +267,16 @@ namespace pP::matter {
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparseBuffer(device, 4u, 4u, "PBMPM sparse counters", buffers.m_counters));
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, sparseBuffer(device, 12u, 4u, "PBMPM sparse arguments", buffers.m_arguments, true));
-        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparseBuffer(device, 6u, 4u, "PBMPM sparse first error", buffers.m_errors));
+
+        const char *const diagnostic = std::getenv("PPR_PBMPM_RETURN_DIAGNOSTIC");
+        const u32 error_words = diagnostic and std::string_view{diagnostic} == "1" ? 31u : 6u;
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, error_words * sizeof(u32) <= device.getInfo().limits.maxBufferSize
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::value_too_large));
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, sparseBuffer(device, error_words, 4u, "PBMPM sparse first error", buffers.m_errors));
+        state->m_capacity.m_dynamic_bytes += (error_words - 6u) * sizeof(u32);
 
         for (u32 index = 0u; index < 2u; ++index) {
             PPR_RETURN_ERROR_ON_FAIL(

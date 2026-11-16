@@ -161,7 +161,8 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
 # leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
-# resident + 3 schedule + 3 substance table + 3 B1 laws + 1 cost + 1 correctness + 1 precision = 55
+# resident + 3 schedule + 3 substance table + 3 B1 laws + 1 cost + 1 correctness + 1 precision
+# + 1 loaded diagnostic + 1 elastic diagnostic = 57
 # `app/matter_gpu` leaves, and the resident list also holds one
 # `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
 # their own entries outside `matter_fast`, below. The two whole-grid terrain
@@ -193,7 +194,7 @@ set(ppr_matter_constitutive_filter "app/matter_gpu/constitutive_invalid_operands
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_calibrated_laws_gpu
-    FILTER "app/matter_gpu/calibrated_caps_hardening_and_two_regime_edges,app/matter_gpu/calibrated_admission_and_clay_sand_divergence"
+    FILTER "app/matter_gpu/calibrated_caps_hardening_and_two_regime_edges,app/matter_gpu/calibrated_admission_and_clay_sand_divergence,app/matter_gpu/calibrated_loaded_clay_and_snow_complete_with_finite_state"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
@@ -208,12 +209,14 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation matter_long
 )
 
+# Report-only outcomes use the same PPR_PBMPM_COST_DIAGNOSTIC opt-in as
+# cost/correctness evidence. The short structural counterpart is in matter_fast.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_calibrated_loaded_diagnostic
     FILTER "app/matter_gpu/calibrated_loaded_clay_and_snow_diagnostic"
     RESOURCE_LOCK gpu
     TIMEOUT 600
-    LABELS unit engine app gpu_validation matter_long
+    LABELS unit engine app gpu_validation
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
