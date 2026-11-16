@@ -1517,8 +1517,16 @@ namespace pP::tests::detail::WorldLightingProjection {
         };
 
         for (const auto &[name, expected]: std::array<std::pair<const char *, u32>, 9u>{{
-                 {"g_numerical", 64u},
+                 // NumericalRow / matter::ParticleWrite: position + displacement (4 floats), F + D (8),
+                 // liquidDensity + logJp + lambda + enabled (4), compaction + solidFraction (2): 18 * 4 = 72.
+                 // Scalar matrix fields keep alignment at 4 bytes, without trailing vector padding.
+                 {"g_numerical", 72u},
+                 // MetadataRow / GridParticleMetadataRow: ID low/high, source row, material/temperature,
+                 // gas X/Y, radius, physical-fill bits: eight 4-byte scalar words, unchanged by B1.
                  {"g_metadata", 32u},
+                 // TerrainVisual / GridTerrainVisual: material, rgba, texture index/period, roundness,
+                 // filteredMean[3], normal index, metallic/roughness/opacity, emissive[3]/strength,
+                 // ior, normal scale, refraction depth, surface flags, transport model, sigma[3]: 24 * 4.
                  {"g_visuals", 96u},
                  {"g_terrain", 4u},
                  {"g_best_key", 4u},

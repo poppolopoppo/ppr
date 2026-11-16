@@ -4160,7 +4160,9 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             struct Cold {
                 std::array<float, 7u> fields{};
             };
-            static_assert(sizeof(Hot) == 72u and sizeof(Cold) == 28u);
+            // Numerical: 18 scalar words * 4 = 72 bytes. Read-only: six floats
+            // plus the property-row word * 4 = 28 bytes (not the pre-B1 24).
+            static_assert(sizeof(Hot) == kGridParticleNumericalStride and sizeof(Cold) == kGridParticleReadonlyStride);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
             // The restored liquid disk's support is R = 2.0 r, where the retired
@@ -4180,6 +4182,58 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             auto live = std::make_shared<std::atomic<u64>>(0u);
             u64 epoch = 0u;
             GridParticleGpuView selected;
+
+            const auto apply_view = [&](const GridParticleGpuView &view) {
+                const auto error = grid.applyGpuParticleView(view);
+                if (not error) {
+                    return error;
+                }
+
+                const auto numerical = view.m_numerical ? view.m_numerical->getDesc() : rhi::BufferDesc{};
+                const auto readonly = view.m_readonly ? view.m_readonly->getDesc() : rhi::BufferDesc{};
+                const auto count = view.m_metadata ? view.m_metadata->m_count : 0u;
+                const auto moving = view.m_metadata ? view.m_metadata->m_moving_count : 0u;
+                _.log(
+                    std::format(
+                        "PARTICLE_VIEW_REJECTED error={} layout={} numerical_stride={} readonly_stride={} origin={} "
+                        "metadata_present={} rows_present={} count={} moving_count={} numerical_present={} "
+                        "numerical_buffer_size={} numerical_buffer_stride={} readonly_present={} "
+                        "readonly_buffer_size={} readonly_buffer_stride={} cell_metres={}",
+                        error.message(), view.m_layout, view.m_stride, view.m_readonly_stride, view.m_origin,
+                        bool(view.m_metadata), view.m_metadata and bool(view.m_metadata->m_rows), count, moving,
+                        bool(view.m_numerical), numerical.size, numerical.elementSize, bool(view.m_readonly),
+                        readonly.size, readonly.elementSize, view.m_metadata ? view.m_metadata->m_cell_metres : 0.0));
+
+                const auto check = [&](const bool valid, const std::string_view term) {
+                    if (not valid) {
+                        _.log(std::format("PARTICLE_VIEW_FAILED_TERM {}", term));
+                    }
+                };
+
+                check(grid.gpuParticleFrameCurrent(view), "frame identity");
+                check(bool(view.m_metadata), "metadata present");
+                check(bool(view.m_numerical), "numerical buffer present");
+                check(bool(view.m_readonly), "readonly buffer present");
+                check(view.m_layout == kGridParticleNumericalLayout, "layout == 5");
+                check(view.m_stride == kGridParticleNumericalStride, "numerical stride == 72");
+                check(view.m_readonly_stride == kGridParticleReadonlyStride, "readonly stride == 28");
+                check(view.m_origin == 3.0, "origin == 3");
+                check(count <= kGridParticleCapacity, "count <= capacity");
+                check(view.m_metadata and bool(view.m_metadata->m_rows), "metadata rows present");
+                check(numerical.elementSize == kGridParticleNumericalStride, "numerical descriptor stride == 72");
+                check(
+                    numerical.size >= std::max<u64>(1u, moving) * kGridParticleNumericalStride,
+                    "numerical descriptor size >= max(1, moving_count) * 72");
+                check(readonly.elementSize == kGridParticleReadonlyStride, "readonly descriptor stride == 28");
+                check(
+                    readonly.size >= std::max<u64>(1u, moving) * kGridParticleReadonlyStride,
+                    "readonly descriptor size >= max(1, moving_count) * 28");
+                check(
+                    view.m_metadata and
+                        view.m_metadata->m_cell_metres == (stage.m_cell_size_m == 1.0f ? 1.0 : 1.0 / 3.0),
+                    "metadata cell metres == fixture cell metres");
+                return error;
+            };
 
             const auto buffer = [&](const u64 stride, const u32 count, const void *data) {
                 rhi::BufferDesc desc{};
@@ -4212,7 +4266,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 selected.m_device_epoch = epoch;
                 selected.m_publication = epoch;
                 live->store(epoch, std::memory_order_release);
-                PPR_TEST_ASSERT(not grid.applyGpuParticleView(selected));
+                PPR_TEST_ASSERT(not apply_view(selected));
             };
 
             publish(0u);
@@ -4320,15 +4374,36 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not make_error_code(device.readBuffer(culled[1u], 0u, sizeof(args), &args)));
             PPR_TEST_ASSERT(args.instanceCount == 0u);
             PPR_TEST_ASSERT(grid.observations().m_particle_uploads == before.m_particle_uploads);
+
             auto invalid = selected;
+            // ReadonlyRow / ParticleReadonly is six floats plus propertyRow: 7 * 4 = 28 bytes.
+            // 64 is still explicitly invalid; admission must reject it rather than hold the publication.
             invalid.m_readonly_stride = 64u;
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(invalid) == std::errc::invalid_argument);
+            const auto invalid_stride_error = apply_view(invalid);
+            _.log(
+                std::format(
+                    "PARTICLE_INVALID_VIEW error={}:{} message={} numerical_stride={} readonly_stride={} "
+                    "numerical_buffer_stride={} readonly_buffer_stride={}",
+                    invalid_stride_error.category().name(), invalid_stride_error.value(),
+                    invalid_stride_error.message(), invalid.m_stride, invalid.m_readonly_stride,
+                    invalid.m_numerical->getDesc().elementSize, invalid.m_readonly->getDesc().elementSize));
+            PPR_TEST_ASSERT(invalid_stride_error == std::errc::invalid_argument);
+
             invalid = selected;
             invalid.m_readonly.setNull();
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(invalid) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(apply_view(invalid) == std::errc::invalid_argument);
+
+            const auto uploads_before_hold = grid.observations().m_particle_uploads;
+            const auto packs_before_hold = grid.particlePackEncodesForTest();
+            const auto packed_epoch_before_hold = grid.particlePackedEpochForTest();
             live->fetch_add(1u, std::memory_order_release);
             PPR_TEST_ASSERT(not selected.current());
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(selected) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not apply_view(selected));
+            PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+            PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+            PPR_TEST_ASSERT(grid.observations().m_particle_uploads == uploads_before_hold);
+            PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packs_before_hold);
+            PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch_before_hold);
 
             // The capture-only projection observes committed metadata order,
             // independently of circle packing, visibility and later epochs.
@@ -4351,7 +4426,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 next.m_terrain_revision = 17u;
                 next.m_joint_tick = epoch * 3u;
                 live->store(epoch, std::memory_order_release);
-                PPR_TEST_ASSERT(not grid.applyGpuParticleView(next));
+                PPR_TEST_ASSERT(not apply_view(next));
                 selected = std::move(next);
             };
 

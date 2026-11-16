@@ -775,6 +775,13 @@ namespace pP::tests::detail {
                 // grid, with the same ties-to-even rounding.
                 mantissa |= 0x800000u;
                 const u32 shift = static_cast<u32>(14 - half_exponent);
+                if (shift >= 32u) {
+                    // The 24-bit mantissa is below halfway (at least 2^31),
+                    // so rounding on the 2^-24 grid gives zero, never a tie.
+                    return 0u;
+                }
+
+                // half_exponent <= 0 gives shift >= 14; the guard caps it at 31.
                 const u32 halfway = 1u << (shift - 1u);
                 const u32 remainder = mantissa & ((1u << shift) - 1u);
                 u32 result = mantissa >> shift;
