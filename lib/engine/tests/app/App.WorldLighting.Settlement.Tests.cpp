@@ -547,8 +547,10 @@ namespace pP::tests::detail::WorldLightingSettlement {
 
         auto live = std::make_shared<std::atomic<u64>>(1u);
         GridParticleGpuView view{};
-        view.m_numerical = makeLightingTestBuffer(fixture.device(), sizeof(hot), sizeof(hot[0u]), hot.data());
-        view.m_readonly = makeLightingTestBuffer(fixture.device(), sizeof(cold), sizeof(cold[0u]), cold.data());
+        view.m_numerical = makeLightingTestBuffer(
+            fixture.device(), sizeof(hot), kGridParticleNumericalStride, hot.data());
+        view.m_readonly = makeLightingTestBuffer(
+            fixture.device(), sizeof(cold), kGridParticleReadonlyStride, cold.data());
         view.m_metadata = *metadata;
         view.m_live_epoch = live;
         view.m_world = grid.activeWorldIdentity();
@@ -614,7 +616,8 @@ namespace pP::tests::detail::WorldLightingSettlement {
         moved[1u] = 3.0f + static_cast<float>(kOtherParticleCell) + 0.5f;
         moved[15u] = 1.0f;
         GridParticleGpuView next = view;
-        next.m_numerical = makeLightingTestBuffer(fixture.device(), sizeof(moved), sizeof(moved[0u]), moved.data());
+        next.m_numerical = makeLightingTestBuffer(
+            fixture.device(), sizeof(moved), kGridParticleNumericalStride, moved.data());
         next.m_device_epoch = 2u;
         PPR_TEST_ASSERT(next.current());
         PPR_TEST_ASSERT(not grid.applyGpuParticleView(next));
@@ -1444,8 +1447,10 @@ namespace pP::tests::detail::WorldLightingSettlement {
             std::array<float, 6u> cold{};
             cold[1u] = std::numbers::pi_v<float> * 0.25f;
             GridParticleGpuView published{};
-            published.m_numerical = makeLightingTestBuffer(device, sizeof(hot), sizeof(hot[0u]), hot.data());
-            published.m_readonly = makeLightingTestBuffer(device, sizeof(cold), sizeof(cold[0u]), cold.data());
+            published.m_numerical = makeLightingTestBuffer(
+                device, sizeof(hot), kGridParticleNumericalStride, hot.data());
+            published.m_readonly = makeLightingTestBuffer(
+                device, sizeof(cold), kGridParticleReadonlyStride, cold.data());
             published.m_metadata = *metadata;
             published.m_live_epoch = live;
             published.m_world = world;
