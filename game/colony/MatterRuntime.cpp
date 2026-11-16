@@ -265,10 +265,9 @@ namespace pP::colony {
             particle.m_mass = static_cast<float>(record.m_mass_kg / mass_unit);
             particle.m_volume = static_cast<float>(record.m_volume_m3 / volume_unit);
             const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
-            particle.m_material = static_cast<float>(
-                catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase));
-            if (particle.m_material >= 4.0f)
-                particle.m_log_jp = 0.0f;
+            matter::GpuMaterialProperties property{};
+            property.m_family = catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase);
+            matter::initializeMaterialState(particle, property);
 
             if (not std::isfinite(particle.m_mass) or
                 particle.m_mass <= 0.0f or
@@ -681,17 +680,16 @@ namespace pP::colony {
             particle.m_position_x = static_cast<float>(position.m_x) + 0.5f + kMatterOrigin;
             particle.m_position_y = static_cast<float>(position.m_y) + 0.5f + kMatterOrigin;
             particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-            particle.m_material = static_cast<float>(catalogFamily(material->m_key, record.m_phase));
+            matter::GpuMaterialProperties defaults{};
+            defaults.m_family = catalogFamily(material->m_key, record.m_phase);
+
             // Reuse saved rows for dug particles, including migrated legacy families.
             const auto property = std::ranges::find(
                 result.m_properties, record.m_material, &matter::GpuMaterialProperties::m_substance_id);
-            if (property != result.m_properties.end()) {
-                particle.m_material = static_cast<float>(property->m_family);
+            if (property != result.m_properties.end())
                 particle.m_solid_fraction = property->m_solid_fraction0;
-            }
 
-            if (particle.m_material >= 4.0f)
-                particle.m_log_jp = 0.0f;
+            matter::initializeMaterialState(particle, property != result.m_properties.end() ? *property : defaults);
 
             if (not std::isfinite(particle.m_mass) or particle.m_mass <= 0.0f) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::result_out_of_range);

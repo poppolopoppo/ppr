@@ -243,6 +243,9 @@ export namespace pP::matter {
         std::span<const u32> m_particle_rows{};
     };
 
+    /// Stamp a fresh particle only; never use on restored or evolved history.
+    void initializeMaterialState(GpuParticle &particle, const GpuMaterialProperties &row) noexcept;
+
     [[nodiscard]] bool validMaterialProperties(const GpuMaterialProperties &row) noexcept;
     [[nodiscard]] bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept;
     [[nodiscard]] std::error_code validateMaterialTable(std::span<const GpuMaterialProperties> rows);

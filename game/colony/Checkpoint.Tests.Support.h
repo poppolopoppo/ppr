@@ -124,7 +124,8 @@ namespace pP::game::tests::detail::checkpoint {
 
         explicit inline Fixture(
             std::string name_space = "checkpoint", std::string world_key = "frontier",
-            const u32 world_edge = sim::kWorldEdge)
+            const u32 world_edge = sim::kWorldEdge, const bool material_families = false,
+            const bool terrain_families = false)
             : m_namespace{std::move(name_space)}, m_world_key{std::move(world_key)},
               m_manifest{"schema_version = 1\npack_id = '" + m_namespace + "'\n"} {
             static std::atomic<u32> ordinal{};
@@ -172,6 +173,19 @@ namespace pP::game::tests::detail::checkpoint {
             material.m_appearance.m_alpha_mode = EMaterialAlphaMode::blend;
             material.m_appearance.m_texture_sampling = EMaterialTextureSampling::repeat;
             add("sandstone", sim::asset::kMaterialKind, "sandstone.toml", material);
+
+            if (material_families) {
+                auto family_material = material;
+                if (not terrain_families) {
+                    family_material.m_representation = sim::definition::EMaterialRepresentation::particle;
+                    family_material.m_diggable.reset();
+                }
+
+                for (const char *const key: {"snow", "clay", "sand"}) {
+                    family_material.m_appearance.m_display_name = key;
+                    add(key, sim::asset::kMaterialKind, std::string{key} + ".toml", family_material);
+                }
+            }
 
             material.m_element = "liquid";
             material.m_diggable.reset();
@@ -243,6 +257,12 @@ namespace pP::game::tests::detail::checkpoint {
             world.m_palette.m_materials.m_entries = {
                 {"basalt", {"basalt", 1u}}, {"sandstone", {"sandstone", 2u}}, {"water", {"water", 3u}},
                 {"oxygen", {"oxygen", 4u}}};
+            if (material_families) {
+                world.m_palette.m_materials.m_entries.push_back({"snow", {"snow", 5u}});
+                world.m_palette.m_materials.m_entries.push_back({"clay", {"clay", 6u}});
+                world.m_palette.m_materials.m_entries.push_back({"sand", {"sand", 7u}});
+            }
+
             world.m_palette.m_fields.m_entries.push_back({"noise", {"noise", 0u}});
             world.m_palette.m_biomes.m_entries.push_back({"hearth", {"hearth", 0u}});
             world.m_palette.m_features.m_entries.push_back({"landing", {"landing", 0u}});
@@ -276,7 +296,7 @@ namespace pP::game::tests::detail::checkpoint {
 
             m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
 
-            PPR_TEST_ASSERT(m_catalog->materials().size() == 4u);
+            PPR_TEST_ASSERT(m_catalog->materials().size() == (material_families ? 7u : 4u));
             const auto *const oxygen = m_catalog->findMaterial("oxygen");
             PPR_TEST_ASSERT(oxygen != nullptr);
             PPR_TEST_ASSERT(oxygen->m_numeric_id == 4u and oxygen->m_phase == EMaterialPhase::gas);

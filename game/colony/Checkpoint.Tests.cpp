@@ -117,6 +117,76 @@ namespace pP::game::tests::detail::checkpoint {
         }
     };
 
+    PPR_UNIT_TEST (dug_and_seeded_material_families_initialize_from_properties) {
+        Fixture fixture{"dug_families", "frontier", 1024u, true, true};
+        const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        auto source = checkpoint.m_current_matter;
+        sim::ChunkGrid grid{1024u};
+
+        u32 x = 60u;
+        for (const char *const key: {"snow", "clay", "sand", "water"}) {
+            const auto *const material = fixture.m_catalog->findMaterial(key);
+            PPR_TEST_ASSERT(material != nullptr);
+            PPR_TEST_ASSERT(not grid.setCell({x++, 60u}, {material->m_numeric_id, 300.0f}));
+        }
+
+        auto captured = grid.captureChunk({0u, 0u});
+        PPR_TEST_ASSERT(captured.has_value());
+        for (u32 column = 60u; column < 64u; ++column) {
+            PPR_TEST_ASSERT(not grid.setCell({column, 60u}, {}));
+        }
+
+        grid.exchangeChunk(*captured);
+        const std::array edits{std::move(*captured)};
+        for (const bool saved_properties: {false, true}) {
+            if (saved_properties) {
+                for (const char *const key: {"snow", "clay"}) {
+                    const auto *const material = fixture.m_catalog->findMaterial(key);
+                    matter::GpuMaterialProperties row{};
+                    row.m_substance_id = material->m_numeric_id;
+                    row.m_family = matterFamily(*material);
+                    row.m_solid_fraction0 = 0.45f;
+                    source.m_properties.push_back(row);
+                }
+            }
+
+            auto prepared = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+            PPR_TEST_ASSERT(prepared and prepared->has_value());
+            auto &state = **prepared;
+            PPR_TEST_ASSERT(not completeMatterProperties(state, fixture.m_catalog.get()));
+            // Water is not terrain: removing its cell must not emit a dug particle.
+            PPR_TEST_ASSERT(state.m_particles.size() == source.m_particles.size() + 3u);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 24u>>(state.m_particles.front()) ==
+                std::bit_cast<std::array<u32, 24u>>(source.m_particles.front()));
+
+            const auto indices = matterPropertyIndices(state);
+            PPR_TEST_ASSERT(indices.has_value());
+            for (std::size_t index = source.m_particles.size(); index < state.m_particles.size(); ++index) {
+                const auto &row = state.m_properties[(*indices)[index]];
+                const auto &particle = state.m_particles[index];
+                const bool new_family = row.m_family != matter::ESourceMaterial::sand;
+                PPR_TEST_ASSERT(particle.m_log_jp == (new_family ? 0.0f : 1.0f));
+                PPR_TEST_ASSERT(particle.m_compaction == 0.0f);
+                PPR_TEST_ASSERT(particle.m_solid_fraction == (new_family ? row.m_solid_fraction0 : 0.3f));
+            }
+
+            const auto snapshot = captureMovingMatter(state, state.m_particles);
+            PPR_TEST_ASSERT(snapshot.has_value());
+            auto seeded = makeMatterState(
+                *snapshot, state.m_cell_metres, state.m_thickness_metres, kMatterGravityY, 8u, 1024u,
+                fixture.m_catalog.get());
+            PPR_TEST_ASSERT(seeded.has_value());
+            PPR_TEST_ASSERT(not completeMatterProperties(*seeded, fixture.m_catalog.get()));
+            for (const auto &particle: seeded->m_particles) {
+                const bool new_family = particle.m_material == static_cast<float>(matter::ESourceMaterial::cohesive) or
+                                        particle.m_material == static_cast<float>(matter::ESourceMaterial::compacting);
+                PPR_TEST_ASSERT(particle.m_log_jp == (new_family ? 0.0f : 1.0f));
+                PPR_TEST_ASSERT(particle.m_compaction == 0.0f and particle.m_solid_fraction == 0.3f);
+            }
+        }
+    };
+
     PPR_UNIT_TEST (dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once) {
         Fixture fixture;
         const auto *const oxygen = fixture.m_catalog->findMaterial("oxygen");
@@ -1412,6 +1482,7 @@ namespace pP::game::tests {
                 round_trip_restores_edited_cells_actor_identity_and_frozen_full_capture,
                 restored_current_matter_is_frozen_until_attached_and_keeps_physical_inventory,
                 dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once,
+                dug_and_seeded_material_families_initialize_from_properties,
                 new_contour_coverage_rejects_moving_and_gas_but_preserves_prior_overlap,
                 current_round_trip_preserves_all_words_and_rebinds_only_world,
                 current_particle_wire_payload_is_the_exact_semantic_word_sequence,

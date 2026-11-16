@@ -212,6 +212,15 @@ namespace pP::matter {
                row.m_solid_exponent >= 0.0f;
     }
 
+    void initializeMaterialState(GpuParticle &particle, const GpuMaterialProperties &row) noexcept {
+        particle.m_material = static_cast<float>(row.m_family);
+        if (row.m_family == ESourceMaterial::cohesive or row.m_family == ESourceMaterial::compacting) {
+            particle.m_log_jp = 0.0f;
+            particle.m_compaction = 0.0f;
+            particle.m_solid_fraction = row.m_solid_fraction0;
+        }
+    }
+
     bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept {
         if (not std::isfinite(particle.m_compaction) or
             particle.m_compaction < 0.0f or

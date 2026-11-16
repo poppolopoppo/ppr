@@ -771,6 +771,79 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not driver.finishServiceDoor(move_b));
     };
 
+    PPR_UNIT_TEST (particle_tool_initializes_material_families_and_preserves_restored_history) {
+        Fixture fixture{"tool_families", "frontier", 1024u, true};
+        auto checkpoint = editedCheckpoint(*fixture.m_catalog);
+        {
+            GpuOwner owner;
+            owner.initialize();
+            owner.restore(fixture.m_catalog, checkpoint, 3u);
+            auto &driver = *owner.m_driver;
+            driver.setPaused(true);
+
+            for (const char *const key: {"snow", "clay", "sand", "water"}) {
+                const auto *const material = fixture.m_catalog->findMaterial(key);
+                PPR_TEST_ASSERT(material != nullptr);
+                const auto before = driver.matterState()->m_particles.size();
+                PPR_TEST_ASSERT(not driver.requestParticleTool(
+                    {20.0, 20.0, 2.0, 1u, material->m_numeric_id, EParticleToolKind::spawn}));
+                owner.update(TimeSpan{});
+
+                auto state = *driver.matterState();
+                PPR_TEST_ASSERT(state.m_particles.size() == before + 1u);
+                PPR_TEST_ASSERT(not completeMatterProperties(state, fixture.m_catalog.get()));
+                const auto indices = matterPropertyIndices(state);
+                PPR_TEST_ASSERT(indices.has_value());
+                const auto &row = state.m_properties[indices->back()];
+                const auto &particle = state.m_particles.back();
+                const bool new_family = std::string_view{key} == "snow" or std::string_view{key} == "clay";
+                PPR_TEST_ASSERT(particle.m_log_jp == (new_family ? 0.0f : 1.0f));
+                PPR_TEST_ASSERT(particle.m_compaction == 0.0f);
+                PPR_TEST_ASSERT(particle.m_solid_fraction == (new_family ? row.m_solid_fraction0 : 0.3f));
+                PPR_TEST_ASSERT(particle.m_material == static_cast<float>(matterFamily(*material)));
+            }
+
+            const auto captured = captureWorldCheckpoint(driver, driver.preparedWorld()->generated());
+            PPR_TEST_ASSERT(captured.has_value());
+            checkpoint = *captured;
+        }
+
+        // Evolved history and a nondefault saved phi0 must survive restore;
+        // another fresh append uses phi0 without resetting the retained prefix.
+        for (std::size_t index = 1u; index <= 2u; ++index) {
+            checkpoint.m_current_matter.m_particles[index].m_compaction = 0.25f;
+            checkpoint.m_current_matter.m_particles[index].m_solid_fraction = 0.6f;
+        }
+
+        const auto snow = fixture.m_catalog->findMaterial("snow")->m_numeric_id;
+        auto &properties = checkpoint.m_current_matter.m_properties;
+        std::ranges::find(properties, snow, &matter::GpuMaterialProperties::m_substance_id)->m_solid_fraction0 = 0.45f;
+        const auto bytes = encodeWorldCheckpoint(checkpoint, *fixture.m_catalog);
+        PPR_TEST_ASSERT(bytes.has_value());
+        const auto decoded = decodeWorldCheckpoint(*bytes, *fixture.m_catalog);
+        PPR_TEST_ASSERT(decoded.has_value());
+
+        GpuOwner restored;
+        restored.initialize();
+        restored.restore(fixture.m_catalog, *decoded, 4u);
+        auto &driver = *restored.m_driver;
+        driver.setPaused(true);
+        PPR_TEST_ASSERT(not driver.requestParticleTool({20.0, 20.0, 2.0, 1u, snow, EParticleToolKind::spawn}));
+        restored.update(TimeSpan{});
+
+        const auto &state = *driver.matterState();
+        PPR_TEST_ASSERT(state.m_particles.size() == checkpoint.m_current_matter.m_particles.size() + 1u);
+        for (std::size_t index = 0u; index < checkpoint.m_current_matter.m_particles.size(); ++index) {
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 24u>>(state.m_particles[index]) ==
+                std::bit_cast<std::array<u32, 24u>>(checkpoint.m_current_matter.m_particles[index]));
+        }
+
+        PPR_TEST_ASSERT(state.m_particles.back().m_log_jp == 0.0f);
+        PPR_TEST_ASSERT(state.m_particles.back().m_compaction == 0.0f);
+        PPR_TEST_ASSERT(state.m_particles.back().m_solid_fraction == 0.45f);
+    };
+
     PPR_UNIT_TEST (paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero) {
         Fixture fixture{"tool_inventory", "frontier", 1024u};
         const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
@@ -3555,6 +3628,7 @@ namespace pP::game::tests {
         _.recurse({
             detail::checkpoint::service_door_cancel_reused_matter_target_rejects_stale_outer_activation,
             detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
+            detail::checkpoint::particle_tool_initializes_material_families_and_preserves_restored_history,
             detail::checkpoint::terrain_position_rejection_freezes_matter_until_a_committed_mutation,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::particle_occupied_wall_order_is_rejected_then_succeeds_after_evolution,

@@ -340,7 +340,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.
     ppr_add_test_entry(TARGET game.tests
         NAME particle_tools_gpu
-        FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero"
+        FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,game/checkpoint_gpu/particle_tool_initializes_material_families_and_preserves_restored_history"
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
