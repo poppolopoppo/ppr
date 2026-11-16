@@ -1,5 +1,6 @@
 // Focused executable checks of the actual port helpers; not a second solver.
 #include "types.slang"
+#define PBMPM_CONFORMANCE_PARTICLE_ROWS 1
 #include "fork_core.slang"
 
 void fail(uint flag, uint row, uint field) { InterlockedOr(g_errors[0],flag); }

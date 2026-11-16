@@ -2,10 +2,17 @@
 // BSD-3-Clause notice: LICENSE.md. Arithmetic expressions are retained verbatim.
 // Engine-only hooks preserve the no-hook conformance order.
 struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled; };
-#ifdef PBMPM_ENGINE_PARTICLE_ROWS
+#if defined(PBMPM_ENGINE_PARTICLE_ROWS) && defined(PBMPM_CONFORMANCE_PARTICLE_ROWS)
+#error Select exactly one PBMPM particle row ABI
+#elif defined(PBMPM_ENGINE_PARTICLE_ROWS)
 struct Cold { float mass, volume, material, r, g, b; uint propertyRow; };
-#else
+#elif defined(PBMPM_CONFORMANCE_PARTICLE_ROWS)
 struct Cold { float mass, volume, material, r, g, b; };
+#else
+#error Explicit PBMPM particle row ABI selection required
+#endif
+#if (defined(PBMPM_ENGINE_ADAPTERS) || defined(PBMPM_SPARSE_STORAGE)) && !defined(PBMPM_ENGINE_PARTICLE_ROWS)
+#error Engine solver and maintenance require the engine particle row ABI
 #endif
 struct Bucket { uint start, count, x, y; };
 ConstantBuffer<Parameters> g_parameters;

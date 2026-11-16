@@ -291,12 +291,18 @@ namespace pP::game::tests::detail::checkpoint {
         particle.m_log_jp = 0.75f;
         const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
 
+        state.m_properties[0u].m_liquid_viscosity = 0.375f;
+        state.m_properties[0u].m_liquid_relaxation = 0.75f;
+        const auto property_words = std::bit_cast<std::array<u32, 10u>>(state.m_properties[0u]);
+
         const auto bytes = encodeWorldCheckpoint(checkpoint, *fixture.m_catalog);
         PPR_TEST_ASSERT(bytes.has_value());
         const auto decoded = decodeWorldCheckpoint(*bytes, *fixture.m_catalog);
         PPR_TEST_ASSERT(decoded.has_value());
         PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(decoded->m_current_matter.m_particles[0u]) == words);
         PPR_TEST_ASSERT(decoded->m_current_matter.m_identity == state.m_identity);
+        PPR_TEST_ASSERT(
+            std::bit_cast<std::array<u32, 10u>>(decoded->m_current_matter.m_properties[0u]) == property_words);
 
         const auto snapshot_bytes = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(snapshot_bytes.has_value());
@@ -320,6 +326,7 @@ namespace pP::game::tests::detail::checkpoint {
 
         const auto &current = *(*restored)->matterState();
         PPR_TEST_ASSERT(current.m_identity == MatterIdentity{92u, 7u, 4u});
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 10u>>(current.m_properties[0u]) == property_words);
         PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(current.m_particles[0u]) == words);
         PPR_TEST_ASSERT((*restored)->update(TimeSpan{}) == std::errc::operation_not_permitted);
 
@@ -952,6 +959,18 @@ namespace pP::game::tests::detail::checkpoint {
         const auto &catalog = *fixture.m_catalog;
         auto checkpoint = editedCheckpoint(catalog);
         checkpoint.m_current_matter.m_iterations = 5u;
+
+        // Independent FNV-1a fixture: little-endian policy=1, count=2, then
+        // <II8f> rows (11/12, liquid, 1, 1.5, 1, .125/.5, 30, 0, 1, 1).
+        // Computed from those explicit wire bytes, not the production identity helper.
+        std::array<matter::GpuMaterialProperties, 2u> identity_rows{
+            {{11u, matter::ESourceMaterial::liquid, 1.0f, 1.5f, 1.0f, 0.125f, 30.0f, 0.0f, 1.0f, 1.0f},
+                {12u, matter::ESourceMaterial::liquid, 1.0f, 1.5f, 1.0f, 0.5f, 30.0f, 0.0f, 1.0f, 1.0f}}};
+        constexpr u64 expected_identity = 0xd505ee7f0438172eull;
+        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows) == expected_identity);
+        std::swap(identity_rows[0u], identity_rows[1u]);
+        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows) == expected_identity);
+
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         const auto raw = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(encoded and raw);
@@ -1069,6 +1088,8 @@ namespace pP::game::tests::detail::checkpoint {
             const auto refused = restoreWorldCheckpoint(fixture.m_catalog, std::move(invalid), 94u);
             PPR_TEST_ASSERT(not refused and refused.error() == std::errc::invalid_argument);
 
+            // This is a separate candidate restore: it proves that the live
+            // driver's capture is unchanged, not live GPU admission or rollback.
             const auto after = captureWorldCheckpoint(**live, (*live)->preparedWorld()->generated());
             PPR_TEST_ASSERT(after.has_value());
             const auto after_bytes = encodeWorldCheckpoint(*after, catalog);

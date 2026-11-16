@@ -161,7 +161,7 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
 # leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
-# resident + 3 schedule + 1 cost + 1 correctness + 1 precision = 49
+# resident + 3 schedule + 3 substance table + 1 cost + 1 correctness + 1 precision = 52
 # `app/matter_gpu` leaves, and the resident list also holds one
 # `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
 # their own entries outside `matter_fast`, below. The two whole-grid terrain
@@ -227,10 +227,10 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation matter_fast
 )
 
-# B1's two table leaves each belong to this one exact-path shard.
+# B1's three table leaves each belong to this one exact-path shard.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_properties_gpu
-    FILTER "app/matter_gpu/substance_rows_preserve_defaults_and_reject_invalid_replacements,app/matter_gpu/same_family_substances_differ_and_unused_rows_do_not_dispatch"
+    FILTER "app/matter_gpu/substance_rows_preserve_defaults_and_reject_invalid_replacements,app/matter_gpu/same_family_substances_differ_and_unused_rows_do_not_dispatch,app/matter_gpu/device_property_guard_reports_out_of_range_and_family_mismatch"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300

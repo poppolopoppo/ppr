@@ -5096,6 +5096,25 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(cold->getFieldByIndex(0u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_mass));
         PPR_TEST_ASSERT(cold->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_color_r));
         PPR_TEST_ASSERT(cold->getFieldByIndex(6u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_property_row));
+
+        shader::SharedModule maintenance;
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "pbmpm" / "sparse_grid.slang", "pbmpm_sparse_grid",
+            maintenance.writeRef()));
+        auto *const maintenance_layout = maintenance->getLayout();
+        PPR_TEST_ASSERT(maintenance_layout != nullptr);
+        slang::TypeLayoutReflection *maintenance_cold = nullptr;
+        for (unsigned index = 0u; index < maintenance_layout->getParameterCount(); ++index) {
+            auto *const parameter = maintenance_layout->getParameterByIndex(index);
+            if (std::string_view{parameter->getName()} == "g_cold")
+                maintenance_cold = parameter->getTypeLayout()->getElementTypeLayout();
+        }
+
+        PPR_TEST_ASSERT(maintenance_cold != nullptr);
+        PPR_TEST_ASSERT(maintenance_cold->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(ParticleReadonly));
+        PPR_TEST_ASSERT(
+            maintenance_cold->getFieldByIndex(6u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_property_row));
+
         auto *const properties = find("g_properties");
         PPR_TEST_ASSERT(properties != nullptr);
         PPR_TEST_ASSERT(properties->getStride(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(GpuMaterialProperties));
@@ -5486,26 +5505,194 @@ namespace pP::tests::detail::MatterGpu {
             std::errc::invalid_argument);
         PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == retained_epoch);
 
-        const auto appended = restParticle();
-        const std::array<u32, 1u> appended_index{0u};
+        // Start the append probe with two distinguishable rows of the same family.
+        // Semantic snapshots omit propertyRow, so inspect the committed cold buffer.
+        std::array<GpuMaterialProperties, 3u> growing_rows{};
+        for (u32 index = 0u; index < growing_rows.size(); ++index) {
+            growing_rows[index].m_substance_id = 11u + index;
+            growing_rows[index].m_family = ESourceMaterial::liquid;
+            growing_rows[index].m_liquid_viscosity = 0.125f * static_cast<float>(index);
+        }
+
+        auto retained_particle = restParticle();
+        retained_particle.m_deformation_displacement = {0.0f, 0.1f, 0.1f, 0.0f};
+        const std::array<u32, 1u> retained_index{1u};
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            {&retained_particle, 1u}, {}, retained_epoch, {}, ETerrainUpdate::replace,
+            {std::span{growing_rows}.first(2u), retained_index}));
+        fixture.m_solver.publishReplacement();
+        const auto append_epoch = fixture.m_solver.accounting().m_epoch;
+
+        const auto read_index = [&](const u32 particle) {
+            const auto view = fixture.m_solver.committedView();
+            PPR_TEST_ASSERT(view and particle < view->m_count);
+
+            ParticleReadonly cold{};
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_rhi->getDevice().readBuffer(
+                view->m_cold, particle * sizeof(ParticleReadonly), sizeof(cold), &cold)));
+            return cold.m_property_row;
+        };
+
+        PPR_TEST_ASSERT(read_index(0u) == 1u);
+
+        auto appended = retained_particle;
+        appended.m_position_x += 12.0f;
+        const std::array<u32, 1u> appended_index{2u};
         PPR_TEST_ASSERT(not fixture.m_solver.prepareAppend(
-            {&appended, 1u}, retained_epoch, {}, ETerrainUpdate::preserve, {rows, appended_index}));
+            {&appended, 1u}, append_epoch, {}, ETerrainUpdate::preserve, {growing_rows, appended_index}));
         PPR_TEST_ASSERT(not fixture.m_solver.cancelPreparedReplacement());
-        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == retained_epoch);
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == append_epoch);
+        PPR_TEST_ASSERT(read_index(0u) == 1u);
+        PPR_TEST_ASSERT(growing_rows[read_index(0u)].m_liquid_viscosity == 0.125f);
+
         const auto cancelled = fixture.snapshot();
-        PPR_TEST_ASSERT(std::memcmp(cancelled.data(), resumed.data(), sizeof(particles)) == 0);
+        PPR_TEST_ASSERT(cancelled.size() == 1u);
+        PPR_TEST_ASSERT(std::memcmp(cancelled.data(), &retained_particle, sizeof(GpuParticle)) == 0);
 
         PPR_TEST_ASSERT(not fixture.m_solver.prepareAppend(
-            {&appended, 1u}, retained_epoch, {}, ETerrainUpdate::preserve, {rows, appended_index}));
+            {&appended, 1u}, append_epoch, {}, ETerrainUpdate::preserve, {growing_rows, appended_index}));
         PPR_TEST_ASSERT(not fixture.m_solver.drain());
         const auto copied = fixture.m_solver.pollReplacement();
         PPR_TEST_ASSERT(copied and *copied);
+
         fixture.m_solver.publishReplacement();
         const auto appended_state = fixture.snapshot();
-        PPR_TEST_ASSERT(appended_state.size() == 5u);
-        PPR_TEST_ASSERT(std::memcmp(appended_state.data(), resumed.data(), sizeof(particles)) == 0);
+        PPR_TEST_ASSERT(appended_state.size() == 2u);
+        PPR_TEST_ASSERT(std::memcmp(appended_state.data(), &retained_particle, sizeof(GpuParticle)) == 0);
+        PPR_TEST_ASSERT(read_index(0u) == 1u and read_index(1u) == 2u);
+        PPR_TEST_ASSERT(growing_rows[read_index(0u)].m_liquid_viscosity == 0.125f);
+
+        // Cancellation must also retain the already-published extended table.
+        std::array<GpuMaterialProperties, 4u> cancelled_rows{};
+        std::copy(growing_rows.begin(), growing_rows.end(), cancelled_rows.begin());
+        cancelled_rows[3u] = growing_rows[0u];
+        cancelled_rows[3u].m_substance_id = 14u;
+        cancelled_rows[3u].m_liquid_viscosity = 0.5f;
+        const std::array<u32, 1u> cancelled_index{3u};
+        const auto published_append_epoch = fixture.m_solver.accounting().m_epoch;
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareAppend(
+            {&appended, 1u}, published_append_epoch, {}, ETerrainUpdate::preserve, {cancelled_rows, cancelled_index}));
+        PPR_TEST_ASSERT(not fixture.m_solver.cancelPreparedReplacement());
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == published_append_epoch);
+        PPR_TEST_ASSERT(fixture.m_solver.accounting().m_particle_count == 2u);
+        PPR_TEST_ASSERT(read_index(0u) == 1u and read_index(1u) == 2u);
+        PPR_TEST_ASSERT(growing_rows[read_index(0u)].m_liquid_viscosity == 0.125f);
+
         fixture.finishOneSubstep();
-        PPR_TEST_ASSERT(fixture.publishCompletedTick().size() == 5u);
+        const auto append_result = fixture.publishCompletedTick();
+
+        // Replacement rebuilds indices against a permuted table. Both particles
+        // must still consume exactly the same coefficients as the append path.
+        auto replacement_rows = growing_rows;
+        std::swap(replacement_rows[0u], replacement_rows[1u]);
+        const std::array<u32, 2u> rebuilt_indices{0u, 2u};
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            appended_state, {}, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+            {replacement_rows, rebuilt_indices}));
+        fixture.m_solver.publishReplacement();
+        PPR_TEST_ASSERT(read_index(0u) == 0u);
+        PPR_TEST_ASSERT(replacement_rows[read_index(0u)].m_liquid_viscosity == 0.125f);
+
+        fixture.finishOneSubstep();
+        const auto replacement_result = fixture.publishCompletedTick();
+        PPR_TEST_ASSERT(append_result.size() == replacement_result.size());
+        PPR_TEST_ASSERT(
+            std::memcmp(append_result.data(), replacement_result.data(), append_result.size() * sizeof(GpuParticle)) ==
+            0);
+    };
+
+    PPR_UNIT_TEST (device_property_guard_reports_out_of_range_and_family_mismatch) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize();
+
+        shader::SharedModule module;
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "pbmpm" / "property_checks.slang", "pbmpm_property_checks",
+            module.writeRef()));
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_TEST_ASSERT(
+            not make_error_code(module->findEntryPointByName("inspectPropertyAdmission", entry.writeRef())));
+
+        slang::IComponentType *entries[]{entry.get()};
+        rhi::ShaderProgramDesc program_desc{};
+        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        program_desc.slangGlobalScope = module.get();
+        program_desc.slangEntryPoints = entries;
+        program_desc.slangEntryPointCount = 1u;
+        shader::Diagnose diagnostics;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        auto &device = fixture.m_rhi->getDevice();
+        PPR_TEST_ASSERT(
+            not make_error_code(device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef())));
+
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program;
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_desc, pipeline.writeRef())));
+
+        // Bypass host admission deliberately. The first table is too short for
+        // index 1; the second has a corrupted family at the valid index 0.
+        for (const u32 field: {0u, 1u}) {
+            ParticleReadonly cold = packReadonly(restParticle());
+            cold.m_property_row = field == 0u ? 1u : 0u;
+
+            GpuMaterialProperties properties{};
+            properties.m_substance_id = 11u;
+            properties.m_family = field == 0u ? ESourceMaterial::liquid : ESourceMaterial::sand;
+            const std::array<u32, 6u> initial_errors{0u, 0u, 0xffff'ffffu, 0xffff'ffffu, 0xffff'ffffu, 0xffff'ffffu};
+
+            const auto buffer = [&](const void *const data, const u64 size, const u32 stride, const bool writable) {
+                rhi::BufferDesc desc{};
+                desc.size = size;
+                desc.elementSize = stride;
+                desc.usage = writable ? static_cast<rhi::BufferUsage>(
+                                            static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                                            static_cast<u32>(rhi::BufferUsage::CopySource))
+                                      : rhi::BufferUsage::ShaderResource;
+                desc.defaultState = writable ? rhi::ResourceState::UnorderedAccess : rhi::ResourceState::ShaderResource;
+                rhi::ComPtr<rhi::IBuffer> result;
+                PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, data, result.writeRef())));
+                return result;
+            };
+
+            const auto cold_buffer = buffer(&cold, sizeof(cold), sizeof(cold), false);
+            const auto table_buffer = buffer(&properties, sizeof(properties), sizeof(properties), false);
+            const auto errors = buffer(initial_errors.data(), sizeof(initial_errors), sizeof(u32), true);
+
+            rhi::ComPtr<rhi::ICommandEncoder> encoder;
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            auto *const pass = encoder->beginComputePass();
+            PPR_TEST_ASSERT(pass != nullptr);
+            auto *const root = pass->bindPipeline(pipeline);
+            PPR_TEST_ASSERT(root != nullptr);
+            rhi::ShaderCursor cursor{root};
+            PPR_TEST_ASSERT(not make_error_code(
+                cursor["g_cold"].setBinding(rhi::Binding(cold_buffer, {.offset = 0u, .size = sizeof(cold)}))));
+            PPR_TEST_ASSERT(not make_error_code(
+                cursor["g_properties"].setBinding(
+                    rhi::Binding(table_buffer, {.offset = 0u, .size = sizeof(properties)}))));
+            PPR_TEST_ASSERT(not make_error_code(
+                cursor["g_errors"].setBinding(rhi::Binding(errors, {.offset = 0u, .size = sizeof(initial_errors)}))));
+            pass->dispatchCompute(1u, 1u, 1u);
+            pass->end();
+
+            rhi::ComPtr<rhi::ICommandBuffer> commands;
+            PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+            };
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(commands)));
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+
+            std::array<u32, 6u> actual{};
+            PPR_TEST_ASSERT(not make_error_code(device.readBuffer(errors, 0u, sizeof(actual), actual.data())));
+            PPR_TEST_ASSERT(actual[0u] == 512u and actual[1u] == 1u);
+            PPR_TEST_ASSERT(actual[2u] == cold.m_property_row and actual[3u] == field);
+            PPR_TEST_ASSERT(actual[4u] == 0u and actual[5u] == 0xffff'ffffu);
+        }
     };
 
     PPR_UNIT_TEST (same_family_substances_differ_and_unused_rows_do_not_dispatch) {
@@ -7779,6 +7966,7 @@ namespace pP::tests {
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::substance_rows_preserve_defaults_and_reject_invalid_replacements,
                 detail::MatterGpu::same_family_substances_differ_and_unused_rows_do_not_dispatch,
+                detail::MatterGpu::device_property_guard_reports_out_of_range_and_family_mismatch,
                 detail::MatterGpu::supported_iteration_counts_validate_before_work,
                 detail::MatterGpu::iteration_roles_integrate_once_per_substep,
                 detail::MatterGpu::sand_history_phase_a_characterization,

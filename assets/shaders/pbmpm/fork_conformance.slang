@@ -5,6 +5,7 @@
 // ------------------------------------------------------------------
 // split storage, bucket protocol and owned error status
 // ------------------------------------------------------------------
+#define PBMPM_CONFORMANCE_PARTICLE_ROWS 1
 #include "fork_core.slang"
 
 void fail(uint flag, uint row, uint field) {
