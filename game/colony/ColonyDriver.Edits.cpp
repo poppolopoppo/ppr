@@ -660,9 +660,7 @@ namespace pP::colony {
                     particle.m_position_x = static_cast<float>(x) + 0.5f + kMatterOrigin;
                     particle.m_position_y = static_cast<float>(y) + 0.5f + kMatterOrigin;
                     particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-                    particle.m_material = static_cast<float>(
-                        material->m_phase == EMaterialPhase::liquid ? matter::ESourceMaterial::liquid
-                                                                    : matter::ESourceMaterial::sand);
+                    particle.m_material = static_cast<float>(matterFamily(*material));
                     working.m_records.push_back(record);
                     working.m_particles.push_back(particle);
                     ++spawned;
@@ -681,6 +679,7 @@ namespace pP::colony {
 
         ++working.m_identity.m_publication;
         working.m_profile.m_particle_count = static_cast<u32>(working.m_particles.size());
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completeMatterProperties(working, contentCatalog()));
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyEdits, validateMatterState(
                              working, preparedWorld()->generated().m_plan.recipe().m_materials, working.m_cell_metres,

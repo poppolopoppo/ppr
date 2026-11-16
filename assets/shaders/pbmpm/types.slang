@@ -52,7 +52,7 @@ struct ParticleWrite {
     float enabled;
 };
 
-// Immutable 24-byte device row; every semantic field remains FP32.
+// Immutable 28-byte engine row; the final word is a transient property index.
 struct ParticleReadonly {
     float mass;
     float volume;
@@ -60,6 +60,7 @@ struct ParticleReadonly {
     float colorR;
     float colorG;
     float colorB;
+    uint propertyRow;
 };
 
 // Only admitted collider functionality; browser emitters/drains are absent.

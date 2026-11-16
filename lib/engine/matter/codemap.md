@@ -12,10 +12,44 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `Matter.Gpu.Types.cppm` (`:gpu.types`): source material enum, source-derived default
   profile and explicit scalar CPU/GPU protocol. The semantic record `GpuParticle`
   is 88 bytes (CPU rows, snapshots, checkpoints, v5 wire); the device stores each
-  particle as a 64-byte `ParticleWrite` hot row plus a 24-byte `ParticleReadonly`
-  cold row, packed and unpacked by field name. Static collider stride32,
+  particle as a 64-byte `ParticleWrite` hot row plus a 28-byte `ParticleReadonly`
+  cold row (six FP32 fields + one u32 property index), packed and unpacked by field name.
+  The device row pair is 64 + 28 = 92 bytes, not the 88-byte semantic row. Static collider stride32,
   parameter constant buffer64. F/D are four explicitly named source column
   components; no engine matrix storage inference.
+- B1 `GpuMaterialProperties` is a 40-byte scalar row (alignment 4): stable substance
+  ID, family and eight FP32 coefficients. `GpuMaterialTableView` borrows rows and
+  per-particle indices during preparation only. `ParticleReadonly::m_property_row`
+  is at offset 24; the 88-byte semantic record remains unchanged. Cohesive and
+  compacting enum slots are reserved and rejected. `sandYieldRatio` is legacy
+  calibration, not a modulus ratio; reference density is inventory in rho/1000,
+  not a multiplier in the normalized liquid equation.
+- `Matter.Gpu.cpp::validateMaterialTable` enforces unique nonzero IDs and strict
+  A2 domains; the game validates catalog membership. Replacement owns a copied
+  table and `g_properties` buffer through cancel/publication and tick fences.
+  Append may extend the table but cannot reorder or change its resident prefix.
+  Every fused root binds `g_properties`; `fork_core.slang::particleProperties`
+  resolves the cold index for constraint and integration. The profile owns grid,
+  time, gravity, fixed-point encoding and schedule; per-substance rows own law
+   coefficients. Index UINT_MAX explicitly selects profile-only engine fixtures.
+- `PBMPM_ENGINE_PARTICLE_ROWS` selects the 28-byte cold ABI in both sparse
+  maintenance and the fused solver independently of `PBMPM_ENGINE_ADAPTERS`.
+  The no-adapter conformance shader retains its 24-byte cold ABI and global
+  coefficients. Before any constitutive table read, the fused solver rejects
+  absent/out-of-range storage (flag 512, field 0) or an empty/mismatched row
+  (flag 512, field 1); the error node carries the property index and the particle
+  field carries its owning particle row. UINT_MAX bypasses the table entirely.
+- `game/colony/MatterRuntime.cpp` owns the catalog family map, density conversion,
+  table identity and stable-ID lookup. Water/brine/oil/crude oil/magma are liquid;
+  sand/sandstone/basalt/coal and ores are sand, with separate legacy-valued rows.
+  **Clay, snow and pebbles/gravel are sand placeholders until their laws exist.**
+  Other elements retain the former liquid-phase-versus-sand fallback. Only active
+  particles drive sparse discovery/dispatch, never unused catalog definitions.
+- Checkpoint v8 saves table policy 1, canonical row identity and complete rows;
+  stable catalog IDs reconstruct device indices. v6/v7 synthesize current
+  legacy-valued defaults with catalog density, preserving numerical words and
+  inventory; v6 keeps K2 and v7 keeps saved K. Unknown policy or identity mismatch
+  returns `protocol_not_supported`; malformed rows/IDs return `invalid_argument`.
 - The contour/body extension has separate environment constants (32 bytes),
   immutable predicted end-pose body rows (64 bytes). `Matter.Gpu.Compact.cpp`
   losslessly encodes validated semantic terrain masks and canonical math tables;

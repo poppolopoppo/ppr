@@ -10,12 +10,167 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(GameMatter, info, none)
 
     // ------------------------------------------------------------------
+    // catalog substance properties and stable identity
+    // ------------------------------------------------------------------
+
+    namespace {
+        matter::ESourceMaterial catalogFamily(const std::string_view key, const sim::EGenerationMatter phase) {
+            using Family = matter::ESourceMaterial;
+            static constexpr std::pair<std::string_view, Family> entries[]{
+                {"water", Family::liquid}, {"brine", Family::liquid}, {"oil", Family::liquid},
+                {"crude_oil", Family::liquid}, {"magma", Family::liquid}, {"sand", Family::sand},
+                {"sandstone", Family::sand}, {"basalt", Family::sand}, {"coal", Family::sand},
+                {"copper_ore", Family::sand}, {"iron_ore", Family::sand}, {"uranium_ore", Family::sand},
+                {"wolframite", Family::sand}, {"autunite", Family::sand}, {"azurite", Family::sand},
+                // Explicit placeholders until cohesive DP + cap, compacting snow,
+                // and size-dependent pebble/gravel laws are implemented.
+                {"clay", Family::sand}, {"wet_sand", Family::sand}, {"snow", Family::sand}, {"pebbles", Family::sand},
+                {"gravel", Family::sand}};
+
+            for (const auto &[name, family]: entries) {
+                if (key == name)
+                    return family;
+            }
+
+            return phase == sim::EGenerationMatter::liquid ? Family::liquid : Family::sand;
+        }
+    }
+
+    matter::ESourceMaterial matterFamily(const MaterialDefinition &material) {
+        return catalogFamily(
+            material.m_key, material.m_phase == EMaterialPhase::liquid ? sim::EGenerationMatter::liquid
+                                                                       : sim::EGenerationMatter::solid);
+    }
+
+    u64 matterMaterialTableIdentity(const std::span<const matter::GpuMaterialProperties> rows) {
+        Array<matter::GpuMaterialProperties> canonical(rows.begin(), rows.end());
+        std::ranges::sort(canonical, {}, &matter::GpuMaterialProperties::m_substance_id);
+
+        u64 hash = 14695981039346656037ull;
+        const auto append = [&](const u32 word) {
+            for (u32 byte = 0u; byte < 4u; ++byte) {
+                hash ^= (word >> (byte * 8u)) & 255u;
+                hash *= 1099511628211ull;
+            }
+        };
+
+        append(kMatterMaterialTablePolicy);
+        append(static_cast<u32>(canonical.size()));
+        for (const auto &row: canonical) {
+            for (const auto word: std::bit_cast<std::array<u32, 10u>>(row))
+                append(word);
+        }
+
+        return hash;
+    }
+
+    Expected<Array<u32>> matterPropertyIndices(const MatterState &state) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, matter::validateMaterialTable(state.m_properties));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameMatter, state.m_records.size() == state.m_particles.size()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        std::unordered_map<u32, u32> indices;
+        for (u32 index = 0u; index < state.m_properties.size(); ++index) {
+            indices.emplace(state.m_properties[index].m_substance_id, index);
+        }
+
+        Array<u32> result;
+        result.reserve(state.m_records.size());
+        for (std::size_t index = 0u; index < state.m_records.size(); ++index) {
+            const auto found = indices.find(state.m_records[index].m_material);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GameMatter,
+                found != indices.end() and state.m_particles[index].m_material ==
+                                               static_cast<float>(state.m_properties[found->second].m_family)
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+            result.push_back(found->second);
+        }
+
+        return result;
+    }
+
+    std::error_code setMatterProperties(
+        MatterState &state, const std::span<const matter::GpuMaterialProperties> rows, const ContentCatalog &catalog) {
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        for (const auto &row: rows) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter, row.m_substance_id <= std::numeric_limits<u16>::max() and
+                                    catalog.findMaterial(static_cast<u16>(row.m_substance_id)) != nullptr
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GameMatter, state.m_records.size() == state.m_particles.size()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        std::unordered_map<u32, matter::ESourceMaterial> families;
+        for (const auto &row: rows)
+            families.emplace(row.m_substance_id, row.m_family);
+
+        for (std::size_t index = 0u; index < state.m_records.size(); ++index) {
+            const auto found = families.find(state.m_records[index].m_material);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter,
+                found != families.end() and state.m_particles[index].m_material == static_cast<float>(found->second)
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        Array<matter::GpuMaterialProperties> owned(rows.begin(), rows.end());
+        state.m_properties = std::move(owned);
+        return {};
+    }
+
+    std::error_code completeMatterProperties(MatterState &state, const ContentCatalog *const catalog) {
+        auto rows = state.m_properties;
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        std::unordered_set<u32> ids;
+        for (const auto &row: rows)
+            ids.insert(row.m_substance_id);
+
+        for (const auto &record: state.m_records) {
+            if (not ids.insert(record.m_material).second)
+                continue;
+
+            const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter,
+                not catalog or definition ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            matter::GpuMaterialProperties row{};
+            row.m_substance_id = record.m_material;
+            row.m_family = catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase);
+            row.m_elasticity_ratio = state.m_profile.m_elasticity_ratio;
+            row.m_elastic_relaxation = state.m_profile.m_elastic_relaxation;
+            row.m_liquid_relaxation = state.m_profile.m_liquid_relaxation;
+            row.m_liquid_viscosity = state.m_profile.m_liquid_viscosity;
+            row.m_friction_angle = state.m_profile.m_friction_angle;
+            row.m_plasticity = state.m_profile.m_plasticity;
+            row.m_sand_yield_ratio = state.m_profile.m_elasticity_ratio;
+            row.m_reference_density = static_cast<float>(
+                (definition ? definition->m_reference_density_kg_m3 : record.m_bulk_density_kg_m3) / 1000.0);
+            rows.push_back(row);
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        if (catalog) {
+            PPR_RETURN_ERROR_ON_FAIL(GameMatter, setMatterProperties(state, rows, *catalog));
+            return {};
+        }
+
+        state.m_properties = std::move(rows);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // physical inventory and source units
     // ------------------------------------------------------------------
 
     Expected<MatterState> makeMatterState(
         const sim::MatterParticleSnapshot &snapshot, const double h, const double thickness, const float gravity_y,
-        const u64 world, const u32 world_edge) {
+        const u64 world, const u32 world_edge, const ContentCatalog *const catalog) {
         if (not std::isfinite(h) or
             h <= 0.0 or
             not std::isfinite(thickness) or
@@ -79,9 +234,9 @@ namespace pP::colony {
             particle.m_position_y = static_cast<float>(record.m_y_m / h + static_cast<double>(kMatterOrigin));
             particle.m_mass = static_cast<float>(record.m_mass_kg / mass_unit);
             particle.m_volume = static_cast<float>(record.m_volume_m3 / volume_unit);
+            const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
             particle.m_material = static_cast<float>(
-                record.m_phase == sim::EGenerationMatter::liquid ? matter::ESourceMaterial::liquid
-                                                                 : matter::ESourceMaterial::sand);
+                catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase));
             if (not std::isfinite(particle.m_mass) or
                 particle.m_mass <= 0.0f or
                 not std::isfinite(particle.m_volume) or
@@ -95,6 +250,7 @@ namespace pP::colony {
         }
 
         result.m_profile.m_particle_count = static_cast<u32>(result.m_particles.size());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, completeMatterProperties(result, catalog));
         return result;
     }
 
@@ -292,6 +448,17 @@ namespace pP::colony {
         PPR_RETURN_ERROR_ON_FAIL(
             GameMatter, validateMatterProfile(state.m_profile, h, thickness, gravity_y, state.m_world_edge));
 
+        auto property_indices = matterPropertyIndices(state);
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, property_indices);
+        for (const auto &property: state.m_properties) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter,
+                std::ranges::any_of(
+                    materials, [&](const auto &material) { return material.m_id == property.m_substance_id; })
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+        }
+
         auto snapshot = captureMovingMatter(state, state.m_particles);
         PPR_RETURN_ERROR_ON_FAIL(GameMatter, snapshot);
         PPR_RETURN_ERROR_ON_FAIL(
@@ -309,9 +476,7 @@ namespace pP::colony {
                 }
             }
 
-            const float material = static_cast<float>(
-                record.m_phase == sim::EGenerationMatter::liquid ? matter::ESourceMaterial::liquid
-                                                                 : matter::ESourceMaterial::sand);
+            const float material = static_cast<float>(state.m_properties[(*property_indices)[row]].m_family);
             if (record.m_phase == sim::EGenerationMatter::gas or
                 particle.m_mass != static_cast<float>(record.m_mass_kg / mass_unit) or
                 particle.m_volume != static_cast<float>(record.m_volume_m3 / volume_unit) or
@@ -483,7 +648,7 @@ namespace pP::colony {
             particle.m_position_x = static_cast<float>(position.m_x) + 0.5f + kMatterOrigin;
             particle.m_position_y = static_cast<float>(position.m_y) + 0.5f + kMatterOrigin;
             particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-            particle.m_material = static_cast<float>(matter::ESourceMaterial::sand);
+            particle.m_material = static_cast<float>(catalogFamily(material->m_key, record.m_phase));
             if (not std::isfinite(particle.m_mass) or particle.m_mass <= 0.0f) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::result_out_of_range);
             }
@@ -507,6 +672,7 @@ namespace pP::colony {
         result.m_profile.m_particle_count = static_cast<u32>(result.m_particles.size());
         ++result.m_identity.m_publication;
         ++result.m_identity.m_terrain_revision;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, completeMatterProperties(result, &catalog));
         return std::optional{std::move(result)};
     }
 
@@ -990,9 +1156,12 @@ namespace pP::colony {
                                 *state->m_device, *state->m_queue, *state->m_shaders, state->m_content_root,
                                 source.m_profile, state->m_observation_clock));
 
+            auto indices = matterPropertyIndices(source);
+            PPR_RETURN_ERROR_ON_FAIL(GameMatter, indices);
             const auto prepared = candidate->prepareReplacement(
                 source.m_particles, {}, candidate->accounting().m_epoch,
-                {terrain, source.m_world_edge + 1u, source.m_world_edge + 1u, 2.5f, 2.5f});
+                {terrain, source.m_world_edge + 1u, source.m_world_edge + 1u, 2.5f, 2.5f},
+                matter::ETerrainUpdate::replace, {source.m_properties, *indices});
             if (prepared) {
                 // Candidate never submitted; release on this same lane.
                 PPR_LOG_WARNING_ON_FAIL(GameMatter, candidate->shutdown());
@@ -1310,6 +1479,9 @@ namespace pP::colony {
 
         Array<matter::GpuParticle> uploaded(
             candidate.m_particles.begin() + (replace ? 0u : retained_count), candidate.m_particles.end());
+        auto all_indices = matterPropertyIndices(candidate);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, all_indices);
+        Array<u32> indices(all_indices->begin() + (replace ? 0u : retained_count), all_indices->end());
         Array<GridParticleMetadataRow> metadata;
         std::shared_ptr<MatterPhysicalLedger> ledger;
         auto prepared = presentationMetadata(candidate, m_state->m_observation_clock ? &ledger : nullptr);
@@ -1326,7 +1498,8 @@ namespace pP::colony {
         return enqueue(
             [state, source, target, retained_count, cell, terrain_edge, profile, iterations, moving_count, replace,
                 terrain_edit, uploaded = std::move(uploaded), metadata = std::move(metadata),
-                ledger = std::move(ledger), terrain = std::move(terrain)]() -> std::error_code {
+                ledger = std::move(ledger), terrain = std::move(terrain), properties = candidate.m_properties,
+                indices = std::move(indices)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
@@ -1376,9 +1549,11 @@ namespace pP::colony {
                                  : matter::TerrainView{};
                 const auto policy = terrain_edit ? matter::ETerrainUpdate::replace : matter::ETerrainUpdate::preserve;
                 const auto prepared = replace ? state->m_active->prepareReplacement(
-                                                    uploaded, {}, state->m_active->accounting().m_epoch, view, policy)
+                                                    uploaded, {}, state->m_active->accounting().m_epoch, view, policy,
+                                                    {properties, indices})
                                               : state->m_active->prepareAppend(
-                                                    uploaded, state->m_active->accounting().m_epoch, view, policy);
+                                                    uploaded, state->m_active->accounting().m_epoch, view, policy,
+                                                    {properties, indices});
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, prepared);
                 return {};
             });

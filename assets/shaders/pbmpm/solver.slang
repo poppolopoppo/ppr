@@ -1,6 +1,7 @@
 // Copyright (c) 2024 Electronic Arts Inc. All rights reserved.
 // Selected fork ErikSom/pbmpm 859c449; BSD-3-Clause notice: LICENSE.md.
 #include "types.slang"
+#define PBMPM_ENGINE_PARTICLE_ROWS 1
 #define PBMPM_ENGINE_ADAPTERS 1
 #define PBMPM_SPARSE_STORAGE 1
 #include "fork_core.slang"
@@ -79,6 +80,29 @@ bool validParticle(Particle p, uint row) {
     uint field=invalidParticleField(p,g_parameters);
     if (field!=0xffffffffu) {
         recordError(8u,0xffffffffu,field,row);
+        return false;
+    }
+
+    return true;
+}
+
+// Property failures have their own flag (512): node carries the property index,
+// field 0 means absent/out-of-range storage, field 1 means an empty/mismatched row.
+// UINT_MAX is the explicit global-profile route and never reads the table.
+bool particlePropertiesUsable(uint row) {
+    uint index = g_cold[row].propertyRow;
+    if (index == 0xffffffffu) return true;
+
+    uint count, stride;
+    g_properties.GetDimensions(count, stride);
+    if (index >= count) {
+        recordError(512u, index, 0u, row);
+        return false;
+    }
+
+    MaterialProperties properties = g_properties[index];
+    if (properties.substanceId == 0u || properties.family != uint(g_cold[row].material)) {
+        recordError(512u, index, 1u, row);
         return false;
     }
 
@@ -435,10 +459,11 @@ void fusedIteration<let FirstStage : bool, let Cooperative : bool>(uint lane,uin
 
     if (lane<bucket.count) {
         uint row=g_rows[bucket.start+lane];
+        bool propertiesUsable=particlePropertiesUsable(row);
         Particle p=loadParticle(row);
         float2 oldPosition=float2(p.positionX,p.positionY);
         Weights weights=quadraticWeights(oldPosition);
-        if (!FirstStage) {
+        if (!FirstStage && propertiesUsable) {
             SourceMatrix B=zeroMatrix();
             float2 d=float2(0); float volume=0;
             for (int i=0;i<3;++i) {
@@ -491,9 +516,9 @@ void fusedIteration<let FirstStage : bool, let Cooperative : bool>(uint lane,uin
         }
 
         Particle updated=p;
-        bool scatterable=deformationOperandsUsable(p,row);
+        bool scatterable=propertiesUsable && deformationOperandsUsable(p,row);
         if (scatterable) {
-            updated=constraint(p);
+            updated=constraint(p,row);
             scatterable=producedStateUsable(updated,row);
         }
         if (scatterable) {

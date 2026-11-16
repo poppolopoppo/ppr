@@ -5,6 +5,45 @@ The numerical authority is [ErikSom/pbmpm at
 The original BSD-3-Clause notice is in `LICENSE.md`. Historical EA pins remain
 provenance, not alternative production backends.
 
+## B1 property ownership
+
+Production cold rows are now 28 bytes: the six original FP32 fields followed by
+one u32 property-row index. `g_properties` holds immutable 40-byte substance rows
+through every tick fence. `GpuSolver::prepareReplacement`/`prepareAppend` validate
+and own them; every fused root binds them. `particleProperties(row)` resolves the
+index for `constraint` and `integration`. The 64-byte hot and 88-byte CPU semantic
+records are unchanged. The no-adapter conformance path retains Cold24 and its
+global profile arithmetic. An engine cold index of UINT_MAX explicitly selects
+the global profile for Phase A fixtures.
+
+The global profile continues to own grid dimensions, dt, gravity, volume-feedback
+selection and fixed-point multiplier. Rows own elasticity blend, both relaxation
+coefficients, viscosity, friction degrees, plasticity and `sandYieldRatio`.
+The last is **calibration, not a modulus ratio**. Reference density uses rho/1000
+from catalog physical inventory and does not rescale liquidDensity or pressure.
+Legacy default values, sampling, units, multiplier, K2 source fixtures and K5
+new-world policy remain unchanged. A2 predicates strictly reject invalid rows.
+
+The game catalog maps water/brine/oil/crude oil/magma to liquid and
+sand/sandstone/basalt/coal/ores to sand, with independent legacy-valued rows.
+**Clay, snow and pebbles/gravel are sand placeholders until their laws exist.**
+Cohesive and compacting enum slots cannot activate yet. Cohesive DP requires the
+approved volumetric cap; neither that law nor snow/pebble laws land in B1.
+
+Checkpoint envelope v8 stores policy 1, full rows keyed by stable catalog ID and
+a canonical identity. v6/v7 migration synthesizes current legacy-valued defaults
+without changing physical inventory or numerical state; v6 retains K2, v7 its
+saved K. Unknown policy or identity mismatch returns `protocol_not_supported`
+before replacing a world; invalid IDs/domains return `invalid_argument`.
+
+The B1 GPU leaves assert exact default-row equivalence at K2/K5/K10, distinct
+same-family viscosity response, untouched state after rejected admission, and
+unchanged dispatch counts/results with unused definitions. The frozen fork
+comparison also exercises mapped rows without regenerating fixtures or widening
+tolerances. These are authored assertions, not an execution claim.
+
+## Retained numerical profile
+
 PPR uses liquid relaxation **1**, inherited from its K2 stability tuning, rather than the
 selected fork's default of1.5. The historical EA pin defaulted to2, which is the
 value the instability analysis below was computed at. The liquid equations
@@ -14,7 +53,7 @@ relaxation2; unit relaxation removes that mode, and increasing relaxation
 amplifies it. That analysis describes2, not the selected fork's1.5; the
 regression below covers the unit production value. This is an explicit profile
 correction, not a scatter clamp or a change to the dense source oracle. Both
-production and oracle consume the supplied profile. See the isolated pressure
+production defaults and oracle use these same values. See the isolated pressure
 and frontier5×7-dig regression tests. Re-derivation for the new-world K5 schedule
 and investigation of its first-step clamp activation remain follow-up work.
 
@@ -86,7 +125,8 @@ is independent of spare row-buffer capacity. Bounded atomic reservation rejects 
 or issuing an out-of-range indirect dispatch. Stable rows are only permuted in
 the bucket index buffer; particle storage/order and metadata identity stay fixed.
 
-The device ABI is a64-byte hot row plus a24-byte cold row. The saved semantic
+The production device ABI is a64-byte hot row plus a28-byte cold row (the
+no-adapter oracle retains cold24). The saved semantic
 record remains22 fields/88 bytes, packed by field name; no v5 wire-layout change.
 All evolving fields retain FP32 storage. Terrain masks use4 bits per cell,
 boundary tile occupancy uses1 bit per8x8 tile, and the exact contour tables use

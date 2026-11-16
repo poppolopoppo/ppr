@@ -542,7 +542,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         hot[0u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
         hot[1u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
         hot[15u] = 1.0f;
-        std::array<float, 6u> cold{};
+        std::array<float, 7u> cold{};
         cold[1u] = std::numbers::pi_v<float> * 0.25f;
 
         auto live = std::make_shared<std::atomic<u64>>(1u);
@@ -1444,7 +1444,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
             std::array<float, 16u> hot{};
             hot[0u] = hot[1u] = 3.0f + 40.5f;
             hot[15u] = 1.0f;
-            std::array<float, 6u> cold{};
+            std::array<float, 7u> cold{};
             cold[1u] = std::numbers::pi_v<float> * 0.25f;
             GridParticleGpuView published{};
             published.m_numerical = makeLightingTestBuffer(

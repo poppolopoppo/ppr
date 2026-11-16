@@ -227,6 +227,16 @@ ppr_add_test_entry(TARGET engine.tests.app
     LABELS unit engine app gpu_validation matter_fast
 )
 
+# B1's two table leaves each belong to this one exact-path shard.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_properties_gpu
+    FILTER "app/matter_gpu/substance_rows_preserve_defaults_and_reject_invalid_replacements,app/matter_gpu/same_family_substances_differ_and_unused_rows_do_not_dispatch"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_constitutive_gpu
     FILTER "${ppr_matter_constitutive_filter}"

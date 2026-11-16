@@ -2,15 +2,44 @@
 // BSD-3-Clause notice: LICENSE.md. Arithmetic expressions are retained verbatim.
 // Engine-only hooks preserve the no-hook conformance order.
 struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled; };
+#ifdef PBMPM_ENGINE_PARTICLE_ROWS
+struct Cold { float mass, volume, material, r, g, b; uint propertyRow; };
+#else
 struct Cold { float mass, volume, material, r, g, b; };
+#endif
 struct Bucket { uint start, count, x, y; };
 ConstantBuffer<Parameters> g_parameters;
 #ifdef PBMPM_ENGINE_ADAPTERS
 struct RadialForce { float centerX, centerY, radius, acceleration; };
 ConstantBuffer<RadialForce> g_radial_force;
+// Immutable per-substance rows; referenceDensity describes physical inventory
+// and deliberately does not rescale the normalized liquid state.
+struct MaterialProperties {
+    uint substanceId, family;
+    float elasticityRatio, elasticRelaxation, liquidRelaxation, liquidViscosity;
+    float frictionAngle, plasticity, referenceDensity, sandYieldRatio;
+};
+StructuredBuffer<MaterialProperties> g_properties;
+#define PBMPM_COEFFICIENTS coefficients
+#else
+#define PBMPM_COEFFICIENTS g_parameters
 #endif
 RWStructuredBuffer<Hot> g_hot;
 StructuredBuffer<Cold> g_cold;
+#ifdef PBMPM_ENGINE_ADAPTERS
+MaterialProperties particleProperties(uint row) {
+    uint index = g_cold[row].propertyRow;
+    if (index != 0xffffffffu) return g_properties[index];
+
+    // Explicit profile-only compatibility path for source/Phase A fixtures.
+    MaterialProperties result = {0u, uint(g_cold[row].material),
+        g_parameters.elasticityRatio, g_parameters.elasticRelaxation,
+        g_parameters.liquidRelaxation, g_parameters.liquidViscosity,
+        g_parameters.frictionAngle, g_parameters.plasticity, 1.0,
+        g_parameters.elasticityRatio};
+    return result;
+}
+#endif
 StructuredBuffer<StaticShape> g_shapes;
 #ifndef PBMPM_SPARSE_STORAGE
 StructuredBuffer<int> g_gridSrc;
@@ -108,14 +137,21 @@ SvdResult forkSvd(SourceMatrix m) {
     return result;
 }
 
-Particle constraint(Particle p) {
+Particle constraint(Particle p
+#ifdef PBMPM_ENGINE_ADAPTERS
+    , uint row
+#endif
+) {
+#ifdef PBMPM_ENGINE_ADAPTERS
+    MaterialProperties coefficients = particleProperties(row);
+#endif
     SourceMatrix D = p.deformationDisplacement;
     if (p.material == MaterialLiquid) {
         SourceMatrix deviatoric = scale(add(D, transposed(D)), -1.0);
-        D = add(D, scale(deviatoric, g_parameters.liquidViscosity * 0.5));
+        D = add(D, scale(deviatoric, PBMPM_COEFFICIENTS.liquidViscosity * 0.5));
 
         float alpha = 0.5 * (1.0 / p.liquidDensity - trace(D) - 1.0);
-        D = add(D, scale(identity(), g_parameters.liquidRelaxation * alpha));
+        D = add(D, scale(identity(), PBMPM_COEFFICIENTS.liquidRelaxation * alpha));
     } else if (p.material == MaterialElastic || p.material == MaterialVisco || p.material == MaterialSand) {
         SourceMatrix F = product(add(identity(), D), p.deformationGradient);
         SvdResult decomposition = forkSvd(F);
@@ -129,13 +165,13 @@ Particle constraint(Particle p) {
         SourceMatrix Q = scale(F, 1.0 / (sign(df) * sqrt(cdf)));
         SourceMatrix target = sand ? product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt)
                                   : product(decomposition.U, decomposition.Vt);
-        target = add(scale(target, g_parameters.elasticityRatio), scale(Q, 1.0 - g_parameters.elasticityRatio));
+        target = add(scale(target, PBMPM_COEFFICIENTS.elasticityRatio), scale(Q, 1.0 - PBMPM_COEFFICIENTS.elasticityRatio));
         SourceMatrix difference = subtract(subtract(product(target, inverted(p.deformationGradient)), identity()), D);
-        D = add(D, scale(difference, g_parameters.elasticRelaxation));
+        D = add(D, scale(difference, PBMPM_COEFFICIENTS.elasticRelaxation));
 
         if (sand) {
             SourceMatrix deviatoric = scale(add(D, transposed(D)), -1.0);
-            D = add(D, scale(deviatoric, g_parameters.liquidViscosity * 0.5));
+            D = add(D, scale(deviatoric, PBMPM_COEFFICIENTS.liquidViscosity * 0.5));
         }
     }
 
@@ -150,6 +186,9 @@ static const float kMinSandExponent = -87.0;
 static const float kMaxSandExponent = 88.0;
 #endif
 Particle integration(Particle p, uint row) {
+#ifdef PBMPM_ENGINE_ADAPTERS
+    MaterialProperties coefficients = particleProperties(row);
+#endif
     if (p.material == MaterialLiquid) {
         p.liquidDensity *= trace(p.deformationDisplacement) + 1.0;
         p.liquidDensity = max(p.liquidDensity, 0.05);
@@ -164,7 +203,7 @@ Particle integration(Particle p, uint row) {
         SvdResult decomposition = forkSvd(p.deformationGradient);
         decomposition.Sigma = clamp(decomposition.Sigma, float2(0.1), float2(10000.0));
         if (p.material == MaterialSand) {
-            float sinPhi = sin(g_parameters.frictionAngle / 180.0 * 3.14159);
+            float sinPhi = sin(PBMPM_COEFFICIENTS.frictionAngle / 180.0 * 3.14159);
             float alpha = sqrt(2.0 / 3.0) * 2.0 * sinPhi / (3.0 - sinPhi);
             float2 eDiag = log(max(abs(decomposition.Sigma), float2(1e-6)));
             float traceE = eDiag.x + eDiag.y + p.logJp;
@@ -175,7 +214,12 @@ Particle integration(Particle p, uint row) {
                 p.logJp = 0.5 * traceE;
             } else {
                 p.logJp = 0.0;
+#ifdef PBMPM_ENGINE_ADAPTERS
+                // Compatibility calibration, not a Lamé modulus ratio.
+                float deltaGamma = frobenius + (coefficients.sandYieldRatio + 1.0) * traceE * alpha;
+#else
                 float deltaGamma = frobenius + (g_parameters.elasticityRatio + 1.0) * traceE * alpha;
+#endif
 #ifdef PBMPM_ENGINE_ADAPTERS
                 // Reject NaN before the branch can silently bypass projection.
                 if (!isfinite(deltaGamma)) {
@@ -213,7 +257,7 @@ Particle integration(Particle p, uint row) {
                 }
             }
         } else if (p.material == MaterialVisco) {
-            float yieldSurface = exp(1.0 - g_parameters.plasticity);
+            float yieldSurface = exp(1.0 - PBMPM_COEFFICIENTS.plasticity);
             float J = decomposition.Sigma.x * decomposition.Sigma.y;
 #ifdef PBMPM_ENGINE_ADAPTERS
             // Profile admission already bounds yieldSurface; a nonfinite or
@@ -298,4 +342,3 @@ Particle integration(Particle p, uint row) {
     p.positionX=position.x; p.positionY=position.y; p.displacementX=d.x; p.displacementY=d.y;
     return p;
 }
-

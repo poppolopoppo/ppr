@@ -591,6 +591,26 @@ only for homogeneous elastic K2/K5/K10 and sand K2/K5 constitutive state. Sand K
 checks structure and reports numerical divergence without asserting parity. An explicit family identifier prevents its leading
 liquid row from accidentally selecting it into the homogeneous liquid leaf.
 
+These frozen-oracle counts remain unchanged: 64 rows × 8 compatibility words =
+512 words, of which 64 × 6 = 384 are semantic; the mixed fixture has 36 × 8 =
+288 compatibility words and 36 × 6 = 216 semantic words. The direct no-adapter
+conformance fixture retains its six-float, 24-byte cold ABI. Production cold rows
+now add one transient u32 property index: 6 × 4 + 4 = 28 bytes, giving a
+64 + 28 = 92-byte device pair while `GpuParticle` remains 22 × 4 = 88 bytes.
+
+The current 4,103-edge, 13,044-row dual-owner device-accounting oracle is derived
+separately from those historical measurements. Lookup bytes remain
+8 × 684² + 16 × 513² = 7,953,552. Per-owner fixed bytes are
+7,953,552 + 132 contour + 4 dummy terrain + 64 body + 32 shape + 40 dummy
+material properties = 7,953,824. Empty dynamic storage is
+2 × 92 + 16 + 4 + 12 + 16 + 4 + 16 + 48 + 24 = 324 bytes; loaded storage is
+2 × 13,044 × 92 + 16 × 13,044 + 4 × 78,264 + 12 × 256 × 78,264 +
+16 × 13,044 + 4 × 13,044 + 16 + 48 + 24 = 243,609,832 bytes. Thus the empty
+peak is 2 × (7,953,824 + 324) = 15,908,296 bytes, the loaded peak is
+2 × (7,953,824 + 243,609,832) = 503,127,312 bytes, and growth is
+2 × (243,609,832 − 324) = 487,219,016 bytes. These are allocation formulas,
+not new measured results; readback capacity is accounted separately.
+
 ### Decision B — solid constitutive-state measured upper bound under open investigation
 
 Native execution exposed these first failures under the derived policy at substep 8:
@@ -763,3 +783,21 @@ Three consecutive runs, all inside the 420 s ceiling, with the new conformance l
 
 - **Windows/D3D12 unrun.** Required by the plan as a compatibility gate; Linux evidence cannot satisfy it.
 - **Merge surface.** Three paths overlap with the current `particles` tip: `game/colony/codemap.md`, `lib/engine/app/renderer/App.Renderer.GridPass.cpp` and `.cppm`. Main has advanced past this branch's base with renderer ownership/reconstruction work, so integration and affected rendering tests are still required.
+
+## B1 — per-substance simulation parameters
+
+Every substance now carries its own constitutive family and coefficients instead of inheriting one global set.
+
+| Element | Family | Note |
+|---|---|---|
+| water, brine, oil/crude, magma | liquid | distinct reference density and viscosity per substance |
+| sand, sandstone, basalt, coal, copper/iron/uranium ores, wolframite, autunite, azurite | sand | per-substance friction and density |
+| clay / wet sand, snow, pebbles / gravel | sand | **explicit placeholders** until the cohesive and compacting laws land |
+
+Layout: the semantic record stays 88 bytes; the device cold row grows 24 → 28 bytes for the property index (`kDeviceRowBytes = 92`). The no-adapter conformance path keeps the 24-byte ABI and the global profile, so the pinned upstream fixtures and their arithmetic are unchanged; a mismatch between the two strides previously made sparse maintenance read the property sentinel as a NaN mass, which is now an explicit flag-512 property rejection with field witnesses.
+
+Checkpoint envelope **v8** stores the material-table policy, a canonical table identity and the complete substance rows; per-particle indices are reconstructed, never persisted. v6 migrates to K2 and v7 to its saved schedule, both with legacy-valued rows; a policy or identity mismatch returns `protocol_not_supported`.
+
+Measured during integration: default-row equivalence (legacy values reproduce the accepted Phase A solver, including the frozen fork fixtures), two same-family substances with different viscosity producing distinguishable shear response, invalid tables rejected without disturbing a live world, append/cancellation preserving indices, unused catalog definitions leaving dispatch counts and results unchanged, and v6/v7/v8 round trips with bitwise row assertions.
+
+Still ahead in B1: the **cohesive cap law** (clay), the **compacting porous law** (snow) and the **solid/elastic recovery** determination, plus pebble behaviour. The approved decisions behind them are recorded in `docs/pbmpm-material-laws-proposal.md`: legacy `sandYieldRatio` as calibration, density from physical inventory, strict coefficient admission, identity-preserving migration, and a volumetric cap for the cohesive family.

@@ -1725,7 +1725,7 @@ namespace pP::tests::detail::WorldLightingTrace {
         hot[1u][0u] = 3.0f + 501.5f;
         hot[1u][1u] = 3.0f + 500.5f;
         hot[1u][15u] = 1.0f;
-        std::array<std::array<float, 6u>, 2u> cold{};
+        std::array<std::array<float, 7u>, 2u> cold{};
         for (auto &row: cold) {
             row[1u] = std::numbers::pi_v<float> * 0.25f;
         }

@@ -1,4 +1,7 @@
 #include "types.slang"
+// Maintenance reads the same 28-byte rows as the fused solver, without
+// enabling constitutive/contact adapters or changing the fork's 24-byte ABI.
+#define PBMPM_ENGINE_PARTICLE_ROWS 1
 #define PBMPM_SPARSE_STORAGE 1
 #include "fork_core.slang"
 

@@ -1131,7 +1131,7 @@ namespace pP::tests::detail::MatterFork {
         std::vector<u32> hot, cold;
         for (const auto &particle: snapshot.m_particles) {
             const auto h = std::bit_cast<std::array<u32, 16u>>(matter::packWrite(particle));
-            const auto compact = std::bit_cast<std::array<u32, 6u>>(matter::packReadonly(particle));
+            const auto compact = std::bit_cast<std::array<u32, 7u>>(matter::packReadonly(particle));
             const auto c = oracleCold(compact.data());
             hot.insert(hot.end(), h.begin(), h.end());
             cold.insert(cold.end(), c.begin(), c.end());
@@ -1161,7 +1161,11 @@ namespace pP::tests::detail::MatterFork {
                 std::copy_n(input.hot + original * 16u, 16u, hot_words.begin());
                 std::copy_n(input.cold + original * 8u, 8u, cold_words.begin());
                 const auto hot = std::bit_cast<matter::ParticleWrite>(hot_words);
-                const auto cold = std::bit_cast<matter::ParticleReadonly>(compactCold(cold_words.data()));
+                const auto legacy_cold = compactCold(cold_words.data());
+                matter::ParticleReadonly cold{};
+                // Frozen no-adapter rows stay six words; the engine-only index
+                // defaults to the explicit profile path and is not fixture data.
+                std::memcpy(&cold, &legacy_cold, sizeof(legacy_cold));
                 if (hot.m_enabled == 0.0f) {
                     // The fork's bucket admission skips exactly these rows, so
                     // they produce no count/scatter. Full disabled-row behavior
@@ -1216,8 +1220,50 @@ namespace pP::tests::detail::MatterFork {
             PPR_TEST_ASSERT(not restored.initialize(
                 fixture.rhi_service->getDevice(), *fixture.queue, *fixture.shaders, std::filesystem::current_path(),
                 parameters));
-            PPR_TEST_ASSERT(
-                not restored.prepareReplacement(first_tick.m_particles, shapes, restored.accounting().m_epoch));
+            std::array<matter::GpuMaterialProperties, 4u> properties{};
+            for (u32 family = 0u; family < properties.size(); ++family) {
+                auto &property = properties[family];
+                property.m_substance_id = family + 1u;
+                property.m_family = static_cast<matter::ESourceMaterial>(family);
+                property.m_elasticity_ratio = parameters.m_elasticity_ratio;
+                property.m_elastic_relaxation = parameters.m_elastic_relaxation;
+                property.m_liquid_relaxation = parameters.m_liquid_relaxation;
+                property.m_liquid_viscosity = parameters.m_liquid_viscosity;
+                property.m_friction_angle = parameters.m_friction_angle;
+                property.m_plasticity = parameters.m_plasticity;
+                property.m_sand_yield_ratio = parameters.m_elasticity_ratio;
+            }
+
+            Array<u32> indices;
+            for (const auto &particle: particles)
+                indices.push_back(static_cast<u32>(particle.m_material));
+            PPR_TEST_ASSERT(not restored.prepareReplacement(
+                particles, shapes, restored.accounting().m_epoch, {}, matter::ETerrainUpdate::replace,
+                {properties, indices}));
+            restored.publishReplacement();
+            for (u32 substep = 0u; substep < 8u; ++substep) {
+                PPR_TEST_ASSERT(not restored.submitResidentTick(restored.accounting().m_epoch, 1u, 2u));
+                PPR_TEST_ASSERT(not restored.drain());
+                const auto ready = restored.pollTick();
+                PPR_TEST_ASSERT(ready and *ready);
+                restored.publishTick();
+
+                const auto mapped = captureProduction(restored);
+                const u32 stage = substep * 2u + 1u;
+                compareProduction(
+                    mapped, input.stages[stage].hot, input.stages[stage].cold, original_rows,
+                    kForkWordBounds[case_index], input.name, stage, substep + 1u);
+                if (substep == 7u) {
+                    PPR_TEST_ASSERT(
+                        std::memcmp(
+                            mapped.m_particles.data(), first_tick.m_particles.data(),
+                            first_tick.m_particles.size() * sizeof(matter::GpuParticle)) == 0);
+                }
+            }
+
+            PPR_TEST_ASSERT(not restored.prepareReplacement(
+                first_tick.m_particles, shapes, restored.accounting().m_epoch, {}, matter::ETerrainUpdate::replace,
+                {properties, indices}));
             restored.publishReplacement();
             PPR_TEST_ASSERT(not restored.submitResidentTick(restored.accounting().m_epoch, 8u, 2u));
             PPR_TEST_ASSERT(not restored.drain());

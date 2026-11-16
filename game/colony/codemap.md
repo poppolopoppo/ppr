@@ -237,12 +237,16 @@ the committed revision manifest.
 
 
 `Checkpoint.cppm` / `Checkpoint.cpp` / `Checkpoint.Codec.cpp` /
-`Checkpoint.Validation.cpp` own mandatory current-state game envelope v7. It
+`Checkpoint.Validation.cpp` own mandatory current-state game envelope v8. It
 stores every scalar particle column (p/d/D/F/J/lambda/logJp/color/enabled), the
 fixed profile, physical ledger/gas/next ID, metric and durable publication/terrain
 epochs and the world-owned iteration schedule K∈{2,5,10}. The schedule is a
 little-endian u32 before the unchanged sixteen-word profile (120 fixed matter
-bytes instead of 116). v6 explicitly migrates to K2; versions before v6 fail with
+bytes instead of 116). B1 adds a table-policy/identity/count header (16 bytes)
+and 40-byte substance rows before the raw sim snapshot. Device row indices are
+reconstructed from physical stable IDs, never serialized. v6/v7 synthesize
+current legacy-valued defaults; v6 explicitly migrates to K2 and v7 retains K.
+Unknown table policy or identity/value mismatch and versions before v6 fail with
 `protocol_not_supported`. Invalid schedules fail with `invalid_argument`, never
 clamping. Runtime admission retains K through world publication, append and
 replacement; every resident tick submits the saved schedule. Decode never seeds

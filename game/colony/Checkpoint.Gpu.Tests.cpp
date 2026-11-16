@@ -244,6 +244,10 @@ namespace pP::game::tests::detail::checkpoint {
             if (m_driver) {
                 for (;;) {
                     const auto detached = m_driver->advanceDetachMatter();
+                    if (not detached) {
+                        reportFailure(detached.error(), "advanceDetachMatter");
+                    }
+
                     PPR_TEST_ASSERT(detached.has_value());
                     if (*detached) {
                         break;
@@ -1266,10 +1270,13 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(bytes.has_value());
 
             if (iterations == 2u) {
-                // The codec has no v6 writer: omit only v7's schedule word
-                // from its otherwise unchanged, codec-produced payload.
+                // Reconstruct v6 by removing v8's table and v7's schedule word.
                 const auto raw = sim::save(checkpoint.m_snapshot);
                 PPR_TEST_ASSERT(raw.has_value());
+                const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 40u;
+                const auto table_begin = bytes->begin() +
+                                         static_cast<std::ptrdiff_t>(bytes->size() - raw->size() - 8u - table_bytes);
+                bytes->erase(table_begin, table_begin + static_cast<std::ptrdiff_t>(table_bytes));
                 const std::size_t offset = bytes->size() -
                                            raw->size() -
                                            8u -
@@ -3478,12 +3485,13 @@ namespace pP::game::tests::detail::checkpoint {
     PPR_UNIT_TEST (publication_hold_does_not_change_solver_or_presentation_storage) {
         // Task 5 is a liveness change. No solver, packet or checkpoint layout
         // moves with it (plan §6): GpuParticle stays the 88-byte semantic row,
-        // the hot/cold rows keep their strides, metadata stays 32 bytes and the
+        // hot/cold rows are 64/28 bytes, metadata stays 32 bytes and the
         // checkpoint wire row is still 22 raw words of one GpuParticle.
         static_assert(sizeof(matter::GpuParticle) == 88u);
         static_assert(sizeof(matter::GpuParticle) == 22u * sizeof(u32));
         static_assert(sizeof(matter::ParticleWrite) == 64u);
-        static_assert(sizeof(matter::ParticleReadonly) == 24u);
+        // Six FP32 semantic cold fields + one transient u32 property index = 28 bytes.
+        static_assert(sizeof(matter::ParticleReadonly) == 28u);
         static_assert(sizeof(GridParticleMetadataRow) == 32u);
         static_assert(
             kGridParticleNumericalStride == sizeof(matter::ParticleWrite) and

@@ -53,18 +53,18 @@ namespace pP::tests::detail::WorldLightingProjection {
         return 3.0f + native;
     }
 
-    // Committed numerical (hot64) and readonly (cold24) rows.
+    // Committed numerical (16 * 4 = 64 bytes) and readonly (6 * 4 + 4 index = 28 bytes) rows.
     struct HotRow {
         float m_position[2]{};
         float m_carried[14]{};
     };
 
     struct ColdRow {
-        float m_fields[6]{};
+        float m_fields[7]{};
     };
 
     static_assert(sizeof(HotRow) == 64u and alignof(HotRow) == 4u);
-    static_assert(sizeof(ColdRow) == 24u and alignof(ColdRow) == 4u);
+    static_assert(sizeof(ColdRow) == 28u and alignof(ColdRow) == 4u);
     static_assert(PPR_OFFSETOF(HotRow, m_carried) == 8u);
 
     struct ParticleSpec {
@@ -198,7 +198,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         }
 
         // Publishes exactly the committed GPU state the projection consumes:
-        // stable-ID-ordered metadata, hot64/cold24 numerical rows under the
+        // stable-ID-ordered metadata, hot64/cold28 numerical rows under the
         // published origin, and the full-domain packed terrain words. `cell_metres`
         // is the published native cell edge; the presentation row must convert the
         // committed cell coordinates through it.

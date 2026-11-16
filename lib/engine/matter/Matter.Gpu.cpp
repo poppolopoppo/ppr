@@ -145,6 +145,8 @@ namespace pP::matter {
             rhi::ComPtr<rhi::IBuffer> m_readback;
             rhi::ComPtr<rhi::IBuffer> m_terrain_masks;
             rhi::ComPtr<rhi::IBuffer> m_terrain_boundary_tiles;
+            rhi::ComPtr<rhi::IBuffer> m_properties;
+            Array<GpuMaterialProperties> m_property_rows;
             u64 m_hot_bytes{};
             u64 m_cold_bytes{};
             u32 m_particle_count{};
@@ -157,6 +159,40 @@ namespace pP::matter {
             u32 m_row_capacity{};
             u32 m_body_count{};
         };
+    }
+
+    // ------------------------------------------------------------------
+    // material admission
+    // ------------------------------------------------------------------
+
+    bool validMaterialProperties(const GpuMaterialProperties &row) noexcept {
+        GpuParameters profile{};
+        profile.m_elasticity_ratio = row.m_elasticity_ratio;
+        profile.m_elastic_relaxation = row.m_elastic_relaxation;
+        profile.m_liquid_relaxation = row.m_liquid_relaxation;
+        profile.m_liquid_viscosity = row.m_liquid_viscosity;
+        profile.m_friction_angle = row.m_friction_angle;
+        profile.m_plasticity = row.m_plasticity;
+
+        return row.m_substance_id != 0u and
+               static_cast<u32>(row.m_family) <= static_cast<u32>(ESourceMaterial::visco) and
+               validProfileDomain(profile) and
+               std::isfinite(row.m_sand_yield_ratio) and
+               std::isfinite(row.m_reference_density) and
+               row.m_reference_density > 0.0f and
+               std::isfinite(1.0f / row.m_reference_density);
+    }
+
+    std::error_code validateMaterialTable(const std::span<const GpuMaterialProperties> rows) {
+        std::unordered_set<u32> ids;
+        for (const auto &row: rows) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, validMaterialProperties(row) and ids.insert(row.m_substance_id).second
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        return {};
     }
 
     // ------------------------------------------------------------------
@@ -530,6 +566,7 @@ namespace pP::matter {
 
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_hot", m_particles.m_working_hot));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_cold", m_particles.m_working_cold));
+            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_properties", m_particles.m_properties));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_errors", buffers.m_errors));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_rows", buffers.m_rows));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_buckets", buffers.m_groups));
@@ -722,19 +759,21 @@ namespace pP::matter {
 
     std::error_code GpuSolver::prepareReplacement(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain, const ETerrainUpdate terrain_update) {
-        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false, terrain_update);
+        const u64 expected_epoch, const TerrainView terrain, const ETerrainUpdate terrain_update,
+        const GpuMaterialTableView properties) {
+        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false, terrain_update, properties);
     }
 
     std::error_code GpuSolver::prepareAppend(
         const std::span<const GpuParticle> appended, const u64 expected_epoch, const TerrainView terrain,
-        const ETerrainUpdate terrain_update) {
-        return prepareReplacement_(appended, {}, expected_epoch, terrain, true, terrain_update);
+        const ETerrainUpdate terrain_update, const GpuMaterialTableView properties) {
+        return prepareReplacement_(appended, {}, expected_epoch, terrain, true, terrain_update, properties);
     }
 
     std::error_code GpuSolver::prepareReplacement_(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain, const bool append, const ETerrainUpdate terrain_update) {
+        const u64 expected_epoch, const TerrainView terrain, const bool append, const ETerrainUpdate terrain_update,
+        const GpuMaterialTableView properties) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             m_state and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -772,7 +811,37 @@ namespace pP::matter {
                            ? std::error_code{}
                            : std::make_error_code(std::errc::value_too_large));
 
-        for (const GpuParticle &particle: particles) {
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, validateMaterialTable(properties.m_rows));
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, (properties.m_rows.empty() and properties.m_particle_rows.empty()) or
+                               (not properties.m_rows.empty() and properties.m_particle_rows.size() == particles.size())
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        if (append) {
+            // A resident prefix keeps its indices. Definitions may only extend
+            // that table; changing/reordering existing rows requires replacement.
+            const auto &old = state.m_particles.m_property_rows;
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, properties.m_rows.size() >= old.size() and
+                                   (old.empty() or std::memcmp(
+                                                       old.data(), properties.m_rows.data(),
+                                                       old.size() * sizeof(GpuMaterialProperties)) == 0)
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        for (std::size_t index = 0u; index < particles.size(); ++index) {
+            const auto &particle = particles[index];
+            if (not properties.m_rows.empty()) {
+                const u32 property_row = properties.m_particle_rows[index];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu,
+                    property_row < properties.m_rows.size() and
+                            particle.m_material == static_cast<float>(properties.m_rows[property_row].m_family)
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::invalid_argument));
+            }
+
             PPR_RETURN_ERROR_ON_FAIL(
                 MatterGpu, validParticle(particle, state.m_profile)
                                ? std::error_code{}
@@ -825,6 +894,15 @@ namespace pP::matter {
         }
 
         ParticleStorage replacement;
+        replacement.m_property_rows.assign(properties.m_rows.begin(), properties.m_rows.end());
+        const GpuMaterialProperties empty_properties{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu,
+            createBuffer(
+                *state.m_device, std::max<std::size_t>(1u, properties.m_rows.size()) * sizeof(GpuMaterialProperties),
+                sizeof(GpuMaterialProperties), properties.m_rows.empty() ? &empty_properties : properties.m_rows.data(),
+                "PBMPM immutable substance properties", replacement.m_properties));
+
         replacement.m_particle_count = old_count + static_cast<u32>(particles.size());
         replacement.m_hot_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleWrite);
         replacement.m_cold_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleReadonly);
@@ -921,8 +999,8 @@ namespace pP::matter {
             }
         }
 
-        // Named-field packing is the only crossing between the semantic record and
-        // the split device rows; all six compact cold fields remain FP32.
+        // Named-field packing keeps semantic fields intact; the transient index
+        // is supplied separately from the caller's stable substance metadata.
         Array<ParticleWrite> hot_rows;
         Array<ParticleReadonly> cold_rows;
         if (not particles.empty()) {
@@ -931,6 +1009,9 @@ namespace pP::matter {
             for (std::size_t row = 0u; row < particles.size(); ++row) {
                 hot_rows[row] = packWrite(particles[row]);
                 cold_rows[row] = packReadonly(particles[row]);
+                if (not properties.m_rows.empty()) {
+                    cold_rows[row].m_property_row = properties.m_particle_rows[row];
+                }
             }
         }
 
@@ -1278,6 +1359,7 @@ namespace pP::matter {
                 // The cold row is only ever read by the kernels, so it holds a
                 // shader-resource state rather than the hot row's unordered access.
                 encoder->setBufferState(state.m_particles.m_working_cold, rhi::ResourceState::ShaderResource);
+                encoder->setBufferState(state.m_particles.m_properties, rhi::ResourceState::ShaderResource);
                 encoder->setBufferState(state.m_particles.m_shapes, rhi::ResourceState::ShaderResource);
                 if (state.m_particles.m_terrain_masks) {
                     encoder->setBufferState(state.m_particles.m_terrain_masks, rhi::ResourceState::ShaderResource);
@@ -1549,6 +1631,7 @@ namespace pP::matter {
                     {"field", errors[3]},
                     {"particle_row", errors[4]},
                     {"body", errors[5]},
+                    {"property_table_rows", state.m_particles.m_property_rows.size()},
                     {"epoch", state.m_accounting.m_epoch},
                     {"particle_count", state.m_profile.m_particle_count},
                     {"grid_width", state.m_profile.m_grid_width},
@@ -1744,6 +1827,7 @@ namespace pP::matter {
         const ParticleStorage &particles = m_state->m_particles;
         result.m_device_bytes += 2u * (particles.m_hot_bytes + particles.m_cold_bytes);
         result.m_device_bytes += particles.m_shapes ? particles.m_shapes->getDesc().size : 0u;
+        result.m_device_bytes += particles.m_properties ? particles.m_properties->getDesc().size : 0u;
         result.m_device_bytes += particles.m_sparse.capacity().m_lookup_bytes +
                                  particles.m_sparse.capacity().m_dynamic_bytes;
         result.m_readback_capacity_bytes = particles.m_hot_bytes + particles.m_cold_bytes + kErrorBytes;
@@ -1756,6 +1840,7 @@ namespace pP::matter {
         if (m_state->m_replacement) {
             const ParticleStorage &replacement = *m_state->m_replacement;
             result.m_device_bytes += 2u * (replacement.m_hot_bytes + replacement.m_cold_bytes);
+            result.m_device_bytes += replacement.m_properties ? replacement.m_properties->getDesc().size : 0u;
             result.m_device_bytes += replacement.m_sparse.capacity().m_lookup_bytes +
                                      replacement.m_sparse.capacity().m_dynamic_bytes;
             if (replacement.m_shapes != particles.m_shapes) {

@@ -117,7 +117,7 @@ export namespace pP::matter {
 
         [[nodiscard]] std::error_code prepareReplacement_(
             std::span<const GpuParticle> particles, std::span<const GpuStaticShape> shapes, u64 expected_epoch,
-            TerrainView terrain, bool append, ETerrainUpdate terrain_update);
+            TerrainView terrain, bool append, ETerrainUpdate terrain_update, GpuMaterialTableView properties);
 
     public:
         GpuSolver() noexcept;
@@ -141,13 +141,14 @@ export namespace pP::matter {
         /// This freezes step admission until publication or explicit cancellation.
         [[nodiscard]] std::error_code prepareReplacement(
             std::span<const GpuParticle> particles, std::span<const GpuStaticShape> shapes, u64 expected_epoch,
-            TerrainView terrain = {}, ETerrainUpdate terrain_update = ETerrainUpdate::replace);
+            TerrainView terrain = {}, ETerrainUpdate terrain_update = ETerrainUpdate::replace,
+            GpuMaterialTableView properties = {});
 
         /// Frozen edit candidate: preserve old rows by GPU copy and upload only
         /// appended rows. pollReplacement must prove its copy before publication.
         [[nodiscard]] std::error_code prepareAppend(
             std::span<const GpuParticle> appended, u64 expected_epoch, TerrainView terrain = {},
-            ETerrainUpdate terrain_update = ETerrainUpdate::replace);
+            ETerrainUpdate terrain_update = ETerrainUpdate::replace, GpuMaterialTableView properties = {});
         [[nodiscard]] Expected<bool> pollReplacement();
         [[nodiscard]] std::error_code cancelPreparedReplacement();
 

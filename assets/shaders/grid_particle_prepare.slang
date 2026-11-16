@@ -1,7 +1,7 @@
 #include "grid_particle_native.slang"
 
-// Immutable cold row (24 bytes); the pack shifts volume into a physical radius.
-struct ReadonlyRow { float mass, volume, material, r, g, b; };
+// Immutable cold row (6 floats + 1 uint = 28 bytes); the pack shifts volume into a physical radius.
+struct ReadonlyRow { float mass, volume, material, r, g, b; uint propertyRow; };
 
 // Renderer-owned 24-byte presentation row (plan §3 "Instance layout"). CPU twin:
 // pP::ParticleGpu in lib/engine/app/renderer/App.Renderer.GridPass.cppm; the
