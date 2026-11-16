@@ -739,6 +739,30 @@ namespace pP::tests::detail::WorldLightingTrace {
                 });
         }
 
+        // Optical blend and emissive opaque: the walk must cross a transparent
+        // cell whose material is nonzero and stop on the opaque cell behind it.
+        // The jump byte is now the only occupancy signal it reads, so this is the
+        // class that proves the substitution did not widen occupancy to
+        // "nonzero material".
+        {
+            CategoricalMap map;
+            map.occupy(300u, 300u, kReceiveOnly);
+            map.occupy(310u, 300u, kOpaque);
+            map.occupy(320u, 300u, kBrightReceiveOnly);
+            map.occupy(330u, 300u, kEmissiveOpaque);
+            map.occupy(340u, 300u, kOpaqueBlack);
+            run_case(
+                "classification", map,
+                {
+                    makeSegment(float2{100.5f, 300.5f}, float2{400.5f, 300.5f}),
+                    makeSegment(float2{400.5f, 300.5f}, float2{100.5f, 300.5f}),
+                    makeSegment(float2{300.5f, 250.5f}, float2{300.5f, 350.5f}),
+                    makeSegment(float2{305.5f, 300.5f}, float2{315.5f, 300.5f}),
+                    makeSegment(float2{315.5f, 300.5f}, float2{305.5f, 300.5f}),
+                    makeSegment(float2{325.5f, 300.5f}, float2{335.5f, 300.5f}),
+                });
+        }
+
         // Zero-length, sub-cell and point-only contacts.
         {
             CategoricalMap map;
@@ -1035,6 +1059,141 @@ namespace pP::tests::detail::WorldLightingTrace {
         }
 
         _.log(std::format("WORLD_LIGHTING_TRACE jump_domain all_seven=true"));
+        PPR_TEST_ASSERT(not pass.shutdown());
+    };
+
+    // ------------------------------------------------------------------
+    // jump table is the occupancy predicate
+    // ------------------------------------------------------------------
+
+    // The tracer decides occupancy from `g_jump` alone instead of re-reading the
+    // resolved word and its palette entry in the walk. That substitution is only
+    // sound while `buildJump`'s zero is exactly the tracer's occupancy test for
+    // the snapshot the trace reads, so the identity is checked exhaustively over
+    // every fixture world here rather than assumed.
+    PPR_UNIT_TEST (jump_zero_is_the_occupancy_predicate) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const auto palette_values = makePalette();
+        const auto palette = uploadPalette(fixture, palette_values);
+
+        WorldLightingPass pass;
+        PPR_TEST_ASSERT(not pass.initialize(*fixture.m_shaders, std::filesystem::current_path()));
+
+        const auto run_case = [&](const char *const label, const CategoricalMap &map) {
+            const auto attempt = encodeAcceleration(fixture, pass, palette, map);
+            PPR_TEST_ASSERT(not attempt.m_prepare);
+            PPR_TEST_ASSERT(not attempt.m_finalize);
+            pass.notifySubmitted(1u);
+            PPR_TEST_ASSERT(not pass.collectCompleted(1u));
+
+            const auto jumps = readJumpTable(fixture, attempt.m_snapshot.m_jump);
+            std::vector<u32> resolved(kCells);
+            PPR_TEST_ASSERT(not make_error_code(fixture.device().readBuffer(
+                pass.resolvedCellsForTest(), 0u, resolved.size() * sizeof(u32), resolved.data())));
+
+            u32 occupied = 0u;
+            u32 optical_blend = 0u;
+            u32 vacuum = 0u;
+            u32 opaque_hits = 0u;
+            u32 optical_hits = 0u;
+            for (u32 cell = 0u; cell < kCells; ++cell) {
+                const u32 material = resolved[cell] & 0xffffu;
+                const bool receive_only = lighting::receiveOnlyCell(
+                    palette_values[material].m_surface_flags, palette_values[material].m_emissive_strength);
+                const bool expected = lighting::resolvedCellOccupied(resolved[cell], receive_only);
+                const bool measured = jumps[cell] == 0u;
+
+                if (expected) {
+                    ++occupied;
+                    if (measured) {
+                        ++opaque_hits;
+                    }
+                } else if (material != 0u) {
+                    // Optical blend: transparent despite a nonzero material.
+                    ++optical_blend;
+                    if (not measured) {
+                        ++optical_hits;
+                    }
+                } else {
+                    ++vacuum;
+                }
+
+                if (measured != expected) {
+                    _.log(
+                        std::format(
+                            "WORLD_LIGHTING_TRACE jump_occupancy_mismatch case={} cell=({}, {}) material={} "
+                            "jump={} expected_occupied={}",
+                            label, cell % kEdge, cell / kEdge, material, jumps[cell], expected));
+                }
+
+                PPR_TEST_ASSERT(measured == expected);
+            }
+
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_TRACE jump_occupancy case={} occupied={} optical_blend={} vacuum={} "
+                    "opaque_jump_zero={} optical_jump_nonzero={}",
+                    label, occupied, optical_blend, vacuum, opaque_hits, optical_hits));
+        };
+
+        {
+            CategoricalMap map;
+            run_case("empty", map);
+        }
+
+        {
+            CategoricalMap map;
+            map.fill(kOpaque);
+            run_case("full", map);
+        }
+
+        {
+            // Every classification the predicate distinguishes: opaque, opaque
+            // black, emissive opaque, optical blend (dark and bright).
+            CategoricalMap map;
+            for (u32 y = 0u; y < kEdge; ++y) {
+                for (u32 x = 0u; x < kEdge; ++x) {
+                    switch ((x / 64u + y / 64u) % 5u) {
+                        case 0u: break;
+                        case 1u: map.occupy(x, y, kOpaque); break;
+                        case 2u: map.occupy(x, y, kOpaqueBlack); break;
+                        case 3u: map.occupy(x, y, kReceiveOnly); break;
+                        default: map.occupy(x, y, kEmissiveOpaque); break;
+                    }
+                }
+            }
+            run_case("classification", map);
+        }
+
+        {
+            CategoricalMap map;
+            for (u32 y = 0u; y < kEdge; ++y) {
+                for (u32 x = 0u; x < kEdge; ++x) {
+                    if (((x + y) & 1u) == 0u) {
+                        map.occupy(x, y);
+                    }
+                }
+            }
+            run_case("checkerboard", map);
+        }
+
+        {
+            CategoricalMap map;
+            u32 state = 0x0bad'c0deu;
+            for (u32 cell = 0u; cell < kCells; ++cell) {
+                state = state * 1'664'525u + 1'013'904'223u;
+                if ((state >> 9u) % 41u == 0u) {
+                    map.occupy(cell % kEdge, cell / kEdge);
+                }
+            }
+            run_case("sparse", map);
+        }
+
         PPR_TEST_ASSERT(not pass.shutdown());
     };
 

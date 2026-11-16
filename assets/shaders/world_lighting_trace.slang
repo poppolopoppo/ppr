@@ -159,15 +159,17 @@ SegmentHit traceSegmentDetailed(
 
     float previous = enter;
     while (true) {
-        uint cell_index = uint(cell.y) * kTraceEdge + uint(cell.x);
-        uint resolved = g_resolved_cells[cell_index];
-        uint material = resolved & 0xffffu;
-        TerrainVisual visual = g_visuals[material];
-        bool occupied = resolvedCellOccupied(resolved, visual);
-
+        // The jump table is the occupancy test. `buildJump` writes zero exactly
+        // when `resolvedCellOccupied` is true for the same resolved snapshot, so
+        // one byte decides the whole step and the u32 cell record plus the
+        // 96-byte palette entry are sampled only on a collision. The pairing is
+        // enforced by `WorldLightingPass::prepare`, which dispatches the
+        // projection, `buildVisibility`, `buildJump` and every tracer in one
+        // encoder with the resolved buffer written once at its head.
         uint jump = g_jump[cell];
-        if (jump == 0u || occupied) {
-            if (occupied && traceInOwnBlock(cell, own_block_min, own_block_max)) {
+        if (jump == 0u) {
+            uint cell_index = uint(cell.y) * kTraceEdge + uint(cell.x);
+            if (traceInOwnBlock(cell, own_block_min, own_block_max)) {
                 // The probe's own surface is an opaque self-occluder. The black
                 // terminal interval closes both the current cell's outgoing
                 // radiance and, through zero transmittance, the far interval,
