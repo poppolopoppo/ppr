@@ -1772,13 +1772,42 @@ ParticleDirectVertexOutput vertexParticleIndirectMain(uint vertex:SV_VertexID,ui
     return particleVertex(vertex,g_particle_ids[instance]);
 }
 
-// The solid and liquid fragments read the whole attribute set, so their pipeline
-// needs a vertex entry that declares all of it. Sharing the reduced direct output
-// above would leave those fragments reading locations the vertex never writes,
-// which the Vulkan interface rule forbids outright rather than warning about.
+// The solid and liquid fragments read the surface attributes but none of the
+// identity words the other entries carry. Their pipeline therefore declares the
+// ten attributes it consumes and nothing else: a wider output would only add
+// slots the fragment discards, and a narrower one would leave it reading a
+// location the vertex never writes.
+struct ParticleSolidLiquidVertexOutput {
+    float4 position:SV_Position;
+    float2 fine_position:TEXCOORD0;
+    float2 uv:TEXCOORD1;
+    nointerpolation uint uv_seed:TEXCOORD2;
+    float2 local_m:TEXCOORD3;
+    nointerpolation float shape_scale:TEXCOORD4;
+    nointerpolation uint canonical:TEXCOORD5;
+    nointerpolation float2 flow:TEXCOORD6;
+    nointerpolation float flow_stretch:TEXCOORD7;
+    nointerpolation float2 surface_tangent:TEXCOORD8;
+    nointerpolation float surface_strength:TEXCOORD9;
+};
+
 [shader("vertex")]
-ParticleVertexOutput vertexParticleIndirectFull(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
-    return particleVertexCommon(vertex,instance,false,g_grid_pass.surface_phase_mask,0.0,0.0);
+ParticleSolidLiquidVertexOutput vertexParticleSolidLiquid(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    ParticleVertexOutput expanded=particleVertexCommon(vertex,g_particle_ids[instance],false,
+        g_grid_pass.surface_phase_mask,0.0,0.0);
+    ParticleSolidLiquidVertexOutput output;
+    output.position=expanded.position;
+    output.fine_position=expanded.fine_position;
+    output.uv=expanded.uv;
+    output.uv_seed=expanded.uv_seed;
+    output.local_m=expanded.local_m;
+    output.shape_scale=expanded.shape_scale;
+    output.canonical=expanded.canonical;
+    output.flow=expanded.flow;
+    output.flow_stretch=expanded.flow_stretch;
+    output.surface_tangent=expanded.surface_tangent;
+    output.surface_strength=expanded.surface_strength;
+    return output;
 }
 
 // ------------------------------------------------------------------
@@ -2118,7 +2147,7 @@ float4 shadeParticleSurfaceBeforeEdge(bool liquid,bool blend_class,uint material
         false,blend_class,material,canonical,fine_position,sample,coefficients,backdrop,g_sampler);
 }
 
-float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
+float4 shadeSolidLiquidReactive(ParticleSolidLiquidVertexOutput input,
     StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     SamplerState.Handle g_sampler,bool point_sample,out float geometric_support) {
     geometric_support=0;
@@ -2229,7 +2258,7 @@ float4 shadeSolidLiquidReactive(ParticleVertexOutput input,
 }
 
 [shader("fragment")]
-float4 fragmentSolidLiquidMain(ParticleVertexOutput input,
+float4 fragmentSolidLiquidMain(ParticleSolidLiquidVertexOutput input,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler):SV_Target {
     float unused_reactive;
@@ -2237,7 +2266,7 @@ float4 fragmentSolidLiquidMain(ParticleVertexOutput input,
 }
 
 [shader("fragment")]
-float4 fragmentSolidLiquidSpatial(ParticleVertexOutput input,uint index:SV_SampleIndex,
+float4 fragmentSolidLiquidSpatial(ParticleSolidLiquidVertexOutput input,uint index:SV_SampleIndex,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler):SV_Target {
     // Evaluate the entry's actual varyings before mutating either member.
@@ -2254,7 +2283,7 @@ float4 fragmentSolidLiquidSpatial(ParticleVertexOutput input,uint index:SV_Sampl
 }
 
 [shader("fragment")]
-GridReactiveOutput fragmentSolidLiquidReactive(ParticleVertexOutput input,uint index:SV_SampleIndex,
+GridReactiveOutput fragmentSolidLiquidReactive(ParticleSolidLiquidVertexOutput input,uint index:SV_SampleIndex,
     uniform StructuredBuffer<DescriptorHandle<Texture2D<float4>>> g_textures,
     uniform SamplerState.Handle g_sampler) {
     // Evaluate the entry's actual varyings before mutating either member.

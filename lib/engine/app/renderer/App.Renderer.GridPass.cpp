@@ -4324,7 +4324,7 @@ namespace pP {
                           reactive ? "fragmentParticleReactive" : "fragmentParticleSpatial", particles));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
-                          "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectFull",
+                          "grid_tiles.slang", "grid_tiles", "vertexParticleSolidLiquid",
                           reactive ? "fragmentSolidLiquidReactive" : "fragmentSolidLiquidSpatial", solid_liquid));
 
         particle_gas_program = std::move(particles);
