@@ -538,7 +538,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
         const auto metadata = prepareGridParticleMetadata(fixture.device(), {&row, 1u}, 1u, 1.0, 1u);
         PPR_TEST_ASSERT(metadata.has_value());
 
-        std::array<float, 16u> hot{};
+        std::array<float, 18u> hot{};
         hot[0u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
         hot[1u] = 3.0f + static_cast<float>(kParticleCell) + 0.5f;
         hot[15u] = 1.0f;
@@ -611,7 +611,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
 
         // The next current publication runs the lighting again and updates the
         // source: the particle moves out of the vacuum cell.
-        std::array<float, 16u> moved{};
+        std::array<float, 18u> moved{};
         moved[0u] = 3.0f + static_cast<float>(kOtherParticleCell) + 0.5f;
         moved[1u] = 3.0f + static_cast<float>(kOtherParticleCell) + 0.5f;
         moved[15u] = 1.0f;
@@ -1441,7 +1441,7 @@ namespace pP::tests::detail::WorldLightingSettlement {
             row.m_radius = 0.5f;
             const auto metadata = prepareGridParticleMetadata(device, {&row, 1u}, 1u, 1.0, 1u);
             PPR_TEST_ASSERT(metadata.has_value());
-            std::array<float, 16u> hot{};
+            std::array<float, 18u> hot{};
             hot[0u] = hot[1u] = 3.0f + 40.5f;
             hot[15u] = 1.0f;
             std::array<float, 7u> cold{};

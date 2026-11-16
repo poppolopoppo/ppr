@@ -53,17 +53,17 @@ namespace pP::tests::detail::WorldLightingProjection {
         return 3.0f + native;
     }
 
-    // Committed numerical (16 * 4 = 64 bytes) and readonly (6 * 4 + 4 index = 28 bytes) rows.
+    // Committed numerical (18 * 4 = 72 bytes) and readonly (6 * 4 + 4 index = 28 bytes) rows.
     struct HotRow {
         float m_position[2]{};
-        float m_carried[14]{};
+        float m_carried[16]{};
     };
 
     struct ColdRow {
         float m_fields[7]{};
     };
 
-    static_assert(sizeof(HotRow) == 64u and alignof(HotRow) == 4u);
+    static_assert(sizeof(HotRow) == 72u and alignof(HotRow) == 4u);
     static_assert(sizeof(ColdRow) == 28u and alignof(ColdRow) == 4u);
     static_assert(PPR_OFFSETOF(HotRow, m_carried) == 8u);
 

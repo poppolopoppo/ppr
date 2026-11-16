@@ -248,11 +248,11 @@ namespace pP {
 
         std::ranges::sort(seeds, {}, [](const auto *seed) { return seed->m_id; });
 
-        // Hot64 mirrors the solver's 64-byte ParticleWrite by field order
+        // Hot72 mirrors the solver's 72-byte ParticleWrite by field order
         // (position, displacement, F, D, liquid scalars, enabled); only the
         // admission seed writes position[0..1] and enabled here.
         struct HotRow {
-            std::array<float, 16u> m_fields{};
+            std::array<float, 18u> m_fields{};
         };
         struct ColdRow {
             float m_mass{}, m_volume{}, m_material{}, m_r{}, m_g{}, m_b{};

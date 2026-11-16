@@ -1,7 +1,12 @@
 // Selected ErikSom/pbmpm 859c449 numerical/storage core.
 // BSD-3-Clause notice: LICENSE.md. Arithmetic expressions are retained verbatim.
 // Engine-only hooks preserve the no-hook conformance order.
-struct Hot { float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled; };
+struct Hot {
+    float px, py, dx, dy; SourceMatrix F, D; float J, logJp, lambda, enabled;
+#ifdef PBMPM_ENGINE_PARTICLE_ROWS
+    float compaction, solidFraction;
+#endif
+};
 #if defined(PBMPM_ENGINE_PARTICLE_ROWS) && defined(PBMPM_CONFORMANCE_PARTICLE_ROWS)
 #error Select exactly one PBMPM particle row ABI
 #elif defined(PBMPM_ENGINE_PARTICLE_ROWS)
@@ -25,6 +30,8 @@ struct MaterialProperties {
     uint substanceId, family;
     float elasticityRatio, elasticRelaxation, liquidRelaxation, liquidViscosity;
     float frictionAngle, plasticity, referenceDensity, sandYieldRatio;
+    float cohesion, cap, tension, cohesionHardening, capHardening;
+    float solidFraction0, compactionRate, solidExponent, denseEpsilon;
 };
 StructuredBuffer<MaterialProperties> g_properties;
 #define PBMPM_COEFFICIENTS coefficients
@@ -43,7 +50,7 @@ MaterialProperties particleProperties(uint row) {
         g_parameters.elasticityRatio, g_parameters.elasticRelaxation,
         g_parameters.liquidRelaxation, g_parameters.liquidViscosity,
         g_parameters.frictionAngle, g_parameters.plasticity, 1.0,
-        g_parameters.elasticityRatio};
+        g_parameters.elasticityRatio, 0.05, 0.2, 0.02, 0.2, 0.5, 0.3, 0.5, 2.0, 0.01};
     return result;
 }
 #endif
@@ -71,14 +78,22 @@ groupshared int s_dst[256];
 Particle loadParticle(uint row) {
     Hot h = g_hot[row];
     Cold c = g_cold[row];
-    Particle p = {h.px,h.py,h.dx,h.dy,h.F,h.D,h.J,c.mass,c.material,c.volume,h.lambda,h.logJp,c.r,c.g,c.b,h.enabled};
+    Particle p = {h.px,h.py,h.dx,h.dy,h.F,h.D,h.J,c.mass,c.material,c.volume,h.lambda,h.logJp,c.r,c.g,c.b,h.enabled,0.0,0.3};
+#ifdef PBMPM_ENGINE_PARTICLE_ROWS
+    p.compaction = h.compaction;
+    p.solidFraction = h.solidFraction;
+#endif
 
     return p;
 }
 
 void saveParticle(uint row, Particle p) {
     Hot h = {p.positionX,p.positionY,p.displacementX,p.displacementY,p.deformationGradient,
-        p.deformationDisplacement,p.liquidDensity,p.logJp,p.lambda,p.enabled};
+        p.deformationDisplacement,p.liquidDensity,p.logJp,p.lambda,p.enabled
+#ifdef PBMPM_ENGINE_PARTICLE_ROWS
+        ,p.compaction,p.solidFraction
+#endif
+    };
     g_hot[row] = h;
 }
 
@@ -159,10 +174,18 @@ Particle constraint(Particle p
 
         float alpha = 0.5 * (1.0 / p.liquidDensity - trace(D) - 1.0);
         D = add(D, scale(identity(), PBMPM_COEFFICIENTS.liquidRelaxation * alpha));
-    } else if (p.material == MaterialElastic || p.material == MaterialVisco || p.material == MaterialSand) {
+    } else if (p.material == MaterialElastic || p.material == MaterialVisco || p.material == MaterialSand
+#ifdef PBMPM_ENGINE_ADAPTERS
+        || p.material == MaterialCohesive || p.material == MaterialCompacting
+#endif
+    ) {
         SourceMatrix F = product(add(identity(), D), p.deformationGradient);
         SvdResult decomposition = forkSvd(F);
         bool sand = p.material == MaterialSand;
+        bool frictional = sand;
+#ifdef PBMPM_ENGINE_ADAPTERS
+        frictional = frictional || p.material == MaterialCohesive || p.material == MaterialCompacting;
+#endif
         if (sand && p.logJp == 0.0) {
             decomposition.Sigma = clamp(decomposition.Sigma, float2(1.0), float2(1000.0));
         }
@@ -170,7 +193,7 @@ Particle constraint(Particle p
         float df = determinant(F);
         float cdf = clamp(abs(df), 0.1, sand ? 1.0 : 1000.0);
         SourceMatrix Q = scale(F, 1.0 / (sign(df) * sqrt(cdf)));
-        SourceMatrix target = sand ? product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt)
+        SourceMatrix target = frictional ? product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt)
                                   : product(decomposition.U, decomposition.Vt);
         target = add(scale(target, PBMPM_COEFFICIENTS.elasticityRatio), scale(Q, 1.0 - PBMPM_COEFFICIENTS.elasticityRatio));
         SourceMatrix difference = subtract(subtract(product(target, inverted(p.deformationGradient)), identity()), D);
@@ -191,6 +214,99 @@ Particle constraint(Particle p
 // these arguments: exp(88) = 1.65e38 < FLT_MAX and exp(-87) = 1.6e-38 > 0.
 static const float kMinSandExponent = -87.0;
 static const float kMaxSandExponent = 88.0;
+
+// ------------------------------------------------------------------
+// adapter-only calibration-space cap and shear returns
+// ------------------------------------------------------------------
+
+// H is the legacy sand reservoir. New-family admission requires H=0 and
+// this return leaves it zero; C and phi are separate irreversible histories.
+// No stress mapping or dissipation claim is implied by these projections.
+bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
+                      float H, MaterialProperties a) {
+    if (!all(isfinite(sigma)) || any(sigma <= 0.0) || H != 0.0 ||
+        !isfinite(C) || C < 0.0 || !isfinite(phi) ||
+        phi < a.solidFraction0 || phi > 1.0-a.denseEpsilon) return false;
+
+    float2 e = log(sigma);
+    float trial = e.x + e.y + H;
+    float2 dev = e - trial*0.5;
+    float n = length(dev);
+    float sine = sin(a.frictionAngle / 180.0 * 3.14159);
+    float denominator = 3.0-sine;
+    if (!isfinite(trial) || !isfinite(n) || !isfinite(denominator) || denominator <= 0.0) return false;
+
+    float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
+    float cohesion = a.cohesion;
+    float cap = a.cap;
+    float nextC = C;
+    float nextPhi = phi;
+    float returned = min(trial, a.tension);
+    bool porous = a.family == uint(MaterialCompacting);
+    bool dense = porous && phi >= 1.0-a.denseEpsilon;
+    if (!porous) {
+        cap += a.capHardening*C;
+        if (!isfinite(cap) || cap <= 0.0) return false;
+
+        returned = max(returned, -cap);
+        nextC = max(C, -min(returned, 0.0));
+        cohesion += a.cohesionHardening*nextC;
+    } else {
+        if (!dense) {
+            float voidFraction = 1.0-phi;
+            if (!isfinite(voidFraction) || voidFraction <= 0.0) return false;
+
+            cap = a.cap/voidFraction;
+            if (!isfinite(cap) || cap <= 0.0) return false;
+
+            returned = max(returned, -cap);
+            float increment = a.compactionRate*max(0.0, returned-trial);
+            if (!isfinite(increment)) return false;
+
+            nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
+        }
+
+        dense = nextPhi >= 1.0-a.denseEpsilon;
+        float strengthPhi = dense ? 1.0-a.denseEpsilon : nextPhi;
+        if (!isfinite(strengthPhi) || strengthPhi <= 0.0 || strengthPhi >= 1.0) return false;
+
+        // pow on a positive base <=1 with nonnegative finite exponent cannot overflow.
+        cohesion *= pow(strengthPhi, a.solidExponent);
+        if (!dense) {
+            float voidFraction = 1.0-nextPhi;
+            if (!isfinite(voidFraction) || voidFraction <= 0.0) return false;
+
+            cap = a.cap/voidFraction;
+            if (!isfinite(cap) || cap <= 0.0) return false;
+        }
+    }
+
+    float edge = alpha*max(-returned, 0.0)+cohesion;
+    if (!isfinite(cohesion) || !isfinite(edge) || edge < 0.0) return false;
+
+    if (porous && !dense && returned <= 0.0) {
+        // The cap denominator is guarded above, before this division.
+        float ratio = -returned/cap;
+        if (!isfinite(ratio) || ratio < 0.0 || ratio > 1.0) return false;
+
+        edge *= sqrt(max(0.0, 1.0-ratio*ratio));
+    }
+
+    if (n > edge) {
+        if (!isfinite(n) || n <= 0.0) return false;
+
+        dev *= edge/n;
+    }
+
+    float2 projected = dev + returned*0.5;
+    if (!all(isfinite(projected)) || any(projected < kMinSandExponent) ||
+        any(projected > kMaxSandExponent)) return false;
+
+    sigma = exp(projected);
+    C = nextC;
+    phi = nextPhi;
+    return true;
+}
 #endif
 Particle integration(Particle p, uint row) {
 #ifdef PBMPM_ENGINE_ADAPTERS
@@ -208,7 +324,18 @@ Particle integration(Particle p, uint row) {
 #endif
         p.deformationGradient = product(add(identity(), p.deformationDisplacement), p.deformationGradient);
         SvdResult decomposition = forkSvd(p.deformationGradient);
-        decomposition.Sigma = clamp(decomposition.Sigma, float2(0.1), float2(10000.0));
+        bool calibrated = false;
+#ifdef PBMPM_ENGINE_ADAPTERS
+        calibrated = p.material == MaterialCohesive || p.material == MaterialCompacting;
+        if (calibrated) {
+            if (!calibratedReturn(decomposition.Sigma, p.compaction, p.solidFraction, p.logJp, coefficients)) {
+                p.deformationGradient = stepGradient;
+                recordError(8u, 0xffffffffu, 22u, row);
+                return p;
+            }
+        }
+#endif
+        if (!calibrated) decomposition.Sigma = clamp(decomposition.Sigma, float2(0.1), float2(10000.0));
         if (p.material == MaterialSand) {
             float sinPhi = sin(PBMPM_COEFFICIENTS.frictionAngle / 180.0 * 3.14159);
             float alpha = sqrt(2.0 / 3.0) * 2.0 * sinPhi / (3.0 - sinPhi);

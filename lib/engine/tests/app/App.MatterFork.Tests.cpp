@@ -1130,10 +1130,10 @@ namespace pP::tests::detail::MatterFork {
         PPR_TEST_ASSERT(snapshot.m_particles.size() == original_rows.size());
         std::vector<u32> hot, cold;
         for (const auto &particle: snapshot.m_particles) {
-            const auto h = std::bit_cast<std::array<u32, 16u>>(matter::packWrite(particle));
+            const auto h = std::bit_cast<std::array<u32, 18u>>(matter::packWrite(particle));
             const auto compact = std::bit_cast<std::array<u32, 7u>>(matter::packReadonly(particle));
             const auto c = oracleCold(compact.data());
-            hot.insert(hot.end(), h.begin(), h.end());
+            hot.insert(hot.end(), h.begin(), h.begin() + 16u);
             cold.insert(cold.end(), c.begin(), c.end());
         }
 
@@ -1156,7 +1156,7 @@ namespace pP::tests::detail::MatterFork {
             Array<matter::GpuParticle> particles;
             std::vector<u32> original_rows;
             for (u32 original = 0u; original < input.count; ++original) {
-                std::array<u32, 16u> hot_words{};
+                auto hot_words = std::bit_cast<std::array<u32, 18u>>(matter::ParticleWrite{});
                 std::array<u32, 8u> cold_words{};
                 std::copy_n(input.hot + original * 16u, 16u, hot_words.begin());
                 std::copy_n(input.cold + original * 8u, 8u, cold_words.begin());

@@ -30,8 +30,8 @@ export namespace pP {
         [[nodiscard]] bool operator==(const GridWorldIdentity &) const noexcept = default;
     };
 
-    inline constexpr u32 kGridParticleNumericalLayout = 4u;
-    inline constexpr u32 kGridParticleNumericalStride = 64u;
+    inline constexpr u32 kGridParticleNumericalLayout = 5u;
+    inline constexpr u32 kGridParticleNumericalStride = 72u;
     inline constexpr u32 kGridParticleReadonlyStride = 28u;
     inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
 

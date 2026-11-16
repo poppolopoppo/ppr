@@ -140,10 +140,18 @@ namespace pP::tests::detail::MatterAdapter {
 
         for (const char *const key:
             {"sand", "sandstone", "basalt", "coal", "iron_ore", "copper_ore", "uranium_ore", "wolframite", "autunite",
-                "azurite", "clay", "snow", "pebbles", "gravel"}) {
+                "azurite", "pebbles", "gravel"}) {
             colony::MaterialDefinition material{};
             material.m_key = key;
             PPR_TEST_ASSERT(colony::matterFamily(material) == matter::ESourceMaterial::sand);
+        }
+
+        for (const char *const key: {"clay", "wet_sand", "snow"}) {
+            colony::MaterialDefinition material{};
+            material.m_key = key;
+            PPR_TEST_ASSERT(
+                colony::matterFamily(material) ==
+                (material.m_key == "snow" ? matter::ESourceMaterial::compacting : matter::ESourceMaterial::cohesive));
         }
 
         colony::MaterialDefinition unmapped{};

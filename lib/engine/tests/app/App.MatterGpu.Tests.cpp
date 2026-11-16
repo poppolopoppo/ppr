@@ -201,22 +201,22 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(hot.m_liquid_density == 0.875f and hot.m_log_jp == 0.125f and hot.m_lambda == -0.75f);
         PPR_TEST_ASSERT(hot.m_enabled == 1.0f and cold.m_mass == 2.5f and cold.m_volume == 0.03125f);
         PPR_TEST_ASSERT(cold.m_material == 2.0f and cold.m_color_b == 0.6875f);
-        PPR_TEST_ASSERT(sizeof(cold) == 28u and sizeof(hot) == 64u and sizeof(particle) == 88u);
+        PPR_TEST_ASSERT(sizeof(cold) == 28u and sizeof(hot) == 72u and sizeof(particle) == 96u);
         PPR_TEST_ASSERT(cold.m_property_row == std::numeric_limits<u32>::max());
 
         const GpuParticle restored = unpack(hot, cold);
-        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(restored) == std::bit_cast<std::array<u32, 22u>>(particle));
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 24u>>(restored) == std::bit_cast<std::array<u32, 24u>>(particle));
 
         GpuMaterialProperties property{};
         property.m_substance_id = 1u;
         PPR_TEST_ASSERT(validMaterialProperties(property));
-        for (u32 field = 2u; field < 10u; ++field) {
-            auto words = std::bit_cast<std::array<u32, 10u>>(property);
+        for (u32 field = 2u; field < 19u; ++field) {
+            auto words = std::bit_cast<std::array<u32, 19u>>(property);
             words[field] = std::bit_cast<u32>(std::numeric_limits<float>::quiet_NaN());
             PPR_TEST_ASSERT(not validMaterialProperties(std::bit_cast<GpuMaterialProperties>(words)));
         }
 
-        property.m_family = ESourceMaterial::compacting;
+        property.m_family = static_cast<ESourceMaterial>(6u);
         PPR_TEST_ASSERT(not validMaterialProperties(property));
     };
 
@@ -1485,7 +1485,7 @@ namespace pP::tests::detail::MatterGpu {
         constexpr u32 edge = 1024u;
         constexpr u32 particle_count = 13044u;
         constexpr u32 ticks = 711u;
-        static_assert(sizeof(GpuParticle) == 88u);
+        static_assert(sizeof(GpuParticle) == 96u);
         const auto &clock = ITimerClock::steady();
         Fixture fixture;
         PPR_DEFER {
@@ -1537,9 +1537,9 @@ namespace pP::tests::detail::MatterGpu {
             const auto rows = fixture.snapshot();
             PPR_TEST_ASSERT(rows.size() == initial.size());
             for (u32 row = 0u; row < rows.size(); ++row) {
-                const auto actual = std::bit_cast<std::array<u32, 22u>>(rows[row]);
-                const auto admitted = std::bit_cast<std::array<u32, 22u>>(initial[row]);
-                for (const float field: std::bit_cast<std::array<float, 22u>>(rows[row])) {
+                const auto actual = std::bit_cast<std::array<u32, 24u>>(rows[row]);
+                const auto admitted = std::bit_cast<std::array<u32, 24u>>(initial[row]);
+                for (const float field: std::bit_cast<std::array<float, 24u>>(rows[row])) {
                     PPR_TEST_ASSERT(std::isfinite(field));
                 }
 
@@ -1684,7 +1684,7 @@ namespace pP::tests::detail::MatterGpu {
         constexpr u32 particle_count = 4096u;
         const u32 warm_frames = instrumented ? 5u : 20u;
         const u32 sample_frames = instrumented ? 15u : 30u;
-        static_assert(sizeof(GpuParticle) == 88u);
+        static_assert(sizeof(GpuParticle) == 96u);
         const double frequency = instrumented
                                      ? static_cast<double>(fixture.m_rhi->getDevice().getInfo().timestampFrequency)
                                      : 0.0;
@@ -1851,7 +1851,7 @@ namespace pP::tests::detail::MatterGpu {
         constexpr u32 kWarmTicks = 5u;
         constexpr u32 kSampleTicks = 30u;
         constexpr std::array<u32, 3u> kCounts{2u, 5u, 10u};
-        static_assert(sizeof(GpuParticle) == 88u);
+        static_assert(sizeof(GpuParticle) == 96u);
 
         Fixture fixture;
         PPR_DEFER {
@@ -2150,7 +2150,7 @@ namespace pP::tests::detail::MatterGpu {
         };
         const auto assert_finite = [](const std::span<const GpuParticle> rows) {
             for (const auto &row: rows) {
-                for (const float value: std::bit_cast<std::array<float, 22u>>(row)) {
+                for (const float value: std::bit_cast<std::array<float, 24u>>(row)) {
                     PPR_TEST_ASSERT(std::isfinite(value));
                 }
             }
@@ -2622,7 +2622,7 @@ namespace pP::tests::detail::MatterGpu {
         };
         const auto assert_finite = [](const std::span<const GpuParticle> rows) {
             for (const auto &row: rows) {
-                for (const float value: std::bit_cast<std::array<float, 22u>>(row))
+                for (const float value: std::bit_cast<std::array<float, 24u>>(row))
                     PPR_TEST_ASSERT(std::isfinite(value));
             }
         };
@@ -3036,7 +3036,7 @@ namespace pP::tests::detail::MatterGpu {
                     static_cast<double>(particle.m_position_x), static_cast<double>(particle.m_position_y));
                 std::fflush(stderr);
 
-                for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                for (const float field: std::bit_cast<std::array<float, 24u>>(particle))
                     PPR_TEST_ASSERT(std::isfinite(field));
 
                 PPR_TEST_ASSERT(std::abs(particle.m_liquid_density - 1.0f) < 0.0011f);
@@ -3105,7 +3105,7 @@ namespace pP::tests::detail::MatterGpu {
             u32 zero_plastic_logs = 0u, negative_trace_count = 0u;
             double trace_min = std::numeric_limits<double>::infinity(), trace_max = -trace_min, trace_sum = 0.0;
             for (const auto &particle: rows) {
-                for (const float value: std::bit_cast<std::array<float, 22u>>(particle)) {
+                for (const float value: std::bit_cast<std::array<float, 24u>>(particle)) {
                     PPR_TEST_ASSERT(std::isfinite(value));
                 }
 
@@ -3345,7 +3345,7 @@ namespace pP::tests::detail::MatterGpu {
             auto rows = capture(solver);
             PPR_TEST_ASSERT(rows.size() == initial.size());
             for (std::size_t row = 0u; row < rows.size(); ++row) {
-                for (const float field: std::bit_cast<std::array<float, 22u>>(rows[row])) {
+                for (const float field: std::bit_cast<std::array<float, 24u>>(rows[row])) {
                     PPR_TEST_ASSERT(std::isfinite(field));
                 }
 
@@ -3387,8 +3387,8 @@ namespace pP::tests::detail::MatterGpu {
                                              const std::span<const GpuParticle> second) {
             PPR_TEST_ASSERT(first.size() == second.size());
             for (std::size_t row = 0u; row < first.size(); ++row) {
-                const auto a = std::bit_cast<std::array<float, 22u>>(first[row]);
-                const auto b = std::bit_cast<std::array<float, 22u>>(second[row]);
+                const auto a = std::bit_cast<std::array<float, 24u>>(first[row]);
+                const auto b = std::bit_cast<std::array<float, 24u>>(second[row]);
                 // Position, translation, elastic F and retained affine D are the
                 // physical response. Sand's legacy carried liquid J may differ.
                 for (u32 field = 0u; field < 12u; ++field) {
@@ -3401,8 +3401,8 @@ namespace pP::tests::detail::MatterGpu {
                                              const std::span<const GpuParticle> second, const bool except_j) {
             PPR_TEST_ASSERT(first.size() == second.size());
             for (std::size_t row = 0u; row < first.size(); ++row) {
-                const auto a = std::bit_cast<std::array<float, 22u>>(first[row]);
-                const auto b = std::bit_cast<std::array<float, 22u>>(second[row]);
+                const auto a = std::bit_cast<std::array<float, 24u>>(first[row]);
+                const auto b = std::bit_cast<std::array<float, 24u>>(second[row]);
                 for (u32 field = 0u; field < a.size(); ++field) {
                     if (except_j and field == 12u)
                         continue;
@@ -3517,7 +3517,7 @@ namespace pP::tests::detail::MatterGpu {
             return fixture.snapshot();
         };
         const auto identical = [](const GpuParticle &left, const GpuParticle &right) {
-            return std::bit_cast<std::array<u32, 22u>>(left) == std::bit_cast<std::array<u32, 22u>>(right);
+            return std::bit_cast<std::array<u32, 24u>>(left) == std::bit_cast<std::array<u32, 24u>>(right);
         };
 
         // A single undisturbed row is the disjoint-stencil baseline: at J=1
@@ -4596,7 +4596,7 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(snapshot.m_epoch == epoch + 1u and snapshot.m_particles.size() == 1u);
         const GpuParticle captured_value = snapshot.m_particles[0u];
 
-        for (const float field: std::bit_cast<std::array<float, 22u>>(captured_value))
+        for (const float field: std::bit_cast<std::array<float, 24u>>(captured_value))
             PPR_TEST_ASSERT(std::isfinite(field));
 
         PPR_TEST_ASSERT(captured_value.m_mass == particle.m_mass);
@@ -4954,15 +4954,15 @@ namespace pP::tests::detail::MatterGpu {
         std::vector<GpuParticle> rows{valid};
         std::vector<u32> expected{0xffff'ffffu};
 
-        for (u32 field = 0u; field < 22u; ++field) {
-            auto scalars = std::bit_cast<std::array<float, 22u>>(valid);
+        for (u32 field = 0u; field < 24u; ++field) {
+            auto scalars = std::bit_cast<std::array<float, 24u>>(valid);
             scalars[field] = std::numeric_limits<float>::quiet_NaN();
             rows.push_back(std::bit_cast<GpuParticle>(scalars));
             expected.push_back(field);
         }
 
         const auto add_invalid = [&](const u32 field, const float value) {
-            auto scalars = std::bit_cast<std::array<float, 22u>>(valid);
+            auto scalars = std::bit_cast<std::array<float, 24u>>(valid);
             scalars[field] = value;
             rows.push_back(std::bit_cast<GpuParticle>(scalars));
             expected.push_back(field);
@@ -4972,9 +4972,11 @@ namespace pP::tests::detail::MatterGpu {
         add_invalid(1u, 28.001f);
         add_invalid(12u, 0.0f);
         add_invalid(13u, -1.0f);
-        add_invalid(14u, 4.0f);
+        add_invalid(14u, 6.0f);
         add_invalid(15u, 0.0f);
         add_invalid(21u, 0.0f);
+        add_invalid(22u, -1.0f);
+        add_invalid(23u, 1.0f);
 
         for (std::size_t index = 1u; index < rows.size(); ++index) {
             PPR_TEST_ASSERT(
@@ -5093,6 +5095,8 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(
             hot->getFieldByIndex(5u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_deformation_displacement));
         PPR_TEST_ASSERT(hot->getFieldByIndex(9u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_enabled));
+        PPR_TEST_ASSERT(hot->getFieldByIndex(10u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_compaction));
+        PPR_TEST_ASSERT(hot->getFieldByIndex(11u)->getOffset() == PPR_OFFSETOF(ParticleWrite, m_solid_fraction));
         PPR_TEST_ASSERT(cold->getFieldByIndex(0u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_mass));
         PPR_TEST_ASSERT(cold->getFieldByIndex(3u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_color_r));
         PPR_TEST_ASSERT(cold->getFieldByIndex(6u)->getOffset() == PPR_OFFSETOF(ParticleReadonly, m_property_row));
@@ -5122,6 +5126,10 @@ namespace pP::tests::detail::MatterGpu {
             properties->getFieldByIndex(8u)->getOffset() == PPR_OFFSETOF(GpuMaterialProperties, m_reference_density));
         PPR_TEST_ASSERT(
             properties->getFieldByIndex(9u)->getOffset() == PPR_OFFSETOF(GpuMaterialProperties, m_sand_yield_ratio));
+        PPR_TEST_ASSERT(
+            properties->getFieldByIndex(10u)->getOffset() == PPR_OFFSETOF(GpuMaterialProperties, m_cohesion));
+        PPR_TEST_ASSERT(
+            properties->getFieldByIndex(18u)->getOffset() == PPR_OFFSETOF(GpuMaterialProperties, m_dense_epsilon));
 
         auto *const sparse = find("g_sparse");
         auto *const page_index = find("g_pageIndexA");
@@ -5430,6 +5438,258 @@ namespace pP::tests::detail::MatterGpu {
     // immutable substance table behavior
     // ------------------------------------------------------------------
 
+    PPR_UNIT_TEST (calibrated_caps_hardening_and_two_regime_edges) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+
+        constexpr u32 count = 14u;
+        std::array<GpuParticle, count> input{};
+        std::array<GpuMaterialProperties, count> properties{};
+        const auto set = [&](const u32 index, const ESourceMaterial family, const float t, const float n, const float C,
+                             const float phi) {
+            auto &p = input[index];
+            p = restParticle();
+            p.m_material = static_cast<float>(family);
+            p.m_log_jp = 0.0f;
+            p.m_compaction = C;
+            p.m_solid_fraction = phi;
+            p.m_deformation_gradient = {
+                std::exp(t * 0.5f + n / std::sqrt(2.0f)), 0.0f, 0.0f, std::exp(t * 0.5f - n / std::sqrt(2.0f))};
+
+            properties[index].m_substance_id = index + 1u;
+            properties[index].m_family = family;
+        };
+
+        const float snow_cap = 0.2f / 0.7f;
+        const float compacted_phi = 0.3f + 0.5f * (0.8f - snow_cap);
+        set(0u, ESourceMaterial::cohesive, -0.8f, 0.0f, 0.0f, 0.3f);
+        set(1u, ESourceMaterial::cohesive, -0.8f, 0.0f, 0.2f, 0.3f);
+        set(2u, ESourceMaterial::cohesive, 0.0f, 0.0f, 0.2f, 0.3f);
+        set(3u, ESourceMaterial::cohesive, 0.0f, 0.5f, 0.0f, 0.3f);
+        set(4u, ESourceMaterial::cohesive, 0.5f, 0.0f, 0.0f, 0.3f);
+        set(5u, ESourceMaterial::compacting, -0.8f, 0.0f, 0.0f, 0.3f);
+        set(6u, ESourceMaterial::compacting, 0.0f, 0.0f, 0.0f, compacted_phi);
+        set(7u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, 0.3f);
+        set(8u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, compacted_phi);
+        set(9u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, std::nextafter(0.99f, 0.0f));
+        set(10u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, 0.99f);
+        set(11u, ESourceMaterial::compacting, -30.0f, 0.5f, 0.0f, 0.99f);
+        set(12u, ESourceMaterial::cohesive, 0.0f, 0.0f, 0.0f, 0.3f);
+        input[12u].m_deformation_gradient.m_c0x = 0.0f;
+        set(13u, ESourceMaterial::compacting, -0.1f, 0.5f, 0.0f, 0.3f);
+
+        shader::SharedModule module;
+        PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
+            std::filesystem::current_path() / "shaders" / "pbmpm" / "property_checks.slang", "pbmpm_law_checks",
+            module.writeRef()));
+        shader::ComPtr<slang::IEntryPoint> entry;
+        PPR_TEST_ASSERT(
+            not make_error_code(module->findEntryPointByName("inspectCalibratedReturns", entry.writeRef())));
+        slang::IComponentType *entries[]{entry.get()};
+        rhi::ShaderProgramDesc program_desc{};
+        program_desc.linkingStyle = rhi::LinkingStyle::SingleProgram;
+        program_desc.slangGlobalScope = module.get();
+        program_desc.slangEntryPoints = entries;
+        program_desc.slangEntryPointCount = 1u;
+        shader::Diagnose diagnostics;
+        rhi::ComPtr<rhi::IShaderProgram> program;
+        auto &device = fixture.m_rhi->getDevice();
+        PPR_TEST_ASSERT(
+            not make_error_code(device.createShaderProgram(program_desc, program.writeRef(), diagnostics.writeRef())));
+        rhi::ComputePipelineDesc pipeline_desc{};
+        pipeline_desc.program = program;
+        rhi::ComPtr<rhi::IComputePipeline> pipeline;
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(pipeline_desc, pipeline.writeRef())));
+
+        const auto buffer = [&](const void *data, const u64 size, const u32 stride, const bool writable) {
+            rhi::BufferDesc desc{};
+            desc.size = size;
+            desc.elementSize = stride;
+            desc.usage = writable ? static_cast<rhi::BufferUsage>(
+                                        static_cast<u32>(rhi::BufferUsage::UnorderedAccess) |
+                                        static_cast<u32>(rhi::BufferUsage::CopySource))
+                                  : rhi::BufferUsage::ShaderResource;
+            desc.defaultState = writable ? rhi::ResourceState::UnorderedAccess : rhi::ResourceState::ShaderResource;
+            rhi::ComPtr<rhi::IBuffer> result;
+            PPR_TEST_ASSERT(not make_error_code(device.createBuffer(desc, data, result.writeRef())));
+            return result;
+        };
+
+        const auto source = buffer(input.data(), sizeof(input), sizeof(GpuParticle), false);
+        const auto table = buffer(properties.data(), sizeof(properties), sizeof(GpuMaterialProperties), false);
+        const auto output = buffer(nullptr, sizeof(input), sizeof(GpuParticle), true);
+        rhi::ComPtr<rhi::ICommandEncoder> encoder;
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+        auto *const pass = encoder->beginComputePass();
+        PPR_TEST_ASSERT(pass != nullptr);
+        auto *const root = pass->bindPipeline(pipeline);
+        PPR_TEST_ASSERT(root != nullptr);
+        rhi::ShaderCursor cursor{root};
+        PPR_TEST_ASSERT(not make_error_code(
+            cursor["g_law_input"].setBinding(rhi::Binding(source, {.offset = 0u, .size = sizeof(input)}))));
+        PPR_TEST_ASSERT(not make_error_code(
+            cursor["g_properties"].setBinding(rhi::Binding(table, {.offset = 0u, .size = sizeof(properties)}))));
+        PPR_TEST_ASSERT(not make_error_code(
+            cursor["g_law_output"].setBinding(rhi::Binding(output, {.offset = 0u, .size = sizeof(input)}))));
+        pass->dispatchCompute(1u, 1u, 1u);
+        pass->end();
+
+        rhi::ComPtr<rhi::ICommandBuffer> commands;
+        PPR_TEST_ASSERT(not make_error_code(encoder->finish(commands.writeRef())));
+        PPR_DEFER {
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+        };
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->submit(commands)));
+        PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->waitOnHost()));
+        std::array<GpuParticle, count> result{};
+        PPR_TEST_ASSERT(not make_error_code(device.readBuffer(output, 0u, sizeof(result), result.data())));
+
+        const auto t = [&](const u32 i) {
+            return std::log(result[i].m_deformation_gradient.m_c0x) + std::log(result[i].m_deformation_gradient.m_c1y);
+        };
+        const auto n = [&](const u32 i) {
+            return std::abs(
+                       std::log(result[i].m_deformation_gradient.m_c0x) -
+                       std::log(result[i].m_deformation_gradient.m_c1y)) /
+                   std::sqrt(2.0f);
+        };
+
+        for (u32 i = 0u; i < 12u; ++i)
+            PPR_TEST_ASSERT(result[i].m_enabled == 1.0f);
+
+        PPR_TEST_ASSERT(result[12u].m_enabled == 0.0f);
+        const float sine = std::sin(30.0f / 180.0f * 3.14159f);
+        const float alpha = std::sqrt(2.0f / 3.0f) * 2.0f * sine / (3.0f - sine);
+        const float elliptical_edge = (alpha * 0.1f + 0.05f * 0.3f * 0.3f) *
+                                      std::sqrt(1.0f - (0.1f / snow_cap) * (0.1f / snow_cap));
+        PPR_TEST_ASSERT(result[13u].m_enabled == 1.0f and std::abs(n(13u) - elliptical_edge) < 1e-5f);
+
+        PPR_TEST_ASSERT(std::abs(t(0u) + 0.2f) < 1e-5f and std::abs(result[0u].m_compaction - 0.2f) < 1e-5f);
+        PPR_TEST_ASSERT(std::abs(t(1u) + 0.3f) < 1e-5f and result[1u].m_compaction > result[0u].m_compaction);
+        PPR_TEST_ASSERT(result[2u].m_compaction == input[2u].m_compaction);
+        PPR_TEST_ASSERT(std::abs(t(3u)) < 1e-5f and std::abs(n(3u) - 0.05f) < 1e-5f);
+        PPR_TEST_ASSERT(std::abs(t(4u) - 0.02f) < 1e-5f);
+        PPR_TEST_ASSERT(
+            std::abs(t(5u) + snow_cap) < 1e-5f and std::abs(result[5u].m_solid_fraction - compacted_phi) < 1e-5f);
+        PPR_TEST_ASSERT(result[6u].m_solid_fraction == compacted_phi and n(8u) > n(7u));
+        // Observable continuity means the zero-confinement yield edge n=c.
+        // The finite-compression ellipse edge is intentionally NOT continuous.
+        PPR_TEST_ASSERT(std::abs(n(9u) - n(10u)) < 1e-5f);
+        PPR_TEST_ASSERT(std::abs(t(11u) + 30.0f) < 1e-5f and result[11u].m_solid_fraction == 0.99f);
+    };
+
+    PPR_UNIT_TEST (calibrated_admission_and_clay_sand_divergence) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
+
+        GpuMaterialProperties clay{};
+        clay.m_substance_id = 1u;
+        clay.m_family = ESourceMaterial::cohesive;
+        // Every extension field rejects NaN; signed domains and regime endpoints
+        // reject at the public preparation boundary without publishing anything.
+        for (u32 field = 10u; field < 19u; ++field) {
+            auto words = std::bit_cast<std::array<float, 19u>>(clay);
+            for (const float bad: {-1.0f, std::numeric_limits<float>::quiet_NaN()}) {
+                words[field] = bad;
+                const auto row = std::bit_cast<GpuMaterialProperties>(words);
+                PPR_TEST_ASSERT(not validMaterialProperties(row));
+            }
+        }
+
+        GpuParticle particle = restParticle();
+        particle.m_log_jp = 0.0f;
+        particle.m_material = 4.0f;
+        particle.m_deformation_gradient = {std::exp(0.1f), 0.0f, 0.0f, std::exp(-0.1f)};
+        const std::array<u32, 1u> indices{0u};
+        for (const float bad: {0.0f, 1.0f}) {
+            auto invalid = clay;
+            invalid.m_dense_epsilon = bad;
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(
+                fixture.m_solver.prepareReplacement(
+                    {&particle, 1u}, {}, epoch, {}, ETerrainUpdate::replace, {{&invalid, 1u}, indices}) ==
+                std::errc::invalid_argument);
+            PPR_TEST_ASSERT(fixture.m_solver.accounting().m_epoch == epoch);
+        }
+
+        const auto evolve = [&](const GpuMaterialProperties &property) {
+            particle.m_material = static_cast<float>(property.m_family);
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                {&particle, 1u}, {}, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+                {{&property, 1u}, indices}));
+            fixture.m_solver.publishReplacement();
+            fixture.finishOneSubstep();
+            return fixture.publishCompletedTick()[0u];
+        };
+
+        const auto cohesive = evolve(clay);
+        auto sand = clay;
+        sand.m_family = ESourceMaterial::sand;
+        const auto granular = evolve(sand);
+        PPR_TEST_ASSERT(
+            std::abs(cohesive.m_deformation_gradient.m_c0x - granular.m_deformation_gradient.m_c0x) > 1e-3f);
+    };
+
+    PPR_UNIT_TEST (elastic_one_percent_shear_release_diagnostic) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(false, 64u, 64u, true, nullptr, 0.0f);
+
+        Array<GpuParticle> driven;
+        for (u32 y = 0u; y < 4u; ++y) {
+            for (u32 x = 0u; x < 4u; ++x) {
+                auto p = restParticle();
+                p.m_material = 1.0f;
+                p.m_position_x = 24.5f + float(x) + 0.01f * (float(y) - 1.5f);
+                p.m_position_y = 24.5f + float(y);
+                p.m_deformation_gradient = {1.0f, 0.0f, 0.01f, 1.0f};
+                driven.push_back(p);
+            }
+        }
+
+        // Displacement-controlled 1% shear held for 120 dt=1/480 steps.
+        // Reset only while driven; release evolves the resident patch freely.
+        for (u32 step = 0u; step < 120u; ++step) {
+            fixture.replace(driven);
+            fixture.finishOneSubstep(kDefaultIterations);
+            fixture.m_solver.publishTick();
+        }
+
+        fixture.replace(driven);
+        float residual = std::numeric_limits<float>::infinity();
+        u32 recovered_at = 0u;
+        for (u32 step = 1u; step <= 960u; ++step) {
+            fixture.finishOneSubstep(kDefaultIterations);
+            const auto state = fixture.publishCompletedTick();
+            residual = 0.0f;
+            for (const auto &p: state) {
+                const auto &f = p.m_deformation_gradient;
+                // F^T F removes rigid rotation; translation never enters F.
+                const float a = f.m_c0x * f.m_c0x + f.m_c0y * f.m_c0y - 1.0f;
+                const float b = f.m_c1x * f.m_c1x + f.m_c1y * f.m_c1y - 1.0f;
+                const float c = f.m_c0x * f.m_c1x + f.m_c0y * f.m_c1y;
+                residual = std::max(residual, std::sqrt(a * a + b * b + 2.0f * c * c));
+            }
+
+            if (residual < 1e-2f and recovered_at == 0u)
+                recovered_at = step;
+        }
+
+        std::printf(
+            "B1 elastic diagnostic K=%u drive_s=0.25 release_s=2 first_recovery_step=%u final_objective_norm=%.9g verdict=%s rock_ore=granular\n",
+            kDefaultIterations, recovered_at, double(residual),
+            recovered_at != 0u ? "recovery_observed" : "not_established");
+        // A negative recovery verdict is evidence, not a failing test or remap.
+    };
+
     PPR_UNIT_TEST (substance_rows_preserve_defaults_and_reject_invalid_replacements) {
         Fixture fixture;
         PPR_DEFER {
@@ -5478,7 +5738,7 @@ namespace pP::tests::detail::MatterGpu {
             if (invalid == 4u)
                 rejected_rows[0u].m_liquid_viscosity = std::numeric_limits<float>::infinity();
             if (invalid == 5u)
-                rejected_rows[0u].m_family = ESourceMaterial::cohesive;
+                rejected_rows[0u].m_family = static_cast<ESourceMaterial>(6u);
             if (invalid == 6u)
                 rejected_rows[0u].m_reference_density = 0.0f;
             if (invalid == 7u)
@@ -5766,7 +6026,7 @@ namespace pP::tests::detail::MatterGpu {
         const auto result = fixture.publishSnapshot(epoch);
         PPR_TEST_ASSERT(result.size() == particles.size());
         for (u32 row = 0u; row < result.size(); ++row) {
-            const auto scalars = std::bit_cast<std::array<float, 22u>>(result[row]);
+            const auto scalars = std::bit_cast<std::array<float, 24u>>(result[row]);
             for (const float value: scalars) {
                 PPR_TEST_ASSERT(std::isfinite(value));
             }
@@ -6011,7 +6271,7 @@ namespace pP::tests::detail::MatterGpu {
                     const auto state = fixture.publishCompletedTick();
                     PPR_TEST_ASSERT(state.size() == particles.size());
                     for (const auto &row: state) {
-                        const auto scalars = std::bit_cast<std::array<float, 22u>>(row);
+                        const auto scalars = std::bit_cast<std::array<float, 24u>>(row);
                         for (const float value: scalars) {
                             PPR_TEST_ASSERT(std::isfinite(value));
                         }
@@ -6106,8 +6366,8 @@ namespace pP::tests::detail::MatterGpu {
                     const auto state = fixture.publishCompletedTick();
                     PPR_TEST_ASSERT(state.size() == 1u);
                     PPR_TEST_ASSERT(
-                        std::bit_cast<std::array<float, 22u>>(state[0u]) ==
-                        std::bit_cast<std::array<float, 22u>>(particle));
+                        std::bit_cast<std::array<float, 24u>>(state[0u]) ==
+                        std::bit_cast<std::array<float, 24u>>(particle));
                 }
             }
         }
@@ -6154,7 +6414,7 @@ namespace pP::tests::detail::MatterGpu {
                 fixture.replace({&particle, 1u});
                 const auto first = runTick(substeps, iterations);
                 PPR_TEST_ASSERT(first.size() == 1u);
-                const auto scalars = std::bit_cast<std::array<float, 22u>>(first[0u]);
+                const auto scalars = std::bit_cast<std::array<float, 24u>>(first[0u]);
                 for (const float value: scalars) {
                     PPR_TEST_ASSERT(std::isfinite(value));
                 }
@@ -6437,7 +6697,7 @@ namespace pP::tests::detail::MatterGpu {
                         particle.m_deformation_displacement.m_c0x, particle.m_deformation_displacement.m_c0y,
                         particle.m_deformation_displacement.m_c1x, particle.m_deformation_displacement.m_c1y,
                         particle.m_log_jp));
-                for (const float field: std::bit_cast<std::array<float, 22u>>(particle)) {
+                for (const float field: std::bit_cast<std::array<float, 24u>>(particle)) {
                     PPR_TEST_ASSERT(std::isfinite(field));
                 }
 
@@ -6481,7 +6741,7 @@ namespace pP::tests::detail::MatterGpu {
         };
 
         const auto valid = [&](const GpuParticle &particle, const GpuParticle &initial) {
-            for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+            for (const float field: std::bit_cast<std::array<float, 24u>>(particle))
                 PPR_TEST_ASSERT(std::isfinite(field));
 
             PPR_TEST_ASSERT(particle.m_mass == initial.m_mass and particle.m_volume == initial.m_volume);
@@ -6772,7 +7032,7 @@ namespace pP::tests::detail::MatterGpu {
         const auto unchanged = fixture.snapshot();
         PPR_TEST_ASSERT(unchanged.size() == 1u);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(unchanged[0u]) == std::bit_cast<std::array<u32, 22u>>(initial));
+            std::bit_cast<std::array<u32, 24u>>(unchanged[0u]) == std::bit_cast<std::array<u32, 24u>>(initial));
 
         initial = restParticle();
         initial.m_position_x = 20.5f;
@@ -6800,7 +7060,7 @@ namespace pP::tests::detail::MatterGpu {
             const auto rows = fixture.snapshot();
             PPR_TEST_ASSERT(rows.size() == 1u);
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 22u>>(rows[0u]) == std::bit_cast<std::array<u32, 22u>>(input));
+                std::bit_cast<std::array<u32, 24u>>(rows[0u]) == std::bit_cast<std::array<u32, 24u>>(input));
         };
 
         // Both trajectory endpoints miss this finite solid domain. Entering
@@ -7117,7 +7377,7 @@ namespace pP::tests::detail::MatterGpu {
     PPR_UNIT_TEST (device_peak_footprint_for_dual_grid_ownership) {
         constexpr u32 kEdge = 4103u;
         constexpr u32 kAdmitted = 13'044u;
-        // Semantic rows remain 22 FP32 words = 88 bytes; device rows add one u32 property index.
+        // Semantic rows have 24 FP32 words; device rows add one u32 property index.
         constexpr u64 kRowBytes = sizeof(GpuParticle);
         constexpr u64 kDeviceRowBytes = sizeof(ParticleWrite) + sizeof(ParticleReadonly);
         constexpr u64 kBucketEdge = (kEdge + 5u) / 6u;
@@ -7125,12 +7385,12 @@ namespace pP::tests::detail::MatterGpu {
         constexpr u64 kPageEdge = (kEdge + 7u) / 8u;
         constexpr u64 kPageCount = kPageEdge * kPageEdge;
         constexpr u64 kLookupBytes = 8u * kBucketCount + 16u * kPageCount;
-        static_assert(kRowBytes == 88u and kLookupBytes == 7'953'552u);
-        static_assert(kDeviceRowBytes == 92u); // 16 * 4 hot + (6 * 4 cold + 4 property index).
+        static_assert(kRowBytes == 96u and kLookupBytes == 7'953'552u);
+        static_assert(kDeviceRowBytes == 100u); // 18 * 4 hot + (6 * 4 cold + 4 property index).
 
         // Independent allocation arithmetic, including every zero-row dummy.
         // No solver accounting subtotal or sparseCapacity result is the oracle.
-        // 7,953,552 lookup + 132 contour + 4 dummy terrain + 64 body + 32 shape + 40 dummy properties.
+        // Lookup + contour + dummy terrain + body + shape + 76-byte dummy properties.
         constexpr u64 kFixedBytes = kLookupBytes +
                                     sizeof(PackedContourTables) +
                                     sizeof(u32) +
@@ -7153,23 +7413,20 @@ namespace pP::tests::detail::MatterGpu {
                    24u;
         };
 
-        // 2 * (7,953,824 + [2*92 + 16 + 4 + 12 + 16 + 4 + 16 + 48 + 24]) = 15,908,296.
+        // Both owners include one hot/cold dummy row and one property row.
         constexpr u64 kEmptyPeak = 2u * (kFixedBytes + storageBytes(0u));
-        // B=G=13,044; P=6*B=78,264. Storage = 2*13,044*92 + 16*13,044 + 4*78,264
-        // + 12*256*78,264 + 16*13,044 + 4*13,044 + 16+48+24 = 243,609,832.
-        // 2 * (7,953,824 + 243,609,832) = 503,127,312.
+        // B=G=13,044; P=6*B=78,264. Numerical device rows now have stride100.
         constexpr u64 kProjectedPeak = 2u * (kFixedBytes + storageBytes(kAdmitted));
-        // 4*13,043*92 + 2*(16*13,043 + 4*78,263 + 12*20,035,583 + 16*13,043
-        // + 4*13,043) = 487,219,016; fixed allocations (including properties) cancel.
+        // Fixed allocations (including properties) cancel from growth.
         constexpr u64 kExpectedGrowth = 4u * (kAdmitted - 1u) * kDeviceRowBytes +
                                         2u * (16u * (kAdmitted - 1u) +
                                                  4u * (6u * kAdmitted - 1u) +
                                                  12u * (256u * 6u * kAdmitted - 1u) +
                                                  16u * (kAdmitted - 1u) +
                                                  4u * (kAdmitted - 1u));
-        static_assert(kEmptyPeak == 15'908'296u);
-        static_assert(kProjectedPeak == 503'127'312u);
-        static_assert(kExpectedGrowth == 487'219'016u and kProjectedPeak - kEmptyPeak == kExpectedGrowth);
+        static_assert(kEmptyPeak == 15'908'400u);
+        static_assert(kProjectedPeak == 503'544'792u);
+        static_assert(kExpectedGrowth == 487'636'392u and kProjectedPeak - kEmptyPeak == kExpectedGrowth);
 
         Fixture fixture;
         PPR_DEFER {
@@ -7270,7 +7527,7 @@ namespace pP::tests::detail::MatterGpu {
                 PPR_TEST_ASSERT(captured and captured->has_value());
                 PPR_TEST_ASSERT((**captured).m_particles.size() == 1u);
                 observation.m_finite = std::ranges::all_of(
-                    std::bit_cast<std::array<float, 22u>>((**captured).m_particles[0u]),
+                    std::bit_cast<std::array<float, 24u>>((**captured).m_particles[0u]),
                     [](const float field) { return std::isfinite(field); });
             } else {
                 const GpuFailure &failure = solver.failure();
@@ -7965,6 +8222,9 @@ namespace pP::tests {
                 detail::MatterGpu::evolved_liquid_pool_has_no_interior_render_holes,
                 detail::MatterGpu::all_materials_preserve_inventory_and_publish_finite_state_at_k2,
                 detail::MatterGpu::substance_rows_preserve_defaults_and_reject_invalid_replacements,
+                detail::MatterGpu::calibrated_caps_hardening_and_two_regime_edges,
+                detail::MatterGpu::calibrated_admission_and_clay_sand_divergence,
+                detail::MatterGpu::elastic_one_percent_shear_release_diagnostic,
                 detail::MatterGpu::same_family_substances_differ_and_unused_rows_do_not_dispatch,
                 detail::MatterGpu::device_property_guard_reports_out_of_range_and_family_mismatch,
                 detail::MatterGpu::supported_iteration_counts_validate_before_work,

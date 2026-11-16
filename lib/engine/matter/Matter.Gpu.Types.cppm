@@ -17,8 +17,8 @@ export namespace pP::matter {
         elastic = 1,
         sand = 2,
         visco = 3,
-        cohesive = 4, // Reserved: DP + volumetric cap is not implemented.
-        compacting = 5, // Reserved: porous compaction is not implemented.
+        cohesive = 4,
+        compacting = 5,
     };
 
     enum class EStaticShape : u32 {
@@ -52,8 +52,8 @@ export namespace pP::matter {
     };
 
     /// All source semantic particle fields, in cell/displacement units. This is
-    /// the engine's 88-byte semantic record (CPU rows, snapshots, checkpoints and
-    /// the v5 wire format); it is not the device storage layout, which is split
+    /// the engine's 96-byte semantic record (CPU rows, snapshots and v9 checkpoints);
+    /// it is not the device storage layout, which is split
     /// into ParticleWrite and ParticleReadonly below.
     /// Stable ID, original material and physical inventory live in owned metadata.
     struct GpuParticle {
@@ -73,13 +73,15 @@ export namespace pP::matter {
         float m_color_g{};
         float m_color_b{};
         float m_enabled{1.0f};
+        float m_compaction{};
+        float m_solid_fraction{0.3f};
     };
 
     // ------------------------------------------------------------------
     // device hot and cold row layout
     // ------------------------------------------------------------------
 
-    /// Mutable 64-byte device row: exactly the fields the solver may advance in
+    /// Mutable 72-byte device row: exactly the fields the solver may advance in
     /// a dispatch. Deliberately reordered against the semantic record so the
     /// liquid scalars stay in the hot write set.
     struct ParticleWrite {
@@ -93,6 +95,8 @@ export namespace pP::matter {
         float m_log_jp{1.0f};
         float m_lambda{};
         float m_enabled{1.0f};
+        float m_compaction{};
+        float m_solid_fraction{0.3f};
     };
 
     /// Immutable 28-byte device row. The last word is a transient table index,
@@ -120,6 +124,8 @@ export namespace pP::matter {
         row.m_log_jp = particle.m_log_jp;
         row.m_lambda = particle.m_lambda;
         row.m_enabled = particle.m_enabled;
+        row.m_compaction = particle.m_compaction;
+        row.m_solid_fraction = particle.m_solid_fraction;
         return row;
     }
 
@@ -154,6 +160,8 @@ export namespace pP::matter {
         particle.m_color_g = readonly.m_color_g;
         particle.m_color_b = readonly.m_color_b;
         particle.m_enabled = write.m_enabled;
+        particle.m_compaction = write.m_compaction;
+        particle.m_solid_fraction = write.m_solid_fraction;
         return particle;
     }
 
@@ -214,6 +222,17 @@ export namespace pP::matter {
         float m_reference_density{1.0f};
         /// Legacy sand calibration, NOT a modulus ratio.
         float m_sand_yield_ratio{1.0f};
+        /// Calibration-space strengths/slopes: finite and nonnegative; cap > 0.
+        float m_cohesion{0.05f};
+        float m_cap{0.2f};
+        float m_tension{0.02f};
+        float m_cohesion_hardening{0.2f};
+        float m_cap_hardening{0.5f};
+        /// 0 < phi0 <= 1-epsilon; beta,kappa >= 0; 0 < epsilon < 1.
+        float m_solid_fraction0{0.3f};
+        float m_compaction_rate{0.5f};
+        float m_solid_exponent{2.0f};
+        float m_dense_epsilon{0.01f};
     };
 
     /// Borrowed only during preparation; the solver owns an immutable copy and
@@ -225,11 +244,14 @@ export namespace pP::matter {
     };
 
     [[nodiscard]] bool validMaterialProperties(const GpuMaterialProperties &row) noexcept;
+    [[nodiscard]] bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept;
     [[nodiscard]] std::error_code validateMaterialTable(std::span<const GpuMaterialProperties> rows);
 
     static_assert(
         std::is_standard_layout_v<GpuMaterialProperties> and std::is_trivially_copyable_v<GpuMaterialProperties>);
-    static_assert(sizeof(GpuMaterialProperties) == 40u and alignof(GpuMaterialProperties) == 4u);
+    static_assert(sizeof(GpuMaterialProperties) == 76u and alignof(GpuMaterialProperties) == 4u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_cohesion) == 40u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_dense_epsilon) == 72u);
     static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_elasticity_ratio) == 8u);
     static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_reference_density) == 32u);
     static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_sand_yield_ratio) == 36u);
@@ -337,7 +359,9 @@ export namespace pP::matter {
     static_assert(sizeof(SourceMatrix) == 16u and alignof(SourceMatrix) == 4u);
     static_assert(PPR_OFFSETOF(SourceMatrix, m_c0y) == 4u and PPR_OFFSETOF(SourceMatrix, m_c1x) == 8u);
     static_assert(std::is_standard_layout_v<GpuParticle> and std::is_trivially_copyable_v<GpuParticle>);
-    static_assert(sizeof(GpuParticle) == 88u and alignof(GpuParticle) == 4u);
+    static_assert(sizeof(GpuParticle) == 96u and alignof(GpuParticle) == 4u);
+    static_assert(PPR_OFFSETOF(GpuParticle, m_compaction) == 88u);
+    static_assert(PPR_OFFSETOF(GpuParticle, m_solid_fraction) == 92u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_deformation_gradient) == 16u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_deformation_displacement) == 32u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_liquid_density) == 48u);
@@ -345,7 +369,9 @@ export namespace pP::matter {
     static_assert(PPR_OFFSETOF(GpuParticle, m_color_r) == 72u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_enabled) == 84u);
     static_assert(std::is_standard_layout_v<ParticleWrite> and std::is_trivially_copyable_v<ParticleWrite>);
-    static_assert(sizeof(ParticleWrite) == 64u and alignof(ParticleWrite) == 4u);
+    static_assert(sizeof(ParticleWrite) == 72u and alignof(ParticleWrite) == 4u);
+    static_assert(PPR_OFFSETOF(ParticleWrite, m_compaction) == 64u);
+    static_assert(PPR_OFFSETOF(ParticleWrite, m_solid_fraction) == 68u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_position_x) == 0u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_position_y) == 4u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_displacement_x) == 8u);

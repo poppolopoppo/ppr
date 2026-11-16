@@ -11,17 +11,18 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 
 - `Matter.Gpu.Types.cppm` (`:gpu.types`): source material enum, source-derived default
   profile and explicit scalar CPU/GPU protocol. The semantic record `GpuParticle`
-  is 88 bytes (CPU rows, snapshots, checkpoints, v5 wire); the device stores each
-  particle as a 64-byte `ParticleWrite` hot row plus a 28-byte `ParticleReadonly`
+   is 96 bytes (CPU rows, snapshots, v9 checkpoints); the device stores each
+   particle as a 72-byte `ParticleWrite` hot row plus a 28-byte `ParticleReadonly`
   cold row (six FP32 fields + one u32 property index), packed and unpacked by field name.
-  The device row pair is 64 + 28 = 92 bytes, not the 88-byte semantic row. Static collider stride32,
+   The device row pair is 72 + 28 = 100 bytes, not the 96-byte semantic row. Static collider stride32,
   parameter constant buffer64. F/D are four explicitly named source column
   components; no engine matrix storage inference.
-- B1 `GpuMaterialProperties` is a 40-byte scalar row (alignment 4): stable substance
-  ID, family and eight FP32 coefficients. `GpuMaterialTableView` borrows rows and
+- B1 `GpuMaterialProperties` is a 76-byte scalar row (alignment 4): stable substance
+   ID, family and seventeen FP32 coefficients. `GpuMaterialTableView` borrows rows and
   per-particle indices during preparation only. `ParticleReadonly::m_property_row`
-  is at offset 24; the 88-byte semantic record remains unchanged. Cohesive and
-  compacting enum slots are reserved and rejected. `sandYieldRatio` is legacy
+   is at offset 24; semantic C/phi are at offsets 88/92, hot C/phi at 64/68.
+   Cohesive and compacting are adapter-only log-strain calibration laws with
+   strict admission; see `docs/pbmpm-material-laws-proposal.md`. `sandYieldRatio` is legacy
   calibration, not a modulus ratio; reference density is inventory in rho/1000,
   not a multiplier in the normalized liquid equation.
 - `Matter.Gpu.cpp::validateMaterialTable` enforces unique nonzero IDs and strict
@@ -42,13 +43,15 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
 - `game/colony/MatterRuntime.cpp` owns the catalog family map, density conversion,
   table identity and stable-ID lookup. Water/brine/oil/crude oil/magma are liquid;
   sand/sandstone/basalt/coal and ores are sand, with separate legacy-valued rows.
-  **Clay, snow and pebbles/gravel are sand placeholders until their laws exist.**
+   Clay/wet sand use cohesive cap/shear; snow uses porous ellipse/dense cone.
+   Pebbles/gravel stay granular with their own friction/yield coefficients.
   Other elements retain the former liquid-phase-versus-sand fallback. Only active
   particles drive sparse discovery/dispatch, never unused catalog definitions.
-- Checkpoint v8 saves table policy 1, canonical row identity and complete rows;
-  stable catalog IDs reconstruct device indices. v6/v7 synthesize current
-  legacy-valued defaults with catalog density, preserving numerical words and
-  inventory; v6 keeps K2 and v7 keeps saved K. Unknown policy or identity mismatch
+- Checkpoint v9 saves table policy 2, canonical row identity and complete rows;
+   stable catalog IDs reconstruct device indices. v6/v7 synthesize legacy-valued
+   defaults; v8 verifies policy1 and extends its rows. All preserve old numerical
+   words/families and inventory, adding C=0, phi=.3; v6 keeps K2 and v7/v8 saved K.
+   Unknown policy or identity mismatch
   returns `protocol_not_supported`; malformed rows/IDs return `invalid_argument`.
 - The contour/body extension has separate environment constants (32 bytes),
   immutable predicted end-pose body rows (64 bytes). `Matter.Gpu.Compact.cpp`
@@ -63,7 +66,7 @@ terrain, Box2D, edit and checkpoint adapters. Drawing never advances this solver
   decision and K are runtime values in the parameter row. `:gpu.sparse` owns maintenance
   pipelines, sparse maps, two payload pools, one budget pool and first-error resources. Every
   particle binding is the `g_hot`/`g_cold` row pair; the solver never sees the
-  88-byte semantic record on the device.
+   96-byte semantic record on the device.
 - `prepareReplacement` freezes step admission and allocates every replacement
   particle/shape/readback/root resource before external transaction settlement.
   `publishReplacement` moves prepared ownership without allocation/GPU calls;

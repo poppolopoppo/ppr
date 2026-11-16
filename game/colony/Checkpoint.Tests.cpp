@@ -153,8 +153,8 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(candidate->m_identity.m_publication == 8u and candidate->m_identity.m_terrain_revision == 2u);
         PPR_TEST_ASSERT(candidate->m_gas == original.m_gas);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(candidate->m_particles[0u]) ==
-            std::bit_cast<std::array<u32, 22u>>(source.m_particles[0u]));
+            std::bit_cast<std::array<u32, 24u>>(candidate->m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 24u>>(source.m_particles[0u]));
 
         for (std::size_t i = 0u; i < 2u; ++i) {
             const u32 x = 127u + static_cast<u32>(i);
@@ -271,8 +271,8 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(source.m_next_id == checkpoint.m_current_matter.m_next_id);
         PPR_TEST_ASSERT(source.m_identity == checkpoint.m_current_matter.m_identity);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(source.m_particles[0u]) ==
-            std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+            std::bit_cast<std::array<u32, 24u>>(source.m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 24u>>(checkpoint.m_current_matter.m_particles[0u]));
         PPR_TEST_ASSERT(cohort.getCell({127u, 40u})->m_element != 0u and cohort.getCell({130u, 40u})->m_element == 0u);
     };
 
@@ -289,26 +289,30 @@ namespace pP::game::tests::detail::checkpoint {
         particle.m_liquid_density = 0.5f;
         particle.m_lambda = 0.375f;
         particle.m_log_jp = 0.75f;
-        const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+        particle.m_compaction = 0.25f;
+        particle.m_solid_fraction = 0.6f;
+        const auto words = std::bit_cast<std::array<u32, 24u>>(particle);
 
         state.m_properties[0u].m_liquid_viscosity = 0.375f;
         state.m_properties[0u].m_liquid_relaxation = 0.75f;
-        const auto property_words = std::bit_cast<std::array<u32, 10u>>(state.m_properties[0u]);
+        state.m_properties[0u].m_cohesion = 0.125f;
+        state.m_properties[0u].m_compaction_rate = 0.75f;
+        const auto property_words = std::bit_cast<std::array<u32, 19u>>(state.m_properties[0u]);
 
         const auto bytes = encodeWorldCheckpoint(checkpoint, *fixture.m_catalog);
         PPR_TEST_ASSERT(bytes.has_value());
         const auto decoded = decodeWorldCheckpoint(*bytes, *fixture.m_catalog);
         PPR_TEST_ASSERT(decoded.has_value());
-        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(decoded->m_current_matter.m_particles[0u]) == words);
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 24u>>(decoded->m_current_matter.m_particles[0u]) == words);
         PPR_TEST_ASSERT(decoded->m_current_matter.m_identity == state.m_identity);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 10u>>(decoded->m_current_matter.m_properties[0u]) == property_words);
+            std::bit_cast<std::array<u32, 19u>>(decoded->m_current_matter.m_properties[0u]) == property_words);
 
         const auto snapshot_bytes = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(snapshot_bytes.has_value());
-        // v8 appends policy (4), identity (8), count (4), and ten words per material.
-        const std::size_t table_bytes = 16u + state.m_properties.size() * 40u;
-        const auto profile_offset = bytes->size() - snapshot_bytes->size() - 8u - table_bytes - 88u - 4u - 64u;
+        // v9 appends policy (4), identity (8), count (4), and nineteen words per material.
+        const std::size_t table_bytes = 16u + state.m_properties.size() * 76u;
+        const auto profile_offset = bytes->size() - snapshot_bytes->size() - 8u - table_bytes - 96u - 4u - 64u;
         auto corrupt_profile = *bytes;
         corrupt_profile[profile_offset] ^= 1u;
         const auto rejected_profile = decodeWorldCheckpoint(corrupt_profile, *fixture.m_catalog);
@@ -326,13 +330,13 @@ namespace pP::game::tests::detail::checkpoint {
 
         const auto &current = *(*restored)->matterState();
         PPR_TEST_ASSERT(current.m_identity == MatterIdentity{92u, 7u, 4u});
-        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 10u>>(current.m_properties[0u]) == property_words);
-        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(current.m_particles[0u]) == words);
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 19u>>(current.m_properties[0u]) == property_words);
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 24u>>(current.m_particles[0u]) == words);
         PPR_TEST_ASSERT((*restored)->update(TimeSpan{}) == std::errc::operation_not_permitted);
 
         const auto captured = captureWorldCheckpoint(**restored, (*restored)->preparedWorld()->generated());
         PPR_TEST_ASSERT(captured.has_value());
-        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 22u>>(captured->m_current_matter.m_particles[0u]) == words);
+        PPR_TEST_ASSERT(std::bit_cast<std::array<u32, 24u>>(captured->m_current_matter.m_particles[0u]) == words);
 
         for (u32 scenario = 0u; scenario < 8u; ++scenario) {
             auto bad = checkpoint;
@@ -379,8 +383,8 @@ namespace pP::game::tests::detail::checkpoint {
 
         // v8 tail: 64-byte profile, count, one 88-byte particle, material table,
         // snapshot length and snapshot. The table has a 16-byte header and 40-byte rows.
-        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 40u;
-        const std::size_t profile_offset = encoded->size() - snapshot->size() - 8u - table_bytes - 88u - 4u - 64u;
+        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 76u;
+        const std::size_t profile_offset = encoded->size() - snapshot->size() - 8u - table_bytes - 96u - 4u - 64u;
         const std::size_t relaxation_offset = profile_offset + 7u * 4u;
         // The eighth little-endian profile word is exactly 1.0f before corruption.
         PPR_TEST_ASSERT((*encoded)[relaxation_offset] == 0u and (*encoded)[relaxation_offset + 1u] == 0u);
@@ -414,7 +418,7 @@ namespace pP::game::tests::detail::checkpoint {
         particle.m_color_b = 0.375f;
         particle.m_enabled = 1.0f;
 
-        const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
+        const auto words = std::bit_cast<std::array<u32, 24u>>(particle);
         PPR_TEST_ASSERT(not validateWorldCheckpoint(checkpoint, catalog));
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
@@ -426,9 +430,9 @@ namespace pP::game::tests::detail::checkpoint {
         // after the 22-word particle payload and before the snapshot length.
         const auto snapshot_bytes = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(snapshot_bytes.has_value());
-        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 40u;
-        const std::size_t payload_offset = encoded->size() - snapshot_bytes->size() - 8u - table_bytes - 22u * 4u;
-        PPR_TEST_ASSERT(payload_offset + 22u * 4u + table_bytes + 8u + snapshot_bytes->size() == encoded->size());
+        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 76u;
+        const std::size_t payload_offset = encoded->size() - snapshot_bytes->size() - 8u - table_bytes - 24u * 4u;
+        PPR_TEST_ASSERT(payload_offset + 24u * 4u + table_bytes + 8u + snapshot_bytes->size() == encoded->size());
         constexpr std::array<u8, 4u> particle_count{1u, 0u, 0u, 0u};
         PPR_TEST_ASSERT(std::ranges::equal(std::span{encoded->data() + payload_offset - 4u, 4u}, particle_count));
 
@@ -450,15 +454,15 @@ namespace pP::game::tests::detail::checkpoint {
             return value;
         };
 
-        const std::size_t table_offset = payload_offset + 88u;
+        const std::size_t table_offset = payload_offset + 96u;
         const auto &properties = checkpoint.m_current_matter.m_properties;
         PPR_TEST_ASSERT(read_integer(table_offset, 4u) == kMatterMaterialTablePolicy);
         PPR_TEST_ASSERT(read_integer(table_offset + 4u, 8u) == matterMaterialTableIdentity(properties));
         PPR_TEST_ASSERT(read_integer(table_offset + 12u, 4u) == properties.size());
         for (std::size_t row = 0u; row < properties.size(); ++row) {
-            const auto property_words = std::bit_cast<std::array<u32, 10u>>(properties[row]);
+            const auto property_words = std::bit_cast<std::array<u32, 19u>>(properties[row]);
             for (std::size_t word = 0u; word < property_words.size(); ++word) {
-                PPR_TEST_ASSERT(read_integer(table_offset + 16u + row * 40u + word * 4u, 4u) == property_words[word]);
+                PPR_TEST_ASSERT(read_integer(table_offset + 16u + row * 76u + word * 4u, 4u) == property_words[word]);
             }
         }
 
@@ -917,14 +921,14 @@ namespace pP::game::tests::detail::checkpoint {
         Fixture fixture;
         const auto &catalog = *fixture.m_catalog;
         const auto checkpoint = editedCheckpoint(catalog);
-        PPR_TEST_ASSERT(kWorldCheckpointVersion == 8u and asset::Manifest::schema_version == 1u);
+        PPR_TEST_ASSERT(kWorldCheckpointVersion == 9u and asset::Manifest::schema_version == 1u);
         PPR_TEST_ASSERT(sim::kSnapshotVersion == 5u and checkpoint.m_descriptor.m_pack_schema_version == 1u);
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         PPR_TEST_ASSERT(encoded.has_value());
 
         constexpr std::array<u8, 25u> header{
-            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x08u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
+            0x50u, 0x50u, 0x52u, 0x57u, 0x47u, 0x45u, 0x4eu, 0x31u, 0x09u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u, 0x00u,
             0x00u, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u};
         PPR_TEST_ASSERT(encoded->size() > header.size());
         PPR_TEST_ASSERT(std::ranges::equal(std::span{encoded->data(), header.size()}, header));
@@ -967,34 +971,39 @@ namespace pP::game::tests::detail::checkpoint {
             {{11u, matter::ESourceMaterial::liquid, 1.0f, 1.5f, 1.0f, 0.125f, 30.0f, 0.0f, 1.0f, 1.0f},
                 {12u, matter::ESourceMaterial::liquid, 1.0f, 1.5f, 1.0f, 0.5f, 30.0f, 0.0f, 1.0f, 1.0f}}};
         constexpr u64 expected_identity = 0xd505ee7f0438172eull;
-        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows) == expected_identity);
+        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows, 1u) == expected_identity);
+        const auto current_identity = matterMaterialTableIdentity(identity_rows);
         std::swap(identity_rows[0u], identity_rows[1u]);
-        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows) == expected_identity);
+        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows, 1u) == expected_identity);
+        PPR_TEST_ASSERT(matterMaterialTableIdentity(identity_rows) == current_identity);
 
         const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
         const auto raw = sim::save(checkpoint.m_snapshot);
         PPR_TEST_ASSERT(encoded and raw);
 
-        // Remove v8's material table, then v7's schedule word to reconstruct v6.
-        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 40u;
-        const std::size_t table_offset = encoded->size() - raw->size() - 8u - table_bytes;
-        const std::size_t schedule_offset =
-            table_offset - checkpoint.m_current_matter.m_particles.size() * 88u - 4u - 64u - 4u;
-        auto legacy = *encoded;
-        PPR_TEST_ASSERT(legacy.size() > 8u and schedule_offset <= legacy.size() - 4u);
+        // CPU and GPU fixtures share the suffix-derived offsets and historical
+        // policy/identity/record reconstruction, including pre-decode size guards.
+        const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 76u;
+        const auto offsets = checkpointWireOffsets(encoded->size(), raw->size(), checkpoint.m_current_matter);
+        const std::size_t table_offset = offsets.m_properties;
+        const std::size_t schedule_offset = offsets.m_schedule;
+        const auto v8 = historicalCheckpointBytes(*encoded, raw->size(), checkpoint.m_current_matter, 8u);
+        const auto migrated_v8 = decodeWorldCheckpoint(v8, catalog);
+        PPR_TEST_ASSERT(migrated_v8 and migrated_v8->m_current_matter.m_iterations == 5u);
 
-        legacy.erase(
-            legacy.begin() + static_cast<std::ptrdiff_t>(table_offset),
-            legacy.begin() + static_cast<std::ptrdiff_t>(table_offset + table_bytes));
-        legacy[8u] = 7u;
-        const auto migrated_v7 = decodeWorldCheckpoint(legacy, catalog);
+        const auto v7 = historicalCheckpointBytes(*encoded, raw->size(), checkpoint.m_current_matter, 7u);
+        const auto migrated_v7 = decodeWorldCheckpoint(v7, catalog);
         PPR_TEST_ASSERT(migrated_v7 and migrated_v7->m_current_matter.m_iterations == 5u);
-        PPR_TEST_ASSERT(migrated_v7->m_current_matter.m_properties.size() == 1u);
 
-        legacy[8u] = 6u;
-        const auto schedule_begin = legacy.begin() + static_cast<std::ptrdiff_t>(schedule_offset);
-        legacy.erase(schedule_begin, schedule_begin + 4);
+        auto current = checkpoint;
+        current.m_current_matter.m_iterations = 10u;
+        PPR_TEST_ASSERT(current.m_current_matter.m_iterations != matter::kDefaultIterations);
+        const auto v9 = encodeWorldCheckpoint(current, catalog);
+        PPR_TEST_ASSERT(v9.has_value());
+        const auto migrated_v9 = decodeWorldCheckpoint(*v9, catalog);
+        PPR_TEST_ASSERT(migrated_v9 and migrated_v9->m_current_matter.m_iterations == 10u);
 
+        const auto legacy = historicalCheckpointBytes(*encoded, raw->size(), checkpoint.m_current_matter, 6u);
         const auto migrated = decodeWorldCheckpoint(legacy, catalog);
         PPR_TEST_ASSERT(migrated.has_value());
         PPR_TEST_ASSERT(migrated->m_current_matter.m_iterations == 2u);
@@ -1016,26 +1025,36 @@ namespace pP::game::tests::detail::checkpoint {
             .m_reference_density = static_cast<float>(material->m_reference_density_kg_m3 / 1000.0),
             .m_sand_yield_ratio = 1.0f};
 
-        for (const auto *const migrated_state: {&migrated_v7->m_current_matter, &migrated->m_current_matter}) {
+        for (const auto *const migrated_state:
+            {&migrated->m_current_matter, &migrated_v7->m_current_matter, &migrated_v8->m_current_matter,
+                &migrated_v9->m_current_matter}) {
             PPR_TEST_ASSERT(migrated_state->m_properties.size() == 1u);
             // Word 1 is the solver family, not the table-level policy or identity.
             PPR_TEST_ASSERT(migrated_state->m_properties[0u].m_family == matter::ESourceMaterial::liquid);
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 10u>>(migrated_state->m_properties[0u]) ==
-                std::bit_cast<std::array<u32, 10u>>(legacy_row));
+                std::bit_cast<std::array<u32, 19u>>(migrated_state->m_properties[0u]) ==
+                std::bit_cast<std::array<u32, 19u>>(legacy_row));
             PPR_TEST_ASSERT(migrated_state->m_records == checkpoint.m_current_matter.m_records);
+            PPR_TEST_ASSERT(migrated_state->m_particles.size() == checkpoint.m_current_matter.m_particles.size());
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 22u>>(migrated_state->m_particles[0u]) ==
-                std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+                std::bit_cast<std::array<u32, 24u>>(migrated_state->m_particles[0u]) ==
+                std::bit_cast<std::array<u32, 24u>>(checkpoint.m_current_matter.m_particles[0u]));
+        }
+
+        for (const auto *const migrated_checkpoint: {&*migrated, &*migrated_v7, &*migrated_v8, &*migrated_v9}) {
+            const auto recoded = encodeWorldCheckpoint(*migrated_checkpoint, catalog);
+            PPR_TEST_ASSERT(recoded and (*recoded)[8u] == 9u);
         }
 
         PPR_TEST_ASSERT(migrated->m_current_matter.m_records == checkpoint.m_current_matter.m_records);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(migrated->m_current_matter.m_particles[0u]) ==
-            std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+            std::bit_cast<std::array<u32, 24u>>(migrated->m_current_matter.m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 24u>>(checkpoint.m_current_matter.m_particles[0u]));
 
         const auto upgraded = encodeWorldCheckpoint(*migrated, catalog);
-        PPR_TEST_ASSERT(upgraded and upgraded->size() == legacy.size() + 4u + table_bytes);
+        PPR_TEST_ASSERT(
+            upgraded and
+            upgraded->size() == legacy.size() + 4u + table_bytes + checkpoint.m_current_matter.m_particles.size() * 8u);
         const auto upgraded_state = decodeWorldCheckpoint(*upgraded, catalog);
         PPR_TEST_ASSERT(upgraded_state and upgraded_state->m_current_matter.m_iterations == 2u);
 

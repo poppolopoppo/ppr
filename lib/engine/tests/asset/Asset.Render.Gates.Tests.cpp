@@ -4121,12 +4121,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
 
             struct Hot {
-                std::array<float, 16u> fields{};
+                std::array<float, 18u> fields{};
             };
             struct Cold {
                 std::array<float, 7u> fields{};
             };
-            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 28u);
+            static_assert(sizeof(Hot) == 72u and sizeof(Cold) == 28u);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
             // The restored liquid disk's support is R = 2.0 r, where the retired
@@ -5694,7 +5694,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
                 const auto live = std::make_shared<std::atomic<u64>>(1u);
                 const auto viewAt = [&](const u64 epoch) {
-                    std::array<float, 16u> hot{};
+                    std::array<float, 18u> hot{};
                     hot[0u] = hot[1u] = 3.0f;
                     hot[15u] = 1.0f;
                     std::array<float, 7u> cold{};

@@ -55,14 +55,16 @@ export namespace pP::colony {
         u64 world, u32 world_edge = sim::kWorldEdge, const ContentCatalog *catalog = nullptr);
 
     /// Stable policy plus canonical row values form the persisted table identity.
-    inline constexpr u32 kMatterMaterialTablePolicy = 1u;
+    inline constexpr u32 kMatterMaterialTablePolicy = 2u;
     [[nodiscard]] matter::ESourceMaterial matterFamily(const MaterialDefinition &material);
-    [[nodiscard]] u64 matterMaterialTableIdentity(std::span<const matter::GpuMaterialProperties> rows);
+    [[nodiscard]] u64 matterMaterialTableIdentity(
+        std::span<const matter::GpuMaterialProperties> rows, u32 policy = kMatterMaterialTablePolicy);
     [[nodiscard]] Expected<Array<u32>> matterPropertyIndices(const MatterState &state);
 
     /// Candidate-only default construction/migration. Existing rows are retained;
     /// missing substances use catalog density (or explicit fixture inventory).
-    [[nodiscard]] std::error_code completeMatterProperties(MatterState &state, const ContentCatalog *catalog = nullptr);
+    [[nodiscard]] std::error_code completeMatterProperties(
+        MatterState &state, const ContentCatalog *catalog = nullptr, bool legacy = false);
     /// Validate before changing the candidate; live runtime publication remains a
     /// separate prepared transaction. Family/history conversion is not supported.
     [[nodiscard]] std::error_code setMatterProperties(

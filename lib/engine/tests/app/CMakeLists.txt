@@ -161,7 +161,7 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
 # The responsibility lists plus the resident list are disjoint and cover every
 # leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
-# resident + 3 schedule + 3 substance table + 1 cost + 1 correctness + 1 precision = 52
+# resident + 3 schedule + 3 substance table + 3 B1 laws + 1 cost + 1 correctness + 1 precision = 55
 # `app/matter_gpu` leaves, and the resident list also holds one
 # `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
 # their own entries outside `matter_fast`, below. The two whole-grid terrain
@@ -190,6 +190,23 @@ set(ppr_matter_grid_filter "app/matter_gpu/sparse_capacity_layout_and_independen
 # product) plus the transfer stencil identity; they stay together so one device
 # setup proves the whole per-particle rejection policy.
 set(ppr_matter_constitutive_filter "app/matter_gpu/constitutive_invalid_operands_do_not_enter_unsafe_operations,app/matter_gpu/constitutive_derived_operand_overflow_rejects_state,app/matter_gpu/constitutive_rejection_preserves_committed_epoch_and_rows,app/matter_gpu/quadratic_transfer_reproduces_affine_fields_and_moments")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_calibrated_laws_gpu
+    FILTER "app/matter_gpu/calibrated_caps_hardening_and_two_regime_edges,app/matter_gpu/calibrated_admission_and_clay_sand_divergence"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_elastic_recovery_diagnostic
+    FILTER "app/matter_gpu/elastic_one_percent_shear_release_diagnostic"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_terrain_gpu

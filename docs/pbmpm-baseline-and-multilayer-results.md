@@ -1,5 +1,38 @@
 # PB-MPM baseline and multi-layer results
 
+## B1 increment 2 — authored coverage, unrun
+
+Coordinator R1–R5 decisions are implemented in the adapter path; see
+[material-law decisions and risks](pbmpm-material-laws-proposal.md). Historical
+Phase A results below do not validate this edit-only increment.
+
+* R1: dimensionless log-strain calibration space, inventory-only density; new
+  families use H=0 and separate C/phi. Risk: no stress/stiffness mapping.
+* R2: constant-dev cap/tension clamps, constant-t non-associated shear return,
+  monotone hardening. Only metric non-expansiveness, active n reduction and
+  monotone history are claimed. No dissipation proof or work-sign claim because
+  R1 supplies no stress-space mapping. Risk: sequential empirical return.
+* R3: explicit porous ellipse / dense cone, phi increases by beta times removed
+  over-compression. Epsilon is numerical. Only the t=0 edge is continuous;
+  finite-compression edges intentionally jump. Coordinator accepts that risk.
+* R4: authored 1% shear / 0.25 s drive / 2 s release, objective norm below 1e-2.
+  Negative recovery reports without failing. Verdict **unrun**, rock/ore remain
+  granular. Risk: this local metric is not full bonded-solid validation.
+* R5: fresh/dug C=0, phi=phi0; semantic96/hot72/cold28, property76;
+  checkpoint v9/policy2. v6–v8 preserve old words/families and default extensions.
+  Risk: old saves deliberately retain their old family behavior.
+
+Authored coverage: cap consumption, monotone hardening, zero-confinement
+cohesion, tension, phi compaction/release, dense branch/zero-confinement edge
+continuity, invalid admission, clay/sand divergence, snow strengthening,
+checkpoint exact state/migration, reflection/packing. New CTest entries:
+`engine.tests.app.matter_calibrated_laws_gpu` and
+`engine.tests.app.matter_elastic_recovery_diagnostic`. Renderer ABI fixtures
+were updated as dependent consumers. No builds or tests were run by the
+implementer. This is not a GREEN result.
+
+---
+
 **Plan:** [PB-MPM baseline correction and multi-layer plan](../../.opencode/plan/2026-11-15-pbmpm-baseline-and-multilayer.md)
 **Status:** A0, A2 (constitutive and precision), A3 and A4 complete; A1 generator and checkpoint leaves landed with bounded comparisons and structural-only exclusions detailed below; A5 closed as a documented rejection for Phase A, characterization executed, reconsider at B1. A6 Linux gates passed at the recorded frozen identity; the post-A1 exclusive fast-gate budget and Windows/D3D12 remain unverified. The pre-merge branch-row policy revision is edit-only and awaits orchestrator validation.
 **Identity:** branch `pbmpm/phase-a` in worktree `/home/bek/.local/share/opencode/worktree/4bb70a/pbmpm-phase-a`, base `61df61b954dc804fdf571e10ee42222e6be7fbbd`. Solver, matter, shader and game-factory sources are identical to the planning pin `07b9801ca3fc0b8792978eea42dbbd631560d9d7`; later commits in this checkout are renderer/lighting work.
@@ -784,7 +817,11 @@ Three consecutive runs, all inside the 420 s ceiling, with the new conformance l
 - **Windows/D3D12 unrun.** Required by the plan as a compatibility gate; Linux evidence cannot satisfy it.
 - **Merge surface.** Three paths overlap with the current `particles` tip: `game/colony/codemap.md`, `lib/engine/app/renderer/App.Renderer.GridPass.cpp` and `.cppm`. Main has advanced past this branch's base with renderer ownership/reconstruction work, so integration and affected rendering tests are still required.
 
-## B1 — per-substance simulation parameters
+## B1 increment 1 — historical per-substance plumbing handoff
+
+This subsection records the preceding increment. Its v8 layouts and placeholder
+mapping are superseded by the increment-2 decisions and authored coverage at the
+top of this document.
 
 Every substance now carries an independently editable constitutive-family/coefficient row instead of inheriting one global set. The default coefficient rows currently carry legacy values; independent editability is not distinct per-substance tuning. Reference density comes from each catalog entry. Only explicitly documented element-specific entries are tuned; this table does not claim further tuning.
 
@@ -800,4 +837,7 @@ Checkpoint envelope **v8** stores the material-table policy, a canonical table i
 
 **Authored coverage pending execution:** `app/matter_gpu/substance_rows_preserve_defaults_and_reject_invalid_replacements` asserts default-row equivalence and invalid-table admission/epoch isolation. Its previous semantic-row assertions did **not** establish append index preservation. The extended coverage now reads the retained particle's actual cold index, grows a table with differentiated same-family viscosity rows, checks index/coefficient resolution after cancellation and publication, and compares execution with a replacement control whose indices are rebuilt against a permuted table. `same_family_substances_differ_and_unused_rows_do_not_dispatch` covers differentiated shear response and unused-row dispatch/result invariance. `device_property_guard_reports_out_of_range_and_family_mismatch` executes the production property guard against corrupted device table inputs and asserts flag 512 plus index/field/particle witnesses, separately from host admission. `reflected_scalar_protocol_and_source_helpers` now checks the sparse maintenance cold stride/property offset as well as the solver ABI. The checkpoint leaves `current_round_trip_preserves_all_words_and_rebinds_only_world` and `saved_schedule_migrates_v6_and_rejects_invalid_counts_without_mutating_live_world` cover nondefault v8 coefficient words, legacy v6/v7 migration, a pinned independently computed two-row table hash and row-order invariance. Candidate-restore isolation means a separate failed restore leaves the live driver's capture unchanged; GPU admission/epoch assertions remain in the GPU coverage. No build, test, frozen-fixture rerun or backend compatibility result is claimed for these review edits.
 
-Still ahead in B1: the **cohesive cap law** (clay), the **compacting porous law** (snow) and the **solid/elastic recovery** determination, plus pebble behaviour. The approved decisions behind them are recorded in `docs/pbmpm-material-laws-proposal.md`: legacy `sandYieldRatio` as calibration, density from physical inventory, strict coefficient admission, identity-preserving migration, and a volumetric cap for the cohesive family.
+At that handoff the cohesive/compacting laws and pebble coefficients were still
+ahead. Increment 2 now authors those laws and the elastic diagnostic; execution
+and the recovery determination remain pending. The authoritative decisions and
+accepted risks are in `docs/pbmpm-material-laws-proposal.md`.

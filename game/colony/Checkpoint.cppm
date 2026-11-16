@@ -15,7 +15,7 @@ export namespace pP::colony {
 
     // Version 7 adds the world-owned iteration schedule. Version 6 migrates to
     // K=2 explicitly; all earlier envelopes remain unsupported.
-    inline constexpr u32 kWorldCheckpointVersion = 8u;
+    inline constexpr u32 kWorldCheckpointVersion = 9u;
     inline constexpr u64 kMaxWorldCheckpointBytes = 256u * 1024u * 1024u;
 
     // ------------------------------------------------------------------

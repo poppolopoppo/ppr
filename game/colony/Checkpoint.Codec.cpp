@@ -426,9 +426,9 @@ namespace pP::colony {
         }
 
         // The reflected scalar ABI has no padding: sixteen profile words and
-        // twenty-two particle words. Persist each numeric word little-endian.
+        // twenty-four particle words. Persist each numeric word little-endian.
         const auto &carried = checkpoint.m_current_matter;
-        const u64 matter_bytes = 136u + carried.m_particles.size() * 88u + carried.m_properties.size() * 40u;
+        const u64 matter_bytes = 136u + carried.m_particles.size() * 96u + carried.m_properties.size() * 76u;
 
         const u64 encoded_size = writer.m_bytes.size() + particle_bytes + matter_bytes + 8u + snapshot->size();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
@@ -452,7 +452,7 @@ namespace pP::colony {
         writer.count(carried.m_particles.size());
         for (const auto &particle: carried.m_particles) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
-            for (const u32 word: std::bit_cast<std::array<u32, 22u>>(particle))
+            for (const u32 word: std::bit_cast<std::array<u32, 24u>>(particle))
                 writer.u32value(word);
         }
 
@@ -460,7 +460,7 @@ namespace pP::colony {
         writer.u64value(matterMaterialTableIdentity(carried.m_properties));
         writer.count(carried.m_properties.size());
         for (const auto &row: carried.m_properties) {
-            for (const u32 word: std::bit_cast<std::array<u32, 10u>>(row))
+            for (const u32 word: std::bit_cast<std::array<u32, 19u>>(row))
                 writer.u32value(word);
         }
 
@@ -492,9 +492,10 @@ namespace pP::colony {
         const auto version = reader.u32value();
         PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            CheckpointCodec, magic == kMagic and (version == 6u or version == 7u or version == kWorldCheckpointVersion)
-                                 ? std::error_code{}
-                                 : std::make_error_code(std::errc::protocol_not_supported));
+            CheckpointCodec,
+            magic == kMagic and (version == 6u or version == 7u or version == 8u or version == kWorldCheckpointVersion)
+                ? std::error_code{}
+                : std::make_error_code(std::errc::protocol_not_supported));
         const bool full = reader.boolean();
         PPR_RETURN_UNEXPECTED_ON_FAIL(
             CheckpointCodec, full ? std::error_code{} : sim::make_error_code(sim::errc::invalid_payload));
@@ -564,14 +565,20 @@ namespace pP::colony {
                                  carried.m_profile, carried.m_cell_metres, carried.m_thickness_metres, kMatterGravityY,
                                  descriptor.m_world_edge));
 
-        carried.m_particles.resize(reader.count(sim::kMaxMatterParticles, 88u));
+        carried.m_particles.resize(reader.count(sim::kMaxMatterParticles, version >= 9u ? 96u : 88u));
         for (auto &particle: carried.m_particles) {
             PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, context ? context->error() : std::error_code{});
-            std::array<u32, 22u> words{};
-            for (auto &word: words)
-                word = reader.u32value();
+            // Explicit migration: all old solver words remain bit-exact; C=0,
+            // phi=default phi0. Old families are retained, not silently converted.
+            auto words = std::bit_cast<std::array<u32, 24u>>(matter::GpuParticle{});
+            for (u32 index = 0u; index < (version >= 9u ? 24u : 22u); ++index)
+                words[index] = reader.u32value();
 
             particle = std::bit_cast<matter::GpuParticle>(words);
+            if (version < 9u) {
+                particle.m_compaction = 0.0f;
+                particle.m_solid_fraction = 0.3f;
+            }
         }
 
         // Decode owned physical metadata without initializing solver columns.
@@ -591,20 +598,38 @@ namespace pP::colony {
         if (version >= 8u) {
             const u32 policy = reader.u32value();
             const u64 identity = reader.u64value();
-            Array<matter::GpuMaterialProperties> rows(reader.count(kMaxContentMaterials, 40u));
+            Array<matter::GpuMaterialProperties> rows(reader.count(kMaxContentMaterials, version >= 9u ? 76u : 40u));
             for (auto &row: rows) {
-                std::array<u32, 10u> words{};
-                for (auto &word: words)
-                    word = reader.u32value();
+                auto words = std::bit_cast<std::array<u32, 19u>>(matter::GpuMaterialProperties{});
+                for (u32 index = 0u; index < (version >= 9u ? 19u : 10u); ++index)
+                    words[index] = reader.u32value();
 
                 row = std::bit_cast<matter::GpuMaterialProperties>(words);
+                if (version < 9u) {
+                    // Versioned migration values must not follow future tuning.
+                    row.m_cohesion = 0.05f;
+                    row.m_cap = 0.2f;
+                    row.m_tension = 0.02f;
+                    row.m_cohesion_hardening = 0.2f;
+                    row.m_cap_hardening = 0.5f;
+                    row.m_solid_fraction0 = 0.3f;
+                    row.m_compaction_rate = 0.5f;
+                    row.m_solid_exponent = 2.0f;
+                    row.m_dense_epsilon = 0.01f;
+                }
+
+                PPR_RETURN_UNEXPECTED_ON_FAIL(
+                    CheckpointCodec, version >= 9u or static_cast<u32>(row.m_family) <= 3u
+                                         ? std::error_code{}
+                                         : std::make_error_code(std::errc::invalid_argument));
             }
 
             PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, reader.m_error);
             // An unknown policy or mismatched canonical table is not silently
             // reinterpreted. This is an incompatible envelope, not a solver fault.
             PPR_RETURN_UNEXPECTED_ON_FAIL(
-                CheckpointCodec, policy == kMatterMaterialTablePolicy and identity == matterMaterialTableIdentity(rows)
+                CheckpointCodec, policy == (version >= 9u ? kMatterMaterialTablePolicy : 1u) and
+                                         identity == matterMaterialTableIdentity(rows, policy)
                                      ? std::error_code{}
                                      : std::make_error_code(std::errc::protocol_not_supported));
             PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, setMatterProperties(carried, rows, catalog));
@@ -612,7 +637,7 @@ namespace pP::colony {
             // v6 keeps K2; v7 keeps saved K. Both get the current legacy-valued
             // defaults and catalog reference inventory without changing F/D/J,
             // mass, volume, sampling or any other numerical particle word.
-            PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, completeMatterProperties(carried, &catalog));
+            PPR_RETURN_UNEXPECTED_ON_FAIL(CheckpointCodec, completeMatterProperties(carried, &catalog, true));
         }
 
         const auto snapshot_size = reader.u64value();

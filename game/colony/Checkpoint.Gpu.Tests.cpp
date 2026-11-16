@@ -100,7 +100,7 @@ namespace pP::game::tests::detail::checkpoint {
                     std::fprintf(
                         stderr, "[checkpoint-gpu-before-prefix-particle] id=%llu words=",
                         static_cast<unsigned long long>(state.m_records[row].m_id));
-                    for (const u32 word: std::bit_cast<std::array<u32, 22u>>(state.m_particles[row]))
+                    for (const u32 word: std::bit_cast<std::array<u32, 24u>>(state.m_particles[row]))
                         std::fprintf(stderr, "%08x ", static_cast<unsigned>(word));
                     std::fprintf(stderr, "\n");
                 }
@@ -162,7 +162,7 @@ namespace pP::game::tests::detail::checkpoint {
                         stderr, "[checkpoint-gpu-published-row] row=%zu id=%llu metadata_available=%u words=", row,
                         static_cast<unsigned long long>(record ? record->m_id : 0u),
                         static_cast<unsigned>(record != nullptr));
-                    for (const u32 word: std::bit_cast<std::array<u32, 22u>>(published.m_particles[row]))
+                    for (const u32 word: std::bit_cast<std::array<u32, 24u>>(published.m_particles[row]))
                         std::fprintf(stderr, "%08x ", static_cast<unsigned>(word));
 
                     std::fprintf(stderr, "\n");
@@ -349,11 +349,11 @@ namespace pP::game::tests::detail::checkpoint {
             m_catalog = catalog;
             rememberAdmission();
 
-            Array<std::array<u32, 22u>> words;
+            Array<std::array<u32, 24u>> words;
             words.reserve(m_driver->matterState()->m_particles.size());
 
             for (const auto &particle: m_driver->matterState()->m_particles)
-                words.push_back(std::bit_cast<std::array<u32, 22u>>(particle));
+                words.push_back(std::bit_cast<std::array<u32, 24u>>(particle));
 
             const auto identity = m_driver->matterState()->m_identity;
 
@@ -382,7 +382,7 @@ namespace pP::game::tests::detail::checkpoint {
 
             for (std::size_t row = 0u; row < words.size(); ++row)
                 PPR_TEST_ASSERT(
-                    std::bit_cast<std::array<u32, 22u>>(m_driver->matterState()->m_particles[row]) == words[row]);
+                    std::bit_cast<std::array<u32, 24u>>(m_driver->matterState()->m_particles[row]) == words[row]);
 
             // Restored temperatures publish through the same packed metadata
             // path as the initial seed; compare the actual GPU words to the
@@ -440,7 +440,7 @@ namespace pP::game::tests::detail::checkpoint {
             captureCurrent();
 
             for (const auto &particle: m_driver->matterState()->m_particles) {
-                for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                for (const float field: std::bit_cast<std::array<float, 24u>>(particle))
                     PPR_TEST_ASSERT(std::isfinite(field));
 
                 PPR_TEST_ASSERT(particle.m_liquid_density > 0.0f);
@@ -804,8 +804,8 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(spawned.m_identity.m_terrain_revision == original.m_identity.m_terrain_revision);
         PPR_TEST_ASSERT(spawned.m_records.front() == original.m_records.front());
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(spawned.m_particles.front()) ==
-            std::bit_cast<std::array<u32, 22u>>(original.m_particles.front()));
+            std::bit_cast<std::array<u32, 24u>>(spawned.m_particles.front()) ==
+            std::bit_cast<std::array<u32, 24u>>(original.m_particles.front()));
         for (std::size_t row = 1u; row < spawned.m_records.size(); ++row) {
             PPR_TEST_ASSERT(spawned.m_records[row].m_id == original.m_next_id + row - 1u);
             PPR_TEST_ASSERT(spawned.m_records[row].m_material == water);
@@ -826,8 +826,8 @@ namespace pP::game::tests::detail::checkpoint {
         for (std::size_t row = 0u; row < survivors.m_records.size(); ++row) {
             PPR_TEST_ASSERT(survivors.m_records[row] == spawned.m_records[row + 1u]);
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 22u>>(survivors.m_particles[row]) ==
-                std::bit_cast<std::array<u32, 22u>>(spawned.m_particles[row + 1u]));
+                std::bit_cast<std::array<u32, 24u>>(survivors.m_particles[row]) ==
+                std::bit_cast<std::array<u32, 24u>>(spawned.m_particles[row + 1u]));
         }
 
         PPR_TEST_ASSERT(not driver.requestParticleTool({20.0, 20.0, 1.0, 0u, 0u, EParticleToolKind::destroy}));
@@ -1097,8 +1097,8 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(driver.matterState()->m_next_id == original.m_next_id);
         PPR_TEST_ASSERT(driver.grid().getCell({127u, 40u})->m_element != 0u);
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(driver.matterState()->m_particles[0u]) ==
-            std::bit_cast<std::array<u32, 22u>>(original.m_particles[0u]));
+            std::bit_cast<std::array<u32, 24u>>(driver.matterState()->m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 24u>>(original.m_particles[0u]));
 
         PPR_TEST_ASSERT(not owner.completeOwned(owner.m_runtime.beginCancelWorld()));
 
@@ -1123,8 +1123,8 @@ namespace pP::game::tests::detail::checkpoint {
             sizeof(matter::ParticleWrite) + sizeof(matter::ParticleReadonly));
 
         PPR_TEST_ASSERT(
-            std::bit_cast<std::array<u32, 22u>>(driver.matterState()->m_particles[0u]) ==
-            std::bit_cast<std::array<u32, 22u>>(original.m_particles[0u]));
+            std::bit_cast<std::array<u32, 24u>>(driver.matterState()->m_particles[0u]) ==
+            std::bit_cast<std::array<u32, 24u>>(original.m_particles[0u]));
 
         const auto edited_capture = captureWorldCheckpoint(driver, driver.preparedWorld()->generated());
         PPR_TEST_ASSERT(edited_capture.has_value());
@@ -1263,40 +1263,57 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(driver.matterState()->m_iterations == matter::kDefaultIterations);
         }
 
-        for (const u32 iterations: {2u, 5u, 10u}) {
+        for (const u32 version: {6u, 7u, 8u, 9u}) {
+            // v6 has no schedule and must migrate to K2 even when the source
+            // had K5. v7 carries K5, v8 carries K10, and v9 retains non-default K10.
+            const u32 saved_iterations = version < 8u ? 5u : 10u;
+            const u32 iterations = version == 6u ? 2u : saved_iterations;
             auto checkpoint = editedCheckpoint(catalog);
-            checkpoint.m_current_matter.m_iterations = iterations;
-            auto bytes = encodeWorldCheckpoint(checkpoint, catalog);
-            PPR_TEST_ASSERT(bytes.has_value());
+            checkpoint.m_current_matter.m_iterations = saved_iterations;
+            const auto encoded = encodeWorldCheckpoint(checkpoint, catalog);
+            const auto raw = sim::save(checkpoint.m_snapshot);
+            PPR_TEST_ASSERT(encoded and raw);
 
-            if (iterations == 2u) {
-                // Reconstruct v6 by removing v8's table and v7's schedule word.
-                const auto raw = sim::save(checkpoint.m_snapshot);
-                PPR_TEST_ASSERT(raw.has_value());
-                const std::size_t table_bytes = 16u + checkpoint.m_current_matter.m_properties.size() * 40u;
-                const auto table_begin = bytes->begin() +
-                                         static_cast<std::ptrdiff_t>(bytes->size() - raw->size() - 8u - table_bytes);
-                bytes->erase(table_begin, table_begin + static_cast<std::ptrdiff_t>(table_bytes));
-                const std::size_t offset = bytes->size() -
-                                           raw->size() -
-                                           8u -
-                                           checkpoint.m_current_matter.m_particles.size() * 88u -
-                                           4u -
-                                           64u -
-                                           4u;
-                PPR_TEST_ASSERT(bytes->size() > 8u and offset <= bytes->size() - 4u);
+            // Shared with the CPU mirror: derive offsets from L/S/M/N, rebuild
+            // the v8 policy=1 ten-word identity/table, trim particle tails in
+            // reverse order, and assert the sum-of-parts size before decoding.
+            const auto bytes = historicalCheckpointBytes(*encoded, raw->size(), checkpoint.m_current_matter, version);
+            if (version == 9u)
+                PPR_TEST_ASSERT(saved_iterations != matter::kDefaultIterations);
 
-                (*bytes)[8u] = 6u;
-                const auto schedule_begin = bytes->begin() + static_cast<std::ptrdiff_t>(offset);
-                bytes->erase(schedule_begin, schedule_begin + 4);
-            }
-
-            const auto saved = decodeWorldCheckpoint(*bytes, catalog);
+            const auto saved = decodeWorldCheckpoint(bytes, catalog);
             PPR_TEST_ASSERT(saved and saved->m_current_matter.m_iterations == iterations);
             PPR_TEST_ASSERT(saved->m_current_matter.m_records == checkpoint.m_current_matter.m_records);
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 22u>>(saved->m_current_matter.m_particles[0u]) ==
-                std::bit_cast<std::array<u32, 22u>>(checkpoint.m_current_matter.m_particles[0u]));
+                saved->m_current_matter.m_particles.size() == checkpoint.m_current_matter.m_particles.size());
+            for (std::size_t row = 0u; row < saved->m_current_matter.m_particles.size(); ++row) {
+                PPR_TEST_ASSERT(
+                    std::bit_cast<std::array<u32, 24u>>(saved->m_current_matter.m_particles[row]) ==
+                    std::bit_cast<std::array<u32, 24u>>(checkpoint.m_current_matter.m_particles[row]));
+            }
+
+            // This fixture carries water; all versions must expose the complete
+            // legacy-valued row, including defaults for the nine v9-only words.
+            const auto *const material = catalog.findMaterial(checkpoint.m_current_matter.m_records[0u].m_material);
+            PPR_TEST_ASSERT(material != nullptr);
+            const matter::GpuMaterialProperties legacy_row{
+                .m_substance_id = material->m_numeric_id,
+                .m_family = matter::ESourceMaterial::liquid,
+                .m_elasticity_ratio = 1.0f,
+                .m_elastic_relaxation = 1.5f,
+                .m_liquid_relaxation = 1.0f,
+                .m_liquid_viscosity = 0.01f,
+                .m_friction_angle = 30.0f,
+                .m_plasticity = 0.0f,
+                .m_reference_density = static_cast<float>(material->m_reference_density_kg_m3 / 1000.0),
+                .m_sand_yield_ratio = 1.0f};
+            PPR_TEST_ASSERT(saved->m_current_matter.m_properties.size() == 1u);
+            PPR_TEST_ASSERT(
+                std::bit_cast<std::array<u32, 19u>>(saved->m_current_matter.m_properties[0u]) ==
+                std::bit_cast<std::array<u32, 19u>>(legacy_row));
+
+            const auto upgraded = encodeWorldCheckpoint(*saved, catalog);
+            PPR_TEST_ASSERT(upgraded and (*upgraded)[8u] == 9u);
 
             GpuOwner owner;
             owner.initialize();
@@ -1399,7 +1416,7 @@ namespace pP::game::tests::detail::checkpoint {
         GpuOwner owner;
         owner.initialize(&lane);
 
-        Array<std::array<u32, 22u>> first;
+        Array<std::array<u32, 24u>> first;
         std::optional<sim::BodiesSection> first_bodies;
         PPR_TEST_ASSERT(not saved->m_snapshot.m_bodies.m_records.empty());
         PPR_TEST_ASSERT(saved->m_snapshot.m_bodies.m_records[0u].m_state.m_velocity_y != 0.0f);
@@ -1678,7 +1695,7 @@ namespace pP::game::tests::detail::checkpoint {
             PPR_TEST_ASSERT(driver.matterState()->m_next_id == saved->m_current_matter.m_next_id);
 
             for (std::size_t row = 0u; row < driver.matterState()->m_particles.size(); ++row) {
-                const auto words = std::bit_cast<std::array<u32, 22u>>(driver.matterState()->m_particles[row]);
+                const auto words = std::bit_cast<std::array<u32, 24u>>(driver.matterState()->m_particles[row]);
                 if (replay == 0u)
                     first.push_back(words);
                 else
@@ -2563,7 +2580,7 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(emitted.m_gas.empty() and emitted.m_next_id == 12u + particle_count);
 
         if (not reference_directory.empty()) {
-            static_assert(sizeof(matter::GpuParticle) == 88u);
+            static_assert(sizeof(matter::GpuParticle) == 96u);
             PPR_TEST_ASSERT(long_diagnostic and observe_rendering and particle_count == 256u);
             PPR_TEST_ASSERT(std::filesystem::is_directory(reference_directory));
             for (const u32 endpoint: {120u, 600u, 1800u}) {
@@ -3268,8 +3285,8 @@ namespace pP::game::tests::detail::checkpoint {
             seed.m_mass = 2.0f;
             seed.m_material = static_cast<float>(matter::ESourceMaterial::sand);
             PPR_TEST_ASSERT(
-                std::bit_cast<std::array<u32, 22u>>(emitted.m_particles[row]) ==
-                std::bit_cast<std::array<u32, 22u>>(seed));
+                std::bit_cast<std::array<u32, 24u>>(emitted.m_particles[row]) ==
+                std::bit_cast<std::array<u32, 24u>>(seed));
         }
 
         std::fprintf(
@@ -3310,7 +3327,7 @@ namespace pP::game::tests::detail::checkpoint {
                 const auto &record = state.m_records[row];
                 const auto &original = emitted.m_records[row];
 
-                for (const float field: std::bit_cast<std::array<float, 22u>>(particle))
+                for (const float field: std::bit_cast<std::array<float, 24u>>(particle))
                     finite = finite and std::isfinite(field);
 
                 metadata = metadata and
@@ -3322,8 +3339,8 @@ namespace pP::game::tests::detail::checkpoint {
                            record.m_mass_kg == original.m_mass_kg and
                            record.m_volume_m3 == original.m_volume_m3;
 
-                const auto words = std::bit_cast<std::array<u32, 22u>>(particle);
-                const auto original_words = std::bit_cast<std::array<u32, 22u>>(emitted.m_particles[row]);
+                const auto words = std::bit_cast<std::array<u32, 24u>>(particle);
+                const auto original_words = std::bit_cast<std::array<u32, 24u>>(emitted.m_particles[row]);
                 for (const u32 word: {13u, 14u, 15u, 18u, 19u, 20u, 21u})
                     metadata = metadata and words[word] == original_words[word];
 
@@ -3483,13 +3500,11 @@ namespace pP::game::tests::detail::checkpoint {
     };
 
     PPR_UNIT_TEST (publication_hold_does_not_change_solver_or_presentation_storage) {
-        // Task 5 is a liveness change. No solver, packet or checkpoint layout
-        // moves with it (plan §6): GpuParticle stays the 88-byte semantic row,
-        // hot/cold rows are 64/28 bytes, metadata stays 32 bytes and the
-        // checkpoint wire row is still 22 raw words of one GpuParticle.
-        static_assert(sizeof(matter::GpuParticle) == 88u);
-        static_assert(sizeof(matter::GpuParticle) == 22u * sizeof(u32));
-        static_assert(sizeof(matter::ParticleWrite) == 64u);
+        // Publication holds preserve the current B1 layout: semantic96,
+        // hot72/cold28, metadata32 and 24 raw words in a checkpoint row.
+        static_assert(sizeof(matter::GpuParticle) == 96u);
+        static_assert(sizeof(matter::GpuParticle) == 24u * sizeof(u32));
+        static_assert(sizeof(matter::ParticleWrite) == 72u);
         // Six FP32 semantic cold fields + one transient u32 property index = 28 bytes.
         static_assert(sizeof(matter::ParticleReadonly) == 28u);
         static_assert(sizeof(GridParticleMetadataRow) == 32u);

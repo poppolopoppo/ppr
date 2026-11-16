@@ -83,7 +83,9 @@ namespace pP::matter {
             const bool supported = p.m_material == 0.0f or
                                    p.m_material == 1.0f or
                                    p.m_material == 2.0f or
-                                   p.m_material == 3.0f;
+                                   p.m_material == 3.0f or
+                                   p.m_material == 4.0f or
+                                   p.m_material == 5.0f;
             return supported and
                    p.m_enabled == 1.0f and
                    std::isfinite(p.m_position_x) and
@@ -106,7 +108,12 @@ namespace pP::matter {
                    std::isfinite(p.m_log_jp) and
                    std::isfinite(p.m_color_r) and
                    std::isfinite(p.m_color_g) and
-                   std::isfinite(p.m_color_b);
+                   std::isfinite(p.m_color_b) and
+                   std::isfinite(p.m_compaction) and
+                   p.m_compaction >= 0.0f and
+                   std::isfinite(p.m_solid_fraction) and
+                   p.m_solid_fraction > 0.0f and
+                   p.m_solid_fraction < 1.0f;
         }
 
         std::error_code createBuffer(
@@ -175,12 +182,51 @@ namespace pP::matter {
         profile.m_plasticity = row.m_plasticity;
 
         return row.m_substance_id != 0u and
-               static_cast<u32>(row.m_family) <= static_cast<u32>(ESourceMaterial::visco) and
+               static_cast<u32>(row.m_family) <= static_cast<u32>(ESourceMaterial::compacting) and
                validProfileDomain(profile) and
                std::isfinite(row.m_sand_yield_ratio) and
                std::isfinite(row.m_reference_density) and
                row.m_reference_density > 0.0f and
-               std::isfinite(1.0f / row.m_reference_density);
+               std::isfinite(1.0f / row.m_reference_density) and
+               std::isfinite(row.m_cohesion) and
+               row.m_cohesion >= 0.0f and
+               std::isfinite(row.m_cap) and
+               row.m_cap > 0.0f and
+               std::isfinite(1.0f / row.m_cap) and
+               std::isfinite(row.m_tension) and
+               row.m_tension >= 0.0f and
+               std::isfinite(row.m_cohesion_hardening) and
+               row.m_cohesion_hardening >= 0.0f and
+               std::isfinite(row.m_cap_hardening) and
+               row.m_cap_hardening >= 0.0f and
+               std::isfinite(row.m_dense_epsilon) and
+               row.m_dense_epsilon > 0.0f and
+               row.m_dense_epsilon < 1.0f and
+               1.0f - row.m_dense_epsilon < 1.0f and
+               std::isfinite(row.m_solid_fraction0) and
+               row.m_solid_fraction0 > 0.0f and
+               row.m_solid_fraction0 <= 1.0f - row.m_dense_epsilon and
+               std::isfinite(row.m_compaction_rate) and
+               row.m_compaction_rate >= 0.0f and
+               std::isfinite(row.m_solid_exponent) and
+               row.m_solid_exponent >= 0.0f;
+    }
+
+    bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept {
+        if (not std::isfinite(particle.m_compaction) or
+            particle.m_compaction < 0.0f or
+            not std::isfinite(particle.m_solid_fraction) or
+            particle.m_solid_fraction <= 0.0f or
+            particle.m_solid_fraction >= 1.0f)
+            return false;
+
+        if (row.m_family != ESourceMaterial::cohesive and row.m_family != ESourceMaterial::compacting)
+            return true;
+
+        // New families have no legacy sand expansion reservoir (H = 0).
+        return particle.m_log_jp == 0.0f and
+               particle.m_solid_fraction >= row.m_solid_fraction0 and
+               particle.m_solid_fraction <= 1.0f - row.m_dense_epsilon;
     }
 
     std::error_code validateMaterialTable(const std::span<const GpuMaterialProperties> rows) {
@@ -837,13 +883,15 @@ namespace pP::matter {
                 PPR_RETURN_ERROR_ON_FAIL(
                     MatterGpu,
                     property_row < properties.m_rows.size() and
-                            particle.m_material == static_cast<float>(properties.m_rows[property_row].m_family)
+                            particle.m_material == static_cast<float>(properties.m_rows[property_row].m_family) and
+                            validMaterialState(particle, properties.m_rows[property_row])
                         ? std::error_code{}
                         : std::make_error_code(std::errc::invalid_argument));
             }
 
             PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, validParticle(particle, state.m_profile)
+                MatterGpu, validParticle(particle, state.m_profile) and
+                                   (particle.m_material < 4.0f or not properties.m_rows.empty())
                                ? std::error_code{}
                                : std::make_error_code(std::errc::invalid_argument));
         }

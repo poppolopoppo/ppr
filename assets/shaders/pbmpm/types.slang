@@ -35,10 +35,12 @@ struct Particle {
     float colorG;
     float colorB;
     float enabled;
+    float compaction;
+    float solidFraction;
 };
 
-// Mutable 64-byte device row: position, displacement, F, D and the liquid
-// scalars, in the solver's hot write order.
+// Mutable 72-byte device row: position, displacement, F, D, liquid scalars,
+// C and phi, in the solver's hot write order.
 struct ParticleWrite {
     float positionX;
     float positionY;
@@ -50,6 +52,8 @@ struct ParticleWrite {
     float logJp;
     float lambda;
     float enabled;
+    float compaction;
+    float solidFraction;
 };
 
 // Immutable 28-byte engine row; the final word is a transient property index.
@@ -152,6 +156,8 @@ static const float MaterialLiquid = 0.0;
 static const float MaterialElastic = 1.0;
 static const float MaterialSand = 2.0;
 static const float MaterialVisco = 3.0;
+static const float MaterialCohesive = 4.0;
+static const float MaterialCompacting = 5.0;
 static const uint ShapeTypeBox = 0;
 static const uint ShapeTypeCircle = 1;
 
@@ -162,14 +168,14 @@ static const uint ShapeTypeCircle = 1;
 // Matches the CPU upload admission oracle. Every evolving and carried scalar is
 // checked; kernels never reorder rows, append records, or change stable metadata.
 uint invalidParticleField(Particle p, Parameters parameters) {
-    float fields[22] = {
+    float fields[24] = {
         p.positionX, p.positionY, p.displacementX, p.displacementY,
         p.deformationGradient.c0x, p.deformationGradient.c0y, p.deformationGradient.c1x, p.deformationGradient.c1y,
         p.deformationDisplacement.c0x, p.deformationDisplacement.c0y,
         p.deformationDisplacement.c1x, p.deformationDisplacement.c1y,
         p.liquidDensity, p.mass, p.material, p.volume, p.lambda, p.logJp,
-        p.colorR, p.colorG, p.colorB, p.enabled};
-    for (uint field = 0u; field < 22u; ++field) {
+        p.colorR, p.colorG, p.colorB, p.enabled, p.compaction, p.solidFraction};
+    for (uint field = 0u; field < 24u; ++field) {
         if (!isfinite(fields[field])) return field;
     }
 
@@ -177,9 +183,11 @@ uint invalidParticleField(Particle p, Parameters parameters) {
     if (p.positionY < 3.0 || p.positionY > float(parameters.gridHeight) - 4.0) return 1u;
     if (p.liquidDensity <= 0.0) return 12u;
     if (p.mass <= 0.0) return 13u;
-    if (p.material != MaterialLiquid && p.material != MaterialElastic && p.material != MaterialSand && p.material != MaterialVisco) return 14u;
+    if (p.material != MaterialLiquid && p.material != MaterialElastic && p.material != MaterialSand && p.material != MaterialVisco && p.material != MaterialCohesive && p.material != MaterialCompacting) return 14u;
     if (p.volume <= 0.0) return 15u;
     if (p.enabled != 1.0) return 21u;
+    if (p.compaction < 0.0) return 22u;
+    if (p.solidFraction <= 0.0 || p.solidFraction >= 1.0) return 23u;
 
     return 0xffffffffu;
 }
