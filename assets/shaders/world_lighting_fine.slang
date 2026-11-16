@@ -169,8 +169,7 @@ bool fineReconstructProbe(uint2 probe, out CH result) {
             }
 
             Interval merged = cascadeMerge(near_hit.m_interval, far_interval);
-            chAccumulate(
-                accumulator, merged.m_radiance, atan2(basis.y, basis.x), tap_weight * direction_weight);
+            chAccumulateDirection(accumulator, merged.m_radiance, basis, tap_weight * direction_weight);
         }
     }
 

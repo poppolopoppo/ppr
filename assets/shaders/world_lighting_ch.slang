@@ -92,6 +92,40 @@ void chAccumulate(inout CHAccumulator accumulator, float3 radiance, float theta,
     }
 }
 
+// Direction-based form of chAccumulate for a caller that already holds the unit
+// connector basis (cos theta, sin theta). Order one is the basis pair itself and
+// every higher order follows the complex-angle recurrence
+//   (c, s)_m = (c, s)_{m-1} * (c1, s1),
+// with both next values formed from the same previous pair, so a fit needs no
+// atan2 and no harmonic sin/cos. Reference selection, relative-radiance
+// subtraction, weight sums, accumulation order and chFinish are unchanged; the
+// theta helper above stays the independent reference used by the probe corpus.
+void chAccumulateDirection(inout CHAccumulator accumulator, float3 radiance, float2 basis, float weight) {
+    if (!accumulator.m_has_reference) {
+        accumulator.m_reference = radiance;
+        accumulator.m_has_reference = true;
+    }
+    float3 relative = radiance - accumulator.m_reference;
+
+    accumulator.m_weight += weight;
+    accumulator.m_relative += relative * weight;
+
+    float cosine = basis.x;
+    float sine = basis.y;
+    for (uint m = 1u; m <= 4u; ++m) {
+        accumulator.m_cos[m - 1u] += relative * (weight * cosine);
+        accumulator.m_sin[m - 1u] += relative * (weight * sine);
+        accumulator.m_cos_weight[m - 1u] += weight * cosine;
+        accumulator.m_sin_weight[m - 1u] += weight * sine;
+
+        // Both next-order values read the previous pair, never each other.
+        float next_cosine = cosine * basis.x - sine * basis.y;
+        float next_sine = sine * basis.x + cosine * basis.y;
+        cosine = next_cosine;
+        sine = next_sine;
+    }
+}
+
 // Finishes the fit. A zero or nonfinite total weight is a numeric failure, not
 // a black substitute; the caller reports its category and writes containment.
 bool chFinish(CHAccumulator accumulator, out CH result) {

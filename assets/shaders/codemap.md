@@ -122,16 +122,20 @@ encoders (`packHalf`, `packRGB9E5`, `intervalPackCategory`, `packInterval`,
 stages.
 
 `world_lighting_ch.slang` is the include-only orthonormal circular-harmonic
-basis, weighted sample fit, `angularMean(CH)` and world-cell
-`angularMean(float2)` helper. The including module declares its fine-CH
+basis and weighted sample fit: `chAccumulate` takes an angle and remains the
+test reference, `chAccumulateDirection` takes the already-computed unit
+connector basis and reaches orders 2–4 by a complex-angle recurrence, and both
+share `chFinish`, `angularMean(CH)` and the world-cell `angularMean(float2)`
+helper. The including module declares its fine-CH
 binding before the include (a structured read for visible/gas readers, a
 read/write field for the in-place writer). `world_lighting_fine.slang` owns
 `reconstructFine` (8x8 threads, 512-square): four clamped L1 taps, the 64
 nominal connectors, the near/far merge, exact weighted fitting, the in-place
 `1-exp(-2*dt)` EMA and one encode per record. It reads only its own prior
 record and writes all 32 bytes. `tests/world_lighting_fine_probe.slang`
-exposes the real fit/EMA helpers, the retained L1 schedule identity and
-`angularMean` for the `app/world_lighting_fine/` group.
+exposes the real fit/EMA helpers, the paired theta/direction fit comparison on
+one sample list, the retained L1 schedule identity and `angularMean` for the
+`app/world_lighting_fine/` group.
 
 
 ## Design

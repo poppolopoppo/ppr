@@ -443,6 +443,15 @@ namespace pP::tests::detail::WorldLightingFine {
         return lighting::unpackCH(record).m_coefficients[0] * static_cast<float>(kY0);
     }
 
+    // Mango vectors are indeterminate under value-initialization, so a coefficient
+    // array is zeroed explicitly before any partial assignment; `{}` does not do
+    // this. Never rely on `std::array<float3, 9u> value{}` for zeros.
+    void zeroCoefficients(std::array<float3, 9u> &coefficients) noexcept {
+        for (float3 &coefficient: coefficients) {
+            coefficient = rgb(0.0f, 0.0f, 0.0f);
+        }
+    }
+
     [[nodiscard]] double sinc(const double x) noexcept {
         return x == 0.0 ? 1.0 : std::sin(x) / x;
     }
@@ -782,15 +791,77 @@ namespace pP::tests::detail::WorldLightingFine {
         std::array<u32, 8u> m_previous{};
     };
 
+    // One radiance sample with both fitting inputs: the angle the reference
+    // theta helper consumes and the unit connector basis the direction helper
+    // consumes. They describe the same physical connector.
     struct CHProbeSample {
-        float3 m_radiance;
+        float3 m_radiance{0.0f, 0.0f, 0.0f};
         float m_theta{};
+        float2 m_basis{0.0f, 0.0f};
         float m_weight{};
-        std::array<float, 3u> m_reserved{};
+        float m_reserved{};
     };
+
+    // One finished probe fit: the packed record, the encode report word and the
+    // coefficients before packing. Mango vectors are indeterminate under
+    // value-initialization, so the array is zeroed explicitly rather than relying
+    // on `{}`.
+    struct CHProbeFit {
+        std::array<u32, 8u> m_packed{};
+        u32 m_report{};
+        // Mango's default constructor is explicit, so this member cannot be
+        // value-initialised with `{}`; the body zeroes every component.
+        std::array<float3, 9u> m_coefficients;
+
+        CHProbeFit() noexcept {
+            zeroCoefficients(m_coefficients);
+        }
+    };
+
+    struct CHProbeResult {
+        CHProbeFit m_theta;
+        CHProbeFit m_direction;
+    };
+
+    // Words per fit: packed record (8), encode report (1), coefficients (27).
+    inline constexpr u32 kCHProbeFitWords = 8u + 1u + 27u;
+    inline constexpr u32 kCHProbeCaseWords = 2u * kCHProbeFitWords;
 
     static_assert(sizeof(CHProbeCase) == 48u);
     static_assert(sizeof(CHProbeSample) == 32u);
+
+    // The probe declares the same 32-byte record with basis at byte 16 and weight
+    // at byte 24. Equal sizes alone would not catch a field swap, so pin the
+    // offsets the shader writes and reads.
+    static_assert(std::is_standard_layout_v<CHProbeSample>);
+    static_assert(PPR_OFFSETOF(CHProbeSample, m_radiance) == 0u);
+    static_assert(PPR_OFFSETOF(CHProbeSample, m_theta) == 12u);
+    static_assert(PPR_OFFSETOF(CHProbeSample, m_basis) == 16u);
+    static_assert(PPR_OFFSETOF(CHProbeSample, m_weight) == 24u);
+    static_assert(PPR_OFFSETOF(CHProbeSample, m_reserved) == 28u);
+
+    // Builds one probe sample from a precomputed connector basis. The reference
+    // angle is atan2 of that same FP32 basis: the angle the previous production
+    // call computed from it (host double atan2 rounded to FP32; the backend's
+    // atan2f may differ by one ulp). A real normalized connector has length
+    // 1 + eps, so this pairing also exercises the recurrence's r^m behaviour.
+    [[nodiscard]] CHProbeSample chSampleWithBasis(
+        const float3 radiance, const float2 basis, const float weight) noexcept {
+        CHProbeSample sample;
+        sample.m_radiance = radiance;
+        sample.m_theta = static_cast<float>(std::atan2(static_cast<double>(basis.y), static_cast<double>(basis.x)));
+        sample.m_basis = basis;
+        sample.m_weight = weight;
+        sample.m_reserved = 0.0f;
+        return sample;
+    }
+
+    // Builds one probe sample from an angle: the basis is the unit pair rounded
+    // to FP32 exactly as the connector normalization would be.
+    [[nodiscard]] CHProbeSample chSample(const float3 radiance, const double theta, const float weight) noexcept {
+        const float2 basis{static_cast<float>(std::cos(theta)), static_cast<float>(std::sin(theta))};
+        return chSampleWithBasis(radiance, basis, weight);
+    }
 
     struct L1ProbeQuery {
         u32 m_probe_x{};
@@ -888,8 +959,24 @@ namespace pP::tests::detail::WorldLightingFine {
         submit(fixture, *encoder);
     }
 
-    // Runs the real CH fit/encode helpers for synthetic sample sets.
-    [[nodiscard]] std::vector<std::array<u32, 9u>> runCHProbe(
+    [[nodiscard]] CHProbeFit readCHProbeFit(const std::vector<u32> &words, const std::size_t base) {
+        CHProbeFit fit;
+        std::copy_n(words.begin() + static_cast<std::ptrdiff_t>(base), 8u, fit.m_packed.begin());
+        fit.m_report = words[base + 8u];
+        for (u32 coefficient = 0u; coefficient < 9u; ++coefficient) {
+            const std::size_t offset = base + 9u + coefficient * 3u;
+            fit.m_coefficients[coefficient] = rgb(
+                std::bit_cast<float>(words[offset + 0u]), std::bit_cast<float>(words[offset + 1u]),
+                std::bit_cast<float>(words[offset + 2u]));
+        }
+
+        return fit;
+    }
+
+    // Runs the real CH fit/encode helpers for synthetic sample sets. Both the
+    // theta reference and the direction helper consume every sample in the same
+    // invocation.
+    [[nodiscard]] std::vector<CHProbeResult> runCHProbe(
         Fixture &fixture, const std::vector<CHProbeCase> &cases, const std::vector<CHProbeSample> &samples) {
         PPR_TEST_ASSERT(not cases.empty());
         PPR_TEST_ASSERT(not samples.empty());
@@ -899,7 +986,8 @@ namespace pP::tests::detail::WorldLightingFine {
             fixture.device(), cases.size() * sizeof(CHProbeCase), sizeof(CHProbeCase), cases.data());
         auto sample_buffer = makeShaderBuffer(
             fixture.device(), samples.size() * sizeof(CHProbeSample), sizeof(CHProbeSample), samples.data());
-        auto result_buffer = makeStorageBuffer(fixture.device(), cases.size() * 9u * sizeof(u32), sizeof(u32));
+        auto result_buffer = makeStorageBuffer(
+            fixture.device(), cases.size() * kCHProbeCaseWords * sizeof(u32), sizeof(u32));
         auto field_buffer = makeStorageBuffer(
             fixture.device(), cases.size() * sizeof(lighting::PackedCH), sizeof(lighting::PackedCH));
 
@@ -914,13 +1002,82 @@ namespace pP::tests::detail::WorldLightingFine {
 
         dispatchProbe(fixture, probe, 1u);
 
-        const auto words = readWords(fixture, result_buffer, 0u, cases.size() * 9u * sizeof(u32));
-        std::vector<std::array<u32, 9u>> results(cases.size());
+        const auto words = readWords(fixture, result_buffer, 0u, cases.size() * kCHProbeCaseWords * sizeof(u32));
+        std::vector<CHProbeResult> results(cases.size());
         for (std::size_t index = 0u; index < results.size(); ++index) {
-            std::copy_n(words.begin() + static_cast<std::ptrdiff_t>(index * 9u), 9u, results[index].begin());
+            const std::size_t base = index * kCHProbeCaseWords;
+            results[index].m_theta = readCHProbeFit(words, base);
+            results[index].m_direction = readCHProbeFit(words, base + kCHProbeFitWords);
         }
 
         return results;
+    }
+
+    [[nodiscard]] lighting::PackedCH packedProbeRecord(const CHProbeFit &fit) {
+        lighting::PackedCH packed{};
+        packed.m_words.fill(0u);
+        std::copy_n(fit.m_packed.begin(), 8u, packed.m_words.begin());
+        return packed;
+    }
+
+    // Paired theta/direction agreement bound on finished FP32 coefficients. The
+    // accumulators differ only by basis rounding (plus the recurrence's m*eps
+    // norm growth on a real 1 + eps connector), which stays below one AC
+    // quantisation step; a wrong order, sign, seed or window differs by orders of
+    // magnitude more.
+    inline constexpr float kDirectionAgreement = 2.0e-4f;
+
+    struct CHProbeAgreement {
+        float m_maximum_coefficient_delta{};
+        u32 m_differing_packed_words{};
+    };
+
+    // Compares the two fits of one case. Reference selection, weights and
+    // accumulation order are identical, so only basis rounding separates them.
+    // The packed records may still differ by one step when a component rounds
+    // across a quantisation threshold; that count is reported, never asserted
+    // away.
+    [[nodiscard]] CHProbeAgreement assertDirectionMatchesTheta(const CHProbeResult &result) {
+        PPR_TEST_ASSERT(result.m_theta.m_report == result.m_direction.m_report);
+
+        CHProbeAgreement agreement{};
+        for (u32 coefficient = 0u; coefficient < 9u; ++coefficient) {
+            const float3 &theta = result.m_theta.m_coefficients[coefficient];
+            const float3 &direction = result.m_direction.m_coefficients[coefficient];
+            const std::array<float, 3u> deltas{
+                std::abs(theta.x - direction.x), std::abs(theta.y - direction.y), std::abs(theta.z - direction.z)};
+            for (const float delta: deltas) {
+                agreement.m_maximum_coefficient_delta = (std::max) (agreement.m_maximum_coefficient_delta, delta);
+                PPR_TEST_ASSERT(delta <= kDirectionAgreement);
+            }
+        }
+
+        for (u32 word = 0u; word < 8u; ++word) {
+            if (result.m_theta.m_packed[word] != result.m_direction.m_packed[word]) {
+                ++agreement.m_differing_packed_words;
+            }
+        }
+
+        if (result.m_theta.m_report == 0u) {
+            const lighting::CH theta = lighting::unpackCH(packedProbeRecord(result.m_theta));
+            const lighting::CH direction = lighting::unpackCH(packedProbeRecord(result.m_direction));
+            const float scale = std::bit_cast<float>(result.m_direction.m_packed[1u]);
+            const float tolerance = scale + 1.0e-6f;
+            PPR_TEST_ASSERT(closeRGB9E5(theta.m_coefficients[0u], direction.m_coefficients[0u]));
+            for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                PPR_TEST_ASSERT(
+                    std::abs(theta.m_coefficients[coefficient].x - direction.m_coefficients[coefficient].x) <=
+                    tolerance);
+                PPR_TEST_ASSERT(
+                    std::abs(theta.m_coefficients[coefficient].y - direction.m_coefficients[coefficient].y) <=
+                    tolerance);
+                PPR_TEST_ASSERT(
+                    std::abs(theta.m_coefficients[coefficient].z - direction.m_coefficients[coefficient].z) <=
+                    tolerance);
+            }
+        }
+
+        return agreement;
     }
 
     struct L1ProbeResult {
@@ -1133,20 +1290,17 @@ namespace pP::tests::detail::WorldLightingFine {
             std::vector<CHProbeSample> samples(kSamples);
             for (u32 index = 0u; index < kSamples; ++index) {
                 const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kSamples + rotation;
-                samples[index].m_radiance = field.evaluate(theta - rotation);
-                samples[index].m_theta = static_cast<float>(theta);
-                samples[index].m_weight = static_cast<float>(weight);
+                samples[index] = chSample(field.evaluate(theta - rotation), theta, static_cast<float>(weight));
             }
 
             return samples;
         };
 
-        const auto assertCoefficients = [&](const std::array<u32, 9u> &words, const std::array<float3, 9u> &expected) {
-            lighting::PackedCH packed{};
-            std::copy_n(words.begin(), 8u, packed.m_words.begin());
+        const auto assertCoefficients = [&](const CHProbeFit &fit, const std::array<float3, 9u> &expected) {
+            const lighting::PackedCH packed = packedProbeRecord(fit);
             const lighting::CH decoded = lighting::unpackCH(packed);
             const float scale = std::bit_cast<float>(packed.m_words[1u]);
-            PPR_TEST_ASSERT(words[8u] == 0u);
+            PPR_TEST_ASSERT(fit.m_report == 0u);
             PPR_TEST_ASSERT(closeRGB9E5(decoded.m_coefficients[0], expected[0u]));
 
             const float tolerance = 0.51f * scale + 1.0e-6f;
@@ -1173,7 +1327,15 @@ namespace pP::tests::detail::WorldLightingFine {
             probe.m_sample_count = kSamples;
             probe.m_first_field = 1u;
             const auto results = runCHProbe(fixture, {probe}, samples);
-            assertCoefficients(results[0u], field.windowed());
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label=harmonics_rotation_0 theta_report={} "
+                    "direction_report={}",
+                    results[0u].m_theta.m_report, results[0u].m_direction.m_report));
+            assertCoefficients(results[0u].m_theta, field.windowed());
+            assertCoefficients(results[0u].m_direction, field.windowed());
+            PPR_TEST_ASSERT(
+                assertDirectionMatchesTheta(results[0u]).m_maximum_coefficient_delta <= kDirectionAgreement);
         }
 
         {
@@ -1183,15 +1345,24 @@ namespace pP::tests::detail::WorldLightingFine {
             probe.m_sample_count = kSamples;
             probe.m_first_field = 1u;
             const auto results = runCHProbe(fixture, {probe}, samples);
-            assertCoefficients(results[0u], [&] {
+            const auto expected = [&] {
                 auto rotated = rotatedCoefficients(field.m_coefficients, rotation);
                 HOracle rotated_field{};
                 rotated_field.m_coefficients = rotated;
                 return rotated_field.windowed();
-            }());
+            }();
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label=harmonics_rotation_0.37 theta_report={} "
+                    "direction_report={}",
+                    results[0u].m_theta.m_report, results[0u].m_direction.m_report));
+            assertCoefficients(results[0u].m_theta, expected);
+            assertCoefficients(results[0u].m_direction, expected);
+            PPR_TEST_ASSERT(
+                assertDirectionMatchesTheta(results[0u]).m_maximum_coefficient_delta <= kDirectionAgreement);
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE harmonics signed=true rotated=true window_once=true"));
+        _.log(std::format("WORLD_LIGHTING_FINE harmonics signed=true rotated=true window_once=true direction=true"));
     };
 
     PPR_UNIT_TEST (zero_weight_and_invalid_total_weight_are_not_promoted) {
@@ -1206,19 +1377,14 @@ namespace pP::tests::detail::WorldLightingFine {
         std::vector<CHProbeSample> base(kSamples);
         for (u32 index = 0u; index < kSamples; ++index) {
             const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kSamples;
-            base[index].m_radiance = rgb(
-                1.0f + 0.2f * static_cast<float>(std::cos(theta)), 0.5f,
-                0.25f + 0.1f * static_cast<float>(std::sin(2.0 * theta)));
-            base[index].m_theta = static_cast<float>(theta);
-            base[index].m_weight = static_cast<float>(weight);
+            base[index] = chSample(
+                rgb(1.0f + 0.2f * static_cast<float>(std::cos(theta)), 0.5f,
+                    0.25f + 0.1f * static_cast<float>(std::sin(2.0 * theta))),
+                theta, static_cast<float>(weight));
         }
 
         auto with_zero = base;
-        CHProbeSample ignored;
-        ignored.m_radiance = rgb(1.0e6f, 1.0e6f, 1.0e6f);
-        ignored.m_theta = 0.123f;
-        ignored.m_weight = 0.0f;
-        with_zero.push_back(ignored);
+        with_zero.push_back(chSample(rgb(1.0e6f, 1.0e6f, 1.0e6f), 0.123, 0.0f));
 
         CHProbeCase plain{};
         plain.m_sample_count = kSamples;
@@ -1227,8 +1393,27 @@ namespace pP::tests::detail::WorldLightingFine {
         zero_tap.m_sample_count = kSamples + 1u;
 
         auto results = runCHProbe(fixture, {plain, zero_tap}, with_zero);
-        PPR_TEST_ASSERT(results[0u] == results[1u]);
-        PPR_TEST_ASSERT(results[0u][8u] == 0u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_case label=appended_zero_weight theta_report={} "
+                "direction_report={}",
+                results[0u].m_theta.m_report, results[0u].m_direction.m_report));
+        const auto same = [](const CHProbeFit &left, const CHProbeFit &right) {
+            return left.m_packed == right.m_packed and left.m_report == right.m_report;
+        };
+        PPR_TEST_ASSERT(same(results[0u].m_theta, results[1u].m_theta));
+        PPR_TEST_ASSERT(same(results[0u].m_direction, results[1u].m_direction));
+        PPR_TEST_ASSERT(results[0u].m_theta.m_report == 0u);
+        PPR_TEST_ASSERT(assertDirectionMatchesTheta(results[0u]).m_maximum_coefficient_delta <= kDirectionAgreement);
+
+        // A numeric failure is reported, never promoted: the packed record stays
+        // all zero and the report word is one on both fitting paths.
+        const auto assert_failed = [](const CHProbeFit &fit) {
+            PPR_TEST_ASSERT(fit.m_report == 1u);
+            for (const u32 word: fit.m_packed) {
+                PPR_TEST_ASSERT(word == 0u);
+            }
+        };
 
         {
             CHProbeCase zero_total{};
@@ -1240,10 +1425,14 @@ namespace pP::tests::detail::WorldLightingFine {
             }
 
             const auto failure = runCHProbe(fixture, {zero_total}, zero_samples);
-            PPR_TEST_ASSERT(failure[0u][8u] == 1u);
-            for (u32 word = 0u; word < 9u; ++word) {
-                PPR_TEST_ASSERT(failure[0u][word] == (word == 8u ? 1u : 0u));
-            }
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label=zero_total_weight theta_report={} "
+                    "direction_report={}",
+                    failure[0u].m_theta.m_report, failure[0u].m_direction.m_report));
+            assert_failed(failure[0u].m_theta);
+            assert_failed(failure[0u].m_direction);
+            PPR_TEST_ASSERT(assertDirectionMatchesTheta(failure[0u]).m_maximum_coefficient_delta == 0.0f);
         }
 
         {
@@ -1253,10 +1442,900 @@ namespace pP::tests::detail::WorldLightingFine {
             auto invalid_samples = base;
             invalid_samples[3u].m_weight = std::numeric_limits<float>::quiet_NaN();
             const auto failure = runCHProbe(fixture, {invalid_total}, invalid_samples);
-            PPR_TEST_ASSERT(failure[0u][8u] == 1u);
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label=nan_total_weight theta_report={} "
+                    "direction_report={}",
+                    failure[0u].m_theta.m_report, failure[0u].m_direction.m_report));
+            assert_failed(failure[0u].m_theta);
+            assert_failed(failure[0u].m_direction);
+            PPR_TEST_ASSERT(assertDirectionMatchesTheta(failure[0u]).m_maximum_coefficient_delta == 0.0f);
         }
 
-        _.log(std::format("WORLD_LIGHTING_FINE zero_weight skipped=true nonpositive_total=failure"));
+        _.log(std::format("WORLD_LIGHTING_FINE zero_weight skipped=true nonpositive_total=failure direction=true"));
+    };
+
+    // ------------------------------------------------------------------
+    // direction-fit qualification corpus
+    // ------------------------------------------------------------------
+
+    // One connector sample: the radiance the connector carries plus the exact
+    // FP32 basis the direction helper receives. The reference angle is atan2 of
+    // that same basis, so the pair models the production substitution: the theta
+    // helper gets the angle the old call derived from this basis, and the
+    // direction helper gets the normalized pair itself. A sample built from an
+    // angle is not a backend-produced basis; the replay cases below are labelled
+    // accordingly.
+    struct CHCorpusSample {
+        float3 m_radiance;
+        float2 m_basis;
+        double m_theta;
+        double m_weight;
+    };
+
+    [[nodiscard]] float3 chEvaluate(const std::array<float3, 9u> &coefficients, const double theta) noexcept {
+        HOracle field{};
+        field.m_coefficients = coefficients;
+        return field.evaluate(theta);
+    }
+
+    [[nodiscard]] double chBasisAngle(const float2 basis) noexcept {
+        return std::atan2(static_cast<double>(basis.y), static_cast<double>(basis.x));
+    }
+
+    // A sample at an angle: the basis is the pair rounded to FP32 exactly as the
+    // unit connector normalization would produce.
+    [[nodiscard]] CHCorpusSample corpusAt(const float3 radiance, const double angle, const double weight) noexcept {
+        const float2 basis{static_cast<float>(std::cos(angle)), static_cast<float>(std::sin(angle))};
+        return {radiance, basis, chBasisAngle(basis), weight};
+    }
+
+    [[nodiscard]] CHCorpusSample corpusWithBasis(
+        const float3 radiance, const float2 basis, const double weight) noexcept {
+        return {radiance, basis, chBasisAngle(basis), weight};
+    }
+
+    // Host replay of the production connector geometry: clamped L1 taps, retained
+    // trace frames, box exit and FP32 normalization, replayed with the same
+    // independent geometry the connector oracle uses. This is not the backend's
+    // own basis: the schedule angle and trig are evaluated in double here and the
+    // GPU may contract length/division differently, so `non_unit_bases` proves
+    // host replay norm error only. A real normalized connector still has length
+    // 1 + eps, so the recurrence's r^m behaviour is exercised.
+    struct FineBasisSample {
+        float2 m_basis;
+        float m_weight;
+    };
+
+    [[nodiscard]] std::vector<FineBasisSample> fineConnectorBases(
+        const u32 probe_x, const u32 probe_y, const u64 accepted) {
+        const float2 fine_center{
+            (static_cast<float>(probe_x) + 0.5f) * 2.0f, (static_cast<float>(probe_y) + 0.5f) * 2.0f};
+        const float2 box_min{fine_center.x - 4.0f, fine_center.y - 4.0f};
+        const float2 box_max{fine_center.x + 4.0f, fine_center.y + 4.0f};
+        const auto taps = fineTaps(probe_x, probe_y);
+        constexpr double direction_weight = 2.0 * std::numbers::pi / 16.0;
+
+        std::vector<FineBasisSample> result;
+        result.reserve(64u);
+        for (const FineTap &tap: taps) {
+            if (tap.m_weight <= 0.0f) {
+                continue;
+            }
+
+            const L1OracleFrame frame = fineL1Frame(accepted, tap.m_x, tap.m_y);
+            const float2 center{
+                (static_cast<float>(tap.m_x) + 0.5f) * 4.0f, (static_cast<float>(tap.m_y) + 0.5f) * 4.0f};
+            for (u32 phi = 0u; phi < 16u; ++phi) {
+                const double angle = fineConnectorAngle(phi, frame.m_trace);
+                const float2 direction{static_cast<float>(std::cos(angle)), static_cast<float>(std::sin(angle))};
+
+                float slip_x = kTraceFarOracle;
+                float slip_y = kTraceFarOracle;
+                if (direction.x > 0.0f) {
+                    slip_x = (box_max.x - center.x) / direction.x;
+                } else if (direction.x < 0.0f) {
+                    slip_x = (box_min.x - center.x) / direction.x;
+                }
+                if (direction.y > 0.0f) {
+                    slip_y = (box_max.y - center.y) / direction.y;
+                } else if (direction.y < 0.0f) {
+                    slip_y = (box_min.y - center.y) / direction.y;
+                }
+
+                const float exit_parameter = std::min(slip_x, slip_y);
+                const float2 exit_point{
+                    center.x + direction.x * exit_parameter, center.y + direction.y * exit_parameter};
+                const float2 connector{exit_point.x - fine_center.x, exit_point.y - fine_center.y};
+                const float connector_length = std::sqrt(connector.x * connector.x + connector.y * connector.y);
+                const float2 basis = connector_length == 0.0f
+                                         ? direction
+                                         : float2{connector.x / connector_length, connector.y / connector_length};
+                result.push_back({basis, tap.m_weight * static_cast<float>(direction_weight)});
+            }
+        }
+
+        return result;
+    }
+
+    // Double-precision evaluation of the documented fit: first-sample reference,
+    // relative mean, mean-subtracted projection and one Lanczos window. It is
+    // independent of the streamed accumulator expansion and of both shader
+    // helpers, so it is the reference for every corpus case.
+    [[nodiscard]] std::array<float3, 9u> chFitOracle(const std::vector<CHCorpusSample> &samples) {
+        PPR_TEST_ASSERT(not samples.empty());
+
+        const float3 reference = samples.front().m_radiance;
+        std::array<double, 3u> reference_channels{};
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            reference_channels[channel] = fineChannel(reference, channel);
+        }
+
+        double total = 0.0;
+        std::array<double, 3u> relative{};
+        for (const CHCorpusSample &sample: samples) {
+            total += sample.m_weight;
+            for (u32 channel = 0u; channel < 3u; ++channel) {
+                relative[channel] += (fineChannel(sample.m_radiance, channel) - reference_channels[channel]) *
+                                     sample.m_weight;
+            }
+        }
+
+        PPR_TEST_ASSERT(total > 0.0);
+        std::array<double, 3u> relative_mean{};
+        std::array<double, 3u> mean{};
+        for (u32 channel = 0u; channel < 3u; ++channel) {
+            relative_mean[channel] = relative[channel] / total;
+            mean[channel] = reference_channels[channel] + relative_mean[channel];
+        }
+
+        std::array<float3, 9u> result;
+        result[0u] = rgb(
+            static_cast<float>(mean[0u] / kY0), static_cast<float>(mean[1u] / kY0), static_cast<float>(mean[2u] / kY0));
+
+        for (u32 m = 1u; m <= 4u; ++m) {
+            std::array<double, 3u> cosine_sum{};
+            std::array<double, 3u> sine_sum{};
+            double cosine_weight = 0.0;
+            double sine_weight = 0.0;
+            for (const CHCorpusSample &sample: samples) {
+                const double angle = static_cast<double>(m) * sample.m_theta;
+                const double cosine = std::cos(angle);
+                const double sine = std::sin(angle);
+                cosine_weight += sample.m_weight * cosine;
+                sine_weight += sample.m_weight * sine;
+                for (u32 channel = 0u; channel < 3u; ++channel) {
+                    const double deviation = fineChannel(sample.m_radiance, channel) - reference_channels[channel];
+                    cosine_sum[channel] += deviation * (sample.m_weight * cosine);
+                    sine_sum[channel] += deviation * (sample.m_weight * sine);
+                }
+            }
+
+            const double factor = (2.0 * std::numbers::pi / total) * lanczos(m) / std::sqrt(std::numbers::pi);
+            result[2u * m - 1u] = rgb(
+                static_cast<float>((cosine_sum[0u] - relative_mean[0u] * cosine_weight) * factor),
+                static_cast<float>((cosine_sum[1u] - relative_mean[1u] * cosine_weight) * factor),
+                static_cast<float>((cosine_sum[2u] - relative_mean[2u] * cosine_weight) * factor));
+            result[2u * m] = rgb(
+                static_cast<float>((sine_sum[0u] - relative_mean[0u] * sine_weight) * factor),
+                static_cast<float>((sine_sum[1u] - relative_mean[1u] * sine_weight) * factor),
+                static_cast<float>((sine_sum[2u] - relative_mean[2u] * sine_weight) * factor));
+        }
+
+        return result;
+    }
+
+    // A signed field with every order populated, so a wrong recurrence order, a
+    // dropped term or a second window moves coefficients far beyond one
+    // quantisation step.
+    [[nodiscard]] std::array<float3, 9u> allOrderCorpusField() {
+        std::array<float3, 9u> field;
+        field[0u] = rgb(1.0f, 0.8f, 0.6f);
+        field[1u] = rgb(0.60f, -0.30f, 0.15f); // cos1
+        field[2u] = rgb(-0.25f, 0.40f, -0.45f); // sin1
+        field[3u] = rgb(0.50f, 0.20f, -0.10f); // cos2
+        field[4u] = rgb(0.10f, -0.25f, 0.35f); // sin2
+        field[5u] = rgb(-0.40f, 0.30f, 0.15f); // cos3
+        field[6u] = rgb(0.20f, -0.15f, 0.40f); // sin3
+        field[7u] = rgb(0.35f, 0.15f, -0.20f); // cos4
+        field[8u] = rgb(-0.15f, 0.25f, 0.10f); // sin4
+        return field;
+    }
+
+    // A field whose non-maximal order-1 AC components sit on signed-byte rounding
+    // ties: scale = max(abs(AC))/127, and every constructed ratio shares the
+    // order-1 Lanczos factor, so a component of max*(k+0.5)/127 lands halfway and
+    // ties-to-even decides its byte. The two paths can then land on opposite
+    // sides without violating either tolerance.
+    [[nodiscard]] std::array<float3, 9u> halfStepCorpusField() {
+        constexpr float kMaximum = 0.508f;
+        std::array<float3, 9u> field;
+
+        // Mango vectors are indeterminate under value-initialization, so every
+        // order is written explicitly; no inactive coefficient may be read.
+        for (u32 index = 0u; index < 9u; ++index) {
+            field[index] = rgb(0.0f, 0.0f, 0.0f);
+        }
+
+        field[0u] = rgb(1.0f, 1.0f, 1.0f);
+        field[1u] = rgb(kMaximum, kMaximum * (0.5f / 127.0f), -kMaximum); // 127, 0.5, -127 steps
+        field[2u] = rgb(-kMaximum * (1.5f / 127.0f), kMaximum, kMaximum * (2.5f / 127.0f)); // 1.5, 127, 2.5
+        return field;
+    }
+
+    // Small-AC sensitivity, not a shared-scale underflow test: the codec has no
+    // magnitude floor here, only division underflow to zero. One byte is a large
+    // relative change at this amplitude, so the case exposes rounding sensitivity
+    // rather than a floor boundary.
+    [[nodiscard]] std::array<float3, 9u> smallAcCorpusField() {
+        std::array<float3, 9u> field;
+        for (u32 index = 0u; index < 9u; ++index) {
+            field[index] = rgb(0.0f, 0.0f, 0.0f);
+        }
+
+        field[0u] = rgb(1.0f, 1.0f, 1.0f);
+        field[1u] = rgb(1.0e-3f, -5.0e-4f, 2.5e-4f);
+        field[2u] = rgb(-7.5e-4f, 1.0e-3f, -2.5e-4f);
+        return field;
+    }
+
+    // Compares the finished coefficients before packing with the same oracle and
+    // the existing coefficient tolerance. The packed comparison alone cannot
+    // show whether a difference entered before quantisation or only at it.
+    void assertPrepackMatchesOracle(const CHProbeFit &fit, const std::array<float3, 9u> &expected) {
+        const float scale = std::bit_cast<float>(fit.m_packed[1u]);
+        const float tolerance = 0.51f * scale + 2.0e-4f;
+        PPR_TEST_ASSERT(closeRGB9E5(fit.m_coefficients[0u], expected[0u], 5.0e-3f));
+        for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+            PPR_TEST_ASSERT(std::abs(fit.m_coefficients[coefficient].x - expected[coefficient].x) <= tolerance);
+            PPR_TEST_ASSERT(std::abs(fit.m_coefficients[coefficient].y - expected[coefficient].y) <= tolerance);
+            PPR_TEST_ASSERT(std::abs(fit.m_coefficients[coefficient].z - expected[coefficient].z) <= tolerance);
+        }
+    }
+
+    PPR_UNIT_TEST (direction_accumulation_matches_the_theta_reference) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const std::array<float3, 9u> field = allOrderCorpusField();
+
+        // Uniform samples carry exactly zero AC: identical radiance leaves the
+        // reference-relative deviation at zero on both paths.
+        constexpr u32 kCircleSamples = 64u;
+        const double circle_weight = 2.0 * std::numbers::pi / static_cast<double>(kCircleSamples);
+        std::vector<CHCorpusSample> uniform(kCircleSamples);
+        for (u32 index = 0u; index < kCircleSamples; ++index) {
+            uniform[index] = corpusAt(
+                rgb(0.5f, 0.75f, 1.0f), 2.0 * std::numbers::pi * static_cast<double>(index) / kCircleSamples,
+                circle_weight);
+        }
+
+        // Rotated signed harmonics of all four orders on a uniform circle.
+        const auto circle = [&](const double rotation) {
+            std::vector<CHCorpusSample> samples(kCircleSamples);
+            for (u32 index = 0u; index < kCircleSamples; ++index) {
+                const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kCircleSamples + rotation;
+                samples[index] = corpusAt(chEvaluate(field, theta - rotation), theta, circle_weight);
+            }
+
+            return samples;
+        };
+
+        // Axis and near-axis angles with uneven weights and an asymmetric field:
+        // the basis passes through (+-1, 0) and (0, +-1) and just beside them, and
+        // no symmetry cancels a sign defect.
+        const auto axes = [&](const bool near_axis) {
+            constexpr u32 kAxisSamples = 16u;
+            std::vector<CHCorpusSample> samples(kAxisSamples);
+            for (u32 index = 0u; index < kAxisSamples; ++index) {
+                const double axis = std::numbers::pi * static_cast<double>(index) / 8.0;
+                const double jitter = near_axis ? (index % 2u == 0u ? -1.0e-4 : 1.0e-4) : 0.0;
+                const double theta = axis + jitter;
+                samples[index] = corpusAt(
+                    chEvaluate(field, theta), theta, 0.1 + 0.03 * static_cast<double>(index % 5u));
+            }
+
+            return samples;
+        };
+
+        // Both sides of the +-pi seam with different weights and radiance on each
+        // side, so the paired representation cannot cancel sine terms. A constant
+        // radiance pedestal keeps the seam's own DC positive: the unpadded signed
+        // field is about -0.099 in blue at pi, which the codec must reject as
+        // negative DC. The pedestal leaves every deviation, angle, weight and the
+        // whole AC fit unchanged while making this a successful fit case.
+        const auto seam = [&] {
+            std::vector<CHCorpusSample> samples;
+            samples.reserve(16u);
+            for (u32 index = 0u; index < 8u; ++index) {
+                const double offset = 1.0e-3 * static_cast<double>(index);
+                const double positive = std::numbers::pi - offset;
+                const double negative = -std::numbers::pi + offset;
+                samples.push_back(
+                    corpusAt(chEvaluate(field, positive) + rgb(1.0f, 1.0f, 1.0f), positive, 0.30 + 0.02 * index));
+                samples.push_back(
+                    corpusAt(chEvaluate(field, negative) + rgb(1.0f, 1.0f, 1.0f), negative, 0.55 - 0.03 * index));
+            }
+
+            return samples;
+        };
+
+        // Strictly increasing weights, then the same samples with a leading
+        // zero-weight sample of different finite radiance (the reference pin) and
+        // with an appended one (the skip pin).
+        const auto uneven_samples = [&] {
+            std::vector<CHCorpusSample> samples(16u);
+            for (u32 index = 0u; index < 16u; ++index) {
+                const double theta = std::numbers::pi * static_cast<double>(index) / 8.0;
+                samples[index] = corpusAt(chEvaluate(field, theta), theta, 0.05 * static_cast<double>(index + 1u));
+            }
+
+            return samples;
+        };
+
+        // The leading zero-weight sample is the first sample, so it seeds the
+        // reference even though it contributes no weight; the appended one must be
+        // skipped entirely.
+        const auto leadingZero = [&](const std::vector<CHCorpusSample> &base_samples) {
+            std::vector<CHCorpusSample> samples = base_samples;
+            samples.insert(samples.begin(), corpusAt(rgb(0.02f, 0.03f, 0.04f), 1.1, 0.0));
+            return samples;
+        };
+
+        const auto appendedZero = [&](const std::vector<CHCorpusSample> &base_samples) {
+            std::vector<CHCorpusSample> samples = base_samples;
+            samples.push_back(corpusAt(rgb(1.0e6f, 1.0e6f, 1.0e6f), 0.123, 0.0));
+            return samples;
+        };
+
+        // Host replay of the production connector bases. The interior probe has
+        // four distinct taps with retained ages; accepted 0 leaves three taps
+        // never initialized; the two edge probes clamp every tap to their single
+        // neighbour (both are corners, not one-axis edges).
+        u32 non_unit_bases = 0u;
+        const auto production = [&](const u32 probe_x, const u32 probe_y, const u64 accepted) {
+            std::vector<CHCorpusSample> samples;
+            for (const FineBasisSample &entry: fineConnectorBases(probe_x, probe_y, accepted)) {
+                const double theta = chBasisAngle(entry.m_basis);
+                const float length = std::sqrt(entry.m_basis.x * entry.m_basis.x + entry.m_basis.y * entry.m_basis.y);
+                if (length != 1.0f)
+                    ++non_unit_bases;
+                samples.push_back(
+                    corpusWithBasis(chEvaluate(field, theta), entry.m_basis, static_cast<double>(entry.m_weight)));
+            }
+
+            return samples;
+        };
+
+        // The production geometry cannot reach a zero-length connector (L1 centres
+        // are even, the fine box boundaries odd), so the direction fallback is
+        // exercised directly: a unit schedule direction with no normalized basis.
+        const auto zero_length_fallback = [&] {
+            std::vector<CHCorpusSample> samples(16u);
+            for (u32 phi = 0u; phi < 16u; ++phi) {
+                const double theta = 2.0 * std::numbers::pi * static_cast<double>(phi) / 16.0;
+                const float2 direction{static_cast<float>(std::cos(theta)), static_cast<float>(std::sin(theta))};
+                samples[phi] = corpusWithBasis(chEvaluate(field, theta), direction, 2.0 * std::numbers::pi / 16.0);
+            }
+
+            return samples;
+        };
+
+        // Signed-zero axis variants: (1, +0), (1, -0), (-1, +0), (-1, -0) and the
+        // same on the vertical axis, with asymmetric weights.
+        const auto signed_zero_axes = [&] {
+            const std::array<float2, 8u> bases{
+                float2{1.0f, 0.0f}, float2{1.0f, -0.0f}, float2{-1.0f, 0.0f}, float2{-1.0f, -0.0f}, float2{0.0f, 1.0f},
+                float2{-0.0f, 1.0f}, float2{0.0f, -1.0f}, float2{-0.0f, -1.0f}};
+            std::vector<CHCorpusSample> samples(bases.size());
+            for (u32 index = 0u; index < bases.size(); ++index) {
+                samples[index] = corpusWithBasis(
+                    chEvaluate(field, chBasisAngle(bases[index])), bases[index],
+                    0.30 + 0.05 * static_cast<double>(index));
+            }
+
+            return samples;
+        };
+
+        // A negative individual weight with a positive total is accepted: chFinish
+        // validates the total, not every weight, and this preserves that contract.
+        const auto negative_individual_weight = [&]() {
+            std::vector<CHCorpusSample> samples(16u);
+            for (u32 index = 0u; index < 16u; ++index) {
+                const double theta = std::numbers::pi * static_cast<double>(index) / 8.0;
+                const double weight = index == 5u ? -0.2 : 0.5;
+                samples[index] = corpusAt(chEvaluate(field, theta), theta, weight);
+            }
+
+            return samples;
+        }();
+
+        // Quantisation-sensitive corpora: a half-step field and a near-floor AC
+        // field, both sampled on the uniform circle that recovers them exactly.
+        const auto circleSamples = [&](const std::array<float3, 9u> &coefficients) {
+            std::vector<CHCorpusSample> samples(kCircleSamples);
+            for (u32 index = 0u; index < kCircleSamples; ++index) {
+                const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kCircleSamples;
+                samples[index] = corpusAt(chEvaluate(coefficients, theta), theta, circle_weight);
+            }
+
+            return samples;
+        };
+
+        struct CorpusCase {
+            std::vector<CHCorpusSample> m_samples;
+            std::string m_label;
+        };
+
+        std::vector<CorpusCase> corpus;
+        corpus.push_back({uniform, "uniform"});
+        corpus.push_back({circle(0.0), "all_orders"});
+        corpus.push_back({circle(0.37), "all_orders_rotated"});
+        corpus.push_back({circle(-2.9), "all_orders_wrapped"});
+        corpus.push_back({axes(false), "axes"});
+        corpus.push_back({axes(true), "near_axes"});
+        corpus.push_back({seam(), "seam"});
+        corpus.push_back({uneven_samples(), "uneven_weights"});
+        corpus.push_back({production(100u, 100u, 7u), "replay_interior_retained"});
+        corpus.push_back({production(100u, 100u, 0u), "replay_interior_uninitialized"});
+        corpus.push_back({production(0u, 0u, 0u), "replay_corner_clamped_origin"});
+        corpus.push_back({production(511u, 511u, 7u), "replay_corner_clamped_far"});
+        corpus.push_back({zero_length_fallback(), "zero_length_fallback"});
+        corpus.push_back({signed_zero_axes(), "signed_zero_axes"});
+        corpus.push_back({negative_individual_weight, "negative_individual_weight"});
+        corpus.push_back({circleSamples(halfStepCorpusField()), "quantisation_half_step"});
+        corpus.push_back({circleSamples(smallAcCorpusField()), "quantisation_small_ac"});
+        corpus.push_back({leadingZero(uneven_samples()), "leading_zero_weight"});
+        corpus.push_back({appendedZero(uneven_samples()), "appended_zero_weight"});
+
+        std::vector<CHProbeCase> probes;
+        std::vector<CHProbeSample> samples;
+        std::vector<std::array<float3, 9u>> expectations;
+        std::size_t uneven_index = 0u;
+        std::size_t leading_zero_index = 0u;
+        for (const CorpusCase &entry: corpus) {
+            CHProbeCase probe{};
+            probe.m_sample_offset = static_cast<u32>(samples.size());
+            probe.m_sample_count = static_cast<u32>(entry.m_samples.size());
+            probe.m_first_field = 1u;
+            for (const CHCorpusSample &sample: entry.m_samples) {
+                samples.push_back(
+                    chSampleWithBasis(sample.m_radiance, sample.m_basis, static_cast<float>(sample.m_weight)));
+            }
+
+            if (entry.m_label == "uneven_weights")
+                uneven_index = probes.size();
+            if (entry.m_label == "leading_zero_weight")
+                leading_zero_index = probes.size();
+            probes.push_back(probe);
+            expectations.push_back(chFitOracle(entry.m_samples));
+        }
+
+        PPR_TEST_ASSERT(probes.size() <= 64u);
+        const auto results = runCHProbe(fixture, probes, samples);
+
+        float maximum_delta = 0.0f;
+        float replay_delta = 0.0f;
+        u32 differing_words = 0u;
+        u32 replay_differing_words = 0u;
+        for (std::size_t index = 0u; index < results.size(); ++index) {
+            const std::string &label = corpus[index].m_label;
+
+            // Logged before this case's assertions so a failure names its case.
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label={} expected_c0=({}, {}, {}) theta_report={} "
+                    "direction_report={}",
+                    label, expectations[index][0u].x, expectations[index][0u].y, expectations[index][0u].z,
+                    results[index].m_theta.m_report, results[index].m_direction.m_report));
+
+            // Both fits against the independent double-precision oracle, packed
+            // and before packing, with the existing coefficient and codec
+            // tolerances.
+            PPR_TEST_ASSERT(results[index].m_theta.m_report == 0u);
+            PPR_TEST_ASSERT(results[index].m_direction.m_report == 0u);
+            assertFineMatchesOracle(packedProbeRecord(results[index].m_theta), expectations[index]);
+            assertFineMatchesOracle(packedProbeRecord(results[index].m_direction), expectations[index]);
+            assertPrepackMatchesOracle(results[index].m_theta, expectations[index]);
+            assertPrepackMatchesOracle(results[index].m_direction, expectations[index]);
+
+            const CHProbeAgreement agreement = assertDirectionMatchesTheta(results[index]);
+            maximum_delta = (std::max) (maximum_delta, agreement.m_maximum_coefficient_delta);
+            differing_words += agreement.m_differing_packed_words;
+            if (label.starts_with("replay")) {
+                replay_delta = (std::max) (replay_delta, agreement.m_maximum_coefficient_delta);
+                replay_differing_words += agreement.m_differing_packed_words;
+            }
+
+            // Per-case packed-difference record, including the quantisation cases.
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case_agreement label={} max_coefficient_delta={} "
+                    "differing_packed_words={} direction_scale={}",
+                    label, agreement.m_maximum_coefficient_delta, agreement.m_differing_packed_words,
+                    std::bit_cast<float>(results[index].m_direction.m_packed[1u])));
+
+            if (label == "uniform") {
+                PPR_TEST_ASSERT(results[index].m_theta.m_packed[1u] == 0u);
+                PPR_TEST_ASSERT(results[index].m_direction.m_packed[1u] == 0u);
+                for (u32 word = 2u; word < 8u; ++word) {
+                    PPR_TEST_ASSERT(results[index].m_theta.m_packed[word] == 0u);
+                    PPR_TEST_ASSERT(results[index].m_direction.m_packed[word] == 0u);
+                }
+
+                // Exact zero AC before packing as well: no angular basis can leak
+                // into an identically scoped radiance set.
+                for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                    for (const CHProbeFit *const fit: {&results[index].m_theta, &results[index].m_direction}) {
+                        PPR_TEST_ASSERT(fit->m_coefficients[coefficient].x == 0.0f);
+                        PPR_TEST_ASSERT(fit->m_coefficients[coefficient].y == 0.0f);
+                        PPR_TEST_ASSERT(fit->m_coefficients[coefficient].z == 0.0f);
+                    }
+                }
+            }
+
+            if (label == "seam") {
+                // The seam must be a successful fit. Without the radiance pedestal
+                // the unpadded signed field has negative blue DC at pi and the
+                // reference path correctly reports encode category 1 (report 2).
+                PPR_TEST_ASSERT(expectations[index][0u].x > 0.0f);
+                PPR_TEST_ASSERT(expectations[index][0u].y > 0.0f);
+                PPR_TEST_ASSERT(expectations[index][0u].z > 0.0f);
+            }
+
+            if (label == "all_orders" or label == "all_orders_rotated" or label == "all_orders_wrapped") {
+                for (u32 m = 1u; m <= 4u; ++m) {
+                    PPR_TEST_ASSERT(std::abs(expectations[index][2u * m - 1u].x) > 1.0e-3f);
+                    PPR_TEST_ASSERT(std::abs(expectations[index][2u * m].x) > 1.0e-3f);
+                }
+            }
+
+            if (label == "quantisation_half_step") {
+                // The construction must really sit on signed-byte ties: a nonzero
+                // shared scale with three components at k + 0.5 steps, all in
+                // order 1 so one Lanczos factor preserves their ratios.
+                const std::array<float3, 9u> &expected = expectations[index];
+                float maximum = 0.0f;
+                for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                    maximum = (std::max) (maximum, std::abs(expected[coefficient].x));
+                    maximum = (std::max) (maximum, std::abs(expected[coefficient].y));
+                    maximum = (std::max) (maximum, std::abs(expected[coefficient].z));
+                }
+
+                PPR_TEST_ASSERT(maximum > 0.0f);
+                const float scale = maximum / 127.0f;
+                PPR_TEST_ASSERT(std::abs(std::abs(expected[1u].y) - 0.5f * scale) <= 0.01f * scale);
+                PPR_TEST_ASSERT(std::abs(std::abs(expected[2u].x) - 1.5f * scale) <= 0.01f * scale);
+                PPR_TEST_ASSERT(std::abs(std::abs(expected[2u].z) - 2.5f * scale) <= 0.01f * scale);
+                PPR_TEST_ASSERT(std::bit_cast<float>(results[index].m_direction.m_packed[1u]) > 0.0f);
+            }
+        }
+
+        // A leading zero-weight sample still seeds the reference (the oracle does
+        // not skip it) while the estimator stays reference-invariant, so the fit
+        // matches the sample set without it within arithmetic noise.
+        const CHProbeResult &leading_zero = results[leading_zero_index];
+        PPR_TEST_ASSERT(leading_zero.m_theta.m_report == 0u and leading_zero.m_direction.m_report == 0u);
+        PPR_TEST_ASSERT(leading_zero.m_direction.m_report == leading_zero.m_theta.m_report);
+
+        const auto assert_pair_close = [](const std::array<float3, 9u> &left, const std::array<float3, 9u> &right) {
+            for (u32 coefficient = 0u; coefficient < 9u; ++coefficient) {
+                PPR_TEST_ASSERT(std::abs(left[coefficient].x - right[coefficient].x) <= 1.0e-4f);
+                PPR_TEST_ASSERT(std::abs(left[coefficient].y - right[coefficient].y) <= 1.0e-4f);
+                PPR_TEST_ASSERT(std::abs(left[coefficient].z - right[coefficient].z) <= 1.0e-4f);
+            }
+        };
+
+        assert_pair_close(leading_zero.m_theta.m_coefficients, results[uneven_index].m_theta.m_coefficients);
+        assert_pair_close(leading_zero.m_direction.m_coefficients, results[uneven_index].m_direction.m_coefficients);
+
+        // The appended zero-weight sample cannot change either path's field.
+        const CHProbeResult &uneven = results[uneven_index];
+        const CHProbeResult &zero_weight = results[results.size() - 1u];
+        PPR_TEST_ASSERT(uneven.m_theta.m_packed == zero_weight.m_theta.m_packed);
+        PPR_TEST_ASSERT(uneven.m_direction.m_packed == zero_weight.m_direction.m_packed);
+
+        PPR_TEST_ASSERT(non_unit_bases > 0u);
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_fit cases={} max_coefficient_delta={} differing_packed_words={} "
+                "replay_max_delta={} replay_differing_words={} non_unit_bases={}",
+                results.size(), maximum_delta, differing_words, replay_delta, replay_differing_words, non_unit_bases));
+    };
+
+    PPR_UNIT_TEST (direction_accumulation_preserves_first_field_warm_ema_and_status) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const std::array<float3, 9u> field = allOrderCorpusField();
+        constexpr u32 kSamples = 32u;
+        const double weight = 2.0 * std::numbers::pi / static_cast<double>(kSamples);
+        std::vector<CHCorpusSample> corpus(kSamples);
+        std::vector<CHProbeSample> probe_samples(kSamples);
+        for (u32 index = 0u; index < kSamples; ++index) {
+            const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kSamples;
+            corpus[index] = corpusAt(chEvaluate(field, theta), theta, weight);
+            probe_samples[index] = chSampleWithBasis(
+                corpus[index].m_radiance, corpus[index].m_basis, static_cast<float>(weight));
+        }
+
+        const auto expected_fit = chFitOracle(corpus);
+
+        // A warm prior distinct on DC and every AC order, so both the bypass and
+        // each blend step are observable.
+        lighting::CH prior{};
+        prior.m_coefficients[0u] = rgb(2.0f, 1.5f, 1.0f);
+        for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+            prior.m_coefficients[coefficient] = rgb(
+                0.01f * static_cast<float>(coefficient), -0.005f * static_cast<float>(coefficient),
+                0.002f * static_cast<float>(coefficient));
+        }
+        const auto prior_record = lighting::packCH(prior);
+        PPR_TEST_ASSERT(prior_record.has_value());
+
+        std::vector<CHProbeSample> samples = probe_samples;
+        std::vector<CHProbeSample> zero_samples = probe_samples;
+        for (auto &sample: zero_samples) {
+            sample.m_weight = 0.0f;
+        }
+        std::vector<CHProbeSample> negative_total_samples = probe_samples;
+        for (auto &sample: negative_total_samples) {
+            sample.m_weight = -0.1f;
+        }
+        std::vector<CHProbeSample> infinite_total_samples = probe_samples;
+        infinite_total_samples[3u].m_weight = std::numeric_limits<float>::infinity();
+        std::vector<CHProbeSample> negative_samples = probe_samples;
+        for (auto &sample: negative_samples) {
+            sample.m_radiance = rgb(-1.0f, -1.0f, -1.0f);
+        }
+
+        const u32 zero_offset = static_cast<u32>(samples.size());
+        samples.insert(samples.end(), zero_samples.begin(), zero_samples.end());
+        const u32 negative_total_offset = static_cast<u32>(samples.size());
+        samples.insert(samples.end(), negative_total_samples.begin(), negative_total_samples.end());
+        const u32 infinite_total_offset = static_cast<u32>(samples.size());
+        samples.insert(samples.end(), infinite_total_samples.begin(), infinite_total_samples.end());
+        const u32 negative_offset = static_cast<u32>(samples.size());
+        samples.insert(samples.end(), negative_samples.begin(), negative_samples.end());
+
+        CHProbeCase first{};
+        first.m_sample_count = kSamples;
+        first.m_first_field = 1u;
+        first.m_current_weight = 0.25f;
+        first.m_previous = prior_record->m_words;
+
+        CHProbeCase warm_quarter = first;
+        warm_quarter.m_first_field = 0u;
+        CHProbeCase warm_three_quarters = warm_quarter;
+        warm_three_quarters.m_current_weight = 0.75f;
+
+        CHProbeCase zero_total = first;
+        zero_total.m_sample_offset = zero_offset;
+        CHProbeCase negative_total = first;
+        negative_total.m_sample_offset = negative_total_offset;
+        CHProbeCase infinite_total = first;
+        infinite_total.m_sample_offset = infinite_total_offset;
+        CHProbeCase negative_dc = first;
+        negative_dc.m_sample_offset = negative_offset;
+
+        const auto results = runCHProbe(
+            fixture,
+            {first, warm_quarter, warm_three_quarters, zero_total, negative_total, infinite_total, negative_dc},
+            samples);
+
+        // The first field bypasses the prior on both paths.
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_case label=first_field theta_report={} direction_report={}",
+                results[0u].m_theta.m_report, results[0u].m_direction.m_report));
+        for (const CHProbeFit *const fit: {&results[0u].m_theta, &results[0u].m_direction}) {
+            PPR_TEST_ASSERT(fit->m_report == 0u);
+            assertFineMatchesOracle(packedProbeRecord(*fit), expected_fit);
+        }
+        PPR_TEST_ASSERT(assertDirectionMatchesTheta(results[0u]).m_maximum_coefficient_delta <= kDirectionAgreement);
+        PPR_TEST_ASSERT(results[0u].m_theta.m_packed != results[1u].m_theta.m_packed);
+
+        // Production blends the decoded, quantized prior record, not the authored
+        // CH value, so the expectation uses the same prior the shader uploads.
+        const lighting::CH decoded_prior = lighting::unpackCH(*prior_record);
+
+        const auto assert_ema = [&](const CHProbeFit &fit, const float alpha) {
+            PPR_TEST_ASSERT(fit.m_report == 0u);
+            const lighting::PackedCH packed = packedProbeRecord(fit);
+            const lighting::CH decoded = lighting::unpackCH(packed);
+            const float scale = std::bit_cast<float>(packed.m_words[1u]);
+            const float tolerance = 0.55f * scale + 2.0e-4f;
+
+            std::array<float3, 9u> expected;
+            zeroCoefficients(expected);
+            for (u32 coefficient = 0u; coefficient < 9u; ++coefficient) {
+                const float3 previous = decoded_prior.m_coefficients[coefficient];
+                expected[coefficient] = previous + (expected_fit[coefficient] - previous) * alpha;
+            }
+
+            PPR_TEST_ASSERT(closeRGB9E5(decoded.m_coefficients[0u], expected[0u], 5.0e-3f));
+            for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                PPR_TEST_ASSERT(std::abs(decoded.m_coefficients[coefficient].x - expected[coefficient].x) <= tolerance);
+                PPR_TEST_ASSERT(std::abs(decoded.m_coefficients[coefficient].y - expected[coefficient].y) <= tolerance);
+                PPR_TEST_ASSERT(std::abs(decoded.m_coefficients[coefficient].z - expected[coefficient].z) <= tolerance);
+            }
+        };
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_case label=warm_alpha_0.25 theta_report={} direction_report={}",
+                results[1u].m_theta.m_report, results[1u].m_direction.m_report));
+        assert_ema(results[1u].m_theta, 0.25f);
+        assert_ema(results[1u].m_direction, 0.25f);
+        PPR_TEST_ASSERT(assertDirectionMatchesTheta(results[1u]).m_maximum_coefficient_delta <= kDirectionAgreement);
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_case label=warm_alpha_0.75 theta_report={} direction_report={}",
+                results[2u].m_theta.m_report, results[2u].m_direction.m_report));
+        assert_ema(results[2u].m_theta, 0.75f);
+        assert_ema(results[2u].m_direction, 0.75f);
+        PPR_TEST_ASSERT(assertDirectionMatchesTheta(results[2u]).m_maximum_coefficient_delta <= kDirectionAgreement);
+
+        // Invalid weight and invalid encode status are reported identically. The
+        // zero, negative and infinite totals are numeric failures (report 1); a
+        // negative DC is an encode category failure (report 2). None publishes a
+        // substitute value.
+        constexpr std::array<const char *, 4u> kStatusLabels{
+            "zero_total_weight", "negative_total_weight", "infinite_total_weight", "negative_dc"};
+        u32 status_case = 0u;
+        for (const std::pair<u32, u32> expectation:
+            {std::pair<u32, u32>{3u, 1u}, std::pair<u32, u32>{4u, 1u}, std::pair<u32, u32>{5u, 1u},
+                std::pair<u32, u32>{6u, 2u}}) {
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label={} theta_report={} direction_report={}",
+                    kStatusLabels[status_case], results[expectation.first].m_theta.m_report,
+                    results[expectation.first].m_direction.m_report));
+            ++status_case;
+
+            for (const CHProbeFit *const fit:
+                {&results[expectation.first].m_theta, &results[expectation.first].m_direction}) {
+                PPR_TEST_ASSERT(fit->m_report == expectation.second);
+                for (const u32 word: fit->m_packed) {
+                    PPR_TEST_ASSERT(word == 0u);
+                }
+            }
+            PPR_TEST_ASSERT(
+                results[expectation.first].m_theta.m_report == results[expectation.first].m_direction.m_report);
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_fit first=fresh warm=0.25,0.75 "
+                "status=zero,negative,infinite,negative_dc"));
+    };
+
+    PPR_UNIT_TEST (direction_accumulation_survives_repeated_warm_updates) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(_);
+
+        const std::array<float3, 9u> field = allOrderCorpusField();
+        constexpr u32 kSamples = 32u;
+        constexpr float kAlpha = 0.35f;
+        const double weight = 2.0 * std::numbers::pi / static_cast<double>(kSamples);
+        std::vector<CHCorpusSample> corpus(kSamples);
+        std::vector<CHProbeSample> probe_samples(kSamples);
+        for (u32 index = 0u; index < kSamples; ++index) {
+            const double theta = 2.0 * std::numbers::pi * static_cast<double>(index) / kSamples;
+            corpus[index] = corpusAt(chEvaluate(field, theta), theta, weight);
+            probe_samples[index] = chSampleWithBasis(
+                corpus[index].m_radiance, corpus[index].m_basis, static_cast<float>(weight));
+        }
+
+        const auto expected_fit = chFitOracle(corpus);
+
+        lighting::CH prior{};
+        prior.m_coefficients[0u] = rgb(2.0f, 1.5f, 1.0f);
+        for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+            prior.m_coefficients[coefficient] = rgb(
+                0.01f * static_cast<float>(coefficient), -0.005f * static_cast<float>(coefficient),
+                0.002f * static_cast<float>(coefficient));
+        }
+        const auto prior_record = lighting::packCH(prior);
+        PPR_TEST_ASSERT(prior_record.has_value());
+
+        // Each path keeps its own prior, so decode/requantize drift accumulates
+        // independently instead of being reset by the other path.
+        std::array<u32, 8u> theta_previous = prior_record->m_words;
+        std::array<u32, 8u> direction_previous = prior_record->m_words;
+        lighting::CH theta_state = lighting::unpackCH(*prior_record);
+        lighting::CH direction_state = theta_state;
+
+        for (u32 round = 0u; round < 3u; ++round) {
+            CHProbeCase theta_case{};
+            theta_case.m_sample_count = kSamples;
+            theta_case.m_first_field = 0u;
+            theta_case.m_current_weight = kAlpha;
+            theta_case.m_previous = theta_previous;
+            CHProbeCase direction_case = theta_case;
+            direction_case.m_previous = direction_previous;
+
+            const auto results = runCHProbe(fixture, {theta_case, direction_case}, probe_samples);
+
+            // Logged before this round's assertions so a failure names its round.
+            _.log(
+                std::format(
+                    "WORLD_LIGHTING_FINE direction_case label=warm_round_{} theta_report={} direction_report={}", round,
+                    results[0u].m_theta.m_report, results[1u].m_direction.m_report));
+
+            PPR_TEST_ASSERT(results[0u].m_theta.m_report == 0u);
+            PPR_TEST_ASSERT(results[1u].m_direction.m_report == 0u);
+
+            const auto assert_step = [&](const CHProbeFit &fit, const lighting::CH &previous) {
+                const lighting::PackedCH packed = packedProbeRecord(fit);
+                const lighting::CH decoded = lighting::unpackCH(packed);
+                const float scale = std::bit_cast<float>(packed.m_words[1u]);
+                const float tolerance = 0.55f * scale + 2.0e-4f;
+
+                std::array<float3, 9u> expected;
+                zeroCoefficients(expected);
+                for (u32 coefficient = 0u; coefficient < 9u; ++coefficient) {
+                    const float3 previous_value = previous.m_coefficients[coefficient];
+                    expected[coefficient] = previous_value + (expected_fit[coefficient] - previous_value) * kAlpha;
+                }
+
+                PPR_TEST_ASSERT(closeRGB9E5(decoded.m_coefficients[0u], expected[0u], 5.0e-3f));
+                for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                    PPR_TEST_ASSERT(
+                        std::abs(decoded.m_coefficients[coefficient].x - expected[coefficient].x) <= tolerance);
+                    PPR_TEST_ASSERT(
+                        std::abs(decoded.m_coefficients[coefficient].y - expected[coefficient].y) <= tolerance);
+                    PPR_TEST_ASSERT(
+                        std::abs(decoded.m_coefficients[coefficient].z - expected[coefficient].z) <= tolerance);
+                }
+            };
+
+            assert_step(results[0u].m_theta, theta_state);
+            assert_step(results[1u].m_direction, direction_state);
+
+            // The two chains stay inside one quantisation step of each other,
+            // including the shared scale they re-derive every round.
+            const lighting::PackedCH theta_packed = packedProbeRecord(results[0u].m_theta);
+            const lighting::PackedCH direction_packed = packedProbeRecord(results[1u].m_direction);
+            const lighting::CH theta_decoded = lighting::unpackCH(theta_packed);
+            const lighting::CH direction_decoded = lighting::unpackCH(direction_packed);
+            const float scale = std::bit_cast<float>(direction_packed.m_words[1u]);
+            PPR_TEST_ASSERT(closeRGB9E5(theta_decoded.m_coefficients[0u], direction_decoded.m_coefficients[0u]));
+            for (u32 coefficient = 1u; coefficient < 9u; ++coefficient) {
+                PPR_TEST_ASSERT(
+                    std::abs(
+                        theta_decoded.m_coefficients[coefficient].x -
+                        direction_decoded.m_coefficients[coefficient].x) <= scale + 1.0e-6f);
+                PPR_TEST_ASSERT(
+                    std::abs(
+                        theta_decoded.m_coefficients[coefficient].y -
+                        direction_decoded.m_coefficients[coefficient].y) <= scale + 1.0e-6f);
+                PPR_TEST_ASSERT(
+                    std::abs(
+                        theta_decoded.m_coefficients[coefficient].z -
+                        direction_decoded.m_coefficients[coefficient].z) <= scale + 1.0e-6f);
+            }
+
+            theta_state = theta_decoded;
+            direction_state = direction_decoded;
+            theta_previous = results[0u].m_theta.m_packed;
+            direction_previous = results[1u].m_direction.m_packed;
+        }
+
+        _.log(
+            std::format(
+                "WORLD_LIGHTING_FINE direction_fit warm_rounds=3 alpha={} chains=independent within=one_quantum",
+                kAlpha));
     };
 
     // ------------------------------------------------------------------
@@ -2409,6 +3488,9 @@ namespace pP::tests {
                 detail::WorldLightingFine::uniform_field_preserves_c0_normalization_and_zero_ac,
                 detail::WorldLightingFine::fit_recovers_signed_rotated_harmonics,
                 detail::WorldLightingFine::zero_weight_and_invalid_total_weight_are_not_promoted,
+                detail::WorldLightingFine::direction_accumulation_matches_the_theta_reference,
+                detail::WorldLightingFine::direction_accumulation_preserves_first_field_warm_ema_and_status,
+                detail::WorldLightingFine::direction_accumulation_survives_repeated_warm_updates,
                 detail::WorldLightingFine::injected_active_time_matches_the_approved_ema,
                 detail::WorldLightingFine::rejected_attempts_preserve_phase_validity_and_timing,
                 detail::WorldLightingFine::near_hit_with_uninitialized_far_interval_is_not_suppressed,
