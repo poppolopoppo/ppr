@@ -209,6 +209,14 @@ ppr_add_test_entry(TARGET engine.tests.app
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_calibrated_loaded_diagnostic
+    FILTER "app/matter_gpu/calibrated_loaded_clay_and_snow_diagnostic"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_terrain_gpu
     FILTER "${ppr_matter_terrain_filter}"
     LOOPS

@@ -1278,6 +1278,22 @@ namespace pP::game::tests::detail::checkpoint {
             // the v8 policy=1 ten-word identity/table, trim particle tails in
             // reverse order, and assert the sum-of-parts size before decoding.
             const auto bytes = historicalCheckpointBytes(*encoded, raw->size(), checkpoint.m_current_matter, version);
+            if (version == 8u) {
+                // Independently spell the v8 section sum at this consumer;
+                // the shared reconstruction also guards every version's sum.
+                const auto offsets = checkpointWireOffsets(encoded->size(), raw->size(), checkpoint.m_current_matter);
+                PPR_TEST_ASSERT(
+                    bytes.size() == offsets.m_schedule +
+                                        4u +
+                                        64u +
+                                        4u +
+                                        88u * checkpoint.m_current_matter.m_particles.size() +
+                                        16u +
+                                        40u * checkpoint.m_current_matter.m_properties.size() +
+                                        8u +
+                                        raw->size());
+            }
+
             if (version == 9u)
                 PPR_TEST_ASSERT(saved_iterations != matter::kDefaultIterations);
 
@@ -2598,9 +2614,10 @@ namespace pP::game::tests::detail::checkpoint {
                 const auto mapped = mem::SharedBuffer::mapFile(source);
                 PPR_TEST_ASSERT(mapped.has_value());
                 const auto bytes = mapped->getBufferData();
-                PPR_TEST_ASSERT(bytes.size() == emitted.m_particles.size() * sizeof(matter::GpuParticle));
+                constexpr std::size_t historical_stride = 22u * sizeof(u32);
+                const bool historical = bytes.size() == emitted.m_particles.size() * historical_stride;
+                PPR_TEST_ASSERT(historical or bytes.size() == emitted.m_particles.size() * sizeof(matter::GpuParticle));
                 MatterState reference = emitted;
-                std::memcpy(reference.m_particles.data(), bytes.data(), bytes.size());
                 u64 hash = 14695981039346656037ull;
                 for (const auto byte: bytes) {
                     hash = (hash ^ std::to_integer<u8>(byte)) * 1099511628211ull;
@@ -2608,6 +2625,16 @@ namespace pP::game::tests::detail::checkpoint {
 
                 PPR_TEST_ASSERT(
                     source.filename().string() == std::format("actual-dug-tick-{}-{}.gpu-rows.bin", endpoint, hash));
+
+                // Verify the original capture bytes before extending its same-host
+                // 22-word ABI. Never hash a migrated row in place of the evidence.
+                for (std::size_t row = 0u; row < reference.m_particles.size(); ++row) {
+                    auto words = std::bit_cast<std::array<u32, 24u>>(matter::GpuParticle{});
+                    const auto stride = historical ? historical_stride : sizeof(matter::GpuParticle);
+                    std::memcpy(words.data(), bytes.data() + row * stride, stride);
+                    reference.m_particles[row] = std::bit_cast<matter::GpuParticle>(words);
+                }
+
                 const auto physical = captureMovingMatter(reference, reference.m_particles);
                 PPR_TEST_ASSERT(physical.has_value());
                 reference.m_records.clear();
@@ -2645,8 +2672,9 @@ namespace pP::game::tests::detail::checkpoint {
                     reference.m_thickness_metres, kMatterGravityY));
                 _.log(
                     std::format(
-                        "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi=GpuParticle88_same_host renderer_only=true physical_steps_after_dig=0",
-                        endpoint, hash, bytes.size(), reference.m_particles.size(), source.string()));
+                        "DUG-FROZEN-REFERENCE source=frozen_rows_seed_reference endpoint={} raw_hash={} bytes={} rows={} source_file={} abi={} renderer_only=true physical_steps_after_dig=0",
+                        endpoint, hash, bytes.size(), reference.m_particles.size(), source.string(),
+                        historical ? "GpuParticle88_same_host" : "GpuParticle96_same_host"));
                 observeActualDugRendering(
                     _, reference, driver, checkpoint, *fixture.m_catalog, *render_presentation, endpoint, dig, true,
                     false, true);

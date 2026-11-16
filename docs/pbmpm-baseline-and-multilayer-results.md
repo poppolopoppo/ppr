@@ -1,10 +1,17 @@
 # PB-MPM baseline and multi-layer results
 
-## B1 increment 2 — authored coverage, unrun
+## B1 increment 2 — historical tested identity; review revision unrun
 
 Coordinator R1–R5 decisions are implemented in the adapter path; see
 [material-law decisions and risks](pbmpm-material-laws-proposal.md). Historical
-Phase A results below do not validate this edit-only increment.
+Phase A results below do not validate this edit-only revision. The coordinator
+reports prior gates at `a98f399d`; the present working-tree review changes are
+not part of that tested identity. New-law acceptance is **authored-analytical**,
+with no upstream oracle. The exact prior command lines and external gate ledger
+must still be supplied by the validation owner; they are not inferred from test
+names. Available historical logs `/tmp/opencode/b12-t2.log` and
+`/tmp/opencode/b12-fast2.log` record CTest output under `out/build/clang-dev`,
+but do not contain the invocation or independently bind binaries to the commit.
 
 * R1: dimensionless log-strain calibration space, inventory-only density; new
   families use H=0 and separate C/phi. Risk: no stress/stiffness mapping.
@@ -15,9 +22,13 @@ Phase A results below do not validate this edit-only increment.
 * R3: explicit porous ellipse / dense cone, phi increases by beta times removed
   over-compression. Epsilon is numerical. Only the t=0 edge is continuous;
   finite-compression edges intentionally jump. Coordinator accepts that risk.
-* R4: authored 1% shear / 0.25 s drive / 2 s release, objective norm below 1e-2.
-  Negative recovery reports without failing. Verdict **unrun**, rock/ore remain
-  granular. Risk: this local metric is not full bonded-solid validation.
+* R4/M1: authored affine-velocity drive, nominal 1% shear over 0.25 s, zero
+  gravity/no contacts, K5, then remove only the driving velocity/D contribution
+  and release for 2 s. Per-substep maximum `||F^T F-I||` and rigid-aligned
+  positional RMS/initial RMS radius must both remain `<1e-3` for the final
+  0.5 s. Nominal shear norms ~1.41e-2/~5e-3 justify these bounds. Drive peaks,
+  endpoint values and final-window maxima are reported; insufficient excitation
+  cannot establish recovery. Outcome is report-only; rock/ore remain granular.
 * R5: fresh/dug C=0, phi=phi0; semantic96/hot72/cold28, property76;
   checkpoint v9/policy2. v6–v8 preserve old words/families and default extensions.
   Risk: old saves deliberately retain their old family behavior.
@@ -29,7 +40,46 @@ checkpoint exact state/migration, reflection/packing. New CTest entries:
 `engine.tests.app.matter_calibrated_laws_gpu` and
 `engine.tests.app.matter_elastic_recovery_diagnostic`. Renderer ABI fixtures
 were updated as dependent consumers. No builds or tests were run by the
-implementer. This is not a GREEN result.
+implementer for this review revision. This is not a GREEN result.
+
+Review edits: C1 freezes C/phi and their strengths when projecting the trial
+constraint target, retaining the Q blend and relaxation; M2 accepts historical
+88-byte rows after checking their original file hash. Added coverage exercises
+porous-to-dense return with shear and non-default history replacement/append,
+including exact dense phi. M1 and loaded S1 scenes are **authored, unrun coverage**,
+with no pin/weld seam. Prior tested source identity remains `a98f399d`
+(coordinator-reported gates), not this working tree. Exact historical validation
+commands remain unavailable here. No new measured numerical values are claimed.
+
+S1 (`engine.tests.app.matter_calibrated_loaded_diagnostic`) uses production default
+law coefficients and gravity/contact-only loading of a 4-by-12 column on a box
+floor, dt=1/480, K5. Clay versus a granular-family control reports tagged layer
+height, width, floor-relative support height and differences after 1 s. Snow
+reports mean phi and geometry at 0.25 s intervals through 1 s compression, 1 s
+zero-gravity release, and 1 s equal-gravity reload. Phase-boundary solver restarts
+preserve and byte-compare every particle word. Increased phi retained after
+release measures retained compaction; retained geometric shortening is also
+reported. Smaller additional normalized axial shortening on reload than first
+load reports increased structural resistance, conditioned on positive first
+shortening and retained phi. This geometry-dependent compliance proxy is not a
+stress modulus. Outcomes are report-only; **no run values or successful behavior
+verdicts exist yet**.
+
+S2 ruling: **v8 migration evidence is reconstruction-based, shared with the CPU
+mirror; no independent historical v8 artifact exists in the repository.** Start
+from v9 water/default rows: table offset `L-S-8-(16+76*M)`, particle offset
+`table-96*N`, schedule offset `particles-72`. Remove the table, trim bytes [88,96)
+from particles in reverse order, insert policy1/64-bit FNV-1a identity/count plus
+first ten words per property. Identity hashes little-endian policy/count/ID-sorted
+ten-word rows. Retain K/profile/snapshot and set byte 8 to 8. The helper and added
+GPU assertion check `schedule_offset+4+64+4+88*N+16+40*M+8+S` before decoding.
+This does not supply historical clay/snow or custom-coefficient evidence. The
+independent artifact is deferred; a future genuine artifact can replace the
+fixture. Frozen evidence is retained and no payload was invented.
+
+All current-revision builds, shader checks, M1/S1 executions, checkpoint assertion,
+Linux/Windows compatibility and performance validation remain unrun by this
+edit-only author and belong to the coordinator's validation lane.
 
 ---
 

@@ -182,9 +182,19 @@ Particle constraint(Particle p
         SourceMatrix F = product(add(identity(), D), p.deformationGradient);
         SvdResult decomposition = forkSvd(F);
         bool sand = p.material == MaterialSand;
-        bool frictional = sand;
 #ifdef PBMPM_ENGINE_ADAPTERS
-        frictional = frictional || p.material == MaterialCohesive || p.material == MaterialCompacting;
+        bool calibrated = p.material == MaterialCohesive || p.material == MaterialCompacting;
+        if (calibrated) {
+            // Constraint-target coupling in calibration space, not a stress
+            // derivation. Freeze history AND its strength during this projection;
+            // only integration may advance C/phi.
+            float C = p.compaction;
+            float phi = p.solidFraction;
+            if (!calibratedReturn(decomposition.Sigma, C, phi, p.logJp, coefficients, false)) {
+                recordError(8u, 0xffffffffu, 22u, row);
+                return p;
+            }
+        }
 #endif
         if (sand && p.logJp == 0.0) {
             decomposition.Sigma = clamp(decomposition.Sigma, float2(1.0), float2(1000.0));
@@ -193,7 +203,11 @@ Particle constraint(Particle p
         float df = determinant(F);
         float cdf = clamp(abs(df), 0.1, sand ? 1.0 : 1000.0);
         SourceMatrix Q = scale(F, 1.0 / (sign(df) * sqrt(cdf)));
-        SourceMatrix target = frictional ? product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt)
+        SourceMatrix target = sand
+#ifdef PBMPM_ENGINE_ADAPTERS
+                                  || calibrated
+#endif
+                                  ? product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt)
                                   : product(decomposition.U, decomposition.Vt);
         target = add(scale(target, PBMPM_COEFFICIENTS.elasticityRatio), scale(Q, 1.0 - PBMPM_COEFFICIENTS.elasticityRatio));
         SourceMatrix difference = subtract(subtract(product(target, inverted(p.deformationGradient)), identity()), D);
@@ -223,7 +237,7 @@ static const float kMaxSandExponent = 88.0;
 // this return leaves it zero; C and phi are separate irreversible histories.
 // No stress mapping or dissipation claim is implied by these projections.
 bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
-                      float H, MaterialProperties a) {
+                      float H, MaterialProperties a, bool updateHistory = true) {
     if (!all(isfinite(sigma)) || any(sigma <= 0.0) || H != 0.0 ||
         !isfinite(C) || C < 0.0 || !isfinite(phi) ||
         phi < a.solidFraction0 || phi > 1.0-a.denseEpsilon) return false;
@@ -249,7 +263,7 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
         if (!isfinite(cap) || cap <= 0.0) return false;
 
         returned = max(returned, -cap);
-        nextC = max(C, -min(returned, 0.0));
+        if (updateHistory) nextC = max(C, -min(returned, 0.0));
         cohesion += a.cohesionHardening*nextC;
     } else {
         if (!dense) {
@@ -260,10 +274,12 @@ bool calibratedReturn(inout float2 sigma, inout float C, inout float phi,
             if (!isfinite(cap) || cap <= 0.0) return false;
 
             returned = max(returned, -cap);
-            float increment = a.compactionRate*max(0.0, returned-trial);
-            if (!isfinite(increment)) return false;
+            if (updateHistory) {
+                float increment = a.compactionRate*max(0.0, returned-trial);
+                if (!isfinite(increment)) return false;
 
-            nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
+                nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
+            }
         }
 
         dense = nextPhi >= 1.0-a.denseEpsilon;

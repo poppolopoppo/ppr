@@ -5445,7 +5445,7 @@ namespace pP::tests::detail::MatterGpu {
         };
         fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
 
-        constexpr u32 count = 14u;
+        constexpr u32 count = 15u;
         std::array<GpuParticle, count> input{};
         std::array<GpuMaterialProperties, count> properties{};
         const auto set = [&](const u32 index, const ESourceMaterial family, const float t, const float n, const float C,
@@ -5480,6 +5480,9 @@ namespace pP::tests::detail::MatterGpu {
         set(12u, ESourceMaterial::cohesive, 0.0f, 0.0f, 0.0f, 0.3f);
         input[12u].m_deformation_gradient.m_c0x = 0.0f;
         set(13u, ESourceMaterial::compacting, -0.1f, 0.5f, 0.0f, 0.3f);
+        // Start porous and cross the exact dense boundary in this return while
+        // shear is active. The old cap clamps t, but the new dense cone sets n.
+        set(14u, ESourceMaterial::compacting, -2.0f, 1.0f, 0.0f, 0.3f);
 
         shader::SharedModule module;
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -5579,6 +5582,10 @@ namespace pP::tests::detail::MatterGpu {
         // The finite-compression ellipse edge is intentionally NOT continuous.
         PPR_TEST_ASSERT(std::abs(n(9u) - n(10u)) < 1e-5f);
         PPR_TEST_ASSERT(std::abs(t(11u) + 30.0f) < 1e-5f and result[11u].m_solid_fraction == 0.99f);
+
+        const float dense_edge = alpha * snow_cap + 0.05f * 0.99f * 0.99f;
+        PPR_TEST_ASSERT(result[14u].m_enabled == 1.0f and result[14u].m_solid_fraction == 0.99f);
+        PPR_TEST_ASSERT(std::abs(t(14u) + snow_cap) < 1e-5f and std::abs(n(14u) - dense_edge) < 1e-5f);
     };
 
     PPR_UNIT_TEST (calibrated_admission_and_clay_sand_divergence) {
@@ -5634,7 +5641,193 @@ namespace pP::tests::detail::MatterGpu {
         const auto granular = evolve(sand);
         PPR_TEST_ASSERT(
             std::abs(cohesive.m_deformation_gradient.m_c0x - granular.m_deformation_gradient.m_c0x) > 1e-3f);
+
+        // Restore non-default new-family histories through the public upload
+        // boundary, then preserve them through a resident append and re-upload.
+        std::array<GpuMaterialProperties, 2u> history_rows{clay, clay};
+        history_rows[1u].m_substance_id = 2u;
+        history_rows[1u].m_family = ESourceMaterial::compacting;
+        std::array<GpuParticle, 2u> history_particles{restParticle(), restParticle()};
+        history_particles[0u].m_material = static_cast<float>(ESourceMaterial::cohesive);
+        history_particles[0u].m_log_jp = 0.0f;
+        history_particles[0u].m_compaction = 0.375f;
+        history_particles[0u].m_solid_fraction = 0.625f;
+        history_particles[1u].m_material = static_cast<float>(ESourceMaterial::compacting);
+        history_particles[1u].m_log_jp = 0.0f;
+        history_particles[1u].m_position_x += 8.0f;
+        history_particles[1u].m_compaction = 0.125f;
+        history_particles[1u].m_solid_fraction = 1.0f - history_rows[1u].m_dense_epsilon;
+        const std::array<u32, 2u> history_indices{0u, 1u};
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            std::span{history_particles}.first(1u), {}, fixture.m_solver.accounting().m_epoch, {},
+            ETerrainUpdate::replace, {history_rows, std::span{history_indices}.first(1u)}));
+        fixture.m_solver.publishReplacement();
+
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareAppend(
+            std::span{history_particles}.subspan(1u), fixture.m_solver.accounting().m_epoch, {},
+            ETerrainUpdate::preserve, {history_rows, std::span{history_indices}.subspan(1u)}));
+        PPR_TEST_ASSERT(not fixture.m_solver.drain());
+        const auto copied = fixture.m_solver.pollReplacement();
+        PPR_TEST_ASSERT(copied and *copied);
+        fixture.m_solver.publishReplacement();
+
+        const auto appended = fixture.snapshot();
+        PPR_TEST_ASSERT(appended.size() == history_particles.size());
+        PPR_TEST_ASSERT(std::memcmp(appended.data(), history_particles.data(), sizeof(history_particles)) == 0);
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            appended, {}, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+            {history_rows, history_indices}));
+        fixture.m_solver.publishReplacement();
+
+        const auto restored = fixture.snapshot();
+        PPR_TEST_ASSERT(restored.size() == history_particles.size());
+        PPR_TEST_ASSERT(std::memcmp(restored.data(), history_particles.data(), sizeof(history_particles)) == 0);
     };
+
+    // ------------------------------------------------------------------
+    // loaded calibrated-material geometry diagnostics
+    // ------------------------------------------------------------------
+
+    PPR_UNIT_TEST (calibrated_loaded_clay_and_snow_diagnostic) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        constexpr float gravity = 9.81f / (64.0f / 3.0f);
+        fixture.initialize(true, 64u, 64u, true, nullptr, gravity);
+
+        // A wide floor supports an initially stress-free 4-by-12 column.
+        // Source units: h=1/3 m, floor top=12, particle spacing=1.
+        const GpuStaticShape floor{
+            .m_position_x = 32.0f, .m_position_y = 10.0f, .m_half_size_x = 28.0f, .m_half_size_y = 2.0f};
+        const auto patch = [](const ESourceMaterial family) {
+            Array<GpuParticle> particles;
+            for (u32 y = 0u; y < 12u; ++y) {
+                for (u32 x = 0u; x < 4u; ++x) {
+                    auto p = restParticle();
+                    p.m_position_x = 30.5f + float(x);
+                    p.m_position_y = 12.5f + float(y);
+                    p.m_material = static_cast<float>(family);
+                    p.m_log_jp = 0.0f;
+                    particles.push_back(p);
+                }
+            }
+
+            return particles;
+        };
+        const auto upload = [&](const Array<GpuParticle> &particles, const GpuMaterialProperties &property) {
+            const Array<u32> indices(particles.size(), 0u);
+            PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+                particles, {&floor, 1u}, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+                {{&property, 1u}, indices}));
+            fixture.m_solver.publishReplacement();
+        };
+        const auto geometry = [](const Array<GpuParticle> &particles) {
+            double top = 0.0, bottom = 0.0, min_x = 64.0, max_x = 0.0, phi = 0.0;
+            for (std::size_t i = 0u; i < particles.size(); ++i) {
+                const auto &p = particles[i];
+                for (const float value: std::bit_cast<std::array<float, 24u>>(p))
+                    PPR_TEST_ASSERT(std::isfinite(value));
+
+                if (i < 4u)
+                    bottom += static_cast<double>(p.m_position_y) / 4.0;
+
+                if (i >= 44u)
+                    top += static_cast<double>(p.m_position_y) / 4.0;
+
+                min_x = std::min(min_x, static_cast<double>(p.m_position_x));
+                max_x = std::max(max_x, static_cast<double>(p.m_position_x));
+                phi += static_cast<double>(p.m_solid_fraction) / static_cast<double>(particles.size());
+            }
+
+            // Material-tagged top/bottom layers measure axial shortening even
+            // if a few grains become geometric outliers during collapse.
+            return std::array<double, 4u>{top - bottom, max_x - min_x, top - 12.0, phi};
+        };
+        const auto advance = [&](const char *scene, const char *phase) {
+            Array<GpuParticle> state;
+            for (u32 step = 1u; step <= 480u; ++step) {
+                fixture.finishOneSubstep(kDefaultIterations);
+                fixture.m_solver.publishTick();
+                if (step % 120u != 0u)
+                    continue;
+
+                state = fixture.snapshot();
+                PPR_TEST_ASSERT(state.size() == 48u);
+                const auto g = geometry(state);
+                std::printf(
+                    "B1 loaded scene=%s phase=%s step=%u layer_height=%.9g width=%.9g top_above_floor=%.9g mean_phi=%.9g\n",
+                    scene, phase, step, g[0u], g[1u], g[2u], g[3u]);
+            }
+
+            return state;
+        };
+
+        GpuMaterialProperties property{};
+        property.m_substance_id = 1u;
+        property.m_family = ESourceMaterial::cohesive;
+        upload(patch(property.m_family), property);
+        const auto clay = geometry(advance("clay", "gravity_column"));
+
+        // Same default coefficients, mass, spacing, support and schedule;
+        // only the constitutive family changes for the granular control.
+        property.m_family = ESourceMaterial::sand;
+        upload(patch(property.m_family), property);
+        const auto sand = geometry(advance("granular_control", "gravity_column"));
+        std::printf(
+            "B1 loaded clay_vs_sand height_delta=%.9g width_delta=%.9g support_height_delta=%.9g verdict=%s\n",
+            clay[0u] - sand[0u], clay[1u] - sand[1u], clay[2u] - sand[2u],
+            clay[0u] > sand[0u] and clay[1u] < sand[1u] ? "greater_column_retention" : "not_established");
+
+        property.m_family = ESourceMaterial::compacting;
+        const auto fresh = patch(property.m_family);
+        upload(fresh, property);
+        const auto initial = geometry(fresh);
+        auto state = advance("snow", "compression");
+        const auto compressed = geometry(state);
+
+        // Gravity is immutable in the public profile. Restart only the GPU
+        // owner at phase boundaries, transferring every captured state word.
+        // No prescribed F, velocity, history or position is injected here.
+        const auto set_gravity = [&](const float strength) {
+            auto profile = fixture.m_solver.profile();
+            profile.m_particle_count = 0u;
+            profile.m_shape_count = 0u;
+            profile.m_gravity_strength = strength;
+            PPR_TEST_ASSERT(not fixture.m_solver.shutdown());
+            PPR_TEST_ASSERT(not fixture.m_solver.initialize(
+                fixture.m_rhi->getDevice(), *fixture.m_queue, *fixture.m_shaders, std::filesystem::current_path(),
+                profile));
+            upload(state, property);
+            const auto restored = fixture.snapshot();
+            PPR_TEST_ASSERT(restored.size() == state.size());
+            PPR_TEST_ASSERT(std::memcmp(restored.data(), state.data(), state.size() * sizeof(GpuParticle)) == 0);
+        };
+
+        set_gravity(0.0f);
+        state = advance("snow", "release");
+        const auto released = geometry(state);
+        set_gravity(gravity);
+        state = advance("snow", "reload");
+        const auto reloaded = geometry(state);
+
+        // Equal gravity and one-second load windows: normalized extra axial
+        // shortening is a structural compliance proxy, not a stress modulus.
+        const double first_shortening = (initial[0u] - compressed[0u]) / initial[0u];
+        const double reload_shortening = (released[0u] - reloaded[0u]) / initial[0u];
+        const bool retained = compressed[3u] > initial[3u] and released[3u] >= compressed[3u];
+        const bool resistant = first_shortening > 0.0 and reload_shortening < first_shortening;
+        std::printf(
+            "B1 loaded snow initial_phi=%.9g compressed_phi=%.9g released_phi=%.9g reloaded_phi=%.9g retained_height_loss=%.9g first_shortening=%.9g reload_shortening=%.9g retained_compaction=%s increased_structural_resistance=%s\n",
+            initial[3u], compressed[3u], released[3u], reloaded[3u], (initial[0u] - released[0u]) / initial[0u],
+            first_shortening, reload_shortening, retained ? "observed" : "not_established",
+            retained and resistant ? "observed" : "not_established");
+        // Uncalibrated material outcomes are reported, never assumed as gates.
+    };
+
+    // ------------------------------------------------------------------
+    // dynamically driven elastic recovery diagnostic
+    // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (elastic_one_percent_shear_release_diagnostic) {
         Fixture fixture;
@@ -5648,45 +5841,105 @@ namespace pP::tests::detail::MatterGpu {
             for (u32 x = 0u; x < 4u; ++x) {
                 auto p = restParticle();
                 p.m_material = 1.0f;
-                p.m_position_x = 24.5f + float(x) + 0.01f * (float(y) - 1.5f);
+                p.m_position_x = 24.5f + float(x);
                 p.m_position_y = 24.5f + float(y);
-                p.m_deformation_gradient = {1.0f, 0.0f, 0.01f, 1.0f};
+                // Solver velocities are displacements per dt. Free affine
+                // transport would accumulate 1% shear over the 120-step drive.
+                p.m_displacement_x = (0.01f / 120.0f) * (float(y) - 1.5f);
+                p.m_deformation_displacement = {0.0f, 0.0f, 0.01f / 120.0f, 0.0f};
                 driven.push_back(p);
             }
         }
 
-        // Displacement-controlled 1% shear held for 120 dt=1/480 steps.
-        // Reset only while driven; release evolves the resident patch freely.
-        for (u32 step = 0u; step < 120u; ++step) {
-            fixture.replace(driven);
-            fixture.finishOneSubstep(kDefaultIterations);
-            fixture.m_solver.publishTick();
-        }
+        const auto measure = [&](const std::span<const GpuParticle> state) {
+            PPR_TEST_ASSERT(state.size() == driven.size());
+            double cx = 0.0, cy = 0.0;
+            for (const auto &p: state) {
+                cx += static_cast<double>(p.m_position_x);
+                cy += static_cast<double>(p.m_position_y);
+            }
 
-        fixture.replace(driven);
-        float residual = std::numeric_limits<float>::infinity();
-        u32 recovered_at = 0u;
-        for (u32 step = 1u; step <= 960u; ++step) {
-            fixture.finishOneSubstep(kDefaultIterations);
-            const auto state = fixture.publishCompletedTick();
-            residual = 0.0f;
+            cx /= static_cast<double>(state.size());
+            cy /= static_cast<double>(state.size());
+            double dot = 0.0, cross = 0.0, radius_squared = 0.0;
+            for (std::size_t i = 0u; i < state.size(); ++i) {
+                const double rx = static_cast<double>(driven[i].m_position_x) - 26.0;
+                const double ry = static_cast<double>(driven[i].m_position_y) - 26.0;
+                const double x = static_cast<double>(state[i].m_position_x) - cx;
+                const double y = static_cast<double>(state[i].m_position_y) - cy;
+                dot += rx * x + ry * y;
+                cross += rx * y - ry * x;
+                radius_squared += rx * rx + ry * ry;
+            }
+
+            const double angle = std::atan2(cross, dot);
+            const double c = std::cos(angle), s = std::sin(angle);
+            double error_squared = 0.0, residual = 0.0;
+            for (std::size_t i = 0u; i < state.size(); ++i) {
+                const double rx = static_cast<double>(driven[i].m_position_x) - 26.0;
+                const double ry = static_cast<double>(driven[i].m_position_y) - 26.0;
+                const double dx = static_cast<double>(state[i].m_position_x) - cx - (c * rx - s * ry);
+                const double dy = static_cast<double>(state[i].m_position_y) - cy - (s * rx + c * ry);
+                error_squared += dx * dx + dy * dy;
+            }
+
             for (const auto &p: state) {
                 const auto &f = p.m_deformation_gradient;
                 // F^T F removes rigid rotation; translation never enters F.
-                const float a = f.m_c0x * f.m_c0x + f.m_c0y * f.m_c0y - 1.0f;
-                const float b = f.m_c1x * f.m_c1x + f.m_c1y * f.m_c1y - 1.0f;
-                const float c = f.m_c0x * f.m_c1x + f.m_c0y * f.m_c1y;
-                residual = std::max(residual, std::sqrt(a * a + b * b + 2.0f * c * c));
+                const double c0x = static_cast<double>(f.m_c0x), c0y = static_cast<double>(f.m_c0y);
+                const double c1x = static_cast<double>(f.m_c1x), c1y = static_cast<double>(f.m_c1y);
+                const double a = c0x * c0x + c0y * c0y - 1.0;
+                const double b = c1x * c1x + c1y * c1y - 1.0;
+                const double off = c0x * c1x + c0y * c1y;
+                residual = std::max(residual, std::sqrt(a * a + b * b + 2.0 * off * off));
             }
 
-            if (residual < 1e-2f and recovered_at == 0u)
-                recovered_at = step;
+            return std::array<double, 2u>{residual, std::sqrt(error_squared / radius_squared)};
+        };
+
+        fixture.replace(driven);
+        auto state = driven;
+        std::array<double, 2u> peak{}, final{}, tail_max{};
+        for (u32 step = 1u; step <= 120u; ++step) {
+            fixture.finishOneSubstep(kDefaultIterations);
+            state = fixture.publishCompletedTick();
+            final = measure(state);
+            for (u32 metric = 0u; metric < 2u; ++metric)
+                peak[metric] = std::max(peak[metric], final[metric]);
+
+            std::printf("B1 elastic phase=drive step=%u objective=%.9g aligned_rms=%.9g\n", step, final[0u], final[1u]);
         }
 
+        // Remove only the prescribed affine contribution once. Preserve the
+        // achieved geometry, F, and solver-generated velocity response.
+        for (std::size_t i = 0u; i < state.size(); ++i) {
+            state[i].m_displacement_x -= driven[i].m_displacement_x;
+            state[i].m_deformation_displacement.m_c1x -= 0.01f / 120.0f;
+        }
+
+        fixture.replace(state);
+        bool sustained = true;
+        for (u32 step = 1u; step <= 960u; ++step) {
+            fixture.finishOneSubstep(kDefaultIterations);
+            state = fixture.publishCompletedTick();
+            final = measure(state);
+            if (step > 720u) {
+                sustained = sustained and final[0u] < 1e-3 and final[1u] < 1e-3;
+                for (u32 metric = 0u; metric < 2u; ++metric)
+                    tail_max[metric] = std::max(tail_max[metric], final[metric]);
+            }
+
+            std::printf(
+                "B1 elastic phase=release step=%u objective=%.9g aligned_rms=%.9g\n", step, final[0u], final[1u]);
+        }
+
+        // A drive that never exceeds the recovery thresholds cannot establish
+        // recovery. Report achieved excitation rather than assuming 1% was held.
+        const bool excited = peak[0u] >= 1e-3 and peak[1u] >= 1e-3;
         std::printf(
-            "B1 elastic diagnostic K=%u drive_s=0.25 release_s=2 first_recovery_step=%u final_objective_norm=%.9g verdict=%s rock_ore=granular\n",
-            kDefaultIterations, recovered_at, double(residual),
-            recovered_at != 0u ? "recovery_observed" : "not_established");
+            "B1 elastic diagnostic K=%u drive_s=0.25 release_s=2 peak_objective=%.9g peak_rms=%.9g final_objective=%.9g final_rms=%.9g tail_max_objective=%.9g tail_max_rms=%.9g verdict=%s rock_ore=granular\n",
+            kDefaultIterations, peak[0u], peak[1u], final[0u], final[1u], tail_max[0u], tail_max[1u],
+            excited and sustained ? "sustained_recovery" : "not_established");
         // A negative recovery verdict is evidence, not a failing test or remap.
     };
 
@@ -8224,6 +8477,7 @@ namespace pP::tests {
                 detail::MatterGpu::substance_rows_preserve_defaults_and_reject_invalid_replacements,
                 detail::MatterGpu::calibrated_caps_hardening_and_two_regime_edges,
                 detail::MatterGpu::calibrated_admission_and_clay_sand_divergence,
+                detail::MatterGpu::calibrated_loaded_clay_and_snow_diagnostic,
                 detail::MatterGpu::elastic_one_percent_shear_release_diagnostic,
                 detail::MatterGpu::same_family_substances_differ_and_unused_rows_do_not_dispatch,
                 detail::MatterGpu::device_property_guard_reports_out_of_range_and_family_mismatch,
