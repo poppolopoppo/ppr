@@ -21,8 +21,7 @@ RWStructuredBuffer<float> g_target_ev; // reduced target EV from the histogram
 Texture2D<float4> g_previous_exposure; // previous adapted offset in .x
 RWTexture2D<float4> g_exposure;        // 1x1 adapted offset in .x
 
-[numthreads(1, 1, 1)]
-void adaptExposure(uint3 id : SV_DispatchThreadID) {
+void writeAdaptedExposure(float target) {
     // PostProcessPass always runs this entry: manual exposure uses the disabled
     // branch and writes a deterministic zero offset, which is also the value a
     // later auto-exposure re-enable starts from.
@@ -31,10 +30,19 @@ void adaptExposure(uint3 id : SV_DispatchThreadID) {
         return;
     }
 
-    float target = g_target_ev[0];
     float previous = g_previous_exposure.Load(int3(0, 0, 0)).x;
     float next = previous + (target - previous) * g_auto_exposure.adaptationAlpha;
     next = clamp(next, g_auto_exposure.evMin, g_auto_exposure.evMax);
 
     g_exposure[uint2(0, 0)] = float4(next, 0.0, 0.0, 1.0);
+}
+
+[numthreads(1, 1, 1)]
+void adaptExposure(uint3 id : SV_DispatchThreadID) {
+    if (g_auto_exposure.enabled == 0u) {
+        writeAdaptedExposure(0.0);
+        return;
+    }
+
+    writeAdaptedExposure(g_target_ev[0]);
 }

@@ -280,9 +280,9 @@ namespace pP::tests::detail {
                     rhi::ComPtr<rhi::IBuffer> m_target;
                     std::array<rhi::ComPtr<rhi::ITexture>, 2> m_exposure;
                     std::array<rhi::ComPtr<rhi::ITextureView>, 2> m_exposure_view;
-                    std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> m_histogram_programs;
-                    std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> m_histogram_pipelines;
-                    std::array<rhi::ComPtr<rhi::IShaderObject>, 4> m_histogram_roots;
+                    std::array<rhi::ComPtr<rhi::IShaderProgram>, 6> m_histogram_programs;
+                    std::array<rhi::ComPtr<rhi::IComputePipeline>, 6> m_histogram_pipelines;
+                    std::array<rhi::ComPtr<rhi::IShaderObject>, 6> m_histogram_roots;
                     rhi::ComPtr<rhi::IShaderProgram> m_auto_program;
                     rhi::ComPtr<rhi::IComputePipeline> m_auto_pipeline;
                     rhi::ComPtr<rhi::IShaderObject> m_auto_root;
@@ -292,7 +292,7 @@ namespace pP::tests::detail {
                         return {.offset = 0u, .size = buffer->getDesc().size};
                     }
 
-                    void initialize(const float luminance) {
+                    void initialize(const float luminance, const int2 extent = int2{64, 64}, const u32 pattern = 0u) {
                         PPR_TEST_ASSERT(not m_shaders->initialize());
                         const auto setting = config::getenvLookup("PPR_TEST_GPU_VALIDATION");
                         const bool validation = setting and *setting == "1";
@@ -309,22 +309,37 @@ namespace pP::tests::detail {
                             not make_error_code(device.getQueue(rhi::QueueType::Graphics, m_queue.writeRef())));
                         PPR_TEST_ASSERT(not m_fence.initialize(device));
 
-                        // Synthetic RGBA32Float scene, uniform luminance, uploaded once.
-                        const u32 edge = 64u;
-                        std::vector<float> scene(std::size_t(edge) * edge * 4u);
-                        for (std::size_t pixel = 0u; pixel < std::size_t(edge) * edge; ++pixel) {
-                            scene[pixel * 4u + 0u] = luminance;
-                            scene[pixel * 4u + 1u] = luminance;
-                            scene[pixel * 4u + 2u] = luminance;
+                        // Finite synthetic inputs, including values immediately around
+                        // every log-bin edge. Both schedules consume this same texture.
+                        const u32 width = static_cast<u32>(extent.x);
+                        const u32 height = static_cast<u32>(extent.y);
+                        std::vector<float> scene(std::size_t(width) * height * 4u);
+                        for (std::size_t pixel = 0u; pixel < std::size_t(width) * height; ++pixel) {
+                            const u32 x = static_cast<u32>(pixel % width);
+                            float value = luminance;
+                            if (pattern == 1u) {
+                                value = std::exp2(-10.0f + 20.0f * float(x) / float(width));
+                            } else if (pattern == 2u) {
+                                value = x < width / 2u ? 0.0f : 16.0f;
+                            } else if (pattern == 3u) {
+                                value = (pixel % 2u) == 0u ? 65504.0f : -1.0f;
+                            } else if (pattern == 4u) {
+                                const float edge = std::exp2(-8.0f + float((pixel / 2u) % 65u) * 0.25f);
+                                value = std::nextafter(edge, (pixel % 2u) == 0u ? 0.0f : 65504.0f);
+                            }
+
+                            scene[pixel * 4u + 0u] = value;
+                            scene[pixel * 4u + 1u] = value;
+                            scene[pixel * 4u + 2u] = value;
                             scene[pixel * 4u + 3u] = 1.0f;
                         }
                         const rhi::SubresourceData initial{
                             .data = scene.data(),
-                            .rowPitch = edge * sizeof(float) * 4u,
-                            .slicePitch = std::size_t(edge) * edge * sizeof(float) * 4u};
+                            .rowPitch = width * sizeof(float) * 4u,
+                            .slicePitch = std::size_t(width) * height * sizeof(float) * 4u};
                         rhi::TextureDesc scene_desc{};
                         scene_desc.type = rhi::TextureType::Texture2D;
-                        scene_desc.size = {.width = edge, .height = edge, .depth = 1u};
+                        scene_desc.size = {.width = width, .height = height, .depth = 1u};
                         scene_desc.arrayLength = 1u;
                         scene_desc.mipCount = 1u;
                         scene_desc.format = rhi::Format::RGBA32Float;
@@ -352,7 +367,9 @@ namespace pP::tests::detail {
                             PPR_TEST_ASSERT(not make_error_code(device.createTexture(desc, nullptr, out.writeRef())));
                             PPR_TEST_ASSERT(not make_error_code(out->getDefaultView(view.writeRef())));
                         };
-                        uav_texture(edge, edge, "histogram luminance", m_luminance, m_luminance_view);
+                        uav_texture(
+                            std::min(width, 256u), std::min(height, 256u), "histogram luminance", m_luminance,
+                            m_luminance_view);
 
                         // Zero-initialized exposure so the first adaptation frame reads
                         // a finite previous offset (0) rather than uninitialized memory.
@@ -401,8 +418,9 @@ namespace pP::tests::detail {
                             std::filesystem::current_path() / "shaders" / "luminance_histogram.slang",
                             "luminance_histogram", histogram_module.writeRef()));
                         const char *const histogram_entries[] = {
-                            "clearHistogram", "computeLuminance", "buildHistogram", "reduceHistogram"};
-                        for (u32 index = 0u; index < 4u; ++index) {
+                            "clearHistogram", "computeLuminance", "buildHistogram", "reduceHistogram",
+                            "computeLuminanceAndClear", "reduceAndAdaptExposure"};
+                        for (u32 index = 0u; index < m_histogram_programs.size(); ++index) {
                             shader::ComPtr<slang::IEntryPoint> entry;
                             PPR_TEST_ASSERT(not make_error_code(
                                 histogram_module->findEntryPointByName(histogram_entries[index], entry.writeRef())));
@@ -496,7 +514,7 @@ namespace pP::tests::detail {
 
                     // Runs clear -> luminance downsample -> histogram build -> reduce
                     // and returns the reduced target EV via fenced buffer readback.
-                    float reduceTarget() {
+                    float reduceTarget(const bool fused = false, const bool enabled = true) {
                         struct HistogramParameters {
                             u32 m_source_width;
                             u32 m_source_height;
@@ -506,14 +524,18 @@ namespace pP::tests::detail {
                             u32 m_reserved1;
                         };
 
-                        const u32 edge = 64u;
-                        const HistogramParameters histogram{edge, edge, edge, edge, 0u, 0u};
+                        const auto source = m_scene->getDesc().size;
+                        const auto luminance = m_luminance->getDesc().size;
+                        const HistogramParameters histogram{
+                            source.width, source.height, luminance.width, luminance.height, 0u, 0u};
+                        const u32 groups_x = (luminance.width + 7u) / 8u;
+                        const u32 groups_y = (luminance.height + 7u) / 8u;
 
                         rhi::ComPtr<rhi::ICommandEncoder> encoder;
                         PPR_TEST_ASSERT(not make_error_code(m_queue->createCommandEncoder(encoder.writeRef())));
 
                         const rhi::SubresourceRange range{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u};
-                        for (u32 index = 0u; index < 4u; ++index) {
+                        for (u32 index = 0u; index < m_histogram_roots.size(); ++index) {
                             rhi::ShaderCursor cursor{m_histogram_roots[index]}, constants{};
                             PPR_TEST_ASSERT(not make_error_code(cursor["g_luminance"].getDereferenced(constants)));
                             PPR_TEST_ASSERT(not make_error_code(constants.setData(&histogram, sizeof(histogram))));
@@ -531,6 +553,28 @@ namespace pP::tests::detail {
                         encoder->setBufferState(m_histogram, rhi::ResourceState::UnorderedAccess);
                         encoder->setBufferState(m_target, rhi::ResourceState::UnorderedAccess);
 
+                        if (fused) {
+                            struct AutoParameters {
+                                float m_alpha;
+                                float m_ev_min;
+                                float m_ev_max;
+                                u32 m_enabled;
+                            };
+                            const AutoParameters automatic{
+                                PostProcessPass::adaptationAlpha(std::chrono::milliseconds{16}, 0.7f), -4.0f, 4.0f,
+                                enabled ? 1u : 0u};
+                            rhi::ShaderCursor cursor{m_histogram_roots[5]}, constants{};
+                            PPR_TEST_ASSERT(not make_error_code(cursor["g_auto_exposure"].getDereferenced(constants)));
+                            PPR_TEST_ASSERT(not make_error_code(constants.setData(&automatic, sizeof(automatic))));
+                            PPR_TEST_ASSERT(not make_error_code(
+                                cursor["g_previous_exposure"].setBinding(rhi::Binding(m_exposure_view[0]))));
+                            PPR_TEST_ASSERT(
+                                not make_error_code(cursor["g_exposure"].setBinding(rhi::Binding(m_exposure_view[1]))));
+
+                            encoder->setTextureState(m_exposure[0], range, rhi::ResourceState::ShaderResource);
+                            encoder->setTextureState(m_exposure[1], range, rhi::ResourceState::UnorderedAccess);
+                        }
+
                         const auto dispatch = [&](const u32 index, const u32 x, const u32 y) {
                             auto *const pass = encoder->beginComputePass();
                             PPR_TEST_ASSERT(pass != nullptr);
@@ -539,13 +583,18 @@ namespace pP::tests::detail {
                             pass->end();
                         };
 
-                        dispatch(0u, 1u, 1u); // clearHistogram
+                        if (fused) {
+                            dispatch(4u, groups_x, groups_y); // computeLuminanceAndClear
+                        } else {
+                            dispatch(0u, 1u, 1u); // clearHistogram
+                            encoder->globalBarrier();
+                            dispatch(1u, groups_x, groups_y); // computeLuminance
+                        }
+
                         encoder->globalBarrier();
-                        dispatch(1u, edge / 8u, edge / 8u); // computeLuminance
+                        dispatch(2u, groups_x, groups_y); // buildHistogram
                         encoder->globalBarrier();
-                        dispatch(2u, edge / 8u, edge / 8u); // buildHistogram
-                        encoder->globalBarrier();
-                        dispatch(3u, 1u, 1u); // reduceHistogram
+                        dispatch(fused ? 5u : 3u, 1u, 1u);
                         submit(*encoder);
 
                         const auto out = readBuffer<float>(m_target);
@@ -698,13 +747,60 @@ namespace pP::tests::detail {
                     PPR_TEST_ASSERT(gpu_target > 0.0f);
                     PPR_TEST_ASSERT(dark_luminance * std::exp2(gpu_target) > dark_luminance);
                 };
+
+                PPR_UNIT_TEST (gpu_fused_metering_is_bit_exact) {
+                    // The tiny case checks that all 64 bins are cleared even when
+                    // only one luminance invocation is in bounds. Odd larger cases
+                    // exercise unequal source blocks and the 256-axis cap.
+                    for (const int2 &extent: {int2{1, 1}, int2{257, 259}}) {
+                        for (u32 pattern = 0u; pattern < 5u; ++pattern) {
+                            Fixture fixture;
+                            fixture.initialize(0.18f, extent, pattern);
+                            PPR_DEFER {
+                                fixture.shutdown();
+                            };
+
+                            const float reference_target = fixture.reduceTarget();
+                            const auto reference_bins = fixture.readBuffer<u32>(fixture.m_histogram);
+                            const float reference_exposure = fixture.adapt(std::chrono::milliseconds{16}, 0.7f, true);
+
+                            const auto read_exposure_bits = [&] {
+                                shader::ComPtr<ISlangBlob> blob;
+                                rhi::SubresourceLayout layout{};
+                                PPR_TEST_ASSERT(not make_error_code(fixture.m_rhi->getDevice().readTexture(
+                                    fixture.m_exposure[1], 0u, 0u, blob.writeRef(), &layout)));
+
+                                u32 bits{};
+                                std::memcpy(&bits, blob->getBufferPointer(), sizeof(bits));
+                                return bits;
+                            };
+
+                            // Each fused run starts with the same previous exposure
+                            // slot, but dirty histogram bins from the preceding run.
+                            for (u32 repeat = 0u; repeat < 3u; ++repeat) {
+                                const float target = fixture.reduceTarget(true);
+                                const auto bins = fixture.readBuffer<u32>(fixture.m_histogram);
+                                PPR_TEST_ASSERT(bins == reference_bins);
+                                PPR_TEST_ASSERT(std::bit_cast<u32>(target) == std::bit_cast<u32>(reference_target));
+
+                                PPR_TEST_ASSERT(read_exposure_bits() == std::bit_cast<u32>(reference_exposure));
+                            }
+
+                            // The fused manual branch must ignore the target and
+                            // write exact positive zero, just like standalone adaptation.
+                            (void) fixture.reduceTarget(true, false);
+                            PPR_TEST_ASSERT(read_exposure_bits() == std::bit_cast<u32>(0.0f));
+                        }
+                    }
+                };
             }
 
             const UnitTest histogram_adaptation = UnitTest::Named("histogram_adaptation") /
                                                   [](UnitTest::IRun &run) -> void {
                 run.recurse(
                     {cpu_histogram_math, percentile_trim_retains_fractional_mass, cpu_adaptation_alpha,
-                        Gpu::gpu_adaptation_smoke, Gpu::gpu_dark_scene_target_ev_raises_exposure});
+                        Gpu::gpu_adaptation_smoke, Gpu::gpu_dark_scene_target_ev_raises_exposure,
+                        Gpu::gpu_fused_metering_is_bit_exact});
             };
         }
 

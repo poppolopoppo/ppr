@@ -113,8 +113,7 @@ namespace pP {
         static_assert(PPR_OFFSETOF(AutoExposureParameters, m_enabled) == 12u);
 
         constexpr std::array<const char *, 3> kBloomEntryPoints{"prefilterBloom", "downsampleBloom", "upsampleBloom"};
-        constexpr std::array<const char *, 4> kHistogramEntryPoints{
-            "clearHistogram", "computeLuminance", "buildHistogram", "reduceHistogram"};
+        constexpr std::array<const char *, 2> kHistogramEntryPoints{"computeLuminanceAndClear", "buildHistogram"};
 
         [[nodiscard]] rhi::BufferRange fullRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
@@ -481,7 +480,7 @@ namespace pP {
                 device, present_module.get(), std::array<const char *, 2>{"vertexPresentScene", "fragmentPresentScene"},
                 m_present_program));
 
-        // Metering: clear/downsample/histogram/reduce entries.
+        // Metering: fused clear/downsample and integer histogram entries.
         shader::SharedModule histogram_module{};
         PPR_RETURN_ERROR_ON_FAIL(
             PostProcess, shader_service.loadModuleFromFile(
@@ -512,14 +511,10 @@ namespace pP {
                 PostProcess, device.createComputePipeline(pipeline, m_histogram_pipelines[index].writeRef()));
         }
 
-        // Adaptation: one 1x1 offset write.
-        shader::SharedModule exposure_module{};
-        PPR_RETURN_ERROR_ON_FAIL(
-            PostProcess, shader_service.loadModuleFromFile(
-                             content_dir / TEXT("shaders") / TEXT("auto_exposure.slang"), "auto_exposure",
-                             exposure_module.writeRef()));
+        // One small group totals integer counts; lane zero retains the original
+        // fixed-order percentile traversal and FP32 target/adaptation handoff.
         {
-            auto *const layout = parameterLayout(exposure_module.get(), "g_auto_exposure");
+            auto *const layout = parameterLayout(histogram_module.get(), "g_auto_exposure");
             PPR_RETURN_ERROR_ON_FAIL(
                 PostProcess, layout != nullptr and
                                      layout->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) == sizeof(AutoExposureParameters)
@@ -527,9 +522,9 @@ namespace pP {
                                  : std::make_error_code(std::errc::invalid_argument));
         }
         PPR_RETURN_ERROR_ON_FAIL(
-            PostProcess,
-            createProgram(
-                device, exposure_module.get(), std::array<const char *, 1>{"adaptExposure"}, m_auto_exposure_program));
+            PostProcess, createProgram(
+                             device, histogram_module.get(), std::array<const char *, 1>{"reduceAndAdaptExposure"},
+                             m_auto_exposure_program));
         {
             rhi::ComputePipelineDesc pipeline{};
             pipeline.program = m_auto_exposure_program;
@@ -681,7 +676,7 @@ namespace pP {
         rhi::ComPtr<rhi::IShaderObject> present_root;
         PPR_RETURN_ERROR_ON_FAIL(
             PostProcess, device.createRootShaderObject(m_present_program, present_root.writeRef()));
-        std::array<rhi::ComPtr<rhi::IShaderObject>, 4> histogram_roots{};
+        std::array<rhi::ComPtr<rhi::IShaderObject>, 2> histogram_roots{};
         for (u32 index = 0u; index < histogram_roots.size(); ++index) {
             PPR_RETURN_ERROR_ON_FAIL(
                 PostProcess,
@@ -954,20 +949,25 @@ namespace pP {
         };
 
         if (m_pending_settings.m_auto_exposure) {
-            context.m_encoder.pushDebugGroup("Post.Exposure.Histogram", {});
-            PPR_DEFER {
-                context.m_encoder.popDebugGroup();
-            };
             const u32 groups_x = (luminance_width + 7u) / 8u;
             const u32 groups_y = (luminance_height + 7u) / 8u;
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(0u, 1u, 1u)); // clearHistogram
-            context.m_encoder.globalBarrier();
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(1u, groups_x, groups_y)); // computeLuminance
-            context.m_encoder.globalBarrier();
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(2u, groups_x, groups_y)); // buildHistogram
-            context.m_encoder.globalBarrier();
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(3u, 1u, 1u)); // reduceHistogram
-            context.m_encoder.globalBarrier();
+            {
+                context.m_encoder.pushDebugGroup("Post.Exposure.Luminance", {});
+                PPR_DEFER {
+                    context.m_encoder.popDebugGroup();
+                };
+                PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(0u, groups_x, groups_y));
+                context.m_encoder.globalBarrier();
+            }
+
+            {
+                context.m_encoder.pushDebugGroup("Post.Exposure.Histogram", {});
+                PPR_DEFER {
+                    context.m_encoder.popDebugGroup();
+                };
+                PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(1u, groups_x, groups_y));
+                context.m_encoder.globalBarrier();
+            }
         }
 
         // Adaptation is independent of reconstruction history: the previous
@@ -990,12 +990,21 @@ namespace pP {
         rhi::ShaderCursor constants;
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_auto_exposure"].getDereferenced(constants));
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, constants.setData(&automatic, sizeof(automatic)));
+
+        rhi::ShaderCursor luminance_constants;
+        PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_luminance"].getDereferenced(luminance_constants));
+        PPR_RETURN_ERROR_ON_FAIL(PostProcess, luminance_constants.setData(&parameters, sizeof(parameters)));
+        PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_scene"].setBinding(source));
+        PPR_RETURN_ERROR_ON_FAIL(
+            PostProcess, cursor["g_luminance_image"].setBinding(rhi::Binding(slot.m_luminance_view)));
+        PPR_RETURN_ERROR_ON_FAIL(
+            PostProcess, cursor["g_histogram"].setBinding(rhi::Binding(slot.m_histogram, histogram_range)));
         PPR_RETURN_ERROR_ON_FAIL(
             PostProcess, cursor["g_target_ev"].setBinding(rhi::Binding(slot.m_target_ev, target_range)));
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_previous_exposure"].setBinding(previous));
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_exposure"].setBinding(rhi::Binding(slot.m_exposure_view)));
 
-        context.m_encoder.setBufferState(slot.m_target_ev, rhi::ResourceState::ShaderResource);
+        // The fused invocation retains the target as an observable UAV output.
         context.m_encoder.setTextureState(slot.m_exposure, range, rhi::ResourceState::UnorderedAccess);
         {
             context.m_encoder.pushDebugGroup("Post.Exposure.Adaptation", {});

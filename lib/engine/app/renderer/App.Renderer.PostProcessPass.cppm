@@ -183,7 +183,7 @@ export namespace pP {
             rhi::ComPtr<rhi::ITextureView> m_exposure_view{};
             rhi::ComPtr<rhi::IShaderObject> m_post_root{};
             rhi::ComPtr<rhi::IShaderObject> m_present_root{};
-            std::array<rhi::ComPtr<rhi::IShaderObject>, 4> m_histogram_roots{};
+            std::array<rhi::ComPtr<rhi::IShaderObject>, 2> m_histogram_roots{};
             std::array<rhi::ComPtr<rhi::IShaderObject>, 3> m_bloom_roots{};
             rhi::ComPtr<rhi::IShaderObject> m_auto_exposure_root{};
             ResolvedHdrView m_retained_view{};
@@ -216,8 +216,8 @@ export namespace pP {
         rhi::ComPtr<rhi::IShaderProgram> m_post_program{};
         rhi::ComPtr<rhi::IRenderPipeline> m_post_pipeline{};
         rhi::ComPtr<rhi::IShaderProgram> m_present_program{};
-        std::array<rhi::ComPtr<rhi::IShaderProgram>, 4> m_histogram_programs{};
-        std::array<rhi::ComPtr<rhi::IComputePipeline>, 4> m_histogram_pipelines{};
+        std::array<rhi::ComPtr<rhi::IShaderProgram>, 2> m_histogram_programs{};
+        std::array<rhi::ComPtr<rhi::IComputePipeline>, 2> m_histogram_pipelines{};
         rhi::ComPtr<rhi::IShaderProgram> m_auto_exposure_program{};
         rhi::ComPtr<rhi::IComputePipeline> m_auto_exposure_pipeline{};
         std::array<rhi::ComPtr<rhi::IShaderProgram>, 3> m_bloom_programs{};

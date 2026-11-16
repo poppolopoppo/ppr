@@ -10,6 +10,8 @@
 // CPU oracle accumulates in double. Only the valid resolved R region is
 // sampled; backing padding outside it is never referenced.
 
+#include "auto_exposure.slang"
+
 static const uint kHistogramBins = 64u;
 static const float kLog2Min = -8.0;
 static const float kLog2Max = 8.0;
@@ -28,7 +30,7 @@ ConstantBuffer<LuminanceHistogramParameters> g_luminance;
 Texture2D<float4> g_scene;
 RWTexture2D<float4> g_luminance_image; // R32Float luminance in .x
 RWStructuredBuffer<uint> g_histogram;  // kHistogramBins u32 counts
-RWStructuredBuffer<float> g_target_ev; // one float: reduced target EV offset
+// g_target_ev and adaptation bindings are declared by auto_exposure.slang.
 
 // One workgroup-local histogram, shared by the buildHistogram threads.
 groupshared uint localHistogram[kHistogramBins];
@@ -57,8 +59,8 @@ void clearHistogram(uint3 id : SV_DispatchThreadID) {
 
 // Average each luminance texel over its nonempty integer source block. Blocks
 // partition R exactly: texel i covers [floor(i*R/L), floor((i+1)*R/L)).
-[numthreads(8, 8, 1)]
-void computeLuminance(uint3 id : SV_DispatchThreadID) {
+// Entry points must not call entry points: Slang 2026.17.1 crashes in TransformParamsToConstRef.
+void computeLuminanceValue(uint3 id) {
     if (any(id.xy >= g_luminance.luminanceExtent)) {
         return;
     }
@@ -77,6 +79,24 @@ void computeLuminance(uint3 id : SV_DispatchThreadID) {
         }
     }
     g_luminance_image[id.xy] = float4(count != 0u ? sum / float(count) : 0.0, 0.0, 0.0, 1.0);
+}
+
+[numthreads(8, 8, 1)]
+void computeLuminance(uint3 id : SV_DispatchThreadID) {
+    computeLuminanceValue(id);
+}
+
+// Clear only from group (0,0): all 64 lanes exist even for a 1x1 image.
+// The clear and luminance writes are independent; the dispatch barrier before
+// buildHistogram makes both visible. No previous-frame reset is assumed.
+[numthreads(8, 8, 1)]
+void computeLuminanceAndClear(uint3 id : SV_DispatchThreadID,
+                              uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID) {
+    if (all(group.xy == uint2(0u, 0u))) {
+        g_histogram[local.y * 8u + local.x] = 0u;
+    }
+
+    computeLuminanceValue(id);
 }
 
 // Workgroup-local histogram over the luminance image, merged into one global
@@ -103,13 +123,7 @@ void buildHistogram(uint3 id : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadI
 }
 
 // Reduce the percentile-clipped average log2 luminance to a target EV offset.
-[numthreads(1, 1, 1)]
-void reduceHistogram(uint3 id : SV_DispatchThreadID) {
-    uint total = 0u;
-    for (uint bin = 0u; bin < kHistogramBins; ++bin) {
-        total += g_histogram[bin];
-    }
-
+float writeHistogramTargetForTotal(uint total) {
     // Percentile counts stay fractional in FP32: an integer truncation would
     // discard the whole valid mass of a one-texel image.
     float low = float(total) * kLowPercentile;
@@ -134,5 +148,48 @@ void reduceHistogram(uint3 id : SV_DispatchThreadID) {
     float average = accumulatedCount > 0.0 ? accumulated / accumulatedCount : kLog2Min;
     // The target is applied as exp2(target) to scene radiance: middle gray maps
     // to zero, dark scenes get positive EV, and bright scenes get negative EV.
-    g_target_ev[0] = log2(kMiddleGray) - average;
+    float target = log2(kMiddleGray) - average;
+    g_target_ev[0] = target;
+    return target;
+}
+
+[numthreads(1, 1, 1)]
+void reduceHistogram(uint3 id : SV_DispatchThreadID) {
+    uint total = 0u;
+    for (uint bin = 0u; bin < kHistogramBins; ++bin) {
+        total += g_histogram[bin];
+    }
+
+    writeHistogramTargetForTotal(total);
+}
+
+groupshared uint histogramCounts[kHistogramBins];
+
+// Only the integer total is parallel: at most 256*256 texels, no overflow.
+// Lane zero keeps the original fractional-percentile traversal and adaptation
+// arithmetic, retaining the FP32 target buffer as an observable output.
+[numthreads(64, 1, 1)]
+void reduceAndAdaptExposure(uint3 local : SV_GroupThreadID) {
+    if (g_auto_exposure.enabled == 0u) {
+        if (local.x == 0u) {
+            writeAdaptedExposure(0.0);
+        }
+        return;
+    }
+
+    histogramCounts[local.x] = g_histogram[local.x];
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint cutOff = kHistogramBins / 2u; cutOff > 0u; cutOff >>= 1u) {
+        if (local.x < cutOff) {
+            histogramCounts[local.x] += histogramCounts[local.x + cutOff];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (local.x == 0u) {
+        float target = writeHistogramTargetForTotal(histogramCounts[0]);
+        // Pass by value to avoid a same-dispatch UAV read-after-write.
+        writeAdaptedExposure(target);
+    }
 }

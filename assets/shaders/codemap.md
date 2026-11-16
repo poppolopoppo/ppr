@@ -259,7 +259,13 @@ resulting immutable texture.
 - `luminance_histogram.slang` downsamples the valid R region to min(R,256) with
   integer partition blocks, builds the 64-bin [-8,8] log2 histogram and reduces
   a fractional 10-90% percentile mean. `auto_exposure.slang` applies the
-  exponential adaptation with finite EV clamps.
+  exponential adaptation with finite EV clamps. Production uses three dispatches:
+  `computeLuminanceAndClear` retains the serial per-texel average while clearing
+  bins from the first group; `buildHistogram` merges shared integer counts;
+  `reduceAndAdaptExposure` totals counts with a 64-lane integer tree, then lane
+  zero evaluates the original fractional-percentile mean and adaptation in order.
+  The standalone entries remain for reference-vs-fused GPU qualification. The
+  Luminance, Histogram and Adaptation debug scopes distinguish these dispatches.
 - `display_agx.slang` is the attributed Filament Punchy approximation invoked by
   `post_process.slang` and never by reconstruction/history/presentation.
 - CPU mirrors and cursor bindings live in `TrianglePass`, `GpuCaches`, and `Mesh.Types`.
