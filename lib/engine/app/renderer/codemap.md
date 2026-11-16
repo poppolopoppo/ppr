@@ -35,7 +35,10 @@ transfers no GPU storage. Camera cuts, world
 replacement and W/P/R/S/B changes reset screen history; pan/zoom reprojects; exposure, bloom and
 sky edits preserve it. There is no reactive image, velocity field or alternate AA mode. The
 `assets/shaders/hable_temporal.slang` kernel is the temporal article's algorithm, not the spatial
-snippet.
+snippet. `prepare` splits it into `Hable.Resolve.Interior` (a phase-derived rectangle whose every
+lattice reference is a valid sample, dispatched through a fixed seven-load stencil with no border
+code) and `Hable.Resolve.Border` (the complementary backing pixels, unchanged generic lattice and
+nearest-valid fallback) inside one stage-B submission.
 
 Camera-free RHI-facing submission shapes (`RenderPipelineSignature/Key`, `DrawContext/Callback/Submission`,
 `ColorAttachmentOps`, `ESurfaceDepthPolicy`, `SurfaceRenderPass`) live header-only in

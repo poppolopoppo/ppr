@@ -1387,6 +1387,10 @@ namespace pP {
             context.m_encoder.setBufferState(m_world.m_terrain_palette, rhi::ResourceState::ShaderResource);
             context.m_encoder.setBufferState(census.m_projected, rhi::ResourceState::UnorderedAccess);
             if (count != 0u) {
+                context.m_encoder.pushDebugGroup("Particles.Census", {});
+                PPR_DEFER {
+                    context.m_encoder.popDebugGroup();
+                };
                 auto *const pass = context.m_encoder.beginComputePass();
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));

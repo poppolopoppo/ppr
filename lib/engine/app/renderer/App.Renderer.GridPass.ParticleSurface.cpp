@@ -732,6 +732,11 @@ namespace pP {
             auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->pushDebugGroup("Particles.Surface.Marker", {});
+            PPR_DEFER {
+                pass->popDebugGroup();
+                pass->end();
+            };
             pass->setRenderState(
                 {.viewports = {viewport},
                     .viewportCount = 1u,
@@ -749,8 +754,6 @@ namespace pP {
                 pass->drawIndirect(1u, rhi::BufferOffsetPair{args});
                 ++m_draw_commands;
             }
-
-            pass->end();
         }
         if (draw and m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 7u);
@@ -800,6 +803,11 @@ namespace pP {
             auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->pushDebugGroup("Particles.Surface.Selection", {});
+            PPR_DEFER {
+                pass->popDebugGroup();
+                pass->end();
+            };
             pass->setRenderState(
                 {.viewports = {viewport},
                     .viewportCount = 1u,
@@ -817,8 +825,6 @@ namespace pP {
                 pass->drawIndirect(1u, rhi::BufferOffsetPair{args});
                 ++m_draw_commands;
             }
-
-            pass->end();
         }
         if (draw and m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 3u);
@@ -859,6 +865,11 @@ namespace pP {
             auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->pushDebugGroup("Particles.Surface.Accumulation", {});
+            PPR_DEFER {
+                pass->popDebugGroup();
+                pass->end();
+            };
             pass->setRenderState(
                 {.viewports = {viewport},
                     .viewportCount = 1u,
@@ -881,8 +892,6 @@ namespace pP {
                 pass->drawIndirect(1u, rhi::BufferOffsetPair{args});
                 ++m_draw_commands;
             }
-
-            pass->end();
         }
         if (draw and m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 2u);
@@ -904,22 +913,34 @@ namespace pP {
         accumulation_field.m_base_view = slot.m_base_view;
         accumulation_field.m_normal = slot.m_normal;
         accumulation_field.m_normal_view = slot.m_normal_view;
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, encodeParticleSurfaceFilter_(
-                          context, m_particle_surface_filter_horizontal, slot_index, accumulation_field,
-                          slot.m_horizontal, slot.m_width, slot.m_height, m_particle_surface_filter_samples_per_cell,
-                          m_particle_surface_filter_halo));
+        {
+            context.m_encoder.pushDebugGroup("Particles.Surface.Filter.Horizontal", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, encodeParticleSurfaceFilter_(
+                              context, m_particle_surface_filter_horizontal, slot_index, accumulation_field,
+                              slot.m_horizontal, slot.m_width, slot.m_height,
+                              m_particle_surface_filter_samples_per_cell, m_particle_surface_filter_halo));
+        }
         if (m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 5u);
         }
 
         // The horizontal scratch is complete before the vertical pass reads it.
         context.m_encoder.globalBarrier();
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, encodeParticleSurfaceFilter_(
-                          context, m_particle_surface_filter_vertical, slot_index, slot.m_horizontal, slot.m_vertical,
-                          slot.m_width, slot.m_height, m_particle_surface_filter_samples_per_cell,
-                          m_particle_surface_filter_halo));
+        {
+            context.m_encoder.pushDebugGroup("Particles.Surface.Filter.Vertical", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, encodeParticleSurfaceFilter_(
+                              context, m_particle_surface_filter_vertical, slot_index, slot.m_horizontal,
+                              slot.m_vertical, slot.m_width, slot.m_height, m_particle_surface_filter_samples_per_cell,
+                              m_particle_surface_filter_halo));
+        }
         if (m_particle_timing_queries) {
             context.m_encoder.writeTimestamp(m_particle_timing_queries, 6u);
         }
@@ -1153,6 +1174,10 @@ namespace pP {
         // The marker winner record the composite unions with the reconstructed body.
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_particle_marker"].setBinding(rhi::Binding(slot.m_marker_view)));
 
+        context.m_pass.pushDebugGroup("Particles.Surface.Composite", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
         context.m_pass.setRenderState(
             {.viewports = {context.m_viewport},
                 .viewportCount = 1u,

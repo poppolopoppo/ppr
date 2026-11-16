@@ -954,6 +954,10 @@ namespace pP {
         };
 
         if (m_pending_settings.m_auto_exposure) {
+            context.m_encoder.pushDebugGroup("Post.Exposure.Histogram", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
             const u32 groups_x = (luminance_width + 7u) / 8u;
             const u32 groups_y = (luminance_height + 7u) / 8u;
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, dispatch(0u, 1u, 1u)); // clearHistogram
@@ -993,12 +997,18 @@ namespace pP {
 
         context.m_encoder.setBufferState(slot.m_target_ev, rhi::ResourceState::ShaderResource);
         context.m_encoder.setTextureState(slot.m_exposure, range, rhi::ResourceState::UnorderedAccess);
-        auto *const pass = context.m_encoder.beginComputePass();
-        PPR_RETURN_ERROR_ON_FAIL(
-            PostProcess, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        pass->bindPipeline(m_auto_exposure_pipeline, slot.m_auto_exposure_root);
-        pass->dispatchCompute(1u, 1u, 1u);
-        pass->end();
+        {
+            context.m_encoder.pushDebugGroup("Post.Exposure.Adaptation", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            auto *const pass = context.m_encoder.beginComputePass();
+            PPR_RETURN_ERROR_ON_FAIL(
+                PostProcess, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->bindPipeline(m_auto_exposure_pipeline, slot.m_auto_exposure_root);
+            pass->dispatchCompute(1u, 1u, 1u);
+            pass->end();
+        }
 
         context.m_encoder.setTextureState(slot.m_exposure, range, rhi::ResourceState::ShaderResource);
         context.m_encoder.setTextureState(slot.m_luminance, range, rhi::ResourceState::ShaderResource);
@@ -1041,35 +1051,49 @@ namespace pP {
             PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_down_dst"].setBinding(rhi::Binding(slot.m_bloom_views[0])));
         }
         context.m_encoder.setTextureState(slot.m_bloom[0], range, rhi::ResourceState::UnorderedAccess);
-        PPR_RETURN_ERROR_ON_FAIL(
-            PostProcess, dispatch(0u, (static_cast<u32>(level0.x) + 7u) / 8u, (static_cast<u32>(level0.y) + 7u) / 8u));
+        {
+            context.m_encoder.pushDebugGroup("Post.Bloom.Prefilter", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(
+                PostProcess,
+                dispatch(0u, (static_cast<u32>(level0.x) + 7u) / 8u, (static_cast<u32>(level0.y) + 7u) / 8u));
+        }
         context.m_encoder.globalBarrier();
 
         // Coarser levels: plain 2x2 boxes, edge-replicated, left unweighted.
-        for (u32 level = 1u; level < slot.m_bloom_levels; ++level) {
-            const int2 source = bloomLevelExtent(slot.m_extent, level - 1u);
-            const int2 destination = bloomLevelExtent(slot.m_extent, level);
-            parameters.m_src_width = static_cast<u32>(source.x);
-            parameters.m_src_height = static_cast<u32>(source.y);
-            parameters.m_dst_width = static_cast<u32>(destination.x);
-            parameters.m_dst_height = static_cast<u32>(destination.y);
-            parameters.m_level = level;
+        {
+            context.m_encoder.pushDebugGroup("Post.Bloom.Downsample", {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
+            for (u32 level = 1u; level < slot.m_bloom_levels; ++level) {
+                const int2 source = bloomLevelExtent(slot.m_extent, level - 1u);
+                const int2 destination = bloomLevelExtent(slot.m_extent, level);
+                parameters.m_src_width = static_cast<u32>(source.x);
+                parameters.m_src_height = static_cast<u32>(source.y);
+                parameters.m_dst_width = static_cast<u32>(destination.x);
+                parameters.m_dst_height = static_cast<u32>(destination.y);
+                parameters.m_level = level;
 
-            rhi::ShaderCursor cursor{slot.m_bloom_roots[1]};
-            rhi::ShaderCursor constants;
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_bloom"].getDereferenced(constants));
-            PPR_RETURN_ERROR_ON_FAIL(PostProcess, constants.setData(&parameters, sizeof(parameters)));
-            PPR_RETURN_ERROR_ON_FAIL(
-                PostProcess, cursor["g_down_src"].setBinding(rhi::Binding(slot.m_bloom_views[level - 1u])));
-            PPR_RETURN_ERROR_ON_FAIL(
-                PostProcess, cursor["g_down_dst"].setBinding(rhi::Binding(slot.m_bloom_views[level])));
+                rhi::ShaderCursor cursor{slot.m_bloom_roots[1]};
+                rhi::ShaderCursor constants;
+                PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_bloom"].getDereferenced(constants));
+                PPR_RETURN_ERROR_ON_FAIL(PostProcess, constants.setData(&parameters, sizeof(parameters)));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    PostProcess, cursor["g_down_src"].setBinding(rhi::Binding(slot.m_bloom_views[level - 1u])));
+                PPR_RETURN_ERROR_ON_FAIL(
+                    PostProcess, cursor["g_down_dst"].setBinding(rhi::Binding(slot.m_bloom_views[level])));
 
-            context.m_encoder.setTextureState(slot.m_bloom[level - 1u], range, rhi::ResourceState::ShaderResource);
-            context.m_encoder.setTextureState(slot.m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
-            PPR_RETURN_ERROR_ON_FAIL(
-                PostProcess,
-                dispatch(1u, (static_cast<u32>(destination.x) + 7u) / 8u, (static_cast<u32>(destination.y) + 7u) / 8u));
-            context.m_encoder.globalBarrier();
+                context.m_encoder.setTextureState(slot.m_bloom[level - 1u], range, rhi::ResourceState::ShaderResource);
+                context.m_encoder.setTextureState(slot.m_bloom[level], range, rhi::ResourceState::UnorderedAccess);
+                PPR_RETURN_ERROR_ON_FAIL(
+                    PostProcess,
+                    dispatch(
+                        1u, (static_cast<u32>(destination.x) + 7u) / 8u, (static_cast<u32>(destination.y) + 7u) / 8u));
+                context.m_encoder.globalBarrier();
+            }
         }
 
         // Weighted descent over unweighted raw levels:
@@ -1077,6 +1101,10 @@ namespace pP {
         //   otherwise: result_l = w_l * raw_l + tent(result_(l+1))
         // Each weight is applied once and the recursive reduction never
         // multiplies an already weighted level again.
+        context.m_encoder.pushDebugGroup("Post.Bloom.Upsample", {});
+        PPR_DEFER {
+            context.m_encoder.popDebugGroup();
+        };
         for (u32 level = slot.m_bloom_levels; level-- > 0u;) {
             // A single-level chain is already its own w0=1 result; no descent.
             if (slot.m_bloom_levels == 1u) {
@@ -1161,6 +1189,10 @@ namespace pP {
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_exposure"].setBinding(rhi::Binding(slot.m_exposure_view)));
         PPR_RETURN_ERROR_ON_FAIL(PostProcess, cursor["g_linear"].setDescriptorHandle(m_linear_sampler_handle));
 
+        context.m_pass.pushDebugGroup("Post.ToneMap", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
         context.m_pass.setRenderState({
             .viewports = {context.m_viewport},
             .viewportCount = 1u,

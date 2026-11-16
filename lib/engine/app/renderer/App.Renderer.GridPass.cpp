@@ -1301,6 +1301,10 @@ namespace pP {
         rhi::ShaderCursor cursor{root.get()};
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_brdf_lut"].setBinding(rhi::Binding(view)));
         {
+            encoder->pushDebugGroup("Grid.BrdfLut", {});
+            PPR_DEFER {
+                encoder->popDebugGroup();
+            };
             auto *const pass = encoder->beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
@@ -3886,6 +3890,7 @@ namespace pP {
         VisibilitySlot &slot = m_visibility_slots[m_tile_ring_cursor];
         context.m_encoder.setBufferState(slot.m_args, rhi::ResourceState::UnorderedAccess);
         context.m_encoder.setBufferState(slot.m_ids, rhi::ResourceState::UnorderedAccess);
+        constexpr std::array<const char *, 2u> phase_names{"Grid.Visibility.Reset", "Grid.Visibility.Cull"};
         for (u32 phase = 0u; phase < 2u; ++phase) {
             VisibilityProgram &program = m_visibility_programs[phase];
             rhi::IShaderObject *const root = program.m_roots[m_tile_ring_cursor].get();
@@ -3902,6 +3907,10 @@ namespace pP {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GridPass, cursor["g_tiles"].setBinding(rhi::Binding(tiles, makeFullRange(tiles))));
             }
+            context.m_encoder.pushDebugGroup(phase_names[phase], {});
+            PPR_DEFER {
+                context.m_encoder.popDebugGroup();
+            };
             rhi::IComputePassEncoder *const pass = context.m_encoder.beginComputePass();
             PPR_RETURN_ERROR_ON_FAIL(
                 GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
@@ -3930,7 +3939,13 @@ namespace pP {
 
         const auto cached = pipelineFor_(context.m_device, context.m_render_pipeline_key);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 1u));
+        {
+            context.m_pass.pushDebugGroup("Grid.Terrain.Opaque", {});
+            PPR_DEFER {
+                context.m_pass.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 1u));
+        }
         ++m_draw_commands;
         return {};
     }
@@ -3948,7 +3963,13 @@ namespace pP {
 
         const auto cached = translucentPipelineFor_(context.m_device, context.m_render_pipeline_key);
         PPR_RETURN_ERROR_ON_FAIL(GridPass, cached ? std::error_code{} : cached.error());
-        PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 2u));
+        {
+            context.m_pass.pushDebugGroup("Grid.Terrain.Translucent", {});
+            PPR_DEFER {
+                context.m_pass.popDebugGroup();
+            };
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, encodeTerrainIndirect_(context, **cached, nullptr, 0u, 2u));
+        }
         ++m_draw_commands;
         return {};
     }
@@ -4668,20 +4689,26 @@ namespace pP {
         rhi::RenderPassDesc pass_desc{};
         pass_desc.colorAttachments = &attachment;
         pass_desc.colorAttachmentCount = 1u;
-        auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
-        PPR_RETURN_ERROR_ON_FAIL(
-            GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
-        pass->setRenderState(
-            {.viewports = {rhi::Viewport::fromSize(static_cast<float>(width), static_cast<float>(height))},
-                .viewportCount = 1u,
-                .scissorRects = {rhi::ScissorRect::fromSize(width, height)},
-                .scissorRectCount = 1u,
-                .vertexBuffers = {},
-                .indexBuffer = {}});
-        pass->bindPipeline((*pipeline)->m_pipeline, root);
-        markPipelineUse_(**pipeline, selected);
-        pass->draw({.vertexCount = 3u});
-        pass->end();
+        {
+            auto *const pass = context.m_encoder.beginRenderPass(pass_desc);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, pass != nullptr ? std::error_code{} : std::make_error_code(std::errc::io_error));
+            pass->pushDebugGroup("Grid.Background.Bake", {});
+            PPR_DEFER {
+                pass->popDebugGroup();
+                pass->end();
+            };
+            pass->setRenderState(
+                {.viewports = {rhi::Viewport::fromSize(static_cast<float>(width), static_cast<float>(height))},
+                    .viewportCount = 1u,
+                    .scissorRects = {rhi::ScissorRect::fromSize(width, height)},
+                    .scissorRectCount = 1u,
+                    .vertexBuffers = {},
+                    .indexBuffer = {}});
+            pass->bindPipeline((*pipeline)->m_pipeline, root);
+            markPipelineUse_(**pipeline, selected);
+            pass->draw({.vertexCount = 3u});
+        }
         context.m_encoder.setTextureState(
             slot.m_texture, rhi::SubresourceRange{.layer = 0u, .layerCount = 1u, .mip = 0u, .mipCount = 1u},
             rhi::ResourceState::ShaderResource);
@@ -4702,6 +4729,10 @@ namespace pP {
                           ? std::error_code{}
                           : std::make_error_code(std::errc::operation_not_permitted));
 
+        context.m_pass.pushDebugGroup("Grid.Background", {});
+        PPR_DEFER {
+            context.m_pass.popDebugGroup();
+        };
         if (m_spatial_msaa) {
             PPR_RETURN_ERROR_ON_FAIL(GridPass, validateSpatialContent());
             PPR_RETURN_ERROR_ON_FAIL(
