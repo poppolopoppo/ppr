@@ -256,6 +256,7 @@ namespace pP {
         };
         struct ColdRow {
             float m_mass{}, m_volume{}, m_material{}, m_r{}, m_g{}, m_b{};
+            u32 m_property_row{std::numeric_limits<u32>::max()};
         };
         static_assert(sizeof(HotRow) == kGridParticleNumericalStride and alignof(HotRow) == 4u);
         static_assert(sizeof(ColdRow) == kGridParticleReadonlyStride and alignof(ColdRow) == 4u);

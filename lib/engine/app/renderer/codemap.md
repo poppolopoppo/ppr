@@ -259,7 +259,8 @@ an overlay: neither has a matching current submitted world/camera to stamp.
 ## Design
 
 Resident particle presentation accepts a renderer-neutral layout-v4 view with
-joint strong owners of hot64 positions and cold24 volume/RGB rows, immutable
+joint strong owners of hot64 positions and cold28 volume/RGB/property-index rows
+(six FP32 fields plus one u32 index = 28 bytes), immutable
 stable-ID-ordered metadata, and an epoch-revocation token. The editor rejects
 stale unencoded values before backend work. Prepared slots pin both exact source
 owners through the existing frame fence, including world retirement.
@@ -269,7 +270,7 @@ dispatch on source changes, then three stable frustum-compaction dispatches per
 frame. Scratch is O(N), bounded by the global 1M-particle capacity; numerical
 rows never reorder. Direct particle draws coexist with the liquid surface lane
 below; the sampled disk remains for gas and explicit legacy phase fixtures. Gas retains
-cold24/palette RGB and multiplies it by the current fine-CH angular mean; it alpha-composites
+cold28/palette RGB and multiplies it by the current fine-CH angular mean; it alpha-composites
 over the already shaded scene without relighting the background, adding an
 ambient floor, or contributing authored/thermal transport emission. Phase flags
 are derived for every material, including terrain elements that become particles

@@ -32,11 +32,11 @@ export namespace pP {
 
     inline constexpr u32 kGridParticleNumericalLayout = 4u;
     inline constexpr u32 kGridParticleNumericalStride = 64u;
-    inline constexpr u32 kGridParticleReadonlyStride = 24u;
+    inline constexpr u32 kGridParticleReadonlyStride = 28u;
     inline constexpr u32 kGridParticleCapacity = 1024u * 1024u;
 
     // Stable row/ID mapping and gas-only physical inputs. Moving radius is
-    // cell_metres*sqrt(Cold24.volume/pi); gas radius is sqrt(volume/thickness/pi).
+    // cell_metres*sqrt(ParticleReadonly.volume/pi); gas radius is sqrt(volume/thickness/pi).
     // m_material_temperature packs material ID16 + IEEE binary16 Kelvin with
     // the same encoding as resolved cells; consumers mask the low material bits.
     struct GridParticleMetadataRow {
