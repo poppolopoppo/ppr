@@ -5,7 +5,7 @@ Status: **current-revision execution evidence reported by the coordinator**:
 `matter_elastic_recovery_diagnostic`, and `matter_properties_gpu` are GREEN;
 full `matter_fast` is **26/26**. These identities supersede the earlier
 `a98f399d`-only status. The matched-history reload control added in this edit-only
-follow-up is **authored-only, unrun**; those passes do not cover it. Recorded
+follow-up is **authored-only, unrun** (superseded by the execution ledger in the results document, identity `d347c50f`). Recorded
 snow/clay values are in the [results](pbmpm-baseline-and-multilayer-results.md#b1-increment-2--measured-behaviour-current-revision).
 New-law acceptance remains **authored-analytical**, with no upstream oracle.
 Coordinator decisions R1–R5 below
@@ -128,7 +128,7 @@ all other captured state unchanged and advance 960 steps (2 s). No F/position
 reset or pin/weld seam is used.
 
 Nonlinear evolution does not preserve an independently removable driving
-component. The measured residual is a diagnostic lower/upper bound rather than
+component. The measured residual is a protocol-dependent diagnostic residual rather than
 an exact recovery metric; no rigorous one-sided bound is established. Measurement
 and thresholds are unchanged.
 
@@ -178,7 +178,7 @@ resistance, conditioned on positive control shortening and retained phi; this is
 not a stress modulus or direct reaction force. Outcomes remain report-only;
 assertions cover completion, finite state and valid histories.
 The original S1 execution is GREEN with snow/clay numbers recorded in the results;
-the matched control is **authored-only, unrun; paired numbers pending execution**.
+the matched control was **authored-only, unrun**, and is now executed — see the execution ledger and paired numbers in the results document (identity `d347c50f`).
 
 ## R5 — state, ABI and checkpoint migration
 
@@ -216,7 +216,7 @@ there is no silent conversion of old plastic history.
 
 The coordinator reports current-revision GREEN execution for the four named
 entries above and full `matter_fast` 26/26, including M1 and original S1.
-Only the newly added matched-history control remains authored-only in this
+The matched-history control is now executed (ledger in the results document); only this
 follow-up; it has not been built or run by this edit-only author.
 S2 is deferred: **no independent historical v8
 artifact exists in the repository. Migration evidence is reconstruction-based,
