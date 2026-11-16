@@ -2011,6 +2011,88 @@ namespace pP::tests::detail::WorldLightingMaterial {
         const auto exterior = pixel(lit, kEdge - 1u, kEdge / 2u);
         assert_black(exterior);
         PPR_TEST_ASSERT(std::abs(exterior[3] - 1.0f) <= 0.003f);
+
+        // The visual guard reads the production predicate directly. Optical
+        // emission must not turn transport occupancy into opaque draw coverage.
+        std::array<GridTerrainVisual, 6u> palette{};
+        for (u32 index = 0u; index < palette.size(); ++index) {
+            palette[index].m_material_id = index;
+        }
+
+        palette[2u].m_surface_flags = kGridSurfaceOpticalBlend;
+        palette[3u].m_material_id = 0u;
+        palette[4u].m_surface_flags = kGridSurfaceOpticalBlend;
+        palette[4u].m_emissive_strength = 1.0f;
+        palette[5u].m_emissive_strength = 1.0f;
+
+        const std::array<u32, 7u> cells{1u, 2u, 3u, 4u, 0u, 1u, 5u};
+        const std::array<u32, 7u> winners{
+            0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0u, 0xffffffffu};
+        const std::array<std::array<float, 2u>, 10u> positions{
+            {{0.5f, 0.5f}, {1.5f, 0.5f}, {2.5f, 0.5f}, {3.5f, 0.5f}, {4.5f, 0.5f}, {5.5f, 0.5f}, {6.5f, 0.5f},
+                {-0.001f, 0.5f}, {1024.0f, 0.5f}, {0.5f, 1024.0f}}};
+        auto &device = fixture.device();
+        auto visuals = makeBuffer(device, sizeof(palette), sizeof(GridTerrainVisual), palette.data());
+        auto resolved_cells = makeBuffer(device, sizeof(cells), sizeof(u32), cells.data());
+        auto best_rows = makeBuffer(device, sizeof(winners), sizeof(u32), winners.data());
+        auto points = makeBuffer(device, sizeof(positions), sizeof(positions[0]), positions.data());
+        auto results = makeBuffer(device, 10u * sizeof(u32), sizeof(u32), nullptr, true);
+
+        auto program = fixture.makeProgram(
+            std::filesystem::current_path() / "shaders" / "tests" / "background_coverage_probe.slang",
+            "probeBackgroundCoverage");
+        rhi::ComPtr<rhi::IComputePipeline> pipeline{};
+        rhi::ComputePipelineDesc description{};
+        description.program = program.get();
+        PPR_TEST_ASSERT(not make_error_code(device.createComputePipeline(description, pipeline.writeRef())));
+        rhi::ComPtr<rhi::IShaderObject> root{};
+        PPR_TEST_ASSERT(not make_error_code(device.createRootShaderObject(program, root.writeRef())));
+
+        rhi::ShaderCursor cursor{root.get()};
+        const auto bind = [&](const char *const name, rhi::IBuffer *const buffer) {
+            const rhi::BufferRange range{.offset = 0u, .size = buffer->getDesc().size};
+            PPR_TEST_ASSERT(not make_error_code(cursor[name].setBinding(rhi::Binding(buffer, range))));
+        };
+
+        bind("g_terrain_visuals", visuals.get());
+        bind("g_resolved_cells", resolved_cells.get());
+        bind("g_best_row", best_rows.get());
+        bind("g_positions", points.get());
+        bind("g_results", results.get());
+
+        rhi::ShaderCursor coverage{};
+        PPR_TEST_ASSERT(not make_error_code(cursor["g_background_coverage"].getDereferenced(coverage)));
+        for (u32 scenario = 0u; scenario < 4u; ++scenario) {
+            // Published ownership; no publication; diagnostic; fixture without
+            // committed ownership (the winner fallback must never be indexed).
+            const std::array<u32, 4u> parameters{
+                scenario == 1u ? 0u : (scenario == 3u ? 1u : 3u), scenario == 2u ? 1u : 0u, 0u, 0u};
+            PPR_TEST_ASSERT(not make_error_code(coverage.setData(parameters.data(), sizeof(parameters))));
+
+            rhi::ComPtr<rhi::ICommandEncoder> encoder{};
+            PPR_TEST_ASSERT(not make_error_code(fixture.m_queue->createCommandEncoder(encoder.writeRef())));
+            encoder->setBufferState(results, rhi::ResourceState::UnorderedAccess);
+            {
+                auto *const pass = encoder->beginComputePass();
+                PPR_TEST_ASSERT(pass != nullptr);
+                PPR_DEFER {
+                    pass->end();
+                };
+                pass->bindPipeline(pipeline, root);
+                pass->dispatchCompute(1u, 1u, 1u);
+            }
+
+            encoder->setBufferState(results, rhi::ResourceState::CopySource);
+            fixture.submit(*encoder);
+            std::array<u32, 10u> observed{};
+            PPR_TEST_ASSERT(not make_error_code(device.readBuffer(results, 0u, sizeof(observed), observed.data())));
+
+            for (u32 index = 0u; index < observed.size(); ++index) {
+                const bool expected = (scenario == 0u or scenario == 3u) and
+                                      (index == 0u or index == 6u or (scenario == 3u and index == 5u));
+                PPR_TEST_ASSERT(observed[index] == static_cast<u32>(expected));
+            }
+        }
     };
 
     PPR_UNIT_TEST (grid_tiles_sample_rate_boundary_selects_distinct_cell_materials) {

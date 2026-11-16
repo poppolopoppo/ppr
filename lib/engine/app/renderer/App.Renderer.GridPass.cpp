@@ -4196,6 +4196,44 @@ namespace pP {
 
     std::error_code GridPass::bindBackgroundFineCH_(
         rhi::IDevice &device, rhi::ShaderCursor &cursor, u32 &has_resolved_cells) {
+        // Coverage uses the terrain publication/ownership authority, independently
+        // of the current-FineCH gate below. Bind the same resources on every root
+        // from this module, including the bake whose entry never rejects coverage.
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, ensureLightingFallback_(device));
+        const auto visuals = prepareTerrainVisuals_(device, 0u);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, visuals);
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, *visuals ? std::error_code{} : std::make_error_code(std::errc::operation_in_progress));
+        PPR_RETURN_ERROR_ON_FAIL(
+            GridPass, cursor["g_terrain_visuals"].setBinding(
+                          rhi::Binding(m_world.m_terrain_palette, makeFullRange(m_world.m_terrain_palette))));
+
+        struct BackgroundCoverage {
+            u32 m_availability{};
+            u32 m_diagnostic{};
+            u32 m_reserved0{};
+            u32 m_reserved1{};
+        } coverage{};
+        static_assert(sizeof(BackgroundCoverage) == 16u and alignof(BackgroundCoverage) == 4u);
+        static_assert(PPR_OFFSETOF(BackgroundCoverage, m_diagnostic) == 4u);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindTerrainLighting_(cursor, coverage.m_availability));
+        coverage.m_diagnostic = static_cast<u32>(m_world.m_diagnostic_mode);
+
+        if (m_world.m_lighting and
+            m_world.m_lighting->hasPublishedCells() and
+            m_world.m_world_edge == WorldLightingPass::kWorldEdge) {
+            PPR_RETURN_ERROR_ON_FAIL(GridPass, m_world.m_lighting->bindResolvedCells(cursor));
+        } else {
+            auto *const resolved = m_test_resolved and m_test_fine_ch ? m_test_resolved.get()
+                                                                      : m_lighting_fallback.get();
+            PPR_RETURN_ERROR_ON_FAIL(
+                GridPass, cursor["g_resolved_cells"].setBinding(rhi::Binding(resolved, makeFullRange(resolved))));
+        }
+
+        rhi::ShaderCursor coverage_cursor{};
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, cursor["g_background_coverage"].getDereferenced(coverage_cursor));
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, coverage_cursor.setData(&coverage, sizeof(coverage)));
+
         // The narrow binder reads only this attempt's fine CH; the full
         // world-lighting bind would require material/source/thermal resources
         // the background root does not carry.
@@ -4788,6 +4826,7 @@ namespace pP {
         rhi::ShaderCursor cursor{root};
         GridFrame frame{};
         fillOpticalFrame_(frame);
+        PPR_RETURN_ERROR_ON_FAIL(GridPass, bindBackgroundFineCH_(context.m_device, cursor, frame.m_has_resolved_cells));
         PPR_RETURN_ERROR_ON_FAIL(GridPass, (*pipeline)->m_slot_frame_cursors[slot].setData(&frame, sizeof(frame)));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, cursor["g_backdrop"].setBinding(rhi::Binding(m_background_slots[slot].m_view)));

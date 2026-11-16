@@ -1,6 +1,10 @@
 #include "grid_background_world.slang"
 #include "world_lighting_codec.slang"
+#include "grid_background_coverage.slang"
 
+// ------------------------------------------------------------------
+// background frame and lighting bindings
+// ------------------------------------------------------------------
 // The CH helper expects the fine-field binding to exist before it is included.
 StructuredBuffer<PackedCH> g_fine_ch;
 #include "world_lighting_ch.slang"
@@ -146,6 +150,12 @@ float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
     }
 
     float2 dx = ddx(world), dy = ddy(world);
+
+    // Only native scene samples reject coverage. Capture gradients first so
+    // surviving parallax layers retain their original texture footprint.
+    // The single-sample optical bake always passes lightingSample == 0.
+    if (lightingSample != 0u && backgroundCoveredByOpaqueTerrain(world / g_grid_frame.m_cell_size_m)) discard;
+
     if (g_grid_frame.m_has_surface != 0u) {
         // Columns match the exact seeded height sampled by the terrain raster.
         // Edge clamping keeps backdrop reads bounded when the camera sees outside
