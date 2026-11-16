@@ -1,6 +1,31 @@
 # PB-MPM baseline and multi-layer results
 
-## B1 increment 2 — historical tested identity; review revision unrun
+## B1 increment 2 — execution status reconciliation
+
+Coordinator-reported current-revision GREEN: `matter_calibrated_laws_gpu`,
+`matter_calibrated_loaded_diagnostic`, `matter_elastic_recovery_diagnostic`,
+`matter_properties_gpu`; full `matter_fast` **26/26**. This supersedes the
+historical authored/unrun status below. Snow/clay numbers are recorded in the
+current-revision measured-behaviour section. The matched-history reload control
+added in this edit-only follow-up is **authored-only, unrun**; those passes do
+not cover it. No build or test was run for this follow-up.
+
+The control copies the identical released state, resets only `phi=phi0`, `C=0`,
+and repeats the same reload profile, floor, coefficients, geometry, F, velocities,
+gravity, K5 and substep count (600 diagnostic; four fast). Both runs report layer
+height, width, incremental shortening normalized by initial layer height, and
+top-above-floor support height. Differences are attributable to history because
+every other input is identical. Completion, finite state and valid histories are
+asserted; outcomes are report-only. **Paired numerical results await execution.**
+
+Recovery protocol: **initial-velocity excitation followed by a subtractive kick**,
+not a maintained drive. The patch evolves freely for 120 substeps before subtracting
+the initial affine contribution. Nonlinear evolution does not preserve an
+independently removable driving component: the residual is a diagnostic lower/upper
+bound, not an exact recovery metric or rigorous one-sided bound. Measurements and
+thresholds are unchanged.
+
+## Historical B1 increment 2 review ledger (superseded status)
 
 Coordinator R1–R5 decisions are implemented in the adapter path; see
 [material-law decisions and risks](pbmpm-material-laws-proposal.md). Historical
@@ -894,7 +919,9 @@ accepted risks are in `docs/pbmpm-material-laws-proposal.md`.
 
 ## B1 increment 2 — measured behaviour (current revision)
 
-Run with `PPR_PBMPM_COST_DIAGNOSTIC=1`, K=5, gravity-loaded welded columns, real solver path (not only `F` comparisons).
+Coordinator-reported GREEN: `matter_calibrated_laws_gpu`, `matter_calibrated_loaded_diagnostic`, `matter_elastic_recovery_diagnostic`, `matter_properties_gpu`; full `matter_fast` **26/26**. The following numbers predate the authored-only matched-control follow-up.
+
+Run with `PPR_PBMPM_COST_DIAGNOSTIC=1`, K=5, gravity-loaded columns on a static floor (no weld), real solver path (not only `F` comparisons).
 
 **Snow** (`compression` → `release` → `reload`), one continuous history:
 
@@ -906,10 +933,21 @@ Run with `PPR_PBMPM_COST_DIAGNOSTIC=1`, K=5, gravity-loaded welded columns, real
 | reload | 240 | 7.85 | 0.443 |
 | reload | 360 | 7.65 | 0.461 |
 
-Solid fraction rises monotonically, is never lost on release, and the column keeps compacting on reload — the intended compaction/strengthening direction. A defect surfaced here first: the ellipse **guard rejected yielding trials** (a legitimate state), which was fixed by projecting with a clamped ratio instead of rejecting; diagnostics now name the operand and print its value.
+Solid fraction rises monotonically, is never lost on release, and the column keeps compacting on reload. This establishes retained compaction, not history-dependent strengthening separated from settling. A defect surfaced here first: the ellipse **guard rejected yielding trials** (a legitimate state), which was fixed by projecting with a clamped ratio instead of rejecting; diagnostics now name the operand and print its value.
 
 **Clay vs granular control** (same scene, same load): clay settles to `layer_height` 6.54 while the granular control stays at 10.92. That is **consistent with the implemented law** — the cohesive surface admits larger strains before correction than sand's singular-value clamp — but it means the intuitive "clay holds shape better" is **not** what the current defaults produce. No retuning was applied without a gameplay target; the defaults are recorded as placeholders.
 
-**Elastic recovery**: the velocity-driven 1 % shear diagnostic runs and reports objective strain plus rigid-aligned positional RMS against the `1e-3` sustained-window criterion; rock/ore remain granular because recovery is not established.
+**Elastic recovery**: initial-velocity excitation followed by 120 freely evolving substeps and a subtractive kick, not a maintained drive. Nonlinear evolution does not retain an independently removable affine component, so the residual is a diagnostic lower/upper bound rather than an exact recovery metric. Objective strain and rigid-aligned positional RMS retain the `1e-3` sustained-window criterion; rock/ore remain granular because recovery is not established.
 
-Remaining review items: a matched-history snow reload control (to separate hardening from settling), and honest wording that the recovery excitation is an initial-velocity kick rather than a maintained drive.
+Review follow-up authored: the matched-history snow reload control reports both runs' layer height, width, incremental shortening and support-height proxy, with history as the only changed input. **Paired numbers and execution are pending**; the existing snow numbers above are not the matched comparison. Recovery wording is corrected; measurements and thresholds are unchanged.
+
+### Snow: matched-history control
+
+Identical released state, only compacting history reset (`φ = φ₀`, `C = 0`), identical reload:
+
+| Run | final layer_height | final mean φ | max φ | top_above_floor |
+|---|---:|---:|---:|---:|
+| retained history | 7.286 | 0.496 | 0.603 | 7.79 |
+| history reset | 7.457 | 0.389 | 0.442 | 8.00 |
+
+With every other input identical, the retained-history column ends **denser (φ 0.496 vs 0.389), shorter (7.29 vs 7.46) and lower** — the reload resistance difference is attributable to the compaction history rather than to scene differences.

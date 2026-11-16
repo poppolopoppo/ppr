@@ -1,12 +1,14 @@
 # PB-MPM material laws — B1 increment 2
 
-Status: **review revision authored, unrun**. The coordinator reports prior gates
-at commit `a98f399d`; that evidence predates this revision and does not validate
-its constraint-target coupling. Exact prior command lines and the external
-ledger are not present in this checkout and must be supplied by the validation
-owner before the evidence reconciliation is complete. No GREEN claim accompanies
-this edit-only revision. New-law acceptance is **authored-analytical**, with no
-upstream oracle. Coordinator decisions R1–R5 below
+Status: **current-revision execution evidence reported by the coordinator**:
+`matter_calibrated_laws_gpu`, `matter_calibrated_loaded_diagnostic`,
+`matter_elastic_recovery_diagnostic`, and `matter_properties_gpu` are GREEN;
+full `matter_fast` is **26/26**. These identities supersede the earlier
+`a98f399d`-only status. The matched-history reload control added in this edit-only
+follow-up is **authored-only, unrun**; those passes do not cover it. Recorded
+snow/clay values are in the [results](pbmpm-baseline-and-multilayer-results.md#b1-increment-2--measured-behaviour-current-revision).
+New-law acceptance remains **authored-analytical**, with no upstream oracle.
+Coordinator decisions R1–R5 below
 supersede the earlier stress-space proposals. [Phase A evidence](pbmpm-baseline-and-multilayer-results.md)
 and the [sand investigation](pbmpm-sand-history-derivation.md) remain historical evidence.
 
@@ -119,9 +121,16 @@ M1 ruling: initialize an undeformed 4-by-4 patch with affine velocity
 `vx=.01*(y-ycentre)/.25 s`, `vy=0`, including its APIC contribution. Solver
 velocities are displacements per dt: upload `.01*(y-ycentre)/120` and D01
 `.01/120`. Advance 120 dt=1/480 steps (0.25 s), K5, zero gravity, no contacts.
-At release subtract only the prescribed velocity/D contribution once; re-upload
+This is **initial-velocity excitation followed by a subtractive kick**, not a
+maintained drive: the patch evolves freely for those 120 substeps. At release
+subtract the initial affine velocity/D contribution once; re-upload
 all other captured state unchanged and advance 960 steps (2 s). No F/position
 reset or pin/weld seam is used.
+
+Nonlinear evolution does not preserve an independently removable driving
+component. The measured residual is a diagnostic lower/upper bound rather than
+an exact recovery metric; no rigorous one-sided bound is established. Measurement
+and thresholds are unchanged.
 
 Every substep reports maximum particle Frobenius `||F^T F-I||` and best-fit
 proper-rotation/translation-aligned positional RMS divided by initial RMS radius.
@@ -132,8 +141,8 @@ values and final-window maxima. Both drive peaks must exceed the recovery
 thresholds or recovery is not established. Nominal 1% shear norms are ~1.41e-2
 and ~5e-3, ~14 and ~5 times these thresholds; achieved excitation is measured,
 not assumed to equal nominal free transport. The recovery outcome is report-only,
-including insufficient excitation. Rock/ore remain granular. **Authored, unrun:
-no measured values or corrected recovery verdict are available.**
+including insufficient excitation. Rock/ore remain granular. The coordinator
+reports `matter_elastic_recovery_diagnostic` GREEN; recovery is not established.
 
 ### S1 — loaded production-law scenes
 
@@ -146,18 +155,30 @@ report tagged top-minus-bottom layer height, horizontal spread, top-layer height
 above the floor, and clay-minus-control differences. Greater height and less
 spread report greater column retention; otherwise not established.
 
-Snow advances 1 s under gravity, 1 s release at zero gravity with the floor
-retained, then 1 s reload under the same gravity. Gravity is immutable in the
+Snow advances 600 substeps under gravity, 600 at zero gravity with the floor
+retained, then 600 reload substeps under the same gravity. Gravity is immutable in the
 public profile, so phase boundaries restart the solver, transferring and exactly
 byte-comparing all particle state. No F, position, velocity or history reset is
-injected. Every 0.25 s reports geometry and mean phi. The summary reports initial,
+injected in the retained-history run. Every 120 substeps reports geometry and mean phi.
+Snow diagnostic phases use 600 substeps each (1.25 s at dt=1/480).
+The summary reports initial,
 compressed, released and reloaded phi, retained height loss, and first/reload
 axial shortening normalized by initial layer height. Retained compaction requires
-increased phi retained after release. Increased structural resistance means less
-reload shortening under equal load/duration, with positive first shortening and
-retained phi. This geometry-dependent compliance proxy is not a stress modulus.
-Both scene outcomes are report-only. **Authored, unrun: no measured values or
-successful behavior verdicts are available.**
+increased phi retained after release. First-load shortening is context only:
+its geometry, contacts and velocity differ from reload.
+
+The matched control copies the identical released particle state and resets only
+`phi=phi0`, `C=0`. Both reloads restart with the same profile, floor, coefficients,
+geometry, F, velocity, gravity, K5 and substep count (600 diagnostic; four fast).
+The paired summary reports retained/reset layer height, width, incremental
+shortening normalized by initial layer height, and top-above-floor support-height
+proxy. Any difference is attributable to history because every other input is
+identical. Less shortening than the reset control reports increased structural
+resistance, conditioned on positive control shortening and retained phi; this is
+not a stress modulus or direct reaction force. Outcomes remain report-only;
+assertions cover completion, finite state and valid histories.
+The original S1 execution is GREEN with snow/clay numbers recorded in the results;
+the matched control is **authored-only, unrun; paired numbers pending execution**.
 
 ## R5 — state, ABI and checkpoint migration
 
@@ -176,7 +197,7 @@ append C=0 and phi=.3 (migration phi0), and resave v9. Unknown policy or identit
 mismatch rejects. Coordinator-accepted risk: old saves retain old family behavior;
 there is no silent conversion of old plastic history.
 
-## Authored coverage — execution pending
+## Coverage and execution identity
 
 * `calibrated_caps_hardening_and_two_regime_edges`: actual shader helper; cap
   consumption, monotone C, release history, cohesion at t=0, tension, phi
@@ -193,9 +214,11 @@ there is no silent conversion of old plastic history.
 * Renderer/lighting fixtures follow the ABI. Frozen upstream fixtures remain
   the old-family arithmetic gate; no fixture was regenerated.
 
-The review additions, including M1 and loaded S1 scenes, are **authored, unrun
-coverage**, not execution evidence. Prior gates identify source `a98f399d`, not
-this working-tree revision. S2 is deferred: **no independent historical v8
+The coordinator reports current-revision GREEN execution for the four named
+entries above and full `matter_fast` 26/26, including M1 and original S1.
+Only the newly added matched-history control remains authored-only in this
+follow-up; it has not been built or run by this edit-only author.
+S2 is deferred: **no independent historical v8
 artifact exists in the repository. Migration evidence is reconstruction-based,
 shared with the CPU mirror** (`Checkpoint.Tests.Support.h`). A future independent
 artifact can replace this fixture; it is not a historical compatibility oracle.
@@ -216,5 +239,6 @@ Historical raw 88-byte captures
 are decoded as their original 22 words, with default C/phi appended only after
 the original file hash is checked. Frozen fixtures were not changed.
 
-Linux and Windows/D3D12 builds, shader reflection, tests, integrated behavior and
-performance for this revision remain with the coordinator's validation lane.
+Matched-control execution, platform compatibility and performance gates remain
+with the coordinator's validation lane; the named passes alone do not establish
+Windows/D3D12 compatibility or performance acceptance.

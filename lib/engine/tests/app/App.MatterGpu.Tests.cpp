@@ -5859,22 +5859,43 @@ namespace pP::tests::detail::MatterGpu {
         set_gravity(0.0f);
         state = advance("snow", "release", property);
         const auto released = geometry(state);
+        const auto released_state = state;
         set_gravity(gravity);
         state = advance("snow", "reload", property);
         const auto reloaded = geometry(state);
 
-        // Equal gravity and diagnostic load windows: normalized extra axial
-        // shortening is a structural compliance proxy, not a stress modulus.
+        // Replay the identical released particle state and reload profile,
+        // changing only the compacting history to its admitted initial value.
+        state = released_state;
+        for (auto &particle: state) {
+            particle.m_solid_fraction = property.m_solid_fraction0;
+            particle.m_compaction = 0.0f;
+        }
+
+        set_gravity(gravity);
+        state = advance("snow", "reload_reset_history", property);
+        const auto reset_reloaded = geometry(state);
+
+        // The first load has different geometry/contact/velocity and is context
+        // only. Matched reload shortening is a compliance proxy, not a modulus.
         const double first_shortening = (initial[0u] - compressed[0u]) / initial[0u];
         const double reload_shortening = (released[0u] - reloaded[0u]) / initial[0u];
+        const double reset_reload_shortening = (released[0u] - reset_reloaded[0u]) / initial[0u];
         const bool retained = compressed[3u] > initial[3u] and released[3u] >= compressed[3u];
-        const bool resistant = first_shortening > 0.0 and reload_shortening < first_shortening;
-        if (diagnostic)
+        const bool resistant = reset_reload_shortening > 0.0 and reload_shortening < reset_reload_shortening;
+        if (diagnostic) {
             std::printf(
                 "B1 loaded snow initial_phi=%.9g compressed_phi=%.9g released_phi=%.9g reloaded_phi=%.9g retained_height_loss=%.9g first_shortening=%.9g reload_shortening=%.9g retained_compaction=%s increased_structural_resistance=%s\n",
                 initial[3u], compressed[3u], released[3u], reloaded[3u], (initial[0u] - released[0u]) / initial[0u],
                 first_shortening, reload_shortening, retained ? "observed" : "not_established",
                 retained and resistant ? "observed" : "not_established");
+
+            std::printf(
+                "B1 snow matched_reload retained_height=%.9g reset_height=%.9g retained_width=%.9g reset_width=%.9g retained_shortening=%.9g reset_shortening=%.9g retained_support_height=%.9g reset_support_height=%.9g attribution=history_only_all_other_inputs_identical\n",
+                reloaded[0u], reset_reloaded[0u], reloaded[1u], reset_reloaded[1u], reload_shortening,
+                reset_reload_shortening, reloaded[2u], reset_reloaded[2u]);
+        }
+
         // Uncalibrated material outcomes are reported, never assumed as gates.
     }
 
@@ -5898,7 +5919,7 @@ namespace pP::tests::detail::MatterGpu {
     };
 
     // ------------------------------------------------------------------
-    // dynamically driven elastic recovery diagnostic
+    // initial-velocity excitation and subtractive-kick diagnostic
     // ------------------------------------------------------------------
 
     PPR_UNIT_TEST (elastic_one_percent_shear_release_diagnostic) {
@@ -5916,7 +5937,8 @@ namespace pP::tests::detail::MatterGpu {
                 p.m_position_x = 24.5f + float(x);
                 p.m_position_y = 24.5f + float(y);
                 // Solver velocities are displacements per dt. Free affine
-                // transport would accumulate 1% shear over the 120-step drive.
+                // transport would accumulate 1% shear over 120 free substeps;
+                // this initial-velocity excitation is not a maintained drive.
                 p.m_displacement_x = (0.01f / 120.0f) * (float(y) - 1.5f);
                 p.m_deformation_displacement = {0.0f, 0.0f, 0.01f / 120.0f, 0.0f};
                 driven.push_back(p);
@@ -5982,8 +6004,10 @@ namespace pP::tests::detail::MatterGpu {
             std::printf("B1 elastic phase=drive step=%u objective=%.9g aligned_rms=%.9g\n", step, final[0u], final[1u]);
         }
 
-        // Remove only the prescribed affine contribution once. Preserve the
-        // achieved geometry, F, and solver-generated velocity response.
+        // Apply a subtractive kick equal to the initial affine contribution.
+        // Nonlinear free evolution does not preserve an independently removable
+        // driving component. The residual is a diagnostic lower/upper bound,
+        // not an exact recovery metric; geometry and F remain unchanged.
         for (std::size_t i = 0u; i < state.size(); ++i) {
             state[i].m_displacement_x -= driven[i].m_displacement_x;
             state[i].m_deformation_displacement.m_c1x -= 0.01f / 120.0f;
@@ -6005,7 +6029,7 @@ namespace pP::tests::detail::MatterGpu {
                 "B1 elastic phase=release step=%u objective=%.9g aligned_rms=%.9g\n", step, final[0u], final[1u]);
         }
 
-        // A drive that never exceeds the recovery thresholds cannot establish
+        // An excitation that never exceeds the recovery thresholds cannot establish
         // recovery. Report achieved excitation rather than assuming 1% was held.
         const bool excited = peak[0u] >= 1e-3 and peak[1u] >= 1e-3;
         std::printf(
