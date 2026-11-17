@@ -761,7 +761,7 @@ namespace pP::game::tests::detail::compat {
         Diagnostics defaults_diagnostics;
         const auto normal = resolveCli({}, defaults_diagnostics);
         PPR_TEST_ASSERT(normal.has_value());
-        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == -1);
+        PPR_TEST_ASSERT(normal->m_world_light.m_value.m_sky_hour == 8);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_diagnostic == ELightingDiagnostic::off);
         PPR_TEST_ASSERT(normal->m_world_light.m_value.m_cascade == 1u);
         PPR_TEST_ASSERT(normal->m_pixel.m_value.m_pixel_scale == 3u);
@@ -883,7 +883,7 @@ namespace pP::game::tests::detail::compat {
     PPR_UNIT_TEST (retired_world_light_settings_are_rejected) {
         // The retained settings keep their approved defaults.
         const WorldLightDisplaySettings defaults{};
-        PPR_TEST_ASSERT(defaults.m_sky_hour == -1);
+        PPR_TEST_ASSERT(defaults.m_sky_hour == 8);
         PPR_TEST_ASSERT(defaults.m_diagnostic == ELightingDiagnostic::off);
         PPR_TEST_ASSERT(defaults.m_cascade == 1u);
         const PixelDisplaySettings pixel_defaults{};

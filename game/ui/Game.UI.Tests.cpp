@@ -1585,10 +1585,10 @@ descriptor = "earlier.toml"
         PPR_TEST_ASSERT(post->m_value.m_exposure_ev == 3.0f);
         PPR_TEST_ASSERT(not post_diagnostics.hasErrors());
 
-        // Reset restores factory defaults (the retained black-boundary sky and
+        // Reset restores factory defaults (the golden-dawn sky hour and
         // independent post bloom and eye adaptation on).
         const game::WorldLightDisplaySettings world_defaults{};
-        PPR_TEST_ASSERT(world_defaults.m_sky_hour == -1);
+        PPR_TEST_ASSERT(world_defaults.m_sky_hour == 8);
         PPR_TEST_ASSERT(world_defaults.m_diagnostic == ELightingDiagnostic::off);
         PPR_TEST_ASSERT(world_defaults.m_cascade == 1u);
         const game::PixelDisplaySettings pixel_defaults{};

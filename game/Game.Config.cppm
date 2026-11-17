@@ -237,7 +237,10 @@ export namespace pP::game {
     /// under `game.world_light.*` and edited in the Display window's
     /// "Lighting & Post" section.
     struct WorldLightDisplaySettings {
-        i32 m_sky_hour{-1};
+        /// Golden dawn: the sun sits low enough that the cascade sky reads warm
+        /// rather than neutral, while the hour is still morning. `-1` stays the
+        /// explicit "no sky contribution" value a user can select.
+        i32 m_sky_hour{8};
         ELightingDiagnostic m_diagnostic{ELightingDiagnostic::off};
         u32 m_cascade{1u};
 
