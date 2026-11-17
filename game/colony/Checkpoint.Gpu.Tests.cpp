@@ -1938,7 +1938,6 @@ namespace pP::game::tests::detail::checkpoint {
                 auto stage = captured;
                 if (appearance == 0u) {
                     stage.m_has_background = false;
-                    stage.m_surface_profile.reset();
                     for (auto &visual: stage.m_terrain_visuals) {
                         visual.m_color_rgba = 0x0000ffffu;
                         visual.m_texture_index = 0xffffffffu;

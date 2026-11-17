@@ -63,16 +63,6 @@ namespace pP::colony {
                     std::make_shared<const Array<GridParticleInstance>>(std::move(particles))});
         }
 
-        if (preview.m_plan.recipe().m_open_surface) {
-            auto surface = std::make_shared<GridSurfaceProfile>();
-            surface->m_cell_size_m = packet.m_cell_size_m;
-            for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
-                surface->m_heights_m[column / 4u][column % 4u] = static_cast<float>(sim::generationSurfaceHeight(
-                    preview.m_plan, (static_cast<double>(column) + 0.5) * static_cast<double>(packet.m_cell_size_m)));
-            }
-            packet.m_surface_profile = std::move(surface);
-        }
-
         for (u32 cy = preview.m_support.m_bottom / sim::kChunkEdge; cy < preview.m_support.m_top / sim::kChunkEdge;
             ++cy) {
             for (u32 cx = preview.m_support.m_left / sim::kChunkEdge; cx < preview.m_support.m_right / sim::kChunkEdge;

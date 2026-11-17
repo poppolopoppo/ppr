@@ -37,7 +37,8 @@ struct GridFrame {
     float4 m_viewport;
     float2 m_camera_origin;
     uint m_has_background;
-    uint m_has_surface;
+    // The four bytes after m_has_background are padding: the layer array is
+    // 16-byte aligned on both sides of the mirror.
     BackgroundLayer m_layers[4];
     float m_camera_world_x;
     float m_camera_world_y;

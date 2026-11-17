@@ -488,16 +488,6 @@ export namespace pP {
     static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_repeat_period_m) == 12u);
     static_assert(PPR_OFFSETOF(GridBackgroundLayer, m_parallax_factor) == 16u);
 
-    inline constexpr u32 kGridSurfaceColumns = 4096u;
-    using GridSurfaceHeights = std::array<std::array<float, 4u>, kGridSurfaceColumns / 4u>;
-    static_assert(sizeof(GridSurfaceHeights) == 16384u);
-    // Exact generation height at each fine-column centre. Immutable owned
-    // presentation data; no generation recipe or simulation dependency crosses here.
-    struct GridSurfaceProfile {
-        float m_cell_size_m{1.0f};
-        GridSurfaceHeights m_heights_m{};
-    };
-
     // Initial-state admission seeds in physical units, before a resident solver
     // view exists. Uploaded once per changed inventory; never CPU draw geometry.
     struct GridParticleInstance {
@@ -738,7 +728,8 @@ export namespace pP {
             float m_viewport[4]{};
             float m_camera_origin[2]{};
             u32 m_has_background{};
-            u32 m_has_surface{};
+            // The four bytes at offset 172 are padding: the layer array is
+            // 16-byte aligned on both sides of the shader mirror.
             std::array<GridBackgroundLayer, 4u> m_layers{};
             float m_camera_world_x{};
             float m_camera_world_y{};
@@ -773,7 +764,6 @@ export namespace pP {
         static_assert(PPR_OFFSETOF(GridFrame, m_inverse_view_projection) == 80u);
         static_assert(PPR_OFFSETOF(GridFrame, m_viewport) == 144u);
         static_assert(PPR_OFFSETOF(GridFrame, m_layers) == 176u);
-        static_assert(PPR_OFFSETOF(GridFrame, m_has_surface) == 172u);
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_world_x) == 304u);
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_forward_x) == 316u);
         static_assert(PPR_OFFSETOF(GridFrame, m_camera_ortho) == 328u);
@@ -2105,7 +2095,6 @@ export namespace pP {
             bool m_particle_seeds_dirty{};
             bool m_has_background{};
             std::array<GridBackgroundLayer, 4u> m_background_layers{};
-            std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
             float m_reference_thickness_m{1.0f};
             std::array<ParticleChunk, kGridTileCacheCapacity> m_particles{};
             EGridDiagnosticMode m_diagnostic_mode{EGridDiagnosticMode::textured};
@@ -2255,7 +2244,6 @@ export namespace pP {
         Array<image::ImageAsset> m_terrain_images{};
         bool m_has_background{false};
         std::array<GridBackgroundLayer, 4u> m_background_layers{};
-        std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
         float m_reference_thickness_m{1.0f};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};

@@ -232,7 +232,6 @@ namespace pP::colony {
                 packet.m_particle_batches = std::move(*particles);
             }
 
-            packet.m_surface_profile = cache.captureSurface(driver);
             return {};
         }
 
@@ -381,8 +380,6 @@ namespace pP::colony {
     Expected<Array<GridParticleBatch>> ParticlePresentationCache::capture(const ColonyDriver &driver) {
         if (m_generation != driver.worldGeneration()) {
             m_chunks = {};
-            m_surface_profile.reset();
-            m_surface_captured = false;
             m_generation = driver.worldGeneration();
         }
 
@@ -420,38 +417,6 @@ namespace pP::colony {
             }
         }
         return result;
-    }
-
-    std::shared_ptr<const GridSurfaceProfile> ParticlePresentationCache::captureSurface(const ColonyDriver &driver) {
-        if (m_generation != driver.worldGeneration()) {
-            m_chunks = {};
-            m_surface_profile.reset();
-            m_surface_captured = false;
-            m_generation = driver.worldGeneration();
-        }
-
-        if (m_surface_captured) {
-            return m_surface_profile;
-        }
-
-        static_assert(kGridSurfaceColumns == sim::kWorldEdge);
-        std::array<float, kGridSurfaceColumns> heights;
-
-        if (not driver.sampleSurfaceHeights(heights)) {
-            m_surface_captured = true;
-            return {};
-        }
-
-        auto surface = std::make_shared<GridSurfaceProfile>();
-        surface->m_cell_size_m = 1.0f / static_cast<float>(driver.cellsPerMetre());
-
-        for (u32 column = 0u; column < kGridSurfaceColumns; ++column) {
-            surface->m_heights_m[column / 4u][column % 4u] = heights[column];
-        }
-
-        m_surface_profile = std::move(surface);
-        m_surface_captured = true;
-        return m_surface_profile;
     }
 
     Expected<SimFramePacket> makeSimFramePacket(
@@ -660,7 +625,6 @@ namespace pP::colony {
         stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
         stage.m_has_background = presentation.m_has_background;
         stage.m_background_layers = presentation.m_background_layers;
-        stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
         stage.m_particle_presentation = presentation.m_particle_presentation;
@@ -736,7 +700,6 @@ namespace pP::colony {
         stage.m_reference_thickness_m = presentation.m_reference_thickness_m;
         stage.m_has_background = presentation.m_has_background;
         stage.m_background_layers = presentation.m_background_layers;
-        stage.m_surface_profile = presentation.m_surface_profile;
         stage.m_particle_batches = presentation.m_particle_batches;
         stage.m_gpu_particles = presentation.m_gpu_particles;
         stage.m_particle_presentation = presentation.m_particle_presentation;
@@ -797,7 +760,6 @@ namespace pP::colony {
         stage.m_reference_thickness_m = packet.m_reference_thickness_m;
         stage.m_has_background = packet.m_has_background;
         stage.m_background_layers = packet.m_background_layers;
-        stage.m_surface_profile = packet.m_surface_profile;
         stage.m_particle_batches = packet.m_particle_batches;
         stage.m_gpu_particles = packet.m_gpu_particles;
         stage.m_particle_presentation = packet.m_particle_presentation;

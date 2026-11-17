@@ -39,12 +39,9 @@ export namespace pP::colony {
         // cache:
         std::array<Entry, sim::kChunkCount> m_chunks{};
         u64 m_generation{};
-        std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
-        bool m_surface_captured{};
 
     public:
         [[nodiscard]] Expected<Array<GridParticleBatch>> capture(const ColonyDriver &driver);
-        [[nodiscard]] std::shared_ptr<const GridSurfaceProfile> captureSurface(const ColonyDriver &driver);
     };
 
     // ------------------------------------------------------------------
@@ -82,7 +79,6 @@ export namespace pP::colony {
         float m_reference_thickness_m{1.0f};
         bool m_has_background{};
         std::array<GridBackgroundLayer, 4u> m_background_layers{};
-        std::shared_ptr<const GridSurfaceProfile> m_surface_profile{};
         Array<GridParticleBatch> m_particle_batches{};
         std::optional<GridParticleGpuView> m_gpu_particles{};
         // Publication state of this frame's particle payload (plan §3). `held`

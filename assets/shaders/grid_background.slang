@@ -31,7 +31,8 @@ struct GridFrame {
     float4 m_viewport;
     float2 m_camera_origin;
     uint m_has_background;
-    uint m_has_surface;
+    // The four bytes after m_has_background are padding: the layer array is
+    // 16-byte aligned on both sides of the mirror.
     BackgroundLayer m_layers[4];
     float m_camera_world_x;
     float m_camera_world_y;
@@ -43,12 +44,6 @@ struct GridFrame {
     uint m_has_resolved_cells;
 };
 ConstantBuffer<GridFrame> g_grid_frame;
-// Float4 packing preserves a 16-byte constant-buffer array stride. The
-// background-only buffer is exactly 16 KiB, including on Vulkan minimum limits.
-struct SurfaceProfile {
-    float4 m_heights_m[1024];
-};
-ConstantBuffer<SurfaceProfile> g_surface_profile;
 Texture2D<float4> g_backdrop;
 struct BackgroundVertexOutput {
     float4 position : SV_Position;
@@ -129,9 +124,11 @@ float3 backgroundLayerRadiance(float3 linear_rgb, float2 world, float2 camera, f
     float depth_weight = 1.0 - clamp(parallax, 0.0, 1.0);
     float2 offset_cells = depth_weight * displacement / sqrt(256.0 + dot(displacement, displacement));
     float2 shifted_cells = world / cell + offset_cells;
-    if (any(shifted_cells < 0.0) || any(shifted_cells >= 1024.0)) return float3(0.0);
-
-    return linear_rgb * angularMean(shifted_cells);
+    // A receiver outside the fine field clamps to the field's own edge instead of
+    // returning black: above the world that edge is open sky, so the background
+    // layer standing in for the sky is lit by the sky integral the cascades
+    // already solved rather than by nothing.
+    return linear_rgb * angularMean(clamp(shifted_cells, float2(0.0), float2(1023.0)));
 }
 
 float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
@@ -156,19 +153,6 @@ float4 shadeBackground(BackgroundVertexOutput input, uint lightingSample,
     // The single-sample optical bake always passes lightingSample == 0.
     if (lightingSample != 0u && backgroundCoveredByOpaqueTerrain(world / g_grid_frame.m_cell_size_m)) discard;
 
-    if (g_grid_frame.m_has_surface != 0u) {
-        // Columns match the exact seeded height sampled by the terrain raster.
-        // Edge clamping keeps backdrop reads bounded when the camera sees outside
-        // the finite world. This same target supplies optical refraction below.
-        uint column = uint(clamp(floor(world.x / g_grid_frame.m_cell_size_m), 0.0, 4095.0));
-        float surface_y = g_surface_profile.m_heights_m[column / 4u][column % 4u];
-        if (world.y >= surface_y) {
-            float altitude = saturate((world.y - surface_y) / 180.0);
-            float3 horizon = float3(0.52, 0.70, 0.82);
-            float3 zenith = float3(0.12, 0.30, 0.52);
-            return float4(lerp(horizon, zenith, smoothstep(0.0, 1.0, altitude)), 1.0);
-        }
-    }
     if (lit) {
         float2 world_cells = world / g_grid_frame.m_cell_size_m;
         if (any(world_cells < 0.0) || any(world_cells >= 1024.0)) return float4(0.0, 0.0, 0.0, 1.0);
