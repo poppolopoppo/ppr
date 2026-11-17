@@ -359,8 +359,11 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/shipped_liquids_have_distinct_loaded_gpu_responses"
         LOOPS
         RESOURCE_LOCK gpu
-        TIMEOUT 180
-        LABELS unit game gpu_validation matter_fast
+        # Measured 150 s (Debug, exclusive) and 295 s under contention: this
+        # liquid-comparison workload is evidence, not a per-change gate, so it
+        # stays out of matter_fast and keeps a wide ceiling.
+        TIMEOUT 400
+        LABELS unit game gpu_validation matter_long
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_edit_gpu
