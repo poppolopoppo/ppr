@@ -4443,6 +4443,16 @@ namespace pP::tests::detail::MatterGpu {
                                     }
                                 } else if (best_row[cell] != 0xffffffffu) {
                                     ++water_pixels[index];
+                                    // Keep a bounded set of actual failed samples so a
+                                    // shading change can be distinguished from clear holes.
+                                    if (not blue and holes[index] < 8u) {
+                                        _.log(
+                                            std::format(
+                                                "SOLVER-POOL-HOLE epoch={} pixel=[{},{}] cell=[{},{}] row={} cell_interior={} rgba=[{},{},{},{}] blue_threshold=200",
+                                                epochs[state], x, y, cell_x, cell_y, best_row[cell], cell_interior,
+                                                pixel[0], pixel[1], pixel[2], pixel[3]));
+                                    }
+
                                     holes[index] += blue ? 0u : 1u;
                                 } else if (cell_interior) {
                                     const u32 band = std::clamp(nomination_distance[cell], 1u, kPoolBands);

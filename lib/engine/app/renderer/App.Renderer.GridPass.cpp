@@ -4411,7 +4411,7 @@ namespace pP {
                           m_gpu_particle_gas_program));
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, create(
-                          "grid_tiles.slang", "grid_tiles", "vertexParticleIndirectMain", "fragmentSolidLiquidMain",
+                          "grid_tiles.slang", "grid_tiles", "vertexParticleSolidLiquid", "fragmentSolidLiquidMain",
                           m_gpu_particle_solid_liquid_program));
 
         PPR_RETURN_ERROR_ON_FAIL(

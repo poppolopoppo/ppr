@@ -4279,6 +4279,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             const auto centre = gateTexel_(circle, 64u, 64u);
             const auto clear = gateTexel_(background, 64u, 64u);
+            _.log(
+                std::format(
+                    "RESIDENT-PARTICLE centre_rgba=[{},{},{},{}] clear_rgba=[{},{},{},{}] expected_rgb=[{},{},{}] tolerance=2",
+                    centre[0], centre[1], centre[2], centre[3], clear[0], clear[1], clear[2], clear[3],
+                    std::lround(clear[0] * 0.5), std::lround(clear[1] * 0.5), std::lround(clear[2] * 0.5)));
+
             // The optical liquid's authored black tint keeps its premultiplied
             // color black, so alpha0.5 over the captured clear leaves half of
             // every clear channel.
