@@ -547,10 +547,16 @@ ppr_add_test_entry(TARGET engine.tests.app
 
 # window_input 4.2s + imgui_routing 3.1s + player_service 1.3s live loop-1;
 # these touch native window and device state, so they claim both locks.
+# Window services create a native window and an ImGui context. Under a parallel
+# suite run the third-party GLFW/dbus teardown can still hold allocations when
+# LSan samples at exit, which reports a flake that never reproduces serially
+# (3/3 clean) and is not an engine allocation. Window entries are already the
+# documented exception to parallel scheduling, so this one runs alone.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME services_window
     FILTER "app/window_input,app/imgui_routing,app/player_service"
     LOOPS
+    RUN_SERIAL
     RESOURCE_LOCK gpu window
     TIMEOUT 300
     LABELS unit engine app
