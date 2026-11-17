@@ -971,3 +971,181 @@ Authoritative execution record for the calibrated-law evidence. Any earlier "aut
 Logs: `/tmp/opencode/b18-fast.log` (full gate), `/tmp/opencode/b17-diag.log` (loaded-scene series), `/tmp/opencode/b1-increment2-acceptance.log` (identity and GPU state).
 
 Coverage of this revision: the matched-history snow control, the loaded clay/granular and snow scenes, the elastic recovery diagnostic and the property-table leaves are all inside the executed set. The measured clay result (settles to 6.54 vs granular 10.92) is recorded as a **provisional default** observation, not as intended gameplay behaviour; the snow history comparison is a **diagnostic**, and no "increased resistance" claim is made from it. Elastic recovery remains undemonstrated, so rock and ore stay granular. No upstream oracle exists for these families; their acceptance rests on the authored analytical leaves plus these executed scenes.
+# Dense mixed-material reconstruction bound (2026-11-17, edit-only)
+
+## Evidence and derivation
+
+Live witness: flag 8, field 27, row 9308, epoch 11035, 9536 particles,
+1031-square grid, five property rows, after mixing water, magma and snow.
+Field 27 is checked **before** projection: `sigma` is nonfinite or nonpositive.
+It does not establish that `exp` overflowed. The existing return already rejected
+nonfinite or out-of-`[-87,88]` exponents (field 24). Direct unchecked exponential
+overflow in that return is therefore not an established explanation of this run.
+
+The pre-change law is `t'=clamp(t,-D,T)`, `n'=min(n,edge)`,
+`e'=dev*(n'/n)+t'/2` (no division when `n<=edge`). For porous snow,
+`D=D0/(1-phi)` tends to `D0/epsilon_D`, not infinity at the admitted boundary:
+the shipped values give `0.2/0.01 ~= 20`. At the dense boundary the cap is
+removed. `c=c0*phi^kappa` is bounded by `c0`; it cannot overflow for admitted
+phi and nonnegative finite kappa. The ellipse multiplier lies in `[0,1]`.
+As `alpha*(-t')+c` tends to zero, the return reduces the deviator to zero;
+it divides by **n**, not by that vanishing edge. With shipped 30-degree friction,
+`alpha ~= 0.3266`, so for compression each projected exponent is at most
+`t'/2 + (alpha*(-t')+c)/sqrt(2)`: deep compression does not create a huge
+positive exponent for shipped snow. Cohesive hardening can admit much larger
+caps/strengths, but the dev norm still cannot increase. Thus the proposed
+cap-driven positive overflow is not proved for the shipped mix.
+
+There is nevertheless a numerical range defect: allowing `exp(88) ~= 1.65e38`
+only proves the exponential fits. Matrix reconstruction sums products;
+`forkSvd` later evaluates `E*E+H*H` and `F*F+G*G`. Those squares overflow at
+scales near `sqrt(FLT_MAX) ~= 1.84e19`, well before `exp` overflows near
+88.72. Deep compression also drives determinants and the `Q-R` singular value
+toward zero/cancellation, leaving unusable inverses or singular values upstream
+of the field-27 guard. Which of these occurred in the live scene is unknown.
+
+## Bound and sites
+
+Adapter-only `boundedProjectionExp` clamps finite projected exponents to
+`[ln(0.1), ln(10000)] ~= [-2.302585, 9.210340]` before `exp`, then clamps its
+rounded result to `[0.1,10000]`. These endpoints reuse the existing integration
+singular-value clamp, rather than merely the scalar float range: reconstructed
+matrix terms are order `1e4`, squared terms order `1e8`, and the ideal determinant
+floor is `0.01`. This is deliberate numerical saturation, changing the return
+outside that band; it is not an exact continuation of the yield surface.
+History updates precede component-wise saturation (the porous update is revised
+below). Arbitrary later trial
+displacement can still defeat these bounds; this is not a universal stability proof.
+
+Fixed sites in `assets/shaders/pbmpm/fork_core.slang`:
+
+- Shared `calibratedReturn`: cohesive and compacting integration and
+  frozen-history constraint-target reconstruction now saturate finite exponents.
+- Sand integration return: the same bounded exponential replaces rejection for
+  finite exponent excursions; unusable norm/exponent still rejects.
+- Visco integration rescaling: evaluates the scale in log space and uses the
+  same bound. The analytically reproducible `plasticity=41`, trial sigma=10000
+  case has `J/newJ ~= 5.5e42` although its final sigma is finite; this avoidable
+  intermediate overflow no longer rejects. The no-adapter fork path is retained.
+
+Unusable sigma (including zero/negative), nonfinite t/n/projected exponent,
+invalid C/phi/H, nonfinite cap/strength/history arithmetic, and undefined or
+unusable denominators still reject with their existing witnesses. Visco still
+rejects nonfinite/zero yield, reciprocal or determinant operands. Structural,
+terrain, trial-matrix/inverse, produced-state and fixed-point budget guards
+remain independent rejection paths. No already-nonfinite input is repaired.
+
+## Regression and remaining validation
+
+- Extended `calibrated_caps_hardening_and_two_regime_edges` with deep porous,
+  dense and cohesive compression and cohesive dilation. The shader probe now
+  observes both history-updating and frozen-history returns. Both must accept
+  and land at the reconstruction endpoints; the zero-singular-value rejection
+  remains. The previous dense t=-30 expectation now asserts the lower bound.
+- Changed the existing resident visco quotient-overflow witness to require
+  publication, retaining the liquid fixed-point rejection case.
+- Added `dense_water_magma_snow_resident_ticks_remain_finite`, registered once
+  as `matter_dense_mixed_gpu`: deterministic 768-particle half-cell packing on
+  a 64-square grid, a supporting floor, gravity and descending liquid load,
+  shipped family coefficients, and precompacted snow immediately below/at 0.99.
+  It runs 128 real resident ticks, eight substeps each at K5 (1024 substeps),
+  snapshots every tick, and requires finite complete rows, unchanged inventory,
+  valid material history and monotone snow phi. No CPU substitute solver or
+  helper-only execution is used for this mixed scene.
+
+**Not executed:** this task is edit-only, with no builds or tests authorized.
+The mixed fixture is a bounded reproduction candidate, not an observed reproducer
+or a claim that loading freshly porous snow reaches the dense boundary. The
+closest analytically deterministic overflow is the existing visco quotient case;
+the calibrated helper cases deterministically exercise reconstruction saturation.
+The production case adds 9536 particles, five property rows, a 1031-square domain,
+11035 epochs and an unknown row-9308 neighbourhood/gradient/contact/edit history.
+No checkpoint or neighbourhood capture was supplied. The live crash remains
+unconfirmed fixed pending execution and, if needed, that capture. Required checks:
+runtime shader compilation and these GPU leaves on Vulkan and D3D12, existing
+constitutive/calibrated/sand/visco coverage, and the live mixed-scene replay.
+
+## Follow-up: saturating compaction and bounded axial cap
+
+The planning owner additionally observed snow columns continually shrinking.
+That geometric observation is important but does not imply unbounded C/phi:
+the old shader already clamped phi to `phiMax=1-epsilon_D`, and compacting
+particles leave C unchanged. The dense branch did, however, remove its axial
+cap, and the old additive history update could reach the dense switch abruptly.
+
+The new porous update is
+
+```
+q = max(0, t_returned - t_trial)
+phi_next = phi + (phiMax - phi) * (1 - exp(-beta*q))
+```
+
+For finite nonnegative load increments, remaining compactable porosity obeys
+`phiMax-phi_N = (phiMax-phi_0)*exp(-sum(beta*q))`. It approaches zero from
+above under indefinitely sustained plastic loading, so phi approaches phiMax
+from below. It never overshoots; FP32 rounding can reach phiMax exactly and
+is still admitted. A positive overflowing `beta*q` means complete saturation,
+with `exp(-infinity)=0`. Zero loading or beta=0 produces no increment.
+The old finite-domain checks and final phi clamp remain.
+
+The previous `Dmax=-2*ln(0.1)` was a numerical bound permitting 100-fold
+volume compression, not a porosity limit. The parent session reports that
+the 2048-to-4096 height convergence assertion failed with that bound.
+At fixed solid content, volume is inversely proportional to phi, so
+`t_min=ln(phi/phiMax)` and `D_eff=ln(phiMax/phi)`. Both porous cap evaluations
+now use this depth, and the returned trace is clamped again after the history
+update. For snow, `ln(0.99/0.3)=1.193922`, permitting at most 3.3-fold initial
+compression. As `phi -> phiMax`, `D_eff -> 0`, and the dense return refuses
+further volumetric compression (`t_returned>=0`). Phi strengthening is retained.
+The exponent band remains a second safeguard, not the physical bound; any
+returned component outside it rejects with field 24 and is a defect to diagnose.
+
+Cohesive C was already a running maximum, not a sum:
+`C_next=max(C,-min(t_returned,0))`. Its unbounded hardening formula
+`D0+HD*C` now uses `min(D0+HD*C,ln(phiMax/phi))`. Thus the same unbounded
+hardening shape also needed the porosity limit. Cohesive phi is unchanged;
+newly generated C cannot exceed that depth. An admitted old history above it
+is retained (monotonicity), but cannot grow
+the effective cap. Nonfinite hardening arithmetic remains rejectable.
+The helper regression includes a retained C=1000 case with bounded return.
+
+Neither update writes particle mass or reference volume. Porosity/history and
+elastic deformation change; reference inventory must remain bit-exact. A useful
+physical interpretation at fixed solid inventory is
+`Voccupied/Voccupied_initial = phi_initial/phi`, with a nonzero dense limit.
+**This interpretation is not currently coupled to spatial occupancy in the
+solver:** objective-volume feedback is gated to Sand, and liquid has its own
+density feedback. An F/cap/history floor alone cannot prove a minimum particle
+cloud height. Adding compacting-family occupied-volume feedback would be a
+further solver-design decision, not a consequence of the scalar saturation.
+
+Added `sustained_snow_load_converges_without_inventory_loss`, registered as
+`matter_snow_convergence_gpu`: 192 snow particles in a fixed-width supported
+bin under gravity, real K5 resident ticks, snapshots at 256, 512, 1024, 2048
+and 4096 substeps. It prints height and mean phi at every horizon, verifies
+finite state, monotone bounded phi and exact per-row mass/reference volume,
+requires final height within 5% of the dense-limit prediction (the existing
+boundary allowance, now two-sided), and requires at most 1% initial-height
+change over the last doubling. The predicted dense asymptote is
+`7.5*0.3/0.99=2.272727` cells, or `0.3030303*initial_height`; convergence
+tolerance is 0.075 cells, and the porosity-height tolerance is 0.113636 cells.
+The gate prints both last heights, their difference, the prediction, both
+tolerances and final mean phi before asserting. These are
+explicit fixture acceptance tolerances, not measured results or engine budgets.
+
+| Substeps | Height | Mean phi | Inventory |
+|---|---|---|---|
+| 256 | not run | not run | not run |
+| 512 | not run | not run | not run |
+| 1024 | not run | not run | not run |
+| 2048 | not run | not run | not run |
+| 4096 | not run | not run | not run |
+
+There is **no post-change convergence evidence yet** under this edit-only assignment.
+The prior failure was reported without measured heights; no new numbers are
+invented here. The parent session must report the printed measurements even
+if they disagree with the prediction, without loosening either bound.
+The geometric acceptance gate intentionally remains capable of failing after
+the scalar safeguards. If it fails, the planning owner must decide the spatial
+occupied-volume coupling; do not weaken the test to accept coincident particles
+merely because F and phi remain finite. The live runaway is not claimed fixed.

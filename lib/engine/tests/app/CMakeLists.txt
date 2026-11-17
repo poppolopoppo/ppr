@@ -162,7 +162,7 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # The responsibility lists plus the resident list are disjoint and cover every
 # leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
 # resident + 3 schedule + 3 substance table + 3 B1 laws + 1 cost + 1 correctness + 1 precision
-# + 1 loaded diagnostic + 1 elastic diagnostic = 57
+# + 1 loaded diagnostic + 1 elastic diagnostic + 1 dense mixed regression + 1 snow convergence = 59
 # `app/matter_gpu` leaves, and the resident list also holds one
 # `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
 # their own entries outside `matter_fast`, below. The two whole-grid terrain
@@ -199,6 +199,22 @@ ppr_add_test_entry(TARGET engine.tests.app
     RESOURCE_LOCK gpu
     TIMEOUT 300
     LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_dense_mixed_gpu
+    FILTER "app/matter_gpu/dense_water_magma_snow_resident_ticks_remain_finite"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_snow_convergence_gpu
+    FILTER "app/matter_gpu/sustained_snow_load_converges_without_inventory_loss"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
 )
 
 ppr_add_test_entry(TARGET engine.tests.app

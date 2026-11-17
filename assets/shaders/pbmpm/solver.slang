@@ -70,6 +70,13 @@ void captureCalibratedRejection(uint field, float2 sigma, float C, float phi,
     float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
     float cohesion = a.cohesion;
     float cap = a.cap;
+    float phiDense = 1.0-a.denseEpsilon;
+    float maxCap = log(phiDense/phi);
+    if (field == 33u && (!isfinite(maxCap) || maxCap < 0.0)) {
+        g_errors[15] = asuint(maxCap);
+        return;
+    }
+
     float nextC = C;
     float nextPhi = phi;
     float returned = min(trial, a.tension);
@@ -85,23 +92,21 @@ void captureCalibratedRejection(uint field, float2 sigma, float C, float phi,
         g_errors[15] = asuint(cap);
         if (field == 26u) return;
 
+        cap = min(cap, maxCap);
         returned = max(returned, -cap);
         if (updateHistory) nextC = max(C, -min(returned, 0.0));
         cohesion += a.cohesionHardening*nextC;
     } else {
         if (!dense) {
-            float voidFraction = 1.0-phi;
-            g_errors[29] = asuint(voidFraction);
-            if (field == 32u) return;
-
-            cap = a.cap/voidFraction;
+            cap = maxCap;
             g_errors[15] = asuint(cap);
             if (field == 33u) return;
 
             returned = max(returned, -cap);
             g_errors[25] = asuint(returned);
             if (updateHistory) {
-                float increment = a.compactionRate*max(0.0, returned-trial);
+                float remaining = phiDense-phi;
+                float increment = remaining * (1.0-exp(-a.compactionRate*max(0.0, returned-trial)));
                 g_errors[26] = asuint(increment);
                 if (field == 34u) return;
 
@@ -118,14 +123,14 @@ void captureCalibratedRejection(uint field, float2 sigma, float C, float phi,
         cohesion *= pow(strengthPhi, a.solidExponent);
         g_errors[16] = asuint(cohesion);
         if (!dense) {
-            float voidFraction = 1.0-nextPhi;
-            g_errors[29] = asuint(voidFraction);
-            if (field == 36u) return;
-
-            cap = a.cap/voidFraction;
+            cap = log(phiDense/nextPhi);
             g_errors[15] = asuint(cap);
             if (field == 37u) return;
+        } else {
+            cap = 0.0;
         }
+
+        returned = max(returned, -cap);
     }
 
     float edge = alpha*max(-returned, 0.0)+cohesion;

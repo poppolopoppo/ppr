@@ -46,6 +46,23 @@ tolerances. These are authored assertions, not an execution claim.
 
 ### Calibrated-return rejection evidence
 
+Porous history uses bounded relaxation:
+`phi_next = phi + (1-epsilon_D-phi)*(1-exp(-beta*max(0,t_returned-t_trial)))`.
+Remaining compactable porosity decays exponentially under sustained plastic
+loading. At fixed solid content, `V_dense/V=phi/phi_dense`, hence the porous
+cap is `D_eff=ln(phi_dense/phi)`, evaluated before and after history update.
+The return enforces `t>=-D_eff`; at `phi=phi_dense` it enforces `t>=0`.
+Cohesive hardening uses `min(D0+HD*C, ln(phi_dense/phi))`; its phi stays fixed.
+For snow, `phi0=0.3`, `phi_dense=0.99`: initial `D_eff=1.193922`, and the
+fixed-width dense-height prediction is `0.3030303*initial_height`.
+Porosity bounds the physics. The exponent band is only a second numerical
+safeguard: a returned exponent still outside it is a defect (field 24), not
+an accepted state silently repaired by saturation.
+Mass and reference volume are unchanged. This is a deformation/history bound;
+spatial occupied-volume convergence has its own sustained-load regression and
+is not established by this bound alone. See the edit-only evidence and remaining
+gate in `docs/pbmpm-baseline-and-multilayer-results.md`.
+
 The cohesive/compacting `calibratedReturn` distinguishes arithmetic admission
 from yield-surface projection. Flag 8 names the first rejected operand at both the
 constraint and integration call sites. Fields 22/23 coincide with the semantic
@@ -56,7 +73,7 @@ field slot, not new particle fields:
 |---|---|
 | 22 | Compaction C domain |
 | 23 | Solid fraction phi domain |
-| 24 | Projected exponent domain, before `exp(projected)` |
+| 24 | Nonfinite or out-of-band projected exponent, before bounded `exp(projected)` |
 | 25 | Ellipse ratio / cap radicand |
 | 26 | Cohesive cap depth D |
 | 27 | Singular values |
@@ -64,11 +81,11 @@ field slot, not new particle fields:
 | 29 | Trial log-strain trace t |
 | 30 | Trial deviatoric norm n |
 | 31 | Friction denominator |
-| 32 | Input void fraction `1-phi` |
-| 33 | Input porous cap depth D |
+| 32 | Reserved former input void-fraction witness |
+| 33 | Input porosity-derived cap depth D |
 | 34 | Phi increment |
 | 35 | Strength phi |
-| 36 | Updated void fraction `1-nextPhi` |
+| 36 | Reserved former updated void-fraction witness |
 | 37 | Updated porous cap depth D |
 | 38 | Cohesion c / shear edge |
 | 39 | Projection divisor n |
@@ -282,12 +299,19 @@ is what catches a coefficient product that overflows although every admitted
 operand stayed finite, and a rejected row contributes nothing to the grid.
 Inside the `PBMPM_ENGINE_ADAPTERS` blocks of `fork_core.slang` the sand history
 projection reports field17 when the deviatoric norm has no finite value (a huge
-but finite `logJp`) or when either projected exponent leaves the domain where
-`exp` is finite and positive, and the visco plastic state reports field16 when
-`exp(1 - plasticity)`, `J` or `newJ` is nonfinite or zero, or when the
-`J / newJ` quotient the step multiplies by overflows; either rejection restores
-that particle's step state and continues. The no-adapter conformance path keeps
-its original arithmetic and its preprocessed text is byte-identical. Profile
+but finite `logJp`) or a projected exponent is nonfinite. Finite projected
+exponents saturate to `[log(0.1), log(10000)]` before exponentiation, matching
+the existing integration singular-value band. Cohesive/compacting integration
+and frozen-history constraint targets use the same helper only after checking
+that their physical return is already inside the band; an excursion rejects
+with field24. This deliberately
+bounds reconstruction, not only `exp`: the old `[-87,88]` range permitted
+values whose subsequent matrix/SVD products overflowed. The visco plastic
+state reports field16 when `exp(1 - plasticity)`, its reciprocal, `J` or `newJ`
+is unusable; rescaling now uses `log(sigma)+(log(J)-log(newJ))/2` and the same
+bound rather than forming the potentially overflowing `J/newJ`. A rejected
+row still rejects the working transaction. The no-adapter conformance path keeps
+its original arithmetic. Profile
 constants whose derived operands cannot be finite are refused before any work
 instead: resident-tick admission returns `invalid_argument` unless
 `deltaTime > 0` with a finite `1/deltaTime`, the fixed-point multiplier is at
@@ -305,7 +329,7 @@ Encodability is enforced on the actual scatter operands, including
 absolute-sum budgets; finite raw `D` has no fixed-point bound. Adapter guards
 precede their dependent operations: finite `deltaGamma` precedes the sand branch,
 the norm check precedes its division, the finite yield reciprocal precedes visco
-clamp bounds, and valid `newJ` precedes `J / newJ`.
+clamp bounds, and valid `newJ` precedes logarithmic rescaling.
 
 Terrain and one-way predicted bodies are engine adapters. Terrain grid contact
 uses `node + 0.5`, matching the quadratic weights and APIC offsets. Source shapes,

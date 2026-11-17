@@ -5445,7 +5445,7 @@ namespace pP::tests::detail::MatterGpu {
         };
         fixture.initialize(false, 32u, 32u, true, nullptr, 0.0f);
 
-        constexpr u32 count = 15u;
+        constexpr u32 count = 22u;
         std::array<GpuParticle, count> input{};
         std::array<GpuMaterialProperties, count> properties{};
         const auto set = [&](const u32 index, const ESourceMaterial family, const float t, const float n, const float C,
@@ -5463,14 +5463,14 @@ namespace pP::tests::detail::MatterGpu {
             properties[index].m_family = family;
         };
 
-        const float snow_cap = 0.2f / 0.7f;
-        const float compacted_phi = 0.3f + 0.5f * (0.8f - snow_cap);
+        const float snow_cap = std::log(0.99f / 0.3f);
+        const float compacted_phi = 0.3f + (0.99f - 0.3f) * (1.0f - std::exp(-0.5f * (2.0f - snow_cap)));
         set(0u, ESourceMaterial::cohesive, -0.8f, 0.0f, 0.0f, 0.3f);
         set(1u, ESourceMaterial::cohesive, -0.8f, 0.0f, 0.2f, 0.3f);
         set(2u, ESourceMaterial::cohesive, 0.0f, 0.0f, 0.2f, 0.3f);
         set(3u, ESourceMaterial::cohesive, 0.0f, 0.5f, 0.0f, 0.3f);
         set(4u, ESourceMaterial::cohesive, 0.5f, 0.0f, 0.0f, 0.3f);
-        set(5u, ESourceMaterial::compacting, -0.8f, 0.0f, 0.0f, 0.3f);
+        set(5u, ESourceMaterial::compacting, -2.0f, 0.0f, 0.0f, 0.3f);
         set(6u, ESourceMaterial::compacting, 0.0f, 0.0f, 0.0f, compacted_phi);
         set(7u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, 0.3f);
         set(8u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, compacted_phi);
@@ -5481,8 +5481,26 @@ namespace pP::tests::detail::MatterGpu {
         input[12u].m_deformation_gradient.m_c0x = 0.0f;
         set(13u, ESourceMaterial::compacting, -0.1f, 0.5f, 0.0f, 0.3f);
         // Start porous and cross the exact dense boundary in this return while
-        // shear is active. The old cap clamps t, but the new dense cone sets n.
+        // shear is active. The dense limit clamps t to zero and sets n=c.
         set(14u, ESourceMaterial::compacting, -2.0f, 1.0f, 0.0f, 0.3f);
+        properties[14u].m_compaction_rate = 100.0f;
+
+        // Compression is bounded by porosity on both history paths. An excessive
+        // tensile return still outside the exponent band is a reported defect.
+        set(15u, ESourceMaterial::compacting, -160.0f, 0.0f, 0.0f, std::nextafter(0.99f, 0.0f));
+        set(16u, ESourceMaterial::compacting, -160.0f, 0.0f, 0.0f, 0.99f);
+        set(17u, ESourceMaterial::cohesive, -160.0f, 0.0f, 1000.0f, 0.3f);
+        set(18u, ESourceMaterial::cohesive, 160.0f, 0.0f, 0.0f, 0.3f);
+        properties[18u].m_tension = 200.0f;
+
+        // A vanishing shear edge is a valid projection, including n=0. Only
+        // the separate nonfinite-input control must reject before logarithms.
+        set(19u, ESourceMaterial::compacting, 0.0f, 0.0f, 0.0f, 0.99f);
+        properties[19u].m_cohesion = 0.0f;
+        set(20u, ESourceMaterial::compacting, 0.0f, 0.5f, 0.0f, 0.99f);
+        properties[20u].m_cohesion = 0.0f;
+        set(21u, ESourceMaterial::compacting, 0.0f, 0.0f, 0.0f, 0.99f);
+        input[21u].m_deformation_gradient.m_c0x = std::numeric_limits<float>::infinity();
 
         shader::SharedModule module;
         PPR_TEST_ASSERT(not fixture.m_shaders->loadModuleFromFile(
@@ -5560,10 +5578,62 @@ namespace pP::tests::detail::MatterGpu {
                    std::sqrt(2.0f);
         };
 
-        for (u32 i = 0u; i < 12u; ++i)
-            PPR_TEST_ASSERT(result[i].m_enabled == 1.0f);
+        for (u32 i = 0u; i < 12u; ++i) {
+            if (result[i].m_enabled != 1.0f) {
+                std::printf(
+                    "CALIBRATED-RETURN first_disabled=%u frozen_rejection=%.9g\n", i,
+                    static_cast<double>(result[i].m_liquid_density));
+                const auto input_words = std::bit_cast<std::array<float, 24u>>(input[i]);
+                const auto output_words = std::bit_cast<std::array<float, 24u>>(result[i]);
+                for (std::size_t word = 0u; word < output_words.size(); ++word)
+                    std::printf(
+                        "  scalar[%zu] input=%.9g output=%.9g\n", word, static_cast<double>(input_words[word]),
+                        static_cast<double>(output_words[word]));
 
-        PPR_TEST_ASSERT(result[12u].m_enabled == 0.0f);
+                std::fflush(stdout);
+            }
+
+            PPR_TEST_ASSERT(result[i].m_enabled == 1.0f);
+        }
+
+        // Analytical diagonal returns: sigma = exp(t/2 +/- n/sqrt(2)), F = diag(sigma).
+        // Cohesive D=min(0.2+0.5*C, log(0.99/phi)); C'=max(C,-min(t',0)).
+        // Porous D=log(0.99/phi), recomputed after the bounded phi update.
+        const float dense_edge = 0.05f * 0.99f * 0.99f;
+        const std::array<std::array<float, 2u>, 12u> expected_trace_norm{{
+            {-0.2f, 0.0f}, // 0: cohesive axial cap; C'=0.2, c'=0.09, no shear.
+            {-0.3f, 0.0f}, // 1: hardened axial cap; C'=0.3, c'=0.11, no shear.
+            {0.0f, 0.0f}, // 2: unloaded hardened clay; identity, C'=0.2.
+            {0.0f, 0.05f}, // 3: cohesive shear-only edge c=0.05.
+            {0.02f, 0.0f}, // 4: tension clamp from t=0.5 to T=0.02.
+            {-std::log(0.99f / compacted_phi), 0.0f}, // 5: updated porous axial cap; ellipse edge zero.
+            {0.0f, 0.0f}, // 6: unloaded compacted snow; identity, phi unchanged.
+            {0.0f, 0.05f * 0.3f * 0.3f}, // 7: porous ellipse at t=0; n'=c*phi^2.
+            {0.0f, 0.05f * compacted_phi * compacted_phi}, // 8: same edge after compaction.
+            {0.0f, dense_edge}, // 9: one ulp below phiDense is inside the dense rounding band.
+            {0.0f, dense_edge}, // 10: exact dense cone; n'=c*phiDense^2.
+            {0.0f, dense_edge}, // 11: dense cone removes t=-30 compression, retaining limited shear.
+        }};
+
+        // These well-conditioned diagonal projections have |projected| <= 0.354.
+        // 1e-6 relative allows about eight FP32 epsilons for CPU/GPU log/exp,
+        // history exp and reconstruction; no near-cap square-root sensitivity
+        // enters these nonzero shear targets (case 5 has n=0).
+        for (u32 i = 0u; i < expected_trace_norm.size(); ++i) {
+            const auto &expected = expected_trace_norm[i];
+            const float sigma_x = std::exp(expected[0u] * 0.5f + expected[1u] / std::sqrt(2.0f));
+            const float sigma_y = std::exp(expected[0u] * 0.5f - expected[1u] / std::sqrt(2.0f));
+            const auto &F = result[i].m_deformation_gradient;
+            PPR_TEST_ASSERT(std::abs(F.m_c0x - sigma_x) <= sigma_x * 1e-6f);
+            PPR_TEST_ASSERT(std::abs(F.m_c1y - sigma_y) <= sigma_y * 1e-6f);
+            PPR_TEST_ASSERT(F.m_c0y == 0.0f and F.m_c1x == 0.0f);
+        }
+
+        // Zero singular value rejects before log; neither history nor sigma commits.
+        PPR_TEST_ASSERT(result[12u].m_enabled == 0.0f and result[12u].m_liquid_density == 27.0f);
+        PPR_TEST_ASSERT(result[12u].m_deformation_gradient.m_c0x == 0.0f);
+        PPR_TEST_ASSERT(result[12u].m_deformation_gradient.m_c1y == 1.0f);
+        PPR_TEST_ASSERT(result[12u].m_compaction == 0.0f and result[12u].m_solid_fraction == 0.3f);
         const float sine = std::sin(30.0f / 180.0f * 3.14159f);
         const float alpha = std::sqrt(2.0f / 3.0f) * 2.0f * sine / (3.0f - sine);
         const float elliptical_edge = (alpha * 0.1f + 0.05f * 0.3f * 0.3f) *
@@ -5576,16 +5646,42 @@ namespace pP::tests::detail::MatterGpu {
         PPR_TEST_ASSERT(std::abs(t(3u)) < 1e-5f and std::abs(n(3u) - 0.05f) < 1e-5f);
         PPR_TEST_ASSERT(std::abs(t(4u) - 0.02f) < 1e-5f);
         PPR_TEST_ASSERT(
-            std::abs(t(5u) + snow_cap) < 1e-5f and std::abs(result[5u].m_solid_fraction - compacted_phi) < 1e-5f);
+            std::abs(t(5u) + std::log(0.99f / compacted_phi)) < 1e-5f and
+            std::abs(result[5u].m_solid_fraction - compacted_phi) < 1e-5f);
         PPR_TEST_ASSERT(result[6u].m_solid_fraction == compacted_phi and n(8u) > n(7u));
-        // Observable continuity means the zero-confinement yield edge n=c.
+        // Both near-dense and exact-dense inputs select the cone, whose
+        // zero-confinement yield edge is n=c*phiDense^2.
         // The finite-compression ellipse edge is intentionally NOT continuous.
         PPR_TEST_ASSERT(std::abs(n(9u) - n(10u)) < 1e-5f);
-        PPR_TEST_ASSERT(std::abs(t(11u) + 30.0f) < 1e-5f and result[11u].m_solid_fraction == 0.99f);
+        PPR_TEST_ASSERT(std::abs(t(11u)) < 1e-5f and result[11u].m_solid_fraction == 0.99f);
 
-        const float dense_edge = alpha * snow_cap + 0.05f * 0.99f * 0.99f;
+        for (u32 i = 15u; i < 18u; ++i) {
+            const float expected = i == 17u ? std::sqrt(0.3f / 0.99f) : 1.0f;
+            PPR_TEST_ASSERT(result[i].m_enabled == 1.0f and result[i].m_liquid_density == 0.0f);
+            // The dense cases clamp compression away and reconstruct F through
+            // the SVD plus an exp/log round trip; measured residue is ~2.9e-6 at
+            // unit magnitude, so 1e-5 relative (a few FP32 ulps per
+            // transcendental) is the honest scale for all three identities; the
+            // cohesive case measures 2.8e-6 residual for the same reason.
+            const float round_trip = 1e-5f;
+            PPR_TEST_ASSERT(std::abs(result[i].m_deformation_gradient.m_c0x - expected) <= expected * round_trip);
+            PPR_TEST_ASSERT(std::abs(result[i].m_deformation_gradient.m_c1y - expected) <= expected * round_trip);
+            PPR_TEST_ASSERT(std::abs(result[i].m_deformation_displacement.m_c0x - expected) <= expected * round_trip);
+            PPR_TEST_ASSERT(std::abs(result[i].m_deformation_displacement.m_c1y - expected) <= expected * round_trip);
+        }
+
+        PPR_TEST_ASSERT(result[18u].m_enabled == 0.0f and result[18u].m_liquid_density == 24.0f);
+
+        for (u32 i = 19u; i < 21u; ++i) {
+            PPR_TEST_ASSERT(result[i].m_enabled == 1.0f and result[i].m_liquid_density == 0.0f);
+            PPR_TEST_ASSERT(std::abs(t(i)) < 1e-5f and n(i) < 1e-5f);
+        }
+
+        PPR_TEST_ASSERT(result[21u].m_enabled == 0.0f and result[21u].m_liquid_density == 27.0f);
+        PPR_TEST_ASSERT(result[17u].m_compaction == input[17u].m_compaction);
+
         PPR_TEST_ASSERT(result[14u].m_enabled == 1.0f and result[14u].m_solid_fraction == 0.99f);
-        PPR_TEST_ASSERT(std::abs(t(14u) + snow_cap) < 1e-5f and std::abs(n(14u) - dense_edge) < 1e-5f);
+        PPR_TEST_ASSERT(std::abs(t(14u)) < 1e-5f and std::abs(n(14u) - dense_edge) < 1e-5f);
     };
 
     PPR_UNIT_TEST (calibrated_admission_and_clay_sand_divergence) {
@@ -5904,6 +6000,213 @@ namespace pP::tests::detail::MatterGpu {
         // 600 compression substeps assert each snow row's admissibility and
         // monotone phi; other phases retain four substeps. Report maximum phi.
         runCalibratedLoadedScene(false);
+    };
+
+    PPR_UNIT_TEST (dense_water_magma_snow_resident_ticks_remain_finite) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u, true, nullptr, 9.81f / (64.0f / 3.0f));
+
+        // Shipped water/magma/snow coefficients, with explicit physical inventory.
+        // Interleaved half-cell samples share stencils; a supported snow bed is
+        // loaded by descending liquid. Precompacted snow covers both sides of
+        // the dense boundary without relying on thousands of settling epochs.
+        std::array<GpuMaterialProperties, 3u> properties{};
+        for (u32 i = 0u; i < properties.size(); ++i)
+            properties[i].m_substance_id = i + 1u;
+
+        properties[0u].m_family = ESourceMaterial::liquid;
+        properties[0u].m_liquid_viscosity = 0.01f;
+        properties[0u].m_liquid_relaxation = 1.0f;
+        properties[1u].m_family = ESourceMaterial::liquid;
+        properties[1u].m_liquid_viscosity = 2.0f;
+        properties[1u].m_liquid_relaxation = 0.5f;
+        properties[1u].m_reference_density = 2.5f;
+        properties[2u].m_family = ESourceMaterial::compacting;
+        properties[2u].m_reference_density = 0.3f;
+
+        Array<GpuParticle> particles;
+        Array<u32> indices;
+        for (u32 y = 0u; y < 32u; ++y) {
+            for (u32 x = 0u; x < 24u; ++x) {
+                const u32 index = y < 8u ? 2u : (x + y) % 3u;
+                auto p = restParticle();
+                p.m_position_x = 26.25f + 0.5f * float(x);
+                p.m_position_y = 12.25f + 0.5f * float(y);
+                p.m_material = static_cast<float>(properties[index].m_family);
+                p.m_volume = 0.25f;
+                p.m_mass = p.m_volume * properties[index].m_reference_density;
+                p.m_log_jp = 0.0f;
+                p.m_displacement_y = -0.0005f * float(y);
+                if (index == 2u)
+                    p.m_solid_fraction = x % 2u == 0u ? std::nextafter(0.99f, 0.0f) : 0.99f;
+
+                particles.push_back(p);
+                indices.push_back(index);
+            }
+        }
+
+        const GpuStaticShape floor{
+            .m_position_x = 32.0f, .m_position_y = 10.0f, .m_half_size_x = 28.0f, .m_half_size_y = 2.0f};
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            particles, {&floor, 1u}, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+            {properties, indices}));
+        fixture.m_solver.publishReplacement();
+
+        auto previous = particles;
+        for (u32 tick = 0u; tick < 128u; ++tick) {
+            const u64 epoch = fixture.m_solver.accounting().m_epoch;
+            PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(epoch, kGameSubsteps, kDefaultIterations));
+            PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+            const auto complete = fixture.m_solver.pollTick();
+            if (not complete or not *complete) {
+                const auto &failure = fixture.m_solver.failure();
+                onTestAssertionFailure(
+                    std::format(
+                        "mixed water/magma/snow tick={} epoch={} rows={} flags={} field={} particle={} cause={}", tick,
+                        epoch, particles.size(), failure.m_flags, failure.m_field, failure.m_particle,
+                        failure.m_cause.message())
+                        .c_str(),
+                    std::source_location::current());
+            }
+
+            fixture.m_solver.publishTick();
+            auto state = fixture.snapshot();
+            PPR_TEST_ASSERT(state.size() == particles.size());
+            for (std::size_t row = 0u; row < state.size(); ++row) {
+                const auto &p = state[row];
+                for (const float value: std::bit_cast<std::array<float, 24u>>(p))
+                    PPR_TEST_ASSERT(std::isfinite(value));
+
+                PPR_TEST_ASSERT(validMaterialState(p, properties[indices[row]]));
+                PPR_TEST_ASSERT(p.m_mass == particles[row].m_mass and p.m_volume == particles[row].m_volume);
+                if (indices[row] == 2u)
+                    PPR_TEST_ASSERT(p.m_solid_fraction >= previous[row].m_solid_fraction);
+            }
+
+            previous = std::move(state);
+        }
+    };
+
+    PPR_UNIT_TEST (sustained_snow_load_converges_without_inventory_loss) {
+        Fixture fixture;
+        PPR_DEFER {
+            fixture.shutdown();
+        };
+        fixture.initialize(true, 64u, 64u, true, nullptr, 9.81f / (64.0f / 3.0f));
+
+        // A fixed-width bin distinguishes axial compaction from lateral spread.
+        // Half-cell samples initially occupy a 6-by-8 column above y=12.
+        const std::array<GpuStaticShape, 3u> shapes{{
+            {.m_position_x = 32.0f, .m_position_y = 10.0f, .m_half_size_x = 10.0f, .m_half_size_y = 2.0f},
+            {.m_position_x = 28.0f, .m_position_y = 24.0f, .m_half_size_x = 1.0f, .m_half_size_y = 12.0f},
+            {.m_position_x = 36.0f, .m_position_y = 24.0f, .m_half_size_x = 1.0f, .m_half_size_y = 12.0f},
+        }};
+        GpuMaterialProperties property{};
+        property.m_substance_id = 1u;
+        property.m_family = ESourceMaterial::compacting;
+        property.m_reference_density = 0.3f;
+
+        Array<GpuParticle> particles;
+        for (u32 y = 0u; y < 16u; ++y) {
+            for (u32 x = 0u; x < 12u; ++x) {
+                auto p = restParticle();
+                p.m_position_x = 29.25f + 0.5f * float(x);
+                p.m_position_y = 12.25f + 0.5f * float(y);
+                p.m_material = static_cast<float>(property.m_family);
+                p.m_log_jp = 0.0f;
+                p.m_volume = 0.25f;
+                p.m_mass = 0.075f;
+                particles.push_back(p);
+            }
+        }
+
+        const Array<u32> indices(particles.size(), 0u);
+        PPR_TEST_ASSERT(not fixture.m_solver.prepareReplacement(
+            particles, shapes, fixture.m_solver.accounting().m_epoch, {}, ETerrainUpdate::replace,
+            {{&property, 1u}, indices}));
+        fixture.m_solver.publishReplacement();
+
+        constexpr std::array<u32, 5u> horizons{256u, 512u, 1024u, 2048u, 4096u};
+        std::array<double, horizons.size()> heights{};
+        std::array<double, horizons.size()> fractions{};
+        auto previous = particles;
+        u32 completed = 0u;
+        for (std::size_t horizon = 0u; horizon < horizons.size(); ++horizon) {
+            while (completed < horizons[horizon]) {
+                PPR_TEST_ASSERT(not fixture.m_solver.submitResidentTick(
+                    fixture.m_solver.accounting().m_epoch, kGameSubsteps, kDefaultIterations));
+                PPR_TEST_ASSERT(not fixture.m_solver.drain());
+
+                const auto complete = fixture.m_solver.pollTick();
+                PPR_TEST_ASSERT(complete and *complete);
+
+                fixture.m_solver.publishTick();
+                completed += kGameSubsteps;
+            }
+
+            auto state = fixture.snapshot();
+            PPR_TEST_ASSERT(state.size() == particles.size());
+            double bottom = 64.0, top = 0.0, mean_phi = 0.0;
+            for (std::size_t row = 0u; row < state.size(); ++row) {
+                const auto &p = state[row];
+                for (const float value: std::bit_cast<std::array<float, 24u>>(p))
+                    PPR_TEST_ASSERT(std::isfinite(value));
+
+                PPR_TEST_ASSERT(validMaterialState(p, property));
+                PPR_TEST_ASSERT(p.m_mass == particles[row].m_mass and p.m_volume == particles[row].m_volume);
+                PPR_TEST_ASSERT(p.m_solid_fraction >= previous[row].m_solid_fraction);
+
+                bottom = std::min(bottom, static_cast<double>(p.m_position_y));
+                top = std::max(top, static_cast<double>(p.m_position_y));
+                mean_phi += static_cast<double>(p.m_solid_fraction) / static_cast<double>(state.size());
+            }
+
+            heights[horizon] = top - bottom;
+            fractions[horizon] = mean_phi;
+            std::printf(
+                "SNOW-SATURATION substeps=%u height=%.9g mean_phi=%.9g phi_limit=%.9g inventory=exact\n", completed,
+                heights[horizon], mean_phi, static_cast<double>(1.0f - property.m_dense_epsilon));
+            previous = std::move(state);
+        }
+
+        // Height convergence is settling toward a packing limit; per-particle
+        // volume is bounded by the porosity cap. Occupied-volume transport across
+        // particles is B2's scope. Reference volume and mass remain exact above.
+        // The 0.9 factor is a fixture packing allowance for centre-span and boundary
+        // sampling, not a physical constant or permission for inventory loss.
+        constexpr double initial_height = 7.5;
+        const double phi_dense = static_cast<double>(1.0f - property.m_dense_epsilon);
+        const double dense_height = initial_height * static_cast<double>(property.m_solid_fraction0) / phi_dense;
+        const double packing_floor = 0.9 * dense_height;
+        const double height_difference = std::abs(heights[4u] - heights[3u]);
+        const double previous_difference = std::abs(heights[3u] - heights[2u]);
+        const double height_rate = height_difference / static_cast<double>(horizons[4u] - horizons[3u]);
+        const double previous_rate = previous_difference / static_cast<double>(horizons[3u] - horizons[2u]);
+
+        std::printf(
+            "SNOW-CONVERGENCE initial=%.9g height2048=%.9g height4096=%.9g difference=%.9g previous_difference=%.9g "
+            "rate_per_substep=%.9g previous_rate_per_substep=%.9g "
+            "predicted_dense_height=%.9g packing_floor=%.9g final_mean_phi=%.9g\n",
+            initial_height, heights[3u], heights[4u], height_difference, previous_difference, height_rate,
+            previous_rate, dense_height, packing_floor, fractions.back());
+
+        for (std::size_t horizon = 0u; horizon < horizons.size(); ++horizon) {
+            const double preceding_height = horizon == 0u ? initial_height : heights[horizon - 1u];
+            const double preceding_fraction = horizon == 0u ? static_cast<double>(property.m_solid_fraction0)
+                                                            : fractions[horizon - 1u];
+            PPR_TEST_ASSERT(heights[horizon] <= preceding_height);
+            PPR_TEST_ASSERT(heights[horizon] >= packing_floor);
+            PPR_TEST_ASSERT(fractions[horizon] >= preceding_fraction);
+            PPR_TEST_ASSERT(fractions[horizon] <= phi_dense);
+        }
+
+        // Normalize by interval length: the last doubling horizon spans twice
+        // as many substeps, so settling requires a decreasing per-substep rate.
+        PPR_TEST_ASSERT(height_rate < previous_rate);
     };
 
     PPR_UNIT_TEST (calibrated_loaded_clay_and_snow_diagnostic) {
@@ -8176,12 +8479,13 @@ namespace pP::tests::detail::MatterGpu {
 
         // Trial singular values 1e4 give J = 1e8, while the admitted yield surface
         // clamps both components to 4.25e-18 and newJ to 1.8e-35, so the quotient
-        // J / newJ overflows before sqrt. The visco plastic-state guard reports 16.
+        // J / newJ overflows before sqrt. Log-space rescaling must now accept
+        // this finite state rather than rejecting an avoidable intermediate.
         {
             GpuParticle particle = restParticle();
             particle.m_material = static_cast<float>(ESourceMaterial::visco);
             particle.m_deformation_gradient = {1.0e4f, 0.0f, 0.0f, 1.0e4f};
-            witnesses.push_back({"visco_plastic_quotient_overflow", particle, 16u});
+            witnesses.push_back({"visco_plastic_quotient_overflow", particle, 0xffff'ffffu});
         }
 
         // Control: identity leaves the elastic difference exactly zero, so the
@@ -8575,6 +8879,8 @@ namespace pP::tests {
                 detail::MatterGpu::calibrated_admission_and_clay_sand_divergence,
                 detail::MatterGpu::calibrated_loaded_clay_and_snow_diagnostic,
                 detail::MatterGpu::calibrated_loaded_clay_and_snow_complete_with_finite_state,
+                detail::MatterGpu::dense_water_magma_snow_resident_ticks_remain_finite,
+                detail::MatterGpu::sustained_snow_load_converges_without_inventory_loss,
                 detail::MatterGpu::elastic_one_percent_shear_release_diagnostic,
                 detail::MatterGpu::same_family_substances_differ_and_unused_rows_do_not_dispatch,
                 detail::MatterGpu::device_property_guard_reports_out_of_range_and_family_mismatch,

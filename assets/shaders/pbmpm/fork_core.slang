@@ -225,10 +225,15 @@ Particle constraint(Particle p
 }
 
 #ifdef PBMPM_ENGINE_ADAPTERS
-// exp() keeps the sand projection's singular value finite and normal between
-// these arguments: exp(88) = 1.65e38 < FLT_MAX and exp(-87) = 1.6e-38 > 0.
-static const float kMinSandExponent = -87.0;
-static const float kMaxSandExponent = 88.0;
+// Match the existing integration singular-value band [0.1, 10000]. Merely
+// bounding exp to FLT_MAX is insufficient: reconstruction sums products and
+// forkSvd squares matrix components. This band keeps those operations far below
+// FLT_MAX and avoids near-zero reconstructed determinants. It is a numerical
+// projection bound, not an extra yield surface or a guarantee for arbitrary D.
+float2 boundedProjectionExp(float2 projected) {
+    return clamp(exp(clamp(projected, float2(log(0.1)), float2(log(10000.0)))),
+                 float2(0.1), float2(10000.0));
+}
 
 // ------------------------------------------------------------------
 // adapter-only calibration-space cap and shear returns
@@ -241,15 +246,22 @@ static const float kMaxSandExponent = 88.0;
 // 22 C domain; 23 phi domain; 24 projected exponent domain (exp(projected));
 // 25 ellipse ratio/radicand; 26 cohesive cap D; 27 singular values; 28 legacy H;
 // 29 trial trace t; 30 trial deviatoric norm n; 31 friction denominator;
-// 32 input void fraction; 33 input porous cap D; 34 phi increment;
-// 35 strength phi; 36 updated void fraction; 37 updated porous cap D;
+// 32 reserved; 33 input porosity cap D; 34 phi increment;
+// 35 strength phi; 36 reserved; 37 updated porous cap D;
 // 38 cohesion c/shear edge; 39 projection divisor n. Zero means accepted.
 uint calibratedReturn(inout float2 sigma, inout float C, inout float phi,
                       float H, MaterialProperties a, bool updateHistory = true) {
     if (!all(isfinite(sigma)) || any(sigma <= 0.0)) return 27u;
     if (H != 0.0) return 28u;
     if (!isfinite(C) || C < 0.0) return 22u;
-    if (!isfinite(phi) || phi < a.solidFraction0 || phi > 1.0-a.denseEpsilon) return 23u;
+
+    bool porous = a.family == uint(MaterialCompacting);
+    float phiDense = 1.0-a.denseEpsilon;
+    // Four FP32 relative epsilons cover a few ulps from the dense subtraction,
+    // division and history update. This is a rounding band, not extra porosity.
+    float denseTolerance = 4.0 * 1.1920928955078125e-7 * phiDense;
+    if (!isfinite(phi) || phi < a.solidFraction0 ||
+        phi > phiDense + (porous ? denseTolerance : 0.0)) return 23u;
 
     float2 e = log(sigma);
     float trial = e.x + e.y + H;
@@ -264,48 +276,57 @@ uint calibratedReturn(inout float2 sigma, inout float C, inout float phi,
     float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
     float cohesion = a.cohesion;
     float cap = a.cap;
+    // Fixed solid content gives V_dense/V = phi/phiDense. Porosity, not
+    // the exponent band, bounds compression: t >= log(phi/phiDense).
+    float maxCap = log(phiDense/phi);
+    if (!isfinite(maxCap)) return 33u;
     float nextC = C;
     float nextPhi = phi;
     float returned = min(trial, a.tension);
-    bool porous = a.family == uint(MaterialCompacting);
-    bool dense = porous && phi >= 1.0-a.denseEpsilon;
+    bool dense = porous && (phi >= phiDense-denseTolerance || maxCap <= 0.0);
     if (!porous) {
         cap += a.capHardening*C;
         if (!isfinite(cap) || cap <= 0.0) return 26u;
 
+        cap = min(cap, maxCap);
         returned = max(returned, -cap);
         if (updateHistory) nextC = max(C, -min(returned, 0.0));
         cohesion += a.cohesionHardening*nextC;
     } else {
-        if (!dense) {
-            float voidFraction = 1.0-phi;
-            if (!isfinite(voidFraction) || voidFraction <= 0.0) return 32u;
+        if (updateHistory) nextPhi = min(nextPhi, phiDense);
 
-            cap = a.cap/voidFraction;
-            if (!isfinite(cap) || cap <= 0.0) return 33u;
+        if (!dense) {
+            cap = maxCap;
 
             returned = max(returned, -cap);
             if (updateHistory) {
-                float increment = a.compactionRate*max(0.0, returned-trial);
+                // Exact bounded relaxation of remaining compactable porosity:
+                // phi' = phi + (phiMax-phi)*(1-exp(-beta*plasticCompression)).
+                // Sustained load approaches phiMax; no finite step overshoots.
+                // A positive rate-product overflow means complete saturation,
+                // not an undefined history update (exp(-infinity) is zero).
+                float remaining = (1.0-a.denseEpsilon)-phi;
+                float increment = remaining * (1.0-exp(-a.compactionRate*max(0.0, returned-trial)));
                 if (!isfinite(increment)) return 34u;
 
                 nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
             }
         }
 
-        dense = nextPhi >= 1.0-a.denseEpsilon;
-        float strengthPhi = dense ? 1.0-a.denseEpsilon : nextPhi;
+        cap = log(phiDense/nextPhi);
+        if (!isfinite(cap)) return 37u;
+
+        dense = dense || nextPhi >= phiDense-denseTolerance || cap <= 0.0;
+        float strengthPhi = dense ? phiDense : nextPhi;
         if (!isfinite(strengthPhi) || strengthPhi <= 0.0 || strengthPhi >= 1.0) return 35u;
 
         // pow on a positive base <=1 with nonnegative finite exponent cannot overflow.
         cohesion *= pow(strengthPhi, a.solidExponent);
-        if (!dense) {
-            float voidFraction = 1.0-nextPhi;
-            if (!isfinite(voidFraction) || voidFraction <= 0.0) return 36u;
+        if (dense) cap = 0.0;
 
-            cap = a.cap/voidFraction;
-            if (!isfinite(cap) || cap <= 0.0) return 37u;
-        }
+        // Re-evaluate after history commits: D_eff tends to zero at phiDense.
+        // The dense cone permits shear but refuses further volume compression.
+        returned = max(returned, -cap);
     }
 
     float edge = alpha*max(-returned, 0.0)+cohesion;
@@ -334,10 +355,12 @@ uint calibratedReturn(inout float2 sigma, inout float C, inout float phi,
     }
 
     float2 projected = dev + returned*0.5;
-    if (!all(isfinite(projected)) || any(projected < kMinSandExponent) ||
-        any(projected > kMaxSandExponent)) return 24u;
+    // The exponent band is only a numerical backstop. A physical return still
+    // outside it is a defect, reported rather than silently changing its volume.
+    if (!all(isfinite(projected)) || any(projected < float2(log(0.1))) ||
+        any(projected > float2(log(10000.0)))) return 24u;
 
-    sigma = exp(projected);
+    sigma = boundedProjectionExp(projected);
     C = nextC;
     phi = nextPhi;
     return 0u;
@@ -402,9 +425,8 @@ Particle integration(Particle p, uint row) {
                 if (deltaGamma > 0.0) {
 #ifdef PBMPM_ENGINE_ADAPTERS
                     // The projection divides by the deviatoric norm and then
-                    // exponentiates that ratio. A huge but finite logJp makes
-                    // length() overflow, and an out-of-domain exponent has no
-                    // finite positive exp(); both are rejected here.
+                    // exponentiates that ratio. A huge but finite logJp can make
+                    // length() overflow; an unusable divisor still rejects.
                     if (!isfinite(frobenius) || frobenius == 0.0) {
                         p.deformationGradient = stepGradient;
                         p.logJp = stepLogJp;
@@ -414,16 +436,17 @@ Particle integration(Particle p, uint row) {
 
                     float projectedX = eDiag.x - deltaGamma / frobenius * (eDiag.x - traceE * 0.5);
                     float projectedY = eDiag.y - deltaGamma / frobenius * (eDiag.y - traceE * 0.5);
-                    if (!isfinite(projectedX) || !isfinite(projectedY) ||
-                        projectedX < kMinSandExponent || projectedX > kMaxSandExponent ||
-                        projectedY < kMinSandExponent || projectedY > kMaxSandExponent) {
+                    if (!isfinite(projectedX) || !isfinite(projectedY)) {
                         p.deformationGradient = stepGradient;
                         p.logJp = stepLogJp;
                         recordError(8u, 0xffffffffu, 17u, row);
                         return p;
                     }
-#endif
+
+                    decomposition.Sigma = boundedProjectionExp(float2(projectedX, projectedY));
+#else
                     decomposition.Sigma = exp(eDiag - deltaGamma / frobenius * (eDiag - traceE * 0.5));
+#endif
                 }
             }
         } else if (p.material == MaterialVisco) {
@@ -447,24 +470,19 @@ Particle integration(Particle p, uint row) {
             decomposition.Sigma = clamp(decomposition.Sigma, float2(1.0 / yieldSurface), float2(yieldSurface));
             float newJ = decomposition.Sigma.x * decomposition.Sigma.y;
 #ifdef PBMPM_ENGINE_ADAPTERS
-            // The plastic step multiplies by sqrt(J / newJ). Profile admission
-            // bounds yieldSurface, but the quotient itself can still overflow for
-            // an admitted profile (for example plasticity 41 leaves newJ ~ 1.8e-35
-            // while trial singular values give J ~ 1e8), so it is validated here.
+            // The denominator must exist, but J/newJ need not fit in float:
+            // log(sigma) + (log(J)-log(newJ))/2 evaluates the same scaling
+            // without overflowing that intermediate quotient.
             if (!isfinite(newJ) || newJ == 0.0) {
                 p.deformationGradient = stepGradient;
                 recordError(8u, 0xffffffffu, 16u, row);
                 return p;
             }
 
-            float plasticQuotient = J / newJ;
-            if (!isfinite(plasticQuotient)) {
-                p.deformationGradient = stepGradient;
-                recordError(8u, 0xffffffffu, 16u, row);
-                return p;
-            }
-#endif
+            decomposition.Sigma = boundedProjectionExp(log(decomposition.Sigma) + 0.5 * (log(J) - log(newJ)));
+#else
             decomposition.Sigma *= sqrt(J / newJ);
+#endif
         }
 
         p.deformationGradient = product(product(decomposition.U, diagonal(decomposition.Sigma)), decomposition.Vt);
