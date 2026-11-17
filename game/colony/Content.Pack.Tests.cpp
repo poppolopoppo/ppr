@@ -370,7 +370,7 @@ namespace pP::game::tests::detail::pack {
         PPR_TEST_ASSERT(repeated.has_value() and repeated->m_dug == 0u and repeated->m_touched.empty());
     };
 
-    PPR_UNIT_TEST (construction_checks_complete_tiles_reservations_and_live_actor_overlap) {
+    PPR_UNIT_TEST (construction_accepts_any_cell_rect_and_keeps_occupancy_rules) {
         Fixture fixture;
         config::Diagnostics diagnostics;
         const auto catalog = fixture.load(diagnostics);
@@ -381,19 +381,24 @@ namespace pP::game::tests::detail::pack {
         const Footprint print{{126u, 21u}, 3u, 3u, catalog->findMaterial("masonry")->m_numeric_id};
         PPR_TEST_ASSERT(not validateConstruction(grid, registry, print, *catalog));
 
+        // Cell granularity: an arbitrary offset and edge is a valid rectangle.
+        // Neither the anchor nor the extent has to be a construction-tile multiple.
+        const Footprint offset{{127u, 22u}, 2u, 5u, catalog->findMaterial("masonry")->m_numeric_id};
+        PPR_TEST_ASSERT(not validateConstruction(grid, registry, offset, *catalog));
+
         auto invalid = print;
         invalid.m_element = catalog->findMaterial("water")->m_numeric_id;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
-        invalid = print;
-        invalid.m_min.m_x = 127u;
-        PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
+        invalid = offset;
         invalid.m_min.m_x = 4095u;
         PPR_TEST_ASSERT(validateConstruction(grid, registry, invalid, *catalog) == std::errc::invalid_argument);
 
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {catalog->findMaterial("basalt")->m_numeric_id, 299.0f}));
         // An occupied destination is permanent: terrain cannot become vacuum by
-        // waiting, so it is never reported as a retainable transient.
+        // waiting, so it is never reported as a retainable transient. The rule
+        // is unchanged and applies to any rectangle, aligned or not.
         PPR_TEST_ASSERT(validateConstruction(grid, registry, print, *catalog) == std::errc::file_exists);
+        PPR_TEST_ASSERT(validateConstruction(grid, registry, offset, *catalog) == std::errc::file_exists);
         PPR_TEST_ASSERT(not grid.setCell({128u, 23u}, {0u, 299.0f}));
 
         const auto actor = registry.create();
@@ -2007,7 +2012,7 @@ namespace pP::game::tests {
     const UnitTest pack_content = UnitTest::Named("pack_content") / [](UnitTest::IRun &_) -> void {
         _.recurse({
             detail::pack::catalog_dig_respects_protected_material_and_preflights_the_complete_rectangle,
-            detail::pack::construction_checks_complete_tiles_reservations_and_live_actor_overlap,
+            detail::pack::construction_accepts_any_cell_rect_and_keeps_occupancy_rules,
             detail::pack::errand_preflight_rejects_invalid_actor_before_any_demolition_writes,
             detail::pack::data_only_material_extension_reaches_raster_tools_and_colliders,
             detail::pack::prepared_world_rejects_invalid_inputs_and_cancellation_before_generation,

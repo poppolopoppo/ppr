@@ -10,7 +10,6 @@ import engine.sim;
 import game.colony.agents;
 import game.colony.pathfinding;
 import game.colony.content;
-import game.colony.metric;
 
 import std;
 
@@ -145,18 +144,10 @@ namespace pP::colony {
 
     std::error_code validateConstruction(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog) {
-        PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, validateFootprint(print, &catalog, grid.edge()));
-        if (print.m_min.m_x % 3u != 0u or
-            print.m_min.m_y % 3u != 0u or
-            print.m_width % 3u != 0u or
-            print.m_height % 3u != 0u) {
-            PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, std::errc::invalid_argument);
-        }
-
-        const auto bounds = constructionFootprint(
-            {print.m_min.m_x / 3u, print.m_min.m_y / 3u}, {print.m_width / 3u, print.m_height / 3u}, grid.edge());
-        PPR_RETURN_ERROR_ON_FAIL(ColonyBuilding, bounds);
-
+        // Any cell-aligned rectangle is a wall request. Placement is still
+        // decided by the unchanged occupancy rules: footprint and material
+        // validity, an empty destination, actor overlap, and the live-errand
+        // reservation are the same checks a raw-cell lamp placement applies.
         return validatePlacement(grid, registry, print, catalog);
     }
 

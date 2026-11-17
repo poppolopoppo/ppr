@@ -516,8 +516,8 @@ namespace demo {
         /// Slice 5 footprint preview: logic fills it while a build_wall,
         /// build_lamp or demolish press is held (anchor to current, inclusive,
         /// normalized to min/max, clamped per-axis); the designer lane draws
-        /// it. The existing hover outline stays dig-only. Wall previews snap to
-        /// construction tiles; lamp and demolish previews use raw cells.
+        /// it. The existing hover outline stays dig-only. Every rect tool uses
+        /// the same raw-cell rectangle; nothing snaps to construction tiles.
         /// `m_reason` is "" while the rect is committable, otherwise it names
         /// why release will not commit ("press outside the world", "drag
         /// outside the world").
@@ -1818,11 +1818,13 @@ namespace demo {
             }
         }
 
-        /// Slice 5 preview update: anchor to cursor, inclusive, normalized to
-        /// min/max, then clamped per-axis to kMaxFootprintEdge with the press
-        /// cell held fixed (the cursor side gives). A nullopt anchor or
-        /// cursor pick marks the preview invalid with a reason; release then
-        /// posts that reason instead of committing.
+        /// Preview update for every rect tool: press cell to cursor cell,
+        /// inclusive, normalized to min/max, then clamped per-axis to
+        /// kMaxFootprintEdge with the press cell held fixed (the cursor side
+        /// gives). Wall, lamp and demolish share this cell-exact rectangle, so
+        /// no tool floors to construction tiles. A nullopt anchor or cursor
+        /// pick marks the preview invalid with a reason; release then posts
+        /// that reason instead of committing.
         void updateBuildPreview_() noexcept {
             if (not m_build_preview.m_active) {
                 return;
@@ -1834,29 +1836,6 @@ namespace demo {
             const std::optional<sim::GlobalCellPos> cell = pickCell_(m_tool.m_cursor_client);
             if (not cell.has_value()) {
                 m_build_preview.m_reason = "drag outside the world";
-                return;
-            }
-
-            if (m_driver->preparedWorld() and m_ui_state.m_tool == colony::EColonyTool::build_wall) {
-                const auto print = colony::constructionDragFootprint(
-                    *m_tool.m_footprint_anchor, *cell, colony::kMaxFootprintEdge, m_driver->grid().edge());
-                if (not print) {
-                    m_build_preview.m_reason = "incomplete construction tile at world edge";
-                    return;
-                }
-                m_build_preview.m_anchor = *m_tool.m_footprint_anchor;
-                m_build_preview.m_min = print->m_begin;
-                m_build_preview.m_max = {print->m_end.m_x - 1u, print->m_end.m_y - 1u};
-                const u32 raw_width = std::max(cell->m_x / 3u, m_tool.m_footprint_anchor->m_x / 3u) -
-                                      std::min(cell->m_x / 3u, m_tool.m_footprint_anchor->m_x / 3u) +
-                                      1u;
-                const u32 raw_height = std::max(cell->m_y / 3u, m_tool.m_footprint_anchor->m_y / 3u) -
-                                       std::min(cell->m_y / 3u, m_tool.m_footprint_anchor->m_y / 3u) +
-                                       1u;
-                m_build_preview.m_clamped_x = raw_width > colony::kMaxFootprintEdge / 3u;
-                m_build_preview.m_clamped_y = raw_height > colony::kMaxFootprintEdge / 3u;
-                m_build_preview.m_clamped = m_build_preview.m_clamped_x or m_build_preview.m_clamped_y;
-                m_build_preview.m_reason = "";
                 return;
             }
 

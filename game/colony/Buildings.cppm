@@ -69,16 +69,16 @@ export namespace pP::colony {
     [[nodiscard]] std::error_code validateFootprint(
         const Footprint &print, const ContentCatalog *catalog = nullptr, u32 world_edge = sim::kWorldEdge) noexcept;
 
-    // Generated construction validates the whole metre-aligned footprint before
-    // recording an errand; live errands reserve their complete footprint.
+    /// Validates a solid construction rectangle: any cell-aligned size and offset
+    /// inside the world. Destination occupancy is unchanged — any cell that is
+    /// not vacuum, plus actor overlap and an incomplete errand reservation,
+    /// rejects the whole rectangle.
     [[nodiscard]] std::error_code validateConstruction(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog);
 
     /// Validates the destination cells of a raw-cell placement: in-world rect,
     /// known solid terrain material, no occupied destination (a permanent
-    /// rejection), no actor overlap, and no overlapping live errand. Shares the
-    /// cell contract with `validateConstruction`, which adds the 3x3
-    /// construction-tile alignment; lamps place raw cells and use this directly.
+    /// rejection), no actor overlap, and no overlapping live errand.
     [[nodiscard]] std::error_code validatePlacement(
         const sim::ChunkGrid &grid, sim::Registry &registry, const Footprint &print, const ContentCatalog &catalog);
 

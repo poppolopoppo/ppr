@@ -13,6 +13,9 @@ export namespace pP::colony {
     // ------------------------------------------------------------------
 
     inline constexpr u32 kFineCellsPerMetre = 3u;
+    // A persisted world-metric value, not a construction constraint: wall
+    // rectangles are cell-exact and no longer snap to it. Checkpoints serialise
+    // it and world export prints it, so the name and value stay fixed.
     inline constexpr u32 kFineCellsPerConstructionTile = 3u;
     inline constexpr double kFineCellMetres = 1.0 / kFineCellsPerMetre;
     inline constexpr double kReferenceThicknessMetres = 1.0;
@@ -39,22 +42,6 @@ export namespace pP::colony {
         double m_y{};
     };
 
-    struct ConstructionTile {
-        u32 m_x{};
-        u32 m_y{};
-    };
-
-    struct TileExtent {
-        u32 m_width{1u};
-        u32 m_height{1u};
-    };
-
-    // Half-open global fine-cell rectangle; a footprint may cross chunk edges.
-    struct FineCellRect {
-        sim::GlobalCellPos m_begin{};
-        sim::GlobalCellPos m_end{};
-    };
-
     // ------------------------------------------------------------------
     // operations
     // ------------------------------------------------------------------
@@ -71,16 +58,4 @@ export namespace pP::colony {
 
     // Exact discrete dimensions only; no rounding of authored geometry.
     [[nodiscard]] Expected<u32> discreteFineCellLength(double metres, u32 world_edge = sim::kWorldEdge);
-
-    [[nodiscard]] Expected<FineCellRect> constructionFootprint(
-        ConstructionTile tile, TileExtent extent = {}, u32 world_edge = sim::kWorldEdge);
-
-    // The incomplete final row/column cannot select a construction tile.
-    [[nodiscard]] Expected<ConstructionTile> constructionTileOf(
-        sim::GlobalCellPos position, u32 world_edge = sim::kWorldEdge);
-
-    // Inclusive cursor/anchor selection becomes complete globally aligned tiles;
-    // the cursor side is clamped without moving the anchor tile.
-    [[nodiscard]] Expected<FineCellRect> constructionDragFootprint(
-        sim::GlobalCellPos anchor, sim::GlobalCellPos cursor, u32 max_fine_edge, u32 world_edge = sim::kWorldEdge);
 }
