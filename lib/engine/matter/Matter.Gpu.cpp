@@ -33,6 +33,10 @@ namespace pP::matter {
         constexpr u32 kTerrainFinalPositionField = 6u;
         constexpr std::array<const char *, 2u> kEntries{"fused0", "fused1"};
         constexpr std::array<const char *, 2u> kWaveEntries{"fused0Wave", "fused1Wave"};
+        // Stage 0 bootstraps and writes the first grid state; every later stage
+        // gathers, constrains and scatters, and only the last of them integrates.
+        // All admitted counts share those two programs, so K stays a runtime value.
+        constexpr u32 kMaxIterations = kAdmittedIterations.back();
 
         rhi::BufferRange fullRange(rhi::IBuffer *const buffer) noexcept {
             return {.offset = 0u, .size = buffer->getDesc().size};
@@ -45,11 +49,43 @@ namespace pP::matter {
                    std::isfinite(m.m_c1y);
         }
 
+        /// Derived constitutive operands must stay finite on the admitted profile
+        /// domain. A profile outside it is refused before any GPU work; nothing is
+        /// clamped into a usable range.
+        bool validProfileDomain(const GpuParameters &profile) noexcept {
+            const bool constant_damping = std::isfinite(profile.m_elasticity_ratio) and
+                                          std::isfinite(profile.m_liquid_relaxation) and
+                                          std::isfinite(profile.m_elastic_relaxation) and
+                                          std::isfinite(profile.m_liquid_viscosity);
+            const bool invertible_time = std::isfinite(profile.m_delta_time) and
+                                         profile.m_delta_time > 0.0f and
+                                         std::isfinite(1.0f / profile.m_delta_time);
+            // sin(angle) and the sand denominator 3 - sin(angle) stay usable only
+            // inside this half-open band.
+            const bool friction = std::isfinite(profile.m_friction_angle) and
+                                  profile.m_friction_angle >= 0.0f and
+                                  profile.m_friction_angle < 90.0f;
+            // exp(1 - plasticity) is the visco yield surface; it must stay a
+            // positive finite bound rather than overflow or vanish.
+            const float yield_surface = std::exp(1.0f - profile.m_plasticity);
+            const bool plastic = std::isfinite(profile.m_plasticity) and
+                                 std::isfinite(yield_surface) and
+                                 yield_surface > 0.0f;
+
+            return profile.m_fixed_point_multiplier >= 1u and
+                   invertible_time and
+                   constant_damping and
+                   friction and
+                   plastic;
+        }
+
         bool validParticle(const GpuParticle &p, const GpuParameters &profile) noexcept {
             const bool supported = p.m_material == 0.0f or
                                    p.m_material == 1.0f or
                                    p.m_material == 2.0f or
-                                   p.m_material == 3.0f;
+                                   p.m_material == 3.0f or
+                                   p.m_material == 4.0f or
+                                   p.m_material == 5.0f;
             return supported and
                    p.m_enabled == 1.0f and
                    std::isfinite(p.m_position_x) and
@@ -72,7 +108,12 @@ namespace pP::matter {
                    std::isfinite(p.m_log_jp) and
                    std::isfinite(p.m_color_r) and
                    std::isfinite(p.m_color_g) and
-                   std::isfinite(p.m_color_b);
+                   std::isfinite(p.m_color_b) and
+                   std::isfinite(p.m_compaction) and
+                   p.m_compaction >= 0.0f and
+                   std::isfinite(p.m_solid_fraction) and
+                   p.m_solid_fraction > 0.0f and
+                   p.m_solid_fraction < 1.0f;
         }
 
         std::error_code createBuffer(
@@ -111,6 +152,8 @@ namespace pP::matter {
             rhi::ComPtr<rhi::IBuffer> m_readback;
             rhi::ComPtr<rhi::IBuffer> m_terrain_masks;
             rhi::ComPtr<rhi::IBuffer> m_terrain_boundary_tiles;
+            rhi::ComPtr<rhi::IBuffer> m_properties;
+            Array<GpuMaterialProperties> m_property_rows;
             u64 m_hot_bytes{};
             u64 m_cold_bytes{};
             u32 m_particle_count{};
@@ -126,21 +169,105 @@ namespace pP::matter {
     }
 
     // ------------------------------------------------------------------
+    // material admission
+    // ------------------------------------------------------------------
+
+    bool validMaterialProperties(const GpuMaterialProperties &row) noexcept {
+        GpuParameters profile{};
+        profile.m_elasticity_ratio = row.m_elasticity_ratio;
+        profile.m_elastic_relaxation = row.m_elastic_relaxation;
+        profile.m_liquid_relaxation = row.m_liquid_relaxation;
+        profile.m_liquid_viscosity = row.m_liquid_viscosity;
+        profile.m_friction_angle = row.m_friction_angle;
+        profile.m_plasticity = row.m_plasticity;
+
+        return row.m_substance_id != 0u and
+               static_cast<u32>(row.m_family) <= static_cast<u32>(ESourceMaterial::compacting) and
+               validProfileDomain(profile) and
+               std::isfinite(row.m_sand_yield_ratio) and
+               std::isfinite(row.m_reference_density) and
+               row.m_reference_density > 0.0f and
+               std::isfinite(1.0f / row.m_reference_density) and
+               std::isfinite(row.m_cohesion) and
+               row.m_cohesion >= 0.0f and
+               std::isfinite(row.m_cap) and
+               row.m_cap > 0.0f and
+               std::isfinite(1.0f / row.m_cap) and
+               std::isfinite(row.m_tension) and
+               row.m_tension >= 0.0f and
+               std::isfinite(row.m_cohesion_hardening) and
+               row.m_cohesion_hardening >= 0.0f and
+               std::isfinite(row.m_cap_hardening) and
+               row.m_cap_hardening >= 0.0f and
+               std::isfinite(row.m_dense_epsilon) and
+               row.m_dense_epsilon > 0.0f and
+               row.m_dense_epsilon < 1.0f and
+               1.0f - row.m_dense_epsilon < 1.0f and
+               std::isfinite(row.m_solid_fraction0) and
+               row.m_solid_fraction0 > 0.0f and
+               row.m_solid_fraction0 <= 1.0f - row.m_dense_epsilon and
+               std::isfinite(row.m_compaction_rate) and
+               row.m_compaction_rate >= 0.0f and
+               std::isfinite(row.m_solid_exponent) and
+               row.m_solid_exponent >= 0.0f;
+    }
+
+    void initializeMaterialState(GpuParticle &particle, const GpuMaterialProperties &row) noexcept {
+        particle.m_material = static_cast<float>(row.m_family);
+        if (row.m_family == ESourceMaterial::cohesive or row.m_family == ESourceMaterial::compacting) {
+            particle.m_log_jp = 0.0f;
+            particle.m_compaction = 0.0f;
+            particle.m_solid_fraction = row.m_solid_fraction0;
+        }
+    }
+
+    bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept {
+        if (not std::isfinite(particle.m_compaction) or
+            particle.m_compaction < 0.0f or
+            not std::isfinite(particle.m_solid_fraction) or
+            particle.m_solid_fraction <= 0.0f or
+            particle.m_solid_fraction >= 1.0f)
+            return false;
+
+        if (row.m_family != ESourceMaterial::cohesive and row.m_family != ESourceMaterial::compacting)
+            return true;
+
+        // New families have no legacy sand expansion reservoir (H = 0).
+        return particle.m_log_jp == 0.0f and
+               particle.m_solid_fraction >= row.m_solid_fraction0 and
+               particle.m_solid_fraction <= 1.0f - row.m_dense_epsilon;
+    }
+
+    std::error_code validateMaterialTable(const std::span<const GpuMaterialProperties> rows) {
+        std::unordered_set<u32> ids;
+        for (const auto &row: rows) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, validMaterialProperties(row) and ids.insert(row.m_substance_id).second
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // opt-in bounded device and fence observations
     // ------------------------------------------------------------------
 
     namespace {
-        constexpr u32 kTimingQueries = 44u;
-        constexpr std::array<const char *, 8u> kTimingStages{
-            "particle_copy", "source_metadata_reset", "sparse_discovery", "initialize_b_and_budget", "fused0",
-            "remap_a_and_budget", "fused1", "status_copy"};
+        // One discovery mark plus an initialize/fused pair per stage, in each of
+        // kGameSubsteps substeps, plus the four tick-scope marks.
+        constexpr u32 kTimingQueries = kGameSubsteps * (2u * kMaxIterations + 1u) + 4u;
+        constexpr std::array<const char *, 6u> kTimingStages{
+            "particle_copy", "source_metadata_reset", "sparse_discovery", "initialize_destination", "fused",
+            "status_copy"};
 
         struct TickTimingRecord {
             std::array<u64, kTimingStages.size()> m_ticks{};
             TimePoint m_submit_begin{}, m_submit_end{}, m_first_poll{}, m_last_pending{}, m_ready{}, m_previous_poll{};
             TimeSpan m_poll_work{}, m_max_poll_gap{};
             u64 m_epoch{}, m_signal{}, m_first_gpu{}, m_last_gpu{}, m_polls{};
-            u32 m_substeps{}, m_particles{};
+            u32 m_substeps{}, m_iterations{}, m_particles{};
             bool m_host_drain{};
         };
 
@@ -258,13 +385,19 @@ namespace pP::matter {
                 record.m_last_gpu = m_ticks[m_expected - 1u];
                 record.m_ticks[0u] = m_ticks[1u] - m_ticks[0u];
                 record.m_ticks[1u] = m_ticks[2u] - m_ticks[1u];
+                // Marks per substep: discovery, then one initialize/fused pair per
+                // stage. Both stage kinds accumulate across the whole schedule.
+                const u32 marks_per_substep = 2u * record.m_iterations + 1u;
                 for (u32 substep = 0u; substep < record.m_substeps; ++substep) {
-                    for (u32 stage = 0u; stage < 5u; ++stage) {
-                        const u32 at = 3u + substep * 5u + stage;
-                        record.m_ticks[stage + 2u] += m_ticks[at] - m_ticks[at - 1u];
+                    const u32 base = 3u + substep * marks_per_substep;
+                    record.m_ticks[2u] += m_ticks[base] - m_ticks[base - 1u];
+                    for (u32 stage = 0u; stage < record.m_iterations; ++stage) {
+                        const u32 at = base + 1u + 2u * stage;
+                        record.m_ticks[3u] += m_ticks[at] - m_ticks[at - 1u];
+                        record.m_ticks[4u] += m_ticks[at + 1u] - m_ticks[at];
                     }
                 }
-                record.m_ticks[7u] = m_ticks[m_expected - 1u] - m_ticks[m_expected - 2u];
+                record.m_ticks[5u] = m_ticks[m_expected - 1u] - m_ticks[m_expected - 2u];
 
                 if (m_samples == 0u) {
                     m_first_submit = record.m_submit_begin;
@@ -287,7 +420,9 @@ namespace pP::matter {
                 m_pending = {};
             }
 
-            void begin(rhi::ICommandEncoder &encoder, const u64 epoch, const u32 substeps, const u32 particles) {
+            void begin(
+                rhi::ICommandEncoder &encoder, const u64 epoch, const u32 substeps, const u32 iterations,
+                const u32 particles) {
                 m_recording = false;
                 if (m_error)
                     return;
@@ -295,12 +430,12 @@ namespace pP::matter {
                     ++m_skipped;
                     return;
                 }
-                if (substeps > kGameSubsteps) {
+                if (substeps > kGameSubsteps or iterations > kMaxIterations) {
                     fail(std::make_error_code(std::errc::not_supported));
                     return;
                 }
 
-                m_expected = 5u * substeps + 4u;
+                m_expected = substeps * (2u * iterations + 1u) + 4u;
                 const auto error = make_error_code(m_queries->reset(0u, m_expected));
                 if (error) {
                     fail(error);
@@ -310,6 +445,7 @@ namespace pP::matter {
                 m_pending = {};
                 m_pending.m_epoch = epoch;
                 m_pending.m_substeps = substeps;
+                m_pending.m_iterations = iterations;
                 m_pending.m_particles = particles;
                 m_written = 0u;
                 m_recording = true;
@@ -380,8 +516,9 @@ namespace pP::matter {
                     PPR_LOG(
                         MatterGpu, emphasis, "GPU tick timing last fence observation",
                         {{"epoch", last.m_epoch}, {"signal", last.m_signal}, {"substeps", last.m_substeps},
-                            {"particles", last.m_particles}, {"first_gpu_ticks", last.m_first_gpu},
-                            {"last_gpu_ticks", last.m_last_gpu}, {"completed_after_host_drain", last.m_host_drain},
+                            {"iterations", last.m_iterations}, {"particles", last.m_particles},
+                            {"first_gpu_ticks", last.m_first_gpu}, {"last_gpu_ticks", last.m_last_gpu},
+                            {"completed_after_host_drain", last.m_host_drain},
                             {"submit_begin_ms", milliseconds(last.m_submit_begin - m_origin)},
                             {"submit_end_ms", milliseconds(last.m_submit_end - m_origin)},
                             {"first_poll_ms", milliseconds(last.m_first_poll - m_origin)},
@@ -429,6 +566,7 @@ namespace pP::matter {
         u64 m_snapshot_signal{};
         u64 m_replacement_signal{};
         u32 m_substep{};
+        u32 m_iterations{};
         bool m_inflight{};
         bool m_complete{};
         bool m_valid{};
@@ -452,23 +590,26 @@ namespace pP::matter {
         }
 
         std::error_code bindAndDispatch(
-            rhi::ICommandEncoder &encoder, const u32 iteration, const GpuRadialForce &force) {
-            Kernel &kernel = m_kernels[iteration];
-            const u32 dispatch_index = m_substep * 2u + iteration;
+            rhi::ICommandEncoder &encoder, const u32 stage, const bool destination_a, const u32 source_generation,
+            const GpuRadialForce &force) {
+            Kernel &kernel = m_kernels[stage == 0u ? 0u : 1u];
+            const u32 dispatch_index = m_substep * m_iterations + stage;
             rhi::IShaderObject *const root = m_dispatch_roots[dispatch_index].get();
             rhi::ShaderCursor cursor{root};
             rhi::ShaderCursor parameters{};
             GpuParameters constants = m_profile;
-            constants.m_reserved0 = iteration;
+            constants.m_reserved0 = stage;
+            constants.m_reserved1 = m_iterations;
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_parameters"].getDereferenced(parameters));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&constants, sizeof(constants)));
 
-            if (iteration == 1u) {
+            if (stage + 1u == m_iterations) {
+                // External acceleration exists only where integration does.
                 PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_radial_force"].getDereferenced(parameters));
                 PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&force, sizeof(force)));
             }
 
-            const auto sparse = m_particles.m_sparse.constants(iteration != 0u);
+            const auto sparse = m_particles.m_sparse.constants(destination_a, source_generation);
             const auto &buffers = m_particles.m_sparse.buffers();
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, cursor["g_sparse"].getDereferenced(parameters));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, parameters.setData(&sparse, sizeof(sparse)));
@@ -480,6 +621,7 @@ namespace pP::matter {
 
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_hot", m_particles.m_working_hot));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_cold", m_particles.m_working_cold));
+            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_properties", m_particles.m_properties));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_errors", buffers.m_errors));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_rows", buffers.m_rows));
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, bind("g_buckets", buffers.m_groups));
@@ -672,19 +814,21 @@ namespace pP::matter {
 
     std::error_code GpuSolver::prepareReplacement(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain, const ETerrainUpdate terrain_update) {
-        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false, terrain_update);
+        const u64 expected_epoch, const TerrainView terrain, const ETerrainUpdate terrain_update,
+        const GpuMaterialTableView properties) {
+        return prepareReplacement_(particles, shapes, expected_epoch, terrain, false, terrain_update, properties);
     }
 
     std::error_code GpuSolver::prepareAppend(
         const std::span<const GpuParticle> appended, const u64 expected_epoch, const TerrainView terrain,
-        const ETerrainUpdate terrain_update) {
-        return prepareReplacement_(appended, {}, expected_epoch, terrain, true, terrain_update);
+        const ETerrainUpdate terrain_update, const GpuMaterialTableView properties) {
+        return prepareReplacement_(appended, {}, expected_epoch, terrain, true, terrain_update, properties);
     }
 
     std::error_code GpuSolver::prepareReplacement_(
         const std::span<const GpuParticle> particles, const std::span<const GpuStaticShape> shapes,
-        const u64 expected_epoch, const TerrainView terrain, const bool append, const ETerrainUpdate terrain_update) {
+        const u64 expected_epoch, const TerrainView terrain, const bool append, const ETerrainUpdate terrain_update,
+        const GpuMaterialTableView properties) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             m_state and not busy() ? std::error_code{} : std::make_error_code(std::errc::device_or_resource_busy));
@@ -722,9 +866,41 @@ namespace pP::matter {
                            ? std::error_code{}
                            : std::make_error_code(std::errc::value_too_large));
 
-        for (const GpuParticle &particle: particles) {
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, validateMaterialTable(properties.m_rows));
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, (properties.m_rows.empty() and properties.m_particle_rows.empty()) or
+                               (not properties.m_rows.empty() and properties.m_particle_rows.size() == particles.size())
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::invalid_argument));
+        if (append) {
+            // A resident prefix keeps its indices. Definitions may only extend
+            // that table; changing/reordering existing rows requires replacement.
+            const auto &old = state.m_particles.m_property_rows;
             PPR_RETURN_ERROR_ON_FAIL(
-                MatterGpu, validParticle(particle, state.m_profile)
+                MatterGpu, properties.m_rows.size() >= old.size() and
+                                   (old.empty() or std::memcmp(
+                                                       old.data(), properties.m_rows.data(),
+                                                       old.size() * sizeof(GpuMaterialProperties)) == 0)
+                               ? std::error_code{}
+                               : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        for (std::size_t index = 0u; index < particles.size(); ++index) {
+            const auto &particle = particles[index];
+            if (not properties.m_rows.empty()) {
+                const u32 property_row = properties.m_particle_rows[index];
+                PPR_RETURN_ERROR_ON_FAIL(
+                    MatterGpu,
+                    property_row < properties.m_rows.size() and
+                            particle.m_material == static_cast<float>(properties.m_rows[property_row].m_family) and
+                            validMaterialState(particle, properties.m_rows[property_row])
+                        ? std::error_code{}
+                        : std::make_error_code(std::errc::invalid_argument));
+            }
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, validParticle(particle, state.m_profile) and
+                                   (particle.m_material < 4.0f or not properties.m_rows.empty())
                                ? std::error_code{}
                                : std::make_error_code(std::errc::invalid_argument));
         }
@@ -775,6 +951,15 @@ namespace pP::matter {
         }
 
         ParticleStorage replacement;
+        replacement.m_property_rows.assign(properties.m_rows.begin(), properties.m_rows.end());
+        const GpuMaterialProperties empty_properties{};
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu,
+            createBuffer(
+                *state.m_device, std::max<std::size_t>(1u, properties.m_rows.size()) * sizeof(GpuMaterialProperties),
+                sizeof(GpuMaterialProperties), properties.m_rows.empty() ? &empty_properties : properties.m_rows.data(),
+                "PBMPM immutable substance properties", replacement.m_properties));
+
         replacement.m_particle_count = old_count + static_cast<u32>(particles.size());
         replacement.m_hot_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleWrite);
         replacement.m_cold_bytes = std::max<u64>(1u, replacement.m_particle_count) * sizeof(ParticleReadonly);
@@ -818,11 +1003,11 @@ namespace pP::matter {
                            : std::make_error_code(std::errc::state_not_recoverable));
 
         const ITimerClock *const preparation_clock = state.m_timing ? state.m_timing->m_clock : nullptr;
-        const TimePoint sparse_begin = preparation_clock ? preparation_clock->now() : TimePoint{};
+        [[maybe_unused]] const TimePoint sparse_begin = preparation_clock ? preparation_clock->now() : TimePoint{};
         const auto sparse_error = replacement.m_sparse.initialize_(
             *state.m_device, *state.m_shaders, state.m_content_root, replacement.m_particle_count,
             state.m_profile.m_grid_width, state.m_profile.m_grid_height, bootstrap ? nullptr : &current.m_sparse);
-        const TimePoint sparse_end = preparation_clock ? preparation_clock->now() : TimePoint{};
+        [[maybe_unused]] const TimePoint sparse_end = preparation_clock ? preparation_clock->now() : TimePoint{};
 
         PPR_LOG(
             MatterGpu, emphasis, "Sparse preparation CPU including allocations",
@@ -871,8 +1056,8 @@ namespace pP::matter {
             }
         }
 
-        // Named-field packing is the only crossing between the semantic record and
-        // the split device rows; all six compact cold fields remain FP32.
+        // Named-field packing keeps semantic fields intact; the transient index
+        // is supplied separately from the caller's stable substance metadata.
         Array<ParticleWrite> hot_rows;
         Array<ParticleReadonly> cold_rows;
         if (not particles.empty()) {
@@ -881,6 +1066,9 @@ namespace pP::matter {
             for (std::size_t row = 0u; row < particles.size(); ++row) {
                 hot_rows[row] = packWrite(particles[row]);
                 cold_rows[row] = packReadonly(particles[row]);
+                if (not properties.m_rows.empty()) {
+                    cold_rows[row].m_property_row = properties.m_particle_rows[row];
+                }
             }
         }
 
@@ -922,8 +1110,11 @@ namespace pP::matter {
 
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, createBuffer(
-                           *state.m_device, replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes, 0u,
-                           nullptr, "PBMPM tick readback", replacement.m_readback, true));
+                           *state.m_device,
+                           replacement.m_hot_bytes +
+                               replacement.m_cold_bytes +
+                               replacement.m_sparse.buffers().m_errors->getDesc().size,
+                           0u, nullptr, "PBMPM tick readback", replacement.m_readback, true));
 
         const u64 row_bytes = sizeof(ParticleWrite) + sizeof(ParticleReadonly);
         state.m_accounting.m_last_particle_upload_bytes = particles.size() * row_bytes;
@@ -1087,10 +1278,14 @@ namespace pP::matter {
             expected_epoch == state.m_accounting.m_epoch and expected_epoch != std::numeric_limits<u64>::max()
                 ? std::error_code{}
                 : std::make_error_code(std::errc::state_not_recoverable));
+
+        // Admission precedes every allocation, root and encoding: an unsupported
+        // schedule has no representation, so it is refused rather than clamped.
+        const bool admitted_schedule = isSupportedIterations(iterations);
         PPR_RETURN_ERROR_ON_FAIL(
-            MatterGpu, substeps != 0u and
-                               iterations == kSourceIterations and
-                               substeps <= std::numeric_limits<u32>::max() / 2u and
+            MatterGpu, admitted_schedule and
+                               substeps != 0u and
+                               static_cast<u64>(substeps) * iterations <= std::numeric_limits<u32>::max() and
                                state.m_next_signal != std::numeric_limits<u64>::max()
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
@@ -1113,6 +1308,12 @@ namespace pP::matter {
             MatterGpu, finite_force and force.m_radius >= 0.0f and enabled_force_valid
                            ? std::error_code{}
                            : std::make_error_code(std::errc::invalid_argument));
+
+        // The profile's derived operands are constants for the whole batch, so an
+        // unusable domain is refused here instead of per particle or per operand.
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, validProfileDomain(state.m_profile) ? std::error_code{}
+                                                           : std::make_error_code(std::errc::invalid_argument));
 
         const u64 boundary_rows = static_cast<u64>(body_count) * substeps;
         PPR_RETURN_ERROR_ON_FAIL(
@@ -1147,20 +1348,23 @@ namespace pP::matter {
                            : std::make_error_code(std::errc::value_too_large));
 
         Array<rhi::ComPtr<rhi::IShaderObject>> dispatch_roots;
-        dispatch_roots.resize(static_cast<std::size_t>(substeps) * 2u);
+        dispatch_roots.resize(static_cast<std::size_t>(substeps) * iterations);
 
         for (std::size_t index = 0u; index < dispatch_roots.size(); ++index) {
+            // Roots are substep-major and stage-minor, matching the encode order.
+            const std::size_t stage = index % iterations;
             PPR_RETURN_ERROR_ON_FAIL(
                 MatterGpu, state.m_device->createRootShaderObject(
-                               state.m_kernels[index % 2u].m_program, dispatch_roots[index].writeRef()));
+                               state.m_kernels[stage == 0u ? 0u : 1u].m_program, dispatch_roots[index].writeRef()));
         }
 
-        // Every fused dispatch owns immutable selector/body-base constants.
+        // Every fused dispatch owns immutable stage/selector/body-base constants.
         state.m_dispatch_roots = std::move(dispatch_roots);
-        PPR_ASSERT(state.m_dispatch_roots.size() == static_cast<std::size_t>(substeps) * 2u);
+        PPR_ASSERT(state.m_dispatch_roots.size() == static_cast<std::size_t>(substeps) * iterations);
 
         state.m_boundaries.m_body_count = body_count;
         state.m_accounting.m_substeps = substeps;
+        state.m_iterations = iterations;
 
         const hal::ProfileScope scope{"Matter.Gpu.EncodeTick"};
         rhi::ComPtr<rhi::ICommandEncoder> encoder;
@@ -1192,7 +1396,7 @@ namespace pP::matter {
                         }
                     }
 
-                    timing->begin(*encoder, expected_epoch, substeps, state.m_profile.m_particle_count);
+                    timing->begin(*encoder, expected_epoch, substeps, iterations, state.m_profile.m_particle_count);
                 }
 
                 encoder->setBufferState(state.m_particles.m_committed_hot, rhi::ResourceState::CopySource);
@@ -1215,6 +1419,7 @@ namespace pP::matter {
                 // The cold row is only ever read by the kernels, so it holds a
                 // shader-resource state rather than the hot row's unordered access.
                 encoder->setBufferState(state.m_particles.m_working_cold, rhi::ResourceState::ShaderResource);
+                encoder->setBufferState(state.m_particles.m_properties, rhi::ResourceState::ShaderResource);
                 encoder->setBufferState(state.m_particles.m_shapes, rhi::ResourceState::ShaderResource);
                 if (state.m_particles.m_terrain_masks) {
                     encoder->setBufferState(state.m_particles.m_terrain_masks, rhi::ResourceState::ShaderResource);
@@ -1239,6 +1444,12 @@ namespace pP::matter {
                 if (timing)
                     timing->mark(*encoder);
 
+                // Ping-pong bookkeeping, owned here rather than inferred from stage
+                // parity: a side name plus the generation its payload was written
+                // with. A tick starts logically empty, so no side is readable.
+                bool source_a = true;
+                u32 source_generation = 0u;
+
                 for (u32 substep = 0u; substep < substeps; ++substep) {
                     encoder->pushDebugGroup("PBMPM.Substep", {});
                     PPR_DEFER {
@@ -1252,31 +1463,44 @@ namespace pP::matter {
                             encoder->popDebugGroup();
                         };
 
+                        // The first stage writes the side opposite the one the
+                        // schedule finished on, so only that side's page set is
+                        // republished and the side just read keeps its index.
                         PPR_RETURN_ERROR_ON_FAIL(
-                            MatterGpu, state.m_particles.m_sparse.discover(
-                                           *encoder, *state.m_particles.m_working_hot,
-                                           *state.m_particles.m_working_cold, state.m_profile, state.m_dispatch_roots));
+                            MatterGpu,
+                            state.m_particles.m_sparse.discover(
+                                *encoder, *state.m_particles.m_working_hot, *state.m_particles.m_working_cold,
+                                state.m_profile, not source_a, state.m_dispatch_roots));
                         state.m_accounting.m_dispatches += 9u;
                         if (timing)
                             timing->mark(*encoder);
                     }
 
-                    for (u32 iteration = 0u; iteration < 2u; ++iteration) {
+                    for (u32 stage = 0u; stage < iterations; ++stage) {
+                        const bool destination_a = not source_a;
                         PPR_RETURN_ERROR_ON_FAIL(
                             MatterGpu, state.m_particles.m_sparse.initializeDestination(
-                                           *encoder, iteration != 0u, state.m_dispatch_roots));
+                                           *encoder, destination_a, state.m_dispatch_roots));
                         ++state.m_accounting.m_dispatches;
                         if (timing)
                             timing->mark(*encoder);
 
-                        encoder->pushDebugGroup(iteration == 0u ? "PBMPM.Fused0" : "PBMPM.Fused1", {});
+                        std::array<char, 24u> label{};
+                        *std::format_to_n(label.data(), label.size() - 1u, "PBMPM.Fused{}", stage).out = '\0';
+                        encoder->pushDebugGroup(label.data(), {});
                         PPR_DEFER {
                             encoder->popDebugGroup();
                         };
 
-                        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.bindAndDispatch(*encoder, iteration, force));
+                        PPR_RETURN_ERROR_ON_FAIL(
+                            MatterGpu, state.bindAndDispatch(*encoder, stage, destination_a, source_generation, force));
                         if (timing)
                             timing->mark(*encoder);
+
+                        // The next stage reads the side this stage wrote, at this
+                        // substep's write generation.
+                        source_a = destination_a;
+                        source_generation = state.m_particles.m_sparse.constants().m_generation;
                     }
                 }
 
@@ -1291,7 +1515,7 @@ namespace pP::matter {
                     encoder->setBufferState(state.m_particles.m_readback, rhi::ResourceState::CopyDestination);
                     encoder->copyBuffer(
                         state.m_particles.m_readback, 0u, state.m_particles.m_sparse.buffers().m_errors, 0u,
-                        kErrorBytes);
+                        state.m_particles.m_sparse.buffers().m_errors->getDesc().size);
                     if (timing)
                         timing->mark(*encoder);
                 }
@@ -1422,6 +1646,12 @@ namespace pP::matter {
         state.m_readback_mapped = true;
         std::array<u32, 6u> errors{};
         std::memcpy(errors.data(), mapped, kErrorBytes);
+        const u64 error_bytes = state.m_particles.m_sparse.buffers().m_errors->getDesc().size;
+        std::array<u32, 25u> operands;
+        const bool capture = error_bytes == kErrorBytes + sizeof(operands) and not state.m_injected_verdict;
+        if (capture)
+            std::memcpy(operands.data(), static_cast<const std::byte *>(mapped) + kErrorBytes, sizeof(operands));
+
         if (state.m_injected_verdict)
             errors = *state.m_injected_verdict;
 
@@ -1431,7 +1661,7 @@ namespace pP::matter {
         }
 
         state.m_readback_mapped = false;
-        state.m_accounting.m_last_readback_bytes = kErrorBytes;
+        state.m_accounting.m_last_readback_bytes = error_bytes;
         state.m_failure.m_flags = errors[0];
         state.m_failure.m_claimed = errors[1];
         if (errors[1] != 0u) {
@@ -1458,6 +1688,32 @@ namespace pP::matter {
 
             state.m_failure.m_cause = std::make_error_code(std::errc::result_out_of_range);
 
+            if (capture and operands[0u] == 1u) {
+                const auto value = [&](const std::size_t index) { return std::bit_cast<float>(operands[1u + index]); };
+
+                PPR_LOG_RAW(
+                    MatterGpu, error,
+                    std::format(
+                        "Calibrated return rejection field={} particle_row={} sigma=({:.9g},{:.9g}) "
+                        "t={:.9g} dev=({:.9g},{:.9g}) n={:.9g} phi={:.9g} C={:.9g} D={:.9g} c={:.9g} "
+                        "ellipse_radicand={:.9g} projected=({:.9g},{:.9g}) H={:.9g} next_phi={:.9g} next_C={:.9g} "
+                        "ellipse_ratio={:.9g} friction_denominator={:.9g} returned_t={:.9g} phi_increment={:.9g} "
+                        "shear_edge={:.9g} strength_phi={:.9g} void_fraction={:.9g} update_history={:.9g} "
+                        "(unreached operands are NaN)",
+                        errors[3], errors[4], value(0u), value(1u), value(2u), value(3u), value(4u), value(5u),
+                        value(6u), value(7u), value(8u), value(9u), value(10u), value(11u), value(12u), value(13u),
+                        value(14u), value(15u), value(16u), value(17u), value(18u), value(19u), value(20u), value(21u),
+                        value(22u), value(23u)),
+                    {{"field", errors[3]}, {"particle_row", errors[4]}, {"sigma_x", value(0u)}, {"sigma_y", value(1u)},
+                        {"t", value(2u)}, {"dev_x", value(3u)}, {"dev_y", value(4u)}, {"n", value(5u)},
+                        {"phi", value(6u)}, {"C", value(7u)}, {"D", value(8u)}, {"c", value(9u)},
+                        {"ellipse_radicand", value(10u)}, {"projected_x", value(11u)}, {"projected_y", value(12u)},
+                        {"H", value(13u)}, {"next_phi", value(14u)}, {"next_C", value(15u)},
+                        {"ellipse_ratio", value(16u)}, {"friction_denominator", value(17u)}, {"returned_t", value(18u)},
+                        {"phi_increment", value(19u)}, {"shear_edge", value(20u)}, {"strength_phi", value(21u)},
+                        {"void_fraction", value(22u)}, {"update_history", value(23u)}});
+            }
+
             PPR_LOG(
                 MatterGpu, error, "GPU tick candidate rejected",
                 {
@@ -1467,6 +1723,7 @@ namespace pP::matter {
                     {"field", errors[3]},
                     {"particle_row", errors[4]},
                     {"body", errors[5]},
+                    {"property_table_rows", state.m_particles.m_property_rows.size()},
                     {"epoch", state.m_accounting.m_epoch},
                     {"particle_count", state.m_profile.m_particle_count},
                     {"grid_width", state.m_profile.m_grid_width},
@@ -1662,9 +1919,10 @@ namespace pP::matter {
         const ParticleStorage &particles = m_state->m_particles;
         result.m_device_bytes += 2u * (particles.m_hot_bytes + particles.m_cold_bytes);
         result.m_device_bytes += particles.m_shapes ? particles.m_shapes->getDesc().size : 0u;
+        result.m_device_bytes += particles.m_properties ? particles.m_properties->getDesc().size : 0u;
         result.m_device_bytes += particles.m_sparse.capacity().m_lookup_bytes +
                                  particles.m_sparse.capacity().m_dynamic_bytes;
-        result.m_readback_capacity_bytes = particles.m_hot_bytes + particles.m_cold_bytes + kErrorBytes;
+        result.m_readback_capacity_bytes = particles.m_readback ? particles.m_readback->getDesc().size : kErrorBytes;
         if (particles.m_terrain_masks)
             result.m_device_bytes += particles.m_terrain_masks->getDesc().size;
 
@@ -1674,13 +1932,14 @@ namespace pP::matter {
         if (m_state->m_replacement) {
             const ParticleStorage &replacement = *m_state->m_replacement;
             result.m_device_bytes += 2u * (replacement.m_hot_bytes + replacement.m_cold_bytes);
+            result.m_device_bytes += replacement.m_properties ? replacement.m_properties->getDesc().size : 0u;
             result.m_device_bytes += replacement.m_sparse.capacity().m_lookup_bytes +
                                      replacement.m_sparse.capacity().m_dynamic_bytes;
             if (replacement.m_shapes != particles.m_shapes) {
                 result.m_device_bytes += replacement.m_shapes->getDesc().size;
             }
 
-            result.m_readback_capacity_bytes += replacement.m_hot_bytes + replacement.m_cold_bytes + kErrorBytes;
+            result.m_readback_capacity_bytes += replacement.m_readback->getDesc().size;
             if (replacement.m_terrain_masks and replacement.m_terrain_masks != particles.m_terrain_masks)
                 result.m_device_bytes += replacement.m_terrain_masks->getDesc().size;
 

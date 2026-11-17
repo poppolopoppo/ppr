@@ -47,6 +47,10 @@ endif()
 # gets Clang and the matching libc++ triplet.
 include(cmake/CompilerSelection.cmake)
 
+# Preselect CMAKE_CXX_STDLIB_MODULES_JSON before project() so CMake's own probe
+# cannot record GCC's libstdc++ manifest for this libc++ build (GCC 16 ships one).
+include(cmake/LibcxxModulesManifest.cmake)
+
 include(cmake/VCPkg.cmake)
 
 project(

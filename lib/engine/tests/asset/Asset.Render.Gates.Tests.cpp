@@ -3991,13 +3991,40 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f);
             }
             const auto stable = grid.observations();
-            PPR_TEST_ASSERT(stable.m_particle_instances == 2u and stable.m_particle_buffer_bytes == 380u);
+            const auto log_particle_resources = [&](const char *phase, const GridPassObservations &observed) {
+                const auto buffers = grid.particleBuffersForTest();
+                const auto bytes = [](const rhi::IBuffer *buffer) {
+                    return buffer ? const_cast<rhi::IBuffer *>(buffer)->getDesc().size : 0u;
+                };
+
+                _.log(
+                    std::format(
+                        "grid particles {} instances={} bytes={} packed_bytes={} selected_ids_bytes={} "
+                        "selected_args_bytes={} selected_conic_bytes={} orientation_bytes={} retained_metadata_bytes={} "
+                        "fixture: capacity=2 slots=3 blocks=1 hot_stride=72 cold_stride=28 metadata_stride=32 "
+                        "packed_stride=24 index_stride=4 orientation_roles=2 orientation_stride=4 census=0 "
+                        "source_rows=max(1,instances)",
+                        phase, observed.m_particle_instances, observed.m_particle_buffer_bytes, bytes(buffers[0]),
+                        bytes(buffers[2]), bytes(buffers[1]), bytes(grid.particleConicForTest()),
+                        observed.m_particle_orientation_bytes, observed.m_particle_retained_metadata_bytes));
+            };
+
+            // Exact live descriptor-byte budget: seed hot/cold + metadata + packed/ranks +
+            // block counts/prefix + three slots (IDs/args/pair-packed conics) + two orientation roles.
+            // 2*(72+28+32) + 2*(24+4) + (1+2)*4 + 3*(2*4+16+12) + 2*2*4 = 456.
+            // History/draw alias a role; accepted metadata aliases the publication. No census is requested.
+            // Pins bounded storage and once-only accounting across repeats and world retirement.
+            constexpr u64 kTwoParticleBytes = 456u;
+            log_particle_resources("stable", stable);
+            PPR_TEST_ASSERT(stable.m_particle_instances == 2u);
+            PPR_TEST_ASSERT(stable.m_particle_buffer_bytes == kTwoParticleBytes);
             PPR_TEST_ASSERT(stable.m_background_targets == 3u);
             PPR_TEST_ASSERT(stable.m_background_target_bytes == 3u * 128u * 128u * 8u);
             for (u32 frame = 0u; frame < 6u; ++frame) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f);
             }
             PPR_TEST_ASSERT(grid.observations().m_particle_uploads == stable.m_particle_uploads);
+            PPR_TEST_ASSERT(grid.observations().m_particle_buffer_bytes == stable.m_particle_buffer_bytes);
             PPR_TEST_ASSERT(grid.observations().m_texture_entries == stable.m_texture_entries);
             PPR_TEST_ASSERT(grid.observations().m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
             u32 forced_background_waits = 0u;
@@ -4017,7 +4044,11 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u);
             }
             const auto empty = grid.observations();
-            PPR_TEST_ASSERT(empty.m_particle_instances == 0u and empty.m_particle_buffer_bytes == 260u);
+            // Empty publication allocates one dummy hot/cold/metadata row; capacity stays two:
+            // (72+28+32) + 2*(24+4) + (1+2)*4 + 3*(2*4+16+12) + 2*2*4 = 324.
+            log_particle_resources("empty", empty);
+            PPR_TEST_ASSERT(empty.m_particle_instances == 0u);
+            PPR_TEST_ASSERT(empty.m_particle_buffer_bytes == 324u);
             PPR_TEST_ASSERT(empty.m_particle_root_bindings <= 9u);
             PPR_TEST_ASSERT(empty.m_background_targets == 3u);
             PPR_TEST_ASSERT(empty.m_background_target_bytes == 3u * 64u * 64u * 8u);
@@ -4073,7 +4104,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 drawOpticalGridOnly_(grid, 63.5f, 63.5f, 4.0f, 64u, nullptr, &admitted);
                 PPR_TEST_ASSERT(admitted);
                 const auto settled = grid.observations();
-                PPR_TEST_ASSERT(settled.m_particle_instances == 2u and settled.m_particle_buffer_bytes == 380u);
+                // The retired world has drained; the replacement owns the same two-row cohort.
+                log_particle_resources("settled replacement", settled);
+                PPR_TEST_ASSERT(settled.m_particle_instances == 2u);
+                PPR_TEST_ASSERT(settled.m_particle_buffer_bytes == kTwoParticleBytes);
                 PPR_TEST_ASSERT(settled.m_texture_entries == stable.m_texture_entries);
                 PPR_TEST_ASSERT(settled.m_texture_decoded_bytes == stable.m_texture_decoded_bytes);
                 PPR_TEST_ASSERT(settled.m_background_target_bytes == empty.m_background_target_bytes);
@@ -4121,12 +4155,14 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not grid.applyStagedFrame(stage));
 
             struct Hot {
-                std::array<float, 16u> fields{};
+                std::array<float, 18u> fields{};
             };
             struct Cold {
-                std::array<float, 6u> fields{};
+                std::array<float, 7u> fields{};
             };
-            static_assert(sizeof(Hot) == 64u and sizeof(Cold) == 24u);
+            // Numerical: 18 scalar words * 4 = 72 bytes. Read-only: six floats
+            // plus the property-row word * 4 = 28 bytes (not the pre-B1 24).
+            static_assert(sizeof(Hot) == kGridParticleNumericalStride and sizeof(Cold) == kGridParticleReadonlyStride);
             std::array<Hot, 2u> hot{};
             std::array<Cold, 2u> cold{};
             // The restored liquid disk's support is R = 2.0 r, where the retired
@@ -4146,6 +4182,58 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             auto live = std::make_shared<std::atomic<u64>>(0u);
             u64 epoch = 0u;
             GridParticleGpuView selected;
+
+            const auto apply_view = [&](const GridParticleGpuView &view) {
+                const auto error = grid.applyGpuParticleView(view);
+                if (not error) {
+                    return error;
+                }
+
+                const auto numerical = view.m_numerical ? view.m_numerical->getDesc() : rhi::BufferDesc{};
+                const auto readonly = view.m_readonly ? view.m_readonly->getDesc() : rhi::BufferDesc{};
+                const auto count = view.m_metadata ? view.m_metadata->m_count : 0u;
+                const auto moving = view.m_metadata ? view.m_metadata->m_moving_count : 0u;
+                _.log(
+                    std::format(
+                        "PARTICLE_VIEW_REJECTED error={} layout={} numerical_stride={} readonly_stride={} origin={} "
+                        "metadata_present={} rows_present={} count={} moving_count={} numerical_present={} "
+                        "numerical_buffer_size={} numerical_buffer_stride={} readonly_present={} "
+                        "readonly_buffer_size={} readonly_buffer_stride={} cell_metres={}",
+                        error.message(), view.m_layout, view.m_stride, view.m_readonly_stride, view.m_origin,
+                        bool(view.m_metadata), view.m_metadata and bool(view.m_metadata->m_rows), count, moving,
+                        bool(view.m_numerical), numerical.size, numerical.elementSize, bool(view.m_readonly),
+                        readonly.size, readonly.elementSize, view.m_metadata ? view.m_metadata->m_cell_metres : 0.0));
+
+                const auto check = [&](const bool valid, const std::string_view term) {
+                    if (not valid) {
+                        _.log(std::format("PARTICLE_VIEW_FAILED_TERM {}", term));
+                    }
+                };
+
+                check(grid.gpuParticleFrameCurrent(view), "frame identity");
+                check(bool(view.m_metadata), "metadata present");
+                check(bool(view.m_numerical), "numerical buffer present");
+                check(bool(view.m_readonly), "readonly buffer present");
+                check(view.m_layout == kGridParticleNumericalLayout, "layout == 5");
+                check(view.m_stride == kGridParticleNumericalStride, "numerical stride == 72");
+                check(view.m_readonly_stride == kGridParticleReadonlyStride, "readonly stride == 28");
+                check(view.m_origin == 3.0, "origin == 3");
+                check(count <= kGridParticleCapacity, "count <= capacity");
+                check(view.m_metadata and bool(view.m_metadata->m_rows), "metadata rows present");
+                check(numerical.elementSize == kGridParticleNumericalStride, "numerical descriptor stride == 72");
+                check(
+                    numerical.size >= std::max<u64>(1u, moving) * kGridParticleNumericalStride,
+                    "numerical descriptor size >= max(1, moving_count) * 72");
+                check(readonly.elementSize == kGridParticleReadonlyStride, "readonly descriptor stride == 28");
+                check(
+                    readonly.size >= std::max<u64>(1u, moving) * kGridParticleReadonlyStride,
+                    "readonly descriptor size >= max(1, moving_count) * 28");
+                check(
+                    view.m_metadata and
+                        view.m_metadata->m_cell_metres == (stage.m_cell_size_m == 1.0f ? 1.0 : 1.0 / 3.0),
+                    "metadata cell metres == fixture cell metres");
+                return error;
+            };
 
             const auto buffer = [&](const u64 stride, const u32 count, const void *data) {
                 rhi::BufferDesc desc{};
@@ -4178,7 +4266,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 selected.m_device_epoch = epoch;
                 selected.m_publication = epoch;
                 live->store(epoch, std::memory_order_release);
-                PPR_TEST_ASSERT(not grid.applyGpuParticleView(selected));
+                PPR_TEST_ASSERT(not apply_view(selected));
             };
 
             publish(0u);
@@ -4191,6 +4279,12 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
             const auto centre = gateTexel_(circle, 64u, 64u);
             const auto clear = gateTexel_(background, 64u, 64u);
+            _.log(
+                std::format(
+                    "RESIDENT-PARTICLE centre_rgba=[{},{},{},{}] clear_rgba=[{},{},{},{}] expected_rgb=[{},{},{}] tolerance=2",
+                    centre[0], centre[1], centre[2], centre[3], clear[0], clear[1], clear[2], clear[3],
+                    std::lround(clear[0] * 0.5), std::lround(clear[1] * 0.5), std::lround(clear[2] * 0.5)));
+
             // The optical liquid's authored black tint keeps its premultiplied
             // color black, so alpha0.5 over the captured clear leaves half of
             // every clear channel.
@@ -4286,15 +4380,30 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(not make_error_code(device.readBuffer(culled[1u], 0u, sizeof(args), &args)));
             PPR_TEST_ASSERT(args.instanceCount == 0u);
             PPR_TEST_ASSERT(grid.observations().m_particle_uploads == before.m_particle_uploads);
+
+            // Null GPU buffers and layout/stride mismatches make current() false
+            // and therefore hold. Probe structural rejection with current views.
             auto invalid = selected;
-            invalid.m_readonly_stride = 64u;
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(invalid) == std::errc::invalid_argument);
+            invalid.m_origin = 0.0;
+            PPR_TEST_ASSERT(invalid.current());
+            PPR_TEST_ASSERT(apply_view(invalid) == std::errc::invalid_argument);
+
             invalid = selected;
-            invalid.m_readonly.setNull();
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(invalid) == std::errc::invalid_argument);
+            invalid.m_metadata.reset();
+            PPR_TEST_ASSERT(invalid.current());
+            PPR_TEST_ASSERT(apply_view(invalid) == std::errc::invalid_argument);
+
+            const auto uploads_before_hold = grid.observations().m_particle_uploads;
+            const auto packs_before_hold = grid.particlePackEncodesForTest();
+            const auto packed_epoch_before_hold = grid.particlePackedEpochForTest();
             live->fetch_add(1u, std::memory_order_release);
             PPR_TEST_ASSERT(not selected.current());
-            PPR_TEST_ASSERT(grid.applyGpuParticleView(selected) == std::errc::invalid_argument);
+            PPR_TEST_ASSERT(not apply_view(selected));
+            PPR_TEST_ASSERT(grid.particlePresentationForTest() == EParticlePresentation::held);
+            PPR_TEST_ASSERT(not grid.activeParticlePresentation().has_value());
+            PPR_TEST_ASSERT(grid.observations().m_particle_uploads == uploads_before_hold);
+            PPR_TEST_ASSERT(grid.particlePackEncodesForTest() == packs_before_hold);
+            PPR_TEST_ASSERT(grid.particlePackedEpochForTest() == packed_epoch_before_hold);
 
             // The capture-only projection observes committed metadata order,
             // independently of circle packing, visibility and later epochs.
@@ -4317,7 +4426,7 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
                 next.m_terrain_revision = 17u;
                 next.m_joint_tick = epoch * 3u;
                 live->store(epoch, std::memory_order_release);
-                PPR_TEST_ASSERT(not grid.applyGpuParticleView(next));
+                PPR_TEST_ASSERT(not apply_view(next));
                 selected = std::move(next);
             };
 
@@ -5694,10 +5803,10 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
 
                 const auto live = std::make_shared<std::atomic<u64>>(1u);
                 const auto viewAt = [&](const u64 epoch) {
-                    std::array<float, 16u> hot{};
+                    std::array<float, 18u> hot{};
                     hot[0u] = hot[1u] = 3.0f;
                     hot[15u] = 1.0f;
-                    std::array<float, 6u> cold{};
+                    std::array<float, 7u> cold{};
                     cold[0u] = 1.0f;
                     cold[1u] = std::numbers::pi_v<float> * 0.25f;
                     cold[2u] = static_cast<float>(particle_material);

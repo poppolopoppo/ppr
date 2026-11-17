@@ -109,8 +109,10 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 
 ## Integration
 
-- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `CompilerSelection`, `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`,
-  `Assets`, `Tests`, `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
+- Root `CMakeLists.txt` includes: `PreventInSourceBuilds`, conditional `MSVCToolchain`, `CompilerSelection`,
+  `LibcxxModulesManifest` (pre-`project()` libc++ manifest preselection, see
+  [compiler/codemap.md](compiler/codemap.md)), `VCPkg`, `HAL`, `Compilers`, `RuntimeDlls`, `Assets`, `Tests`,
+  `Sanitizers`, `StaticAnalyzers`, `Cache`, and `Dependencies`.
 - Compiler specifics: see [compiler/codemap.md](compiler/codemap.md); third-party wiring:
   see [external/codemap.md](external/codemap.md).
 - PPR targets opt in to `CXX_MODULE_STD` through `setup_ppr_project()`; external exceptions set it OFF locally.
@@ -124,6 +126,8 @@ Sets up C++23 modules, compiler toolchains, sanitizers, and external dependency 
 - `vcpkg.json` — vcpkg manifest mode configuration.
 - `cmake/MSVCToolchain.cmake` — native MSVC pre-project guard and vcpkg VS path normalization.
 - `cmake/CompilerSelection.cmake` — Linux default to Clang when no compiler is selected.
+- `cmake/LibcxxModulesManifest.cmake` — pre-`project()` `CMAKE_CXX_STDLIB_MODULES_JSON` preselection shared with
+  `compiler/Clang.cmake`, so CMake's own probe cannot record GCC's `libstdc++.modules.json` for the libc++ build.
 - `cmake/Compilers.cmake` — dispatcher + `setup_ppr_project`; rejects GCC.
 - `cmake/RuntimeDlls.cmake` — executable-only Windows runtime-DLL staging helper.
 - `cmake/Tests.cmake` — `ppr_add_test_entry()` test-entry naming and shared-property helper.

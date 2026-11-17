@@ -39,17 +39,39 @@ export namespace pP::colony {
         Array<matter::GpuParticle> m_particles{};
         Array<sim::MatterParticle> m_records{};
         Array<sim::MatterParticle> m_gas{};
+        Array<matter::GpuMaterialProperties> m_properties{};
         MatterIdentity m_identity{};
         u64 m_next_id{1u};
         double m_cell_metres{};
         double m_thickness_metres{};
         matter::GpuParameters m_profile{};
         u32 m_world_edge{sim::kWorldEdge};
+        /// World-owned schedule, outside the sixteen-word shader profile ABI.
+        u32 m_iterations{matter::kDefaultIterations};
     };
 
     [[nodiscard]] Expected<MatterState> makeMatterState(
         const sim::MatterParticleSnapshot &particles, double cell_metres, double thickness_metres, float gravity_y,
-        u64 world, u32 world_edge = sim::kWorldEdge);
+        u64 world, u32 world_edge = sim::kWorldEdge, const ContentCatalog *catalog = nullptr);
+
+    /// Stable policy plus canonical row values form the persisted table identity.
+    inline constexpr u32 kMatterMaterialTablePolicy = 2u;
+    [[nodiscard]] matter::ESourceMaterial matterFamily(const MaterialDefinition &material);
+    /// Fresh catalog calibration; saved property rows remain authoritative.
+    [[nodiscard]] matter::GpuMaterialProperties defaultMatterProperties(
+        const MaterialDefinition &material, const matter::GpuParameters &profile);
+    [[nodiscard]] u64 matterMaterialTableIdentity(
+        std::span<const matter::GpuMaterialProperties> rows, u32 policy = kMatterMaterialTablePolicy);
+    [[nodiscard]] Expected<Array<u32>> matterPropertyIndices(const MatterState &state);
+
+    /// Candidate-only default construction/migration. Existing rows are retained;
+    /// missing substances use catalog density (or explicit fixture inventory).
+    [[nodiscard]] std::error_code completeMatterProperties(
+        MatterState &state, const ContentCatalog *catalog = nullptr, bool legacy = false);
+    /// Validate before changing the candidate; live runtime publication remains a
+    /// separate prepared transaction. Family/history conversion is not supported.
+    [[nodiscard]] std::error_code setMatterProperties(
+        MatterState &state, std::span<const matter::GpuMaterialProperties> rows, const ContentCatalog &catalog);
     [[nodiscard]] Expected<sim::MatterParticleSnapshot> captureMovingMatter(
         const MatterState &state, std::span<const matter::GpuParticle> particles);
 
@@ -73,7 +95,7 @@ export namespace pP::colony {
         const matter::GpuParameters &profile);
 
     // Immutable physical inventory: positions come only from the selected GPU
-    // reader; volume is never reconstructed from a display radius or Cold24.
+    // reader; volume is never reconstructed from a display radius or the device cold row.
     struct MatterPhysicalLedgerRow {
         u64 m_id{};
         double m_volume_m3{};

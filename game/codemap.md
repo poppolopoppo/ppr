@@ -38,7 +38,8 @@ coupling and step Box2D once; normal frames carry a shared GPU view without a
 CPU particle mirror or batch upload. Metadata prepares only at world/inventory
 admission. Checkpoint, preview, inspection and edit coverage request exact demand
 snapshots on existing workers, with simulation admission frozen while UI/render
-continues. Complete v6 payloads and atomic file saving remain unchanged.
+continues. New worlds use `matter::kDefaultIterations` (K5). Complete v7 payloads retain the world schedule; v6 migrates to K2.
+Atomic file saving retains the same ownership protocol.
 
 Preparation readiness separately matches an actual-present resident stamp for
 the acknowledged world/job/generation, publication, terrain revision and joint
@@ -103,7 +104,7 @@ the `app.game.worldgen_frontier`/`worldgen_hollows` profile validations unless t
 are explicitly disabled. The CPU entry excludes `game/checkpoint_gpu` and the two
 heavy preview replay/crop leaves; the worldgen entry uses `PROCESSORS 4`.
 Each GPU entry has its own 180-second ceiling and unchanged explicit validated
-D3D12/4103-grid/eight-substep/K2 fixture. `game.tests` stages its shader assets
+D3D12/4103-grid/eight-substep/new-world-K5 fixture. `game.tests` stages its shader assets
 independently. `Game.Config.Tests.cpp` covers invocation compatibility, source
 precedence and help; `Game.ProfileCapture.Tests.cpp` covers readiness/frozen
 pause/stop-token/shutdown/sdk-sequence behavior; `Game.Display.Tests.cpp` covers drafts, persistence and
@@ -112,7 +113,7 @@ Keep/Revert. Engine test targets never depend on these game modules.
 The game-owned world coordinator retains immutable requests, job-local cancellation and isolated candidate drivers. Independent worker admission is explicit; default WorldJob callers retain the original loading-presented gate. Cancel/failure before renderer activation admission preserves the old session; activation admission latches commit intent, and post-activation attachment/presentation failure is terminal while owners remain retained through real retirement. Only detached drivers may enter worker cleanup/capture. Normal startup loads the authored pack/profile/seed and initializes one actor. Independent render controls stage/activate owned terrain separately, and the modal remains through real presentation. No frame result or loading acknowledgment is fabricated. Integrated responsiveness remains unverified: cold command finalization occupies the sole device lane for about40s. Matter now uses retained asynchronous operations; the renderer retains its existing synchronous teardown policy. No timeout, resolution, schedule or backend workaround is adopted.
 
 
-`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. Mandatory current-state checkpoint envelope v6 is owned by `game.colony.checkpoint`, with dimensioned raw sim snapshot v5. Historical seeds never replace evolved columns; detached restored owners stay frozen until runtime attachment.
+`--worldgen-preview --worldgen-output=<directory>` exports material/biome/temperature/initial-matter P6 PPM overviews and a bounded JSON report through `colony/WorldGen.Export.cpp`. It is a headless authoring path; see `docs/worldgen-content.md` for resolution, orientation and baseline semantics. Mandatory current-state checkpoint envelope v7 is owned by `game.colony.checkpoint`, with dimensioned raw sim snapshot v5. The saved iteration schedule is retained; v6 migrates explicitly to K2. Historical seeds never replace evolved columns; detached restored owners stay frozen until runtime attachment.
 
 `--worldgen-preview --worldgen-gpu-output=<directory>` explicitly enables a rendering-capable,
 UI-free frozen diagnostic host after generation. `colony/WorldGen.Capture.cpp`
@@ -238,4 +239,3 @@ spawn count and catalog particle material. Startup defaults are available throug
 `game.tool_radius_m`, `game.tool_acceleration_m_s2`, `game.tool_spawn_count`,
 `game.tool_spawn_material` in TOML/environment. UI edits are session values.
 Force is cleared on release, cancellation, focus loss and tool/world changes.
-

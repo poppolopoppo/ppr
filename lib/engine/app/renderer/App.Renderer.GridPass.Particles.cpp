@@ -248,14 +248,15 @@ namespace pP {
 
         std::ranges::sort(seeds, {}, [](const auto *seed) { return seed->m_id; });
 
-        // Hot64 mirrors the solver's 64-byte ParticleWrite by field order
+        // Hot72 mirrors the solver's 72-byte ParticleWrite by field order
         // (position, displacement, F, D, liquid scalars, enabled); only the
         // admission seed writes position[0..1] and enabled here.
         struct HotRow {
-            std::array<float, 16u> m_fields{};
+            std::array<float, 18u> m_fields{};
         };
         struct ColdRow {
             float m_mass{}, m_volume{}, m_material{}, m_r{}, m_g{}, m_b{};
+            u32 m_property_row{std::numeric_limits<u32>::max()};
         };
         static_assert(sizeof(HotRow) == kGridParticleNumericalStride and alignof(HotRow) == 4u);
         static_assert(sizeof(ColdRow) == kGridParticleReadonlyStride and alignof(ColdRow) == 4u);
@@ -945,13 +946,12 @@ namespace pP {
             GridPass,
             gpuParticleFrameCurrent(view) ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
-        // Liveness (finding D10): the renderer decides for itself whether the
-        // committed rows are still its own. `publishTick` swaps the pairs in
-        // place and bumps the live epoch, so installing a not-current view would
-        // pack a torn buffer. It is the same hold the packet reports, so the two
-        // layers cannot disagree about liveness (finding D11). The frame's held
-        // preparation counts and logs it once in prepareGpuParticles, which owns
-        // the per-frame decision.
+        // Liveness (finding D10): a not-current view is held without structural
+        // admission because its buffers may belong to a superseded publication.
+        // `publishTick` swaps the pairs in place and bumps the live epoch, so
+        // installing that view could pack a torn buffer. The renderer retains its
+        // own packed rows, matching the packet's hold (finding D11). The frame's
+        // held preparation counts and logs it once in prepareGpuParticles.
         if (not view.current()) {
             m_world.m_particle_presentation = EParticlePresentation::held;
             return {};

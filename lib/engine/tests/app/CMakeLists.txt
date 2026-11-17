@@ -58,6 +58,7 @@ target_sources(engine.tests.app
         App.MatterGpu.Tests.cpp
         App.MatterFork.Tests.cpp
         App.MatterFork.Oracle.h
+        App.MatterFork.Upstream.h
         App.MatterRuntime.Tests.cpp
         App.WorldLighting.Backend.Tests.cpp
         App.WorldLighting.Codec.Tests.cpp
@@ -126,13 +127,22 @@ ppr_stage_assets(engine.tests.app shaders fonts lighting)
 # Transfer, contact, pool and dam continuations own exact leaves, excluded from that group.
 # Pinned-fork conformance uses its own exact group, leaving old workloads/deadlines intact.
 # The 300 s ceiling matches the existing matter device gates.
+#
+# Gate contract: `matter_fast` is the repeated-use simulation gate (transaction
+# safety, transfer identities, scheduling, restore, inventory). `matter_long`
+# holds long-horizon stability and runs at phase-end/delivery. Every retained
+# simulation correctness entry belongs to one of the two; moving an entry to
+# `matter_long` does not weaken it.
+# Exact-once fork inventory: six frozen/production leaves plus five upstream-family leaves.
+set(ppr_matter_fork_filter "app/matter_fork/actual_wgsl_stages_and_exact_semantic_restart,app/matter_fork/guards_reject_before_shared_signed_accumulation,app/matter_fork/production_k2_stages_tick2_and_restored22_match_actual_wgsl,app/matter_fork/radial_force_reflection_and_codegen_preserve_scalar_layout_on_spirv_and_hlsl,app/matter_fork/resident_radial_force_preserves_zero_path_pushes_pulls_and_rejects_invalid_inputs,app/matter_fork/inventory_replacements_preserve_terrain_ownership_accounting_and_contact,app/matter_fork/upstream_liquid_k2_k5_k10,app/matter_fork/upstream_elastic_k2_k5_k10,app/matter_fork/upstream_sand_k2_k5_k10,app/matter_fork/upstream_visco_k2_k5_k10,app/matter_fork/upstream_mixed_k2_k5_k10")
+
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_fork_gpu
-    FILTER "app/matter_fork"
+    FILTER "${ppr_matter_fork_filter}"
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapshot_preserve_full_state_without_feedback,app/matter_gpu/publication_validation_checks_every_scalar_and_matches_upload_admission,app/matter_gpu/resident_append_copies_the_current_prefix_and_uploads_only_new_rows,app/matter_runtime_gpu/resident_completion_keeps_metadata_and_freezes_exact_demand_snapshot,app/matter_gpu/terrain_position_rejection_is_recoverable_and_other_verdicts_stay_fatal")
@@ -149,19 +159,81 @@ set(ppr_matter_resident_filter "app/matter_gpu/resident_status_and_frozen_snapsh
 # Every `app/matter_gpu` leaf must appear in exactly one explicit list below. The
 # lists are explicit tokens, not group prefixes, so each entry's worst observed
 # cost stays bounded: a new leaf is NOT auto-included and must be added here.
-# The four responsibility lists plus the resident list are disjoint and cover
-# every leaf the aggregate owned (3 terrain + 9 contact + 13 material + 10 grid
-# + 4 resident = 39), so GPU-validation coverage is unchanged. The two
-# whole-grid terrain leaves are separated from the rest of the contact geometry
-# because their joint worst observed bound co-resident with the contact set was
-# 267.62 s (89 % of 300 s).
+# The responsibility lists plus the resident list are disjoint and cover every
+# leaf: 3 terrain + 9 contact + 13 material + 10 grid + 4 constitutive + 4
+# resident + 3 schedule + 3 substance table + 3 B1 laws + 1 cost + 1 correctness + 1 precision
+# + 1 loaded diagnostic + 1 elastic diagnostic + 1 dense mixed regression + 1 snow convergence = 59
+# `app/matter_gpu` leaves, and the resident list also holds one
+# `app/matter_runtime_gpu` token. The cost, correctness and precision leaves keep
+# their own entries outside `matter_fast`, below. The two whole-grid terrain
+# leaves are separated from the rest of the contact geometry because their joint
+# worst observed bound co-resident with the contact set was 267.62 s (89 % of
+# 300 s). The material list measures 933 characters; it is split away from the
+# constitutive and schedule lists to stay inside the 1024-character string domain
+# the CLI filter enforces.
 set(ppr_matter_terrain_filter "app/matter_gpu/terrain_rounded_v_endpoint_preserves_certified_contacts_and_resident_rest,app/matter_gpu/terrain_recovery_sweeps_and_rest_preserve_published_contact,app/matter_gpu/transport_exit_repair_is_bounded_and_a_no_op_when_certified")
 
 set(ppr_matter_contact_filter "app/matter_gpu/node_wgsl_conversion_preserves_endpoints_and_scatter_rejection,app/matter_gpu/bootstrap_grid_checks_preserve_fast_and_fallback_error_acceptance,app/matter_gpu/compact_terrain_gpu_decode_matches_wide_tables_masks_and_tile_bits,app/matter_gpu/terrain_endpoint_response_and_complete_boundary_search,app/matter_gpu/wave_boundary_search_matches_serial_for_full_mixed_groups,app/matter_gpu/moving_body_static_limit_translation_rotation_and_one_way_contact,app/matter_gpu/body_admission_rejection_and_same_epoch_contact_publication,app/matter_gpu/predicted_body_slices_select_distinct_substep_rows,app/matter_gpu/guardian_blocks_normal_and_halves_tangent_analytically")
 
-set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/k2_only_rejects_other_counts_before_work,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication,app/matter_gpu/shared_grid_coupling_precedes_support_contact_diagnostic,app/matter_gpu/mean_occupancy_gate_blind_spot_census_diagnostic")
+set(ppr_matter_material_filter "app/matter_gpu/sand_reference_occupancy_compression_and_floor_controls_diagnostic,app/matter_gpu/sand_density_and_terrain_contact_instrumented_gpu_cost_diagnostic,app/matter_gpu/deterministic_1024_sparse_dense_scene,app/matter_gpu/sand_objective_volume_relaxes_compression_without_attraction_and_preserves_restart,app/matter_gpu/sand_terrain_friction_is_dissipative_and_preserves_body_and_guardian_order,app/matter_gpu/isolated_liquid_density_error_decays_without_affine_growth,app/matter_gpu/evolved_liquid_pool_has_no_interior_render_holes,app/matter_gpu/all_materials_preserve_inventory_and_publish_finite_state_at_k2,app/matter_gpu/initialized_rest_gravity_and_publication,app/matter_gpu/all_four_absolute_budgets_reject_without_publication,app/matter_gpu/shared_grid_coupling_precedes_support_contact_diagnostic,app/matter_gpu/mean_occupancy_gate_blind_spot_census_diagnostic,app/matter_gpu/sand_history_phase_a_characterization")
+
+# The iteration schedule owns its own entry: the admitted-count admission leaf and
+# the two schedule leaves prove the stage roles, the single integration per
+# substep and the ping-pong source sides for K in {2, 5, 10}. They need their own
+# device setup per leaf, so they keep their own deadline rather than extending
+# the already measured material group.
+set(ppr_matter_schedule_filter "app/matter_gpu/supported_iteration_counts_validate_before_work,app/matter_gpu/iteration_roles_integrate_once_per_substep,app/matter_gpu/odd_even_schedule_preserves_sparse_sources")
 
 set(ppr_matter_grid_filter "app/matter_gpu/sparse_capacity_layout_and_independent_admission_bounds,app/matter_gpu/sparse_gpu_aprons_publish_unique_flat_keys_and_group_rows,app/matter_gpu/sparse_generations_poison_capacity_and_cross_group_budget_are_transactional,app/matter_gpu/opt_in_stage_timing_follows_completed_fence_and_epoch,app/matter_gpu/device_peak_footprint_for_dual_grid_ownership,app/matter_gpu/strict_conversion_and_collection_retry_preserve_cause,app/matter_gpu/prepared_replacement_accounts_peak_and_freezes_admission,app/matter_gpu/reflected_scalar_protocol_and_source_helpers,app/matter_gpu/split_device_rows_pack_and_unpack_every_semantic_field_by_name,app/matter_gpu/lossless_terrain_codecs_preserve_tables_tails_and_reject_invalid_input")
+
+# Each row here is one unusable constitutive operand (liquid reciprocal, stored
+# or trial deformation, derived visco/sand overflow, a produced coefficient
+# product) plus the transfer stencil identity; they stay together so one device
+# setup proves the whole per-particle rejection policy.
+set(ppr_matter_constitutive_filter "app/matter_gpu/constitutive_invalid_operands_do_not_enter_unsafe_operations,app/matter_gpu/constitutive_derived_operand_overflow_rejects_state,app/matter_gpu/constitutive_rejection_preserves_committed_epoch_and_rows,app/matter_gpu/quadratic_transfer_reproduces_affine_fields_and_moments")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_calibrated_laws_gpu
+    FILTER "app/matter_gpu/calibrated_caps_hardening_and_two_regime_edges,app/matter_gpu/calibrated_admission_and_clay_sand_divergence,app/matter_gpu/calibrated_loaded_clay_and_snow_complete_with_finite_state"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_dense_mixed_gpu
+    FILTER "app/matter_gpu/dense_water_magma_snow_resident_ticks_remain_finite"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_snow_convergence_gpu
+    FILTER "app/matter_gpu/sustained_snow_load_converges_without_inventory_loss"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_elastic_recovery_diagnostic
+    FILTER "app/matter_gpu/elastic_one_percent_shear_release_diagnostic"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation matter_long
+)
+
+# Report-only outcomes use the same PPR_PBMPM_COST_DIAGNOSTIC opt-in as
+# cost/correctness evidence. The short structural counterpart is in matter_fast.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_calibrated_loaded_diagnostic
+    FILTER "app/matter_gpu/calibrated_loaded_clay_and_snow_diagnostic"
+    RESOURCE_LOCK gpu
+    TIMEOUT 600
+    LABELS unit engine app gpu_validation
+)
 
 ppr_add_test_entry(TARGET engine.tests.app
     NAME matter_terrain_gpu
@@ -169,7 +241,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -178,7 +250,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -187,7 +259,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -196,6 +268,91 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+# B1's three table leaves each belong to this one exact-path shard.
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_properties_gpu
+    FILTER "app/matter_gpu/substance_rows_preserve_defaults_and_reject_invalid_replacements,app/matter_gpu/same_family_substances_differ_and_unused_rows_do_not_dispatch,app/matter_gpu/device_property_guard_reports_out_of_range_and_family_mismatch"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_constitutive_gpu
+    FILTER "${ppr_matter_constitutive_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_schedule_gpu
+    FILTER "${ppr_matter_schedule_filter}"
+    LOOPS
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation matter_fast
+)
+
+# Iteration-count operating-point evidence (A4): one fixed scene measured at
+# K in {2, 5, 10}. Opt-in through `PPR_PBMPM_COST_DIAGNOSTIC=1`, and deliberately
+# outside `matter_fast` so the repeated-use gate carries no measurement work; the
+# leaf logs and returns early when the switch is unset. The harness reports that
+# as a passing test, not a CTest skip; it provides no measurement coverage.
+set(ppr_matter_cost_filter "app/matter_gpu/iteration_count_gpu_cost_diagnostic")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_cost_gpu
+    FILTER "${ppr_matter_cost_filter}"
+    RESOURCE_LOCK gpu
+    TIMEOUT 300
+    LABELS unit engine app gpu_validation
+)
+
+# Iteration-count correctness evidence (A4): rest drift, compression decay,
+# elastic recovery, visco residual strain and granular settling, one fixed scene
+# per property at K in {2, 5, 10}. Same opt-in switch as the cost entry, likewise
+# outside `matter_fast`, and bounded by the 120 s contract this evidence owes.
+set(ppr_matter_correctness_filter "app/matter_gpu/iteration_count_correctness_diagnostic")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_correctness_gpu
+    FILTER "${ppr_matter_correctness_filter}"
+    RESOURCE_LOCK gpu
+    TIMEOUT 120
+    LABELS unit engine app gpu_validation
+)
+
+# Absolute-FP32 / fixed-point precision characterization (A2): one liquid row per
+# case at four absolute coordinates cross three physical speeds, three normalized
+# masses and two subcell phases, plus a K=2 schedule control and a 4-row affine
+# shear control. Masses 1, 0.01, 0.001 avoid initial node-support cutoff trips
+# at both seeded phases. Zero gravity, no terrain, shapes, brush or volume feedback.
+# Single rows report deviation from ideal ballistic transport under repeated
+# quantized transfers and an effective per-substep mean-transport loss. Profile
+# headers report weighted initial-scatter speed floors and half-ULP speed limits.
+# Shear-field moments report end-to-end liquid decay (constitutive relaxation at
+# every stage, pressure relaxation, quantization and absolute-position rounding),
+# not total APIC angular momentum or isolated transfer retention. Frozen is a
+# reported flag, never a failure. Opt-in through `PPR_PBMPM_COST_DIAGNOSTIC=1`, outside
+# `matter_fast` for the same reason as the A4 evidence entries, and bounded by the
+# 120 s contract: 148 reports over ~35k single-row substeps (72 cells at the
+# 1-substep horizon, 72 at 480), i.e. ~670k dispatches. The A4 correctness leaf
+# measured ~3k single-row substeps in 4.45 s Release including two device/shader
+# initializations, so the full matrix is expected in the tens of seconds; the
+# measurement lane records the actual value.
+set(ppr_matter_precision_filter "app/matter_gpu/resident_precision_and_quantization_diagnostic")
+
+ppr_add_test_entry(TARGET engine.tests.app
+    NAME matter_precision_gpu
+    FILTER "${ppr_matter_precision_filter}"
+    RESOURCE_LOCK gpu
+    TIMEOUT 120
     LABELS unit engine app gpu_validation
 )
 
@@ -205,13 +362,18 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 300
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 unset(ppr_matter_terrain_filter)
 unset(ppr_matter_contact_filter)
 unset(ppr_matter_material_filter)
 unset(ppr_matter_grid_filter)
+unset(ppr_matter_constitutive_filter)
+unset(ppr_matter_schedule_filter)
+unset(ppr_matter_cost_filter)
+unset(ppr_matter_correctness_filter)
+unset(ppr_matter_precision_filter)
 unset(ppr_matter_resident_filter)
 
 # Numeric adapters need no device. Actual-domain pending physics owns a separate
@@ -221,7 +383,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     FILTER "app/matter_adapter"
     LOOPS
     TIMEOUT 120
-    LABELS unit engine app cpu
+    LABELS unit engine app cpu matter_fast
 )
 
 # Runtime lifecycle: the dedicated cold/reused acknowledgment leaf and the
@@ -242,7 +404,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 ppr_add_test_entry(TARGET engine.tests.app
@@ -251,7 +413,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 unset(ppr_matter_runtime_filter)
@@ -263,7 +425,7 @@ ppr_add_test_entry(TARGET engine.tests.app
     LOOPS
     RESOURCE_LOCK gpu
     TIMEOUT 180
-    LABELS unit engine app gpu_validation
+    LABELS unit engine app gpu_validation matter_fast
 )
 
 
@@ -385,10 +547,16 @@ ppr_add_test_entry(TARGET engine.tests.app
 
 # window_input 4.2s + imgui_routing 3.1s + player_service 1.3s live loop-1;
 # these touch native window and device state, so they claim both locks.
+# Window services create a native window and an ImGui context. Under a parallel
+# suite run the third-party GLFW/dbus teardown can still hold allocations when
+# LSan samples at exit, which reports a flake that never reproduces serially
+# (3/3 clean) and is not an engine allocation. Window entries are already the
+# documented exception to parallel scheduling, so this one runs alone.
 ppr_add_test_entry(TARGET engine.tests.app
     NAME services_window
     FILTER "app/window_input,app/imgui_routing,app/player_service"
     LOOPS
+    RUN_SERIAL
     RESOURCE_LOCK gpu window
     TIMEOUT 300
     LABELS unit engine app

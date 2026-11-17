@@ -37,8 +37,21 @@ namespace pP::tests::detail::MatterAdapter {
     // owned request execution for explicitly inline fixtures
     // ------------------------------------------------------------------
 
-    colony::MatterCompletion completeInline(colony::MatterRuntime &runtime, Expected<colony::MatterRequest> request) {
+    void assertRequestAdmitted(
+        const Expected<colony::MatterRequest> &request,
+        const std::source_location site = std::source_location::current()) {
+        if (not request) {
+            const auto error = request.error();
+            std::fprintf(
+                stderr, "[matter-request-admission] %s:%u: %s:%d (%s)\n", site.file_name(), site.line(),
+                error.category().name(), error.value(), error.message().c_str());
+        }
+
         PPR_TEST_ASSERT(request.has_value());
+    }
+
+    colony::MatterCompletion completeInline(colony::MatterRuntime &runtime, Expected<colony::MatterRequest> request) {
+        assertRequestAdmitted(request);
 
         auto completion = runtime.advance(*request);
         PPR_TEST_ASSERT(completion and completion->has_value());
@@ -106,6 +119,47 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(state.m_profile.m_delta_time == 1.0f / 480.0f);
         PPR_TEST_ASSERT(state.m_identity.m_world == 71u and state.m_identity.m_publication == 0u);
 
+        const auto indices = colony::matterPropertyIndices(state);
+        PPR_TEST_ASSERT(indices and indices->size() == 2u and state.m_properties.size() == 2u);
+        PPR_TEST_ASSERT(state.m_properties[(*indices)[0u]].m_substance_id == 1u);
+        PPR_TEST_ASSERT(state.m_properties[(*indices)[1u]].m_substance_id == 2u);
+        PPR_TEST_ASSERT(state.m_properties[(*indices)[0u]].m_reference_density == 1.0f);
+        PPR_TEST_ASSERT(state.m_properties[(*indices)[1u]].m_reference_density == 1.5f);
+        for (const auto &row: state.m_properties) {
+            PPR_TEST_ASSERT(row.m_liquid_relaxation == state.m_profile.m_liquid_relaxation);
+            PPR_TEST_ASSERT(row.m_elastic_relaxation == state.m_profile.m_elastic_relaxation);
+            PPR_TEST_ASSERT(row.m_sand_yield_ratio == state.m_profile.m_elasticity_ratio);
+        }
+
+        for (const char *const key: {"water", "brine", "oil", "crude_oil", "magma"}) {
+            colony::MaterialDefinition material{};
+            material.m_key = key;
+            material.m_phase = colony::EMaterialPhase::liquid;
+            PPR_TEST_ASSERT(colony::matterFamily(material) == matter::ESourceMaterial::liquid);
+        }
+
+        for (const char *const key:
+            {"sand", "sandstone", "basalt", "coal", "iron_ore", "copper_ore", "uranium_ore", "wolframite", "autunite",
+                "azurite", "pebbles", "gravel"}) {
+            colony::MaterialDefinition material{};
+            material.m_key = key;
+            PPR_TEST_ASSERT(colony::matterFamily(material) == matter::ESourceMaterial::sand);
+        }
+
+        for (const char *const key: {"clay", "wet_sand", "snow"}) {
+            colony::MaterialDefinition material{};
+            material.m_key = key;
+            PPR_TEST_ASSERT(
+                colony::matterFamily(material) ==
+                (material.m_key == "snow" ? matter::ESourceMaterial::compacting : matter::ESourceMaterial::cohesive));
+        }
+
+        colony::MaterialDefinition unmapped{};
+        unmapped.m_key = "fixture_unmapped";
+        PPR_TEST_ASSERT(colony::matterFamily(unmapped) == matter::ESourceMaterial::sand);
+        unmapped.m_phase = colony::EMaterialPhase::liquid;
+        PPR_TEST_ASSERT(colony::matterFamily(unmapped) == matter::ESourceMaterial::liquid);
+
         for (const auto &particle: state.m_particles) {
             PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
             PPR_TEST_ASSERT(
@@ -124,7 +178,7 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(captured->m_chunks[0u].records()[2u] == state.m_gas[0u]);
         PPR_TEST_ASSERT(seeded.m_chunks[0u].records()[0u].m_id == 20u);
 
-        // Authoritative double volumes are independent of display radii/Cold24.
+        // Authoritative double volumes are independent of display radii/the device cold row.
         const std::shared_ptr<const GridParticleMetadataResource> metadata =
             std::make_shared<GridParticleMetadataResource>();
         auto ledger = std::make_shared<colony::MatterPhysicalLedger>();
@@ -431,7 +485,7 @@ namespace pP::tests::detail::MatterAdapter {
         PPR_TEST_ASSERT(not lane.start({}, {}, {}, [&] { wake.release(); }));
 
         const auto await = [&](Expected<colony::MatterRequest> request) {
-            PPR_TEST_ASSERT(request.has_value());
+            assertRequestAdmitted(request);
             outstanding = *request;
             for (;;) {
                 auto completion = runtime.advance(*outstanding);
@@ -842,7 +896,8 @@ namespace pP::tests::detail::MatterAdapter {
         };
 
         const auto execute = [&](Expected<colony::MatterRequest> request) {
-            PPR_TEST_ASSERT(request.has_value());
+            assertRequestAdmitted(request);
+
             auto completion = runtime.advance(*request);
             PPR_TEST_ASSERT(completion and completion->has_value());
             PPR_TEST_ASSERT((**completion).m_execution.m_ran);
@@ -927,7 +982,12 @@ namespace pP::tests::detail::MatterAdapter {
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, candidate, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_replace));
-        std::ignore = success(runtime.beginPollEdit(candidate.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto candidate_ready = success(runtime.beginPollEdit(candidate.m_identity));
+        PPR_TEST_ASSERT(candidate_ready.m_readback and candidate_ready.m_readback->m_source == candidate.m_identity);
+
         auto replaced = success(runtime.beginPublishEdit(candidate.m_identity));
         PPR_TEST_ASSERT(replaced.m_view and replaced.m_view->m_metadata);
         PPR_TEST_ASSERT(replaced.m_view->m_metadata != published.m_view->m_metadata);
@@ -968,10 +1028,20 @@ namespace pP::tests::detail::MatterAdapter {
         appended.m_particles.push_back(appended_particle);
         appended.m_profile.m_particle_count = static_cast<u32>(appended.m_particles.size());
         appended.m_identity.m_publication = source->m_identity.m_publication + 1u;
+
+        // Match production edit preparation: new substances need table rows
+        // before admission resolves each particle's material-property index.
+        PPR_TEST_ASSERT(not colony::completeMatterProperties(appended));
+
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, appended, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_append));
-        std::ignore = success(runtime.beginPollEdit(appended.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto appended_ready = success(runtime.beginPollEdit(appended.m_identity));
+        PPR_TEST_ASSERT(appended_ready.m_readback and appended_ready.m_readback->m_source == appended.m_identity);
+
         auto appended_view = success(runtime.beginPublishEdit(appended.m_identity));
         PPR_TEST_ASSERT(appended_view.m_view and appended_view.m_view->m_metadata);
         PPR_TEST_ASSERT(appended_view.m_view->m_metadata->m_version > replaced.m_view->m_metadata->m_version);
@@ -997,7 +1067,12 @@ namespace pP::tests::detail::MatterAdapter {
         std::ignore = success(runtime.beginPrepareEdit(
             source->m_identity, reordered, static_cast<u32>(source->m_particles.size()), {},
             colony::EMatterEditKind::particle_replace));
-        std::ignore = success(runtime.beginPollEdit(reordered.m_identity));
+
+        // Poll request completion is not readiness: the poll must observe the GPU fence.
+        std::ignore = success(runtime.beginDrain());
+        const auto reordered_ready = success(runtime.beginPollEdit(reordered.m_identity));
+        PPR_TEST_ASSERT(reordered_ready.m_readback and reordered_ready.m_readback->m_source == reordered.m_identity);
+
         auto reordered_view = success(runtime.beginPublishEdit(reordered.m_identity));
         PPR_TEST_ASSERT(reordered_view.m_view and reordered_view.m_view->m_metadata);
         PPR_TEST_ASSERT(not appended_view.m_view->current());

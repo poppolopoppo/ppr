@@ -122,27 +122,30 @@ namespace pP::matter {
         rhi::IDevice *m_device{};
         rhi::IBuffer *m_hot{}, *m_cold{};
         GpuParameters m_profile{};
-        u32 m_next_generation{1u}, m_generation{}, m_source_generation{}, m_remaining_substeps{};
+        u32 m_next_generation{1u}, m_generation{}, m_remaining_substeps{};
         u32 m_buckets{}, m_pages{}, m_groups{};
         bool m_dirty_indexes{true};
         bool m_encoding_open{};
 
-        SparseConstants constants(const bool destination_a) const noexcept {
+        SparseConstants constants(const bool destination_a, const u32 source_generation) const noexcept {
             return {
                 m_capacity.m_width, m_capacity.m_height, m_profile.m_particle_count, m_capacity.m_bucket_columns,
-                m_capacity.m_page_columns, m_buckets, m_pages, m_groups, m_generation, m_source_generation,
+                m_capacity.m_page_columns, m_buckets, m_pages, m_groups, m_generation, source_generation,
                 m_capacity.m_dispatch_width, destination_a ? 1u : 0u, m_capacity.m_bucket_keys, m_capacity.m_page_keys};
         }
 
+        // source_generation is 0 for the maintenance kernels, which never read it;
+        // only the fused solver names the side and generation it reads.
         std::error_code encode(
             rhi::ICommandEncoder &encoder, const u32 kernel, const u32 direct_groups, const i32 indirect,
-            const bool destination_a, Array<rhi::ComPtr<rhi::IShaderObject>> &retained_roots) {
+            const bool destination_a, const u32 source_generation,
+            Array<rhi::ComPtr<rhi::IShaderObject>> &retained_roots) {
             const auto &program = m_kernels[kernel];
             rhi::ComPtr<rhi::IShaderObject> root;
             PPR_RETURN_ERROR_ON_FAIL(MatterGpu, m_device->createRootShaderObject(program.m_program, root.writeRef()));
             const rhi::ShaderCursor cursor{root};
             rhi::ShaderCursor constant_cursor;
-            const auto sparse = constants(destination_a);
+            const auto sparse = constants(destination_a, source_generation);
             const auto set = [&](const char *const name, const void *const data, const u64 bytes) -> std::error_code {
                 if (not cursor[name].isValid())
                     return {};
@@ -264,7 +267,16 @@ namespace pP::matter {
         PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparseBuffer(device, 4u, 4u, "PBMPM sparse counters", buffers.m_counters));
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, sparseBuffer(device, 12u, 4u, "PBMPM sparse arguments", buffers.m_arguments, true));
-        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, sparseBuffer(device, 6u, 4u, "PBMPM sparse first error", buffers.m_errors));
+
+        const char *const diagnostic = std::getenv("PPR_PBMPM_RETURN_DIAGNOSTIC");
+        const u32 error_words = diagnostic and std::string_view{diagnostic} == "1" ? 31u : 6u;
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, error_words * sizeof(u32) <= device.getInfo().limits.maxBufferSize
+                           ? std::error_code{}
+                           : std::make_error_code(std::errc::value_too_large));
+        PPR_RETURN_ERROR_ON_FAIL(
+            MatterGpu, sparseBuffer(device, error_words, 4u, "PBMPM sparse first error", buffers.m_errors));
+        state->m_capacity.m_dynamic_bytes += (error_words - 6u) * sizeof(u32);
 
         for (u32 index = 0u; index < 2u; ++index) {
             PPR_RETURN_ERROR_ON_FAIL(
@@ -327,9 +339,9 @@ namespace pP::matter {
         return m_state->m_buffers;
     }
 
-    SparseConstants SparseGridStorage::constants(const bool a) const noexcept {
+    SparseConstants SparseGridStorage::constants(const bool destination_a, const u32 source_generation) const noexcept {
         PPR_ASSERT(m_state != nullptr);
-        return m_state->constants(a);
+        return m_state->constants(destination_a, source_generation);
     }
 
     std::error_code SparseGridStorage::beginTick(rhi::ICommandEncoder &encoder, const u32 substeps) {
@@ -362,7 +374,6 @@ namespace pP::matter {
                 encoder.clearBuffer(index, sparseRange(index));
             state.m_next_generation = 1u;
         }
-        state.m_source_generation = 0u;
         state.m_generation = 0u;
         state.m_remaining_substeps = substeps;
         encoder.clearBuffer(buffers.m_errors, sparseRange(buffers.m_errors));
@@ -380,13 +391,12 @@ namespace pP::matter {
         state.m_encoding_open = false;
         state.m_remaining_substeps = 0u;
         state.m_generation = 0u;
-        state.m_source_generation = 0u;
         return {};
     }
 
     std::error_code SparseGridStorage::discover(
         rhi::ICommandEncoder &encoder, rhi::IBuffer &hot, rhi::IBuffer &cold, const GpuParameters profile,
-        Array<rhi::ComPtr<rhi::IShaderObject>> &roots) {
+        const bool first_destination_a, Array<rhi::ComPtr<rhi::IShaderObject>> &roots) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu,
             canAdmit(profile.m_particle_count) and
@@ -421,27 +431,26 @@ namespace pP::matter {
                 encoder.popDebugGroup();
             };
             const u32 direct = kernel == 1u ? 1u : row_groups;
-            PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.encode(encoder, kernel, direct, indirect, false, roots));
+            PPR_RETURN_ERROR_ON_FAIL(
+                MatterGpu, state.encode(encoder, kernel, direct, indirect, first_destination_a, 0u, roots));
         }
         return {};
     }
 
     std::error_code SparseGridStorage::initializeDestination(
-        rhi::ICommandEncoder &encoder, const bool a, Array<rhi::ComPtr<rhi::IShaderObject>> &roots) {
+        rhi::ICommandEncoder &encoder, const bool destination_a, Array<rhi::ComPtr<rhi::IShaderObject>> &roots) {
         PPR_RETURN_ERROR_ON_FAIL(
             MatterGpu, m_state and m_state->m_generation != 0u
                            ? std::error_code{}
                            : std::make_error_code(std::errc::operation_not_permitted));
         auto &state = *m_state;
         encoder.pushDebugGroup(
-            a ? "PBMPM.Sparse.RemapA.PayloadAndBudgetZero" : "PBMPM.Sparse.B.PayloadAndBudgetZero", {});
+            destination_a ? "PBMPM.Sparse.RemapA.PayloadAndBudgetZero" : "PBMPM.Sparse.B.PayloadAndBudgetZero", {});
         PPR_DEFER {
             encoder.popDebugGroup();
         };
         encoder.globalBarrier();
-        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.encode(encoder, 6u, 0u, 1, a, roots));
-        if (a)
-            state.m_source_generation = state.m_generation;
+        PPR_RETURN_ERROR_ON_FAIL(MatterGpu, state.encode(encoder, 6u, 0u, 1, destination_a, 0u, roots));
         return {};
     }
 

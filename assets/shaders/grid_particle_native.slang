@@ -4,22 +4,25 @@
 #ifndef PPR_GRID_PARTICLE_NATIVE_SLANG
 #define PPR_GRID_PARTICLE_NATIVE_SLANG
 
-// Mutable 64-byte solver row, field-for-field with the CPU twin
+// Mutable 72-byte solver row, field-for-field with the CPU twin
 // `matter::ParticleWrite` (lib/engine/matter/Matter.Gpu.Types.cppm): position,
 // per-step displacement, the APIC F and D matrices (four floats each there),
-// the liquid scalars in solver write order, and `enabled` last. layout=4 and
-// stride 64; no field may be reordered without changing both sides.
+// the liquid scalars, enabled, C and phi. layout=5 and stride 72.
+// Scalar matrix storage avoids vector-alignment rounding of the new stride.
+struct NumericalMatrix { float x,y,z,w; };
 struct NumericalRow {
     float positionX;
     float positionY;
     float displacementX;
     float displacementY;
-    float4 deformationGradient;
-    float4 deformationDisplacement;
+    NumericalMatrix deformationGradient;
+    NumericalMatrix deformationDisplacement;
     float liquidDensity;
     float logJp;
     float lambda;
     float enabled;
+    float compaction;
+    float solidFraction;
 };
 struct MetadataRow {
     uint idLow,idHigh,sourceRow,materialTemperature;

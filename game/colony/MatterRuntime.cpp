@@ -10,12 +10,260 @@ namespace pP::colony {
     PPR_DEFINE_LOG_CATEGORY(GameMatter, info, none)
 
     // ------------------------------------------------------------------
+    // catalog substance properties and stable identity
+    // ------------------------------------------------------------------
+
+    namespace {
+        std::string_view calibrationKey(const std::string_view key) {
+            // Explicit shipped lighting-lab alias; unrelated lab materials retain defaults.
+            return key == "lab_magma" ? "magma" : key;
+        }
+
+        matter::ESourceMaterial catalogFamily(const std::string_view key, const sim::EGenerationMatter phase) {
+            using Family = matter::ESourceMaterial;
+            static constexpr std::pair<std::string_view, Family> entries[]{
+                {"water", Family::liquid}, {"brine", Family::liquid}, {"oil", Family::liquid},
+                {"crude_oil", Family::liquid}, {"magma", Family::liquid}, {"sand", Family::sand},
+                {"sandstone", Family::sand}, {"basalt", Family::sand}, {"coal", Family::sand},
+                {"copper_ore", Family::sand}, {"iron_ore", Family::sand}, {"uranium_ore", Family::sand},
+                {"wolframite", Family::sand}, {"autunite", Family::sand}, {"azurite", Family::sand},
+                {"clay", Family::cohesive}, {"wet_sand", Family::cohesive}, {"snow", Family::compacting},
+                {"pebbles", Family::sand}, {"gravel", Family::sand}, {"pumice", Family::compacting},
+                {"glass", Family::elastic}, {"obsidian", Family::elastic}, {"clear_quartz", Family::elastic},
+                {"crystal", Family::elastic}, {"diamond", Family::elastic}, {"emerald", Family::elastic},
+                {"ruby", Family::elastic}, {"ice", Family::elastic}, {"polluted_ice", Family::elastic},
+                {"slime", Family::visco}};
+
+            for (const auto &[name, family]: entries) {
+                if (key == name)
+                    return family;
+            }
+
+            return phase == sim::EGenerationMatter::liquid ? Family::liquid : Family::sand;
+        }
+    }
+
+    matter::ESourceMaterial matterFamily(const MaterialDefinition &material) {
+        return catalogFamily(
+            material.m_key, material.m_phase == EMaterialPhase::liquid ? sim::EGenerationMatter::liquid
+                                                                       : sim::EGenerationMatter::solid);
+    }
+
+    matter::GpuMaterialProperties defaultMatterProperties(
+        const MaterialDefinition &material, const matter::GpuParameters &profile) {
+        matter::GpuMaterialProperties row{};
+        row.m_substance_id = material.m_numeric_id;
+        row.m_family = matterFamily(material);
+        row.m_reference_density = static_cast<float>(material.m_reference_density_kg_m3 / 1000.0);
+        row.m_elasticity_ratio = profile.m_elasticity_ratio;
+        row.m_elastic_relaxation = profile.m_elastic_relaxation;
+        row.m_liquid_relaxation = profile.m_liquid_relaxation;
+        row.m_liquid_viscosity = profile.m_liquid_viscosity;
+        row.m_friction_angle = profile.m_friction_angle;
+        row.m_plasticity = profile.m_plasticity;
+        row.m_sand_yield_ratio = profile.m_elasticity_ratio;
+
+        // Calibration, not measured constitutive constants. Unlisted fields retain
+        // the previous profile/default row; see docs/pbmpm-element-calibration.md.
+        const auto key = calibrationKey(material.m_key);
+        static constexpr std::tuple<std::string_view, float, float> liquids[]{
+            {"water", 0.01f, 1.0f}, {"polluted_water", 0.02f, 1.0f}, {"brine", 0.03f, 1.0f}, {"crude_oil", 0.25f, 0.8f},
+            {"magma", 2.0f, 0.5f}};
+        for (const auto &[name, viscosity, relaxation]: liquids) {
+            if (key == name) {
+                row.m_liquid_viscosity = viscosity;
+                row.m_liquid_relaxation = relaxation;
+            }
+        }
+
+        static constexpr std::tuple<std::string_view, float, float> sands[]{
+            {"sand", 30.0f, 1.0f}, {"sandstone", 34.0f, 1.1f}, {"basalt", 36.0f, 1.15f}, {"granite", 36.0f, 1.15f},
+            {"limestone", 33.0f, 1.05f}, {"coal", 28.0f, 0.9f}, {"dirt", 32.0f, 1.0f}, {"regolith", 30.0f, 1.0f},
+            {"ash", 26.0f, 0.85f}, {"pebbles", 38.0f, 1.25f}, {"gravel", 38.0f, 1.25f}, {"salt", 30.0f, 1.0f},
+            {"copper_ore", 34.0f, 1.1f}, {"iron_ore", 34.0f, 1.1f}, {"uranium_ore", 34.0f, 1.1f},
+            {"wolframite", 34.0f, 1.1f}, {"autunite", 34.0f, 1.1f}, {"azurite", 34.0f, 1.1f}};
+        for (const auto &[name, friction, yield]: sands) {
+            if (key == name) {
+                row.m_friction_angle = friction;
+                row.m_sand_yield_ratio = yield;
+            }
+        }
+
+        if (row.m_family == matter::ESourceMaterial::elastic or row.m_family == matter::ESourceMaterial::visco) {
+            row.m_elasticity_ratio = 1.0f;
+            row.m_elastic_relaxation = 1.5f;
+            if (row.m_family == matter::ESourceMaterial::visco)
+                row.m_plasticity = 0.9f;
+        }
+
+        if (key == "clay" or key == "wet_sand") {
+            row.m_cohesion = key == "clay" ? 0.12f : 0.06f;
+            row.m_cap = key == "clay" ? 0.5f : 0.4f;
+            row.m_cohesion_hardening = key == "clay" ? 0.4f : 0.6f;
+        }
+
+        if (key == "pumice")
+            row.m_solid_fraction0 = 0.4f;
+
+        return row;
+    }
+
+    u64 matterMaterialTableIdentity(const std::span<const matter::GpuMaterialProperties> rows, const u32 policy) {
+        Array<matter::GpuMaterialProperties> canonical(rows.begin(), rows.end());
+        std::ranges::sort(canonical, {}, &matter::GpuMaterialProperties::m_substance_id);
+
+        u64 hash = 14695981039346656037ull;
+        const auto append = [&](const u32 word) {
+            for (u32 byte = 0u; byte < 4u; ++byte) {
+                hash ^= (word >> (byte * 8u)) & 255u;
+                hash *= 1099511628211ull;
+            }
+        };
+
+        append(policy);
+        append(static_cast<u32>(canonical.size()));
+        for (const auto &row: canonical) {
+            const auto words = std::bit_cast<std::array<u32, 19u>>(row);
+            for (u32 index = 0u; index < (policy == 1u ? 10u : 19u); ++index)
+                append(words[index]);
+        }
+
+        return hash;
+    }
+
+    Expected<Array<u32>> matterPropertyIndices(const MatterState &state) {
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, matter::validateMaterialTable(state.m_properties));
+        PPR_RETURN_UNEXPECTED_ON_FAIL(
+            GameMatter, state.m_records.size() == state.m_particles.size()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        std::unordered_map<u32, u32> indices;
+        for (u32 index = 0u; index < state.m_properties.size(); ++index) {
+            indices.emplace(state.m_properties[index].m_substance_id, index);
+        }
+
+        Array<u32> result;
+        result.reserve(state.m_records.size());
+        for (std::size_t index = 0u; index < state.m_records.size(); ++index) {
+            const auto found = indices.find(state.m_records[index].m_material);
+            PPR_RETURN_UNEXPECTED_ON_FAIL(
+                GameMatter,
+                found != indices.end() and
+                        state.m_particles[index].m_material ==
+                            static_cast<float>(state.m_properties[found->second].m_family) and
+                        matter::validMaterialState(state.m_particles[index], state.m_properties[found->second])
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+            result.push_back(found->second);
+        }
+
+        return result;
+    }
+
+    std::error_code setMatterProperties(
+        MatterState &state, const std::span<const matter::GpuMaterialProperties> rows, const ContentCatalog &catalog) {
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        for (const auto &row: rows) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter, row.m_substance_id <= std::numeric_limits<u16>::max() and
+                                    catalog.findMaterial(static_cast<u16>(row.m_substance_id)) != nullptr
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(
+            GameMatter, state.m_records.size() == state.m_particles.size()
+                            ? std::error_code{}
+                            : std::make_error_code(std::errc::invalid_argument));
+        std::unordered_map<u32, const matter::GpuMaterialProperties *> families;
+        for (const auto &row: rows)
+            families.emplace(row.m_substance_id, &row);
+
+        for (std::size_t index = 0u; index < state.m_records.size(); ++index) {
+            const auto found = families.find(state.m_records[index].m_material);
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter, found != families.end() and
+                                    state.m_particles[index].m_material == static_cast<float>(found->second->m_family)
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::invalid_argument));
+
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter, matter::validMaterialState(state.m_particles[index], *found->second)
+                                ? std::error_code{}
+                                : std::make_error_code(std::errc::invalid_argument));
+        }
+
+        Array<matter::GpuMaterialProperties> owned(rows.begin(), rows.end());
+        state.m_properties = std::move(owned);
+        return {};
+    }
+
+    std::error_code completeMatterProperties(
+        MatterState &state, const ContentCatalog *const catalog, const bool legacy) {
+        auto rows = state.m_properties;
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        std::unordered_set<u32> ids;
+        for (const auto &row: rows)
+            ids.insert(row.m_substance_id);
+
+        for (const auto &record: state.m_records) {
+            if (not ids.insert(record.m_material).second)
+                continue;
+
+            const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter,
+                not catalog or definition ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
+            matter::GpuMaterialProperties row{};
+            row.m_substance_id = record.m_material;
+            row.m_family = catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase);
+            if (legacy) {
+                row.m_family = record.m_phase == sim::EGenerationMatter::liquid ? matter::ESourceMaterial::liquid
+                                                                                : matter::ESourceMaterial::sand;
+                // Fixed v6/v7 migration defaults, independent of future tuning.
+                row.m_cohesion = 0.05f;
+                row.m_cap = 0.2f;
+                row.m_tension = 0.02f;
+                row.m_cohesion_hardening = 0.2f;
+                row.m_cap_hardening = 0.5f;
+                row.m_solid_fraction0 = 0.3f;
+                row.m_compaction_rate = 0.5f;
+                row.m_solid_exponent = 2.0f;
+                row.m_dense_epsilon = 0.01f;
+            }
+
+            row.m_elasticity_ratio = state.m_profile.m_elasticity_ratio;
+            row.m_elastic_relaxation = state.m_profile.m_elastic_relaxation;
+            row.m_liquid_relaxation = state.m_profile.m_liquid_relaxation;
+            row.m_liquid_viscosity = state.m_profile.m_liquid_viscosity;
+            row.m_friction_angle = state.m_profile.m_friction_angle;
+            row.m_plasticity = state.m_profile.m_plasticity;
+            row.m_sand_yield_ratio = state.m_profile.m_elasticity_ratio;
+            row.m_reference_density = static_cast<float>(
+                (definition ? definition->m_reference_density_kg_m3 : record.m_bulk_density_kg_m3) / 1000.0);
+            if (not legacy and definition)
+                row = defaultMatterProperties(*definition, state.m_profile);
+
+            rows.push_back(row);
+        }
+
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, matter::validateMaterialTable(rows));
+        if (catalog) {
+            PPR_RETURN_ERROR_ON_FAIL(GameMatter, setMatterProperties(state, rows, *catalog));
+            return {};
+        }
+
+        state.m_properties = std::move(rows);
+        return {};
+    }
+
+    // ------------------------------------------------------------------
     // physical inventory and source units
     // ------------------------------------------------------------------
 
     Expected<MatterState> makeMatterState(
         const sim::MatterParticleSnapshot &snapshot, const double h, const double thickness, const float gravity_y,
-        const u64 world, const u32 world_edge) {
+        const u64 world, const u32 world_edge, const ContentCatalog *const catalog) {
         if (not std::isfinite(h) or
             h <= 0.0 or
             not std::isfinite(thickness) or
@@ -79,9 +327,14 @@ namespace pP::colony {
             particle.m_position_y = static_cast<float>(record.m_y_m / h + static_cast<double>(kMatterOrigin));
             particle.m_mass = static_cast<float>(record.m_mass_kg / mass_unit);
             particle.m_volume = static_cast<float>(record.m_volume_m3 / volume_unit);
-            particle.m_material = static_cast<float>(
-                record.m_phase == sim::EGenerationMatter::liquid ? matter::ESourceMaterial::liquid
-                                                                 : matter::ESourceMaterial::sand);
+            const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
+            matter::GpuMaterialProperties property{};
+            property.m_family = catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase);
+            if (definition)
+                property = defaultMatterProperties(*definition, result.m_profile);
+
+            matter::initializeMaterialState(particle, property);
+
             if (not std::isfinite(particle.m_mass) or
                 particle.m_mass <= 0.0f or
                 not std::isfinite(particle.m_volume) or
@@ -95,6 +348,7 @@ namespace pP::colony {
         }
 
         result.m_profile.m_particle_count = static_cast<u32>(result.m_particles.size());
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, completeMatterProperties(result, catalog));
         return result;
     }
 
@@ -280,7 +534,8 @@ namespace pP::colony {
     std::error_code validateMatterState(
         const MatterState &state, const std::span<const sim::GenerationMaterial> materials, const double h,
         const double thickness, const float gravity_y) {
-        if (state.m_cell_metres != h or
+        if (not matter::isSupportedIterations(state.m_iterations) or
+            state.m_cell_metres != h or
             state.m_thickness_metres != thickness or
             state.m_identity.m_world == 0u or
             state.m_identity.m_terrain_revision == 0u or
@@ -290,6 +545,17 @@ namespace pP::colony {
 
         PPR_RETURN_ERROR_ON_FAIL(
             GameMatter, validateMatterProfile(state.m_profile, h, thickness, gravity_y, state.m_world_edge));
+
+        auto property_indices = matterPropertyIndices(state);
+        PPR_RETURN_ERROR_ON_FAIL(GameMatter, property_indices);
+        for (const auto &property: state.m_properties) {
+            PPR_RETURN_ERROR_ON_FAIL(
+                GameMatter,
+                std::ranges::any_of(
+                    materials, [&](const auto &material) { return material.m_id == property.m_substance_id; })
+                    ? std::error_code{}
+                    : std::make_error_code(std::errc::invalid_argument));
+        }
 
         auto snapshot = captureMovingMatter(state, state.m_particles);
         PPR_RETURN_ERROR_ON_FAIL(GameMatter, snapshot);
@@ -302,15 +568,13 @@ namespace pP::colony {
         for (std::size_t row = 0u; row < state.m_particles.size(); ++row) {
             const auto &particle = state.m_particles[row];
             const auto &record = state.m_records[row];
-            for (const float field: std::bit_cast<std::array<float, 22u>>(particle)) {
+            for (const float field: std::bit_cast<std::array<float, 24u>>(particle)) {
                 if (not std::isfinite(field)) {
                     PPR_RETURN_ERROR_ON_FAIL(GameMatter, std::errc::invalid_argument);
                 }
             }
 
-            const float material = static_cast<float>(
-                record.m_phase == sim::EGenerationMatter::liquid ? matter::ESourceMaterial::liquid
-                                                                 : matter::ESourceMaterial::sand);
+            const float material = static_cast<float>(state.m_properties[(*property_indices)[row]].m_family);
             if (record.m_phase == sim::EGenerationMatter::gas or
                 particle.m_mass != static_cast<float>(record.m_mass_kg / mass_unit) or
                 particle.m_volume != static_cast<float>(record.m_volume_m3 / volume_unit) or
@@ -482,7 +746,16 @@ namespace pP::colony {
             particle.m_position_x = static_cast<float>(position.m_x) + 0.5f + kMatterOrigin;
             particle.m_position_y = static_cast<float>(position.m_y) + 0.5f + kMatterOrigin;
             particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-            particle.m_material = static_cast<float>(matter::ESourceMaterial::sand);
+            const auto defaults = defaultMatterProperties(*material, source.m_profile);
+
+            // Reuse saved rows for dug particles, including migrated legacy families.
+            const auto property = std::ranges::find(
+                result.m_properties, record.m_material, &matter::GpuMaterialProperties::m_substance_id);
+            if (property != result.m_properties.end())
+                particle.m_solid_fraction = property->m_solid_fraction0;
+
+            matter::initializeMaterialState(particle, property != result.m_properties.end() ? *property : defaults);
+
             if (not std::isfinite(particle.m_mass) or particle.m_mass <= 0.0f) {
                 PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, std::errc::result_out_of_range);
             }
@@ -506,6 +779,7 @@ namespace pP::colony {
         result.m_profile.m_particle_count = static_cast<u32>(result.m_particles.size());
         ++result.m_identity.m_publication;
         ++result.m_identity.m_terrain_revision;
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, completeMatterProperties(result, &catalog));
         return std::optional{std::move(result)};
     }
 
@@ -715,6 +989,7 @@ namespace pP::colony {
         MatterIdentity m_identity{};
         MatterIdentity m_prepared_identity{};
         std::error_code m_submit_error{};
+        u32 m_iterations{matter::kDefaultIterations}, m_prepared_iterations{matter::kDefaultIterations};
         bool m_submitted{};
         bool m_ready{};
         bool m_append_prepared{}, m_append_ready{};
@@ -969,7 +1244,8 @@ namespace pP::colony {
         }
 
         PPR_RETURN_UNEXPECTED_ON_FAIL(
-            GameMatter, sim::isSupportedWorldEdge(source.m_world_edge) and
+            GameMatter, matter::isSupportedIterations(source.m_iterations) and
+                                sim::isSupportedWorldEdge(source.m_world_edge) and
                                 source.m_profile.m_grid_width == source.m_world_edge + 7u and
                                 source.m_profile.m_grid_height == source.m_world_edge + 7u
                             ? std::error_code{}
@@ -987,9 +1263,12 @@ namespace pP::colony {
                                 *state->m_device, *state->m_queue, *state->m_shaders, state->m_content_root,
                                 source.m_profile, state->m_observation_clock));
 
+            auto indices = matterPropertyIndices(source);
+            PPR_RETURN_ERROR_ON_FAIL(GameMatter, indices);
             const auto prepared = candidate->prepareReplacement(
                 source.m_particles, {}, candidate->accounting().m_epoch,
-                {terrain, source.m_world_edge + 1u, source.m_world_edge + 1u, 2.5f, 2.5f});
+                {terrain, source.m_world_edge + 1u, source.m_world_edge + 1u, 2.5f, 2.5f},
+                matter::ETerrainUpdate::replace, {source.m_properties, *indices});
             if (prepared) {
                 // Candidate never submitted; release on this same lane.
                 PPR_LOG_WARNING_ON_FAIL(GameMatter, candidate->shutdown());
@@ -1018,6 +1297,7 @@ namespace pP::colony {
             state->m_prepared_metadata = std::move(*prepared_metadata);
             state->m_prepared_ledger = std::move(ledger);
             state->m_prepared_identity = source.m_identity;
+            state->m_prepared_iterations = source.m_iterations;
             return {};
         });
     }
@@ -1041,6 +1321,7 @@ namespace pP::colony {
             state->m_active_metadata = std::move(state->m_prepared_metadata);
             state->m_active_ledger = std::move(state->m_prepared_ledger);
             state->m_identity = identity;
+            state->m_iterations = state->m_prepared_iterations;
             return {};
         });
     }
@@ -1098,8 +1379,8 @@ namespace pP::colony {
             state->m_submitted = true;
             state->m_ready = false;
             state->m_submit_error = state->m_active->submitResidentTick(
-                state->m_active->accounting().m_epoch, matter::kGameSubsteps, matter::kSourceIterations, bodies,
-                body_count, force);
+                state->m_active->accounting().m_epoch, matter::kGameSubsteps, state->m_iterations, bodies, body_count,
+                force);
             // An unsuccessful queue submit may still execute. Keep the
             // attempted batch frozen until explicit completion/discard.
             PPR_RETURN_ERROR_ON_FAIL(GameMatter, state->m_submit_error);
@@ -1305,6 +1586,9 @@ namespace pP::colony {
 
         Array<matter::GpuParticle> uploaded(
             candidate.m_particles.begin() + (replace ? 0u : retained_count), candidate.m_particles.end());
+        auto all_indices = matterPropertyIndices(candidate);
+        PPR_RETURN_UNEXPECTED_ON_FAIL(GameMatter, all_indices);
+        Array<u32> indices(all_indices->begin() + (replace ? 0u : retained_count), all_indices->end());
         Array<GridParticleMetadataRow> metadata;
         std::shared_ptr<MatterPhysicalLedger> ledger;
         auto prepared = presentationMetadata(candidate, m_state->m_observation_clock ? &ledger : nullptr);
@@ -1316,15 +1600,18 @@ namespace pP::colony {
         const double cell = candidate.m_cell_metres;
         const u32 terrain_edge = candidate.m_world_edge + 1u;
         const auto profile = candidate.m_profile;
+        const u32 iterations = candidate.m_iterations;
         const u32 moving_count = static_cast<u32>(candidate.m_particles.size());
         return enqueue(
-            [state, source, target, retained_count, cell, terrain_edge, profile, moving_count, replace, terrain_edit,
-                uploaded = std::move(uploaded), metadata = std::move(metadata), ledger = std::move(ledger),
-                terrain = std::move(terrain)]() -> std::error_code {
+            [state, source, target, retained_count, cell, terrain_edge, profile, iterations, moving_count, replace,
+                terrain_edit, uploaded = std::move(uploaded), metadata = std::move(metadata),
+                ledger = std::move(ledger), terrain = std::move(terrain), properties = candidate.m_properties,
+                indices = std::move(indices)]() -> std::error_code {
                 PPR_RETURN_ERROR_ON_FAIL(
                     GameMatter, state and
                                         state->m_active and
                                         state->m_identity == source and
+                                        state->m_iterations == iterations and
                                         state->m_active->profile().m_grid_width == terrain_edge + 6u and
                                         state->m_active->profile().m_grid_height == terrain_edge + 6u and
                                         state->m_active->profile().m_particle_count == retained_count
@@ -1369,9 +1656,11 @@ namespace pP::colony {
                                  : matter::TerrainView{};
                 const auto policy = terrain_edit ? matter::ETerrainUpdate::replace : matter::ETerrainUpdate::preserve;
                 const auto prepared = replace ? state->m_active->prepareReplacement(
-                                                    uploaded, {}, state->m_active->accounting().m_epoch, view, policy)
+                                                    uploaded, {}, state->m_active->accounting().m_epoch, view, policy,
+                                                    {properties, indices})
                                               : state->m_active->prepareAppend(
-                                                    uploaded, state->m_active->accounting().m_epoch, view, policy);
+                                                    uploaded, state->m_active->accounting().m_epoch, view, policy,
+                                                    {properties, indices});
                 PPR_RETURN_ERROR_ON_FAIL(GameMatter, prepared);
                 return {};
             });

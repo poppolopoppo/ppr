@@ -53,18 +53,18 @@ namespace pP::tests::detail::WorldLightingProjection {
         return 3.0f + native;
     }
 
-    // Committed numerical (hot64) and readonly (cold24) rows.
+    // Committed numerical (18 * 4 = 72 bytes) and readonly (6 * 4 + 4 index = 28 bytes) rows.
     struct HotRow {
         float m_position[2]{};
-        float m_carried[14]{};
+        float m_carried[16]{};
     };
 
     struct ColdRow {
-        float m_fields[6]{};
+        float m_fields[7]{};
     };
 
-    static_assert(sizeof(HotRow) == 64u and alignof(HotRow) == 4u);
-    static_assert(sizeof(ColdRow) == 24u and alignof(ColdRow) == 4u);
+    static_assert(sizeof(HotRow) == 72u and alignof(HotRow) == 4u);
+    static_assert(sizeof(ColdRow) == 28u and alignof(ColdRow) == 4u);
     static_assert(PPR_OFFSETOF(HotRow, m_carried) == 8u);
 
     struct ParticleSpec {
@@ -198,7 +198,7 @@ namespace pP::tests::detail::WorldLightingProjection {
         }
 
         // Publishes exactly the committed GPU state the projection consumes:
-        // stable-ID-ordered metadata, hot64/cold24 numerical rows under the
+        // stable-ID-ordered metadata, hot64/cold28 numerical rows under the
         // published origin, and the full-domain packed terrain words. `cell_metres`
         // is the published native cell edge; the presentation row must convert the
         // committed cell coordinates through it.
@@ -1517,8 +1517,16 @@ namespace pP::tests::detail::WorldLightingProjection {
         };
 
         for (const auto &[name, expected]: std::array<std::pair<const char *, u32>, 9u>{{
-                 {"g_numerical", 64u},
+                 // NumericalRow / matter::ParticleWrite: position + displacement (4 floats), F + D (8),
+                 // liquidDensity + logJp + lambda + enabled (4), compaction + solidFraction (2): 18 * 4 = 72.
+                 // Scalar matrix fields keep alignment at 4 bytes, without trailing vector padding.
+                 {"g_numerical", 72u},
+                 // MetadataRow / GridParticleMetadataRow: ID low/high, source row, material/temperature,
+                 // gas X/Y, radius, physical-fill bits: eight 4-byte scalar words, unchanged by B1.
                  {"g_metadata", 32u},
+                 // TerrainVisual / GridTerrainVisual: material, rgba, texture index/period, roundness,
+                 // filteredMean[3], normal index, metallic/roughness/opacity, emissive[3]/strength,
+                 // ior, normal scale, refraction depth, surface flags, transport model, sigma[3]: 24 * 4.
                  {"g_visuals", 96u},
                  {"g_terrain", 4u},
                  {"g_best_key", 4u},

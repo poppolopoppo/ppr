@@ -85,7 +85,11 @@ export namespace pP::matter {
         [[nodiscard]] bool canAdmit(u32 required_rows) const noexcept;
         [[nodiscard]] const SparseCapacity &capacity() const noexcept;
         [[nodiscard]] const SparseBuffers &buffers() const noexcept;
-        [[nodiscard]] SparseConstants constants(bool destination_a = false) const noexcept;
+        /// destination_a is the side this encode writes; source_generation is the
+        /// generation of the opposite side, which this encode reads. Both are host
+        /// decisions: consecutive stages alternate sides, so neither follows from
+        /// the stage index alone.
+        [[nodiscard]] SparseConstants constants(bool destination_a = false, u32 source_generation = 0u) const noexcept;
 
         /// Caller has established prior completion before encoding a new tick.
         /// Rollover clears only lookup metadata at the logically empty frontier.
@@ -94,11 +98,15 @@ export namespace pP::matter {
         /// requires discarding the definitely unsubmitted encoder. Unknown
         /// submission retains this open recording and every referenced owner/root.
         [[nodiscard]] std::error_code settleEncoding(SparseEncodingDisposition disposition);
+        /// first_destination_a names the side the schedule's first stage writes.
+        /// Only that side's page index is republished; the side the previous
+        /// substep finished on keeps the index and generation its reader needs.
         [[nodiscard]] std::error_code discover(
             rhi::ICommandEncoder &encoder, rhi::IBuffer &hot, rhi::IBuffer &cold, GpuParameters profile,
-            Array<rhi::ComPtr<rhi::IShaderObject>> &retained_roots);
-        /// B before iteration0; A after iteration0. Both use identical list slots
-        /// and the single shared absolute-budget pool. Each call ends in a barrier.
+            bool first_destination_a, Array<rhi::ComPtr<rhi::IShaderObject>> &retained_roots);
+        /// One per stage: initializes the side that stage writes. Both sides use
+        /// identical list slots and the single shared absolute-budget pool. Each
+        /// call ends in a barrier.
         [[nodiscard]] std::error_code initializeDestination(
             rhi::ICommandEncoder &encoder, bool destination_a, Array<rhi::ComPtr<rhi::IShaderObject>> &retained_roots);
 

@@ -17,6 +17,8 @@ export namespace pP::matter {
         elastic = 1,
         sand = 2,
         visco = 3,
+        cohesive = 4,
+        compacting = 5,
     };
 
     enum class EStaticShape : u32 {
@@ -27,7 +29,14 @@ export namespace pP::matter {
     inline constexpr u32 kParticleDispatchSize = 64u;
     inline constexpr u32 kGridDispatchSize = 8u;
     inline constexpr u32 kSourceIterations = 2u;
+    /// New-world policy follows the reference baseline at dt = 1/480.
+    inline constexpr u32 kDefaultIterations = 5u;
     inline constexpr u32 kGameSubsteps = 8u;
+    inline constexpr std::array<u32, 3u> kAdmittedIterations{2u, 5u, 10u};
+
+    [[nodiscard]] constexpr bool isSupportedIterations(const u32 iterations) noexcept {
+        return std::ranges::find(kAdmittedIterations, iterations) != kAdmittedIterations.end();
+    }
 
     // ------------------------------------------------------------------
     // explicit GPU storage protocol
@@ -43,8 +52,8 @@ export namespace pP::matter {
     };
 
     /// All source semantic particle fields, in cell/displacement units. This is
-    /// the engine's 88-byte semantic record (CPU rows, snapshots, checkpoints and
-    /// the v5 wire format); it is not the device storage layout, which is split
+    /// the engine's 96-byte semantic record (CPU rows, snapshots and v9 checkpoints);
+    /// it is not the device storage layout, which is split
     /// into ParticleWrite and ParticleReadonly below.
     /// Stable ID, original material and physical inventory live in owned metadata.
     struct GpuParticle {
@@ -64,13 +73,15 @@ export namespace pP::matter {
         float m_color_g{};
         float m_color_b{};
         float m_enabled{1.0f};
+        float m_compaction{};
+        float m_solid_fraction{0.3f};
     };
 
     // ------------------------------------------------------------------
     // device hot and cold row layout
     // ------------------------------------------------------------------
 
-    /// Mutable 64-byte device row: exactly the fields the solver may advance in
+    /// Mutable 72-byte device row: exactly the fields the solver may advance in
     /// a dispatch. Deliberately reordered against the semantic record so the
     /// liquid scalars stay in the hot write set.
     struct ParticleWrite {
@@ -84,9 +95,12 @@ export namespace pP::matter {
         float m_log_jp{1.0f};
         float m_lambda{};
         float m_enabled{1.0f};
+        float m_compaction{};
+        float m_solid_fraction{0.3f};
     };
 
-    /// Immutable 24-byte device row; all six semantic fields remain FP32.
+    /// Immutable 28-byte device row. The last word is a transient table index,
+    /// never a persisted substance identity. UINT_MAX selects the global profile.
     struct ParticleReadonly {
         float m_mass{1.0f};
         float m_volume{1.0f};
@@ -94,6 +108,7 @@ export namespace pP::matter {
         float m_color_r{};
         float m_color_g{};
         float m_color_b{};
+        u32 m_property_row{std::numeric_limits<u32>::max()};
     };
 
     /// Named-field device pack. Never a byte copy: hot and cold reorder the record.
@@ -109,6 +124,8 @@ export namespace pP::matter {
         row.m_log_jp = particle.m_log_jp;
         row.m_lambda = particle.m_lambda;
         row.m_enabled = particle.m_enabled;
+        row.m_compaction = particle.m_compaction;
+        row.m_solid_fraction = particle.m_solid_fraction;
         return row;
     }
 
@@ -143,6 +160,8 @@ export namespace pP::matter {
         particle.m_color_g = readonly.m_color_g;
         particle.m_color_b = readonly.m_color_b;
         particle.m_enabled = write.m_enabled;
+        particle.m_compaction = write.m_compaction;
+        particle.m_solid_fraction = write.m_solid_fraction;
         return particle;
     }
 
@@ -163,7 +182,8 @@ export namespace pP::matter {
     /// follow the pin except for unit liquid relaxation: the pinned fork
     /// defaults to 1.5, and unit relaxation departs from that because a larger
     /// value amplifies density error with the admitted K2 gather/integration
-    /// schedule. The game explicitly configures shared gravity.
+    /// schedule. Re-derivation for new-world K5 remains pending; this tuning is
+    /// unchanged. The game explicitly configures shared gravity.
     struct GpuParameters {
         u32 m_grid_width{};
         u32 m_grid_height{};
@@ -182,6 +202,62 @@ export namespace pP::matter {
         u32 m_reserved0{};
         u32 m_reserved1{};
     };
+
+    // ------------------------------------------------------------------
+    // immutable substance properties
+    // ------------------------------------------------------------------
+
+    /// Scalar structured-buffer ABI. Coefficients are dimensionless except for
+    /// friction (degrees) and reference density (rho / 1000 kg/m^3). Density is
+    /// inventory metadata, not an extra factor in the normalized liquid law.
+    struct GpuMaterialProperties {
+        u32 m_substance_id{};
+        ESourceMaterial m_family{ESourceMaterial::sand};
+        float m_elasticity_ratio{1.0f};
+        float m_elastic_relaxation{1.5f};
+        float m_liquid_relaxation{1.0f};
+        float m_liquid_viscosity{0.01f};
+        float m_friction_angle{30.0f};
+        float m_plasticity{};
+        float m_reference_density{1.0f};
+        /// Legacy sand calibration, NOT a modulus ratio.
+        float m_sand_yield_ratio{1.0f};
+        /// Calibration-space strengths/slopes: finite and nonnegative; cap > 0.
+        float m_cohesion{0.05f};
+        float m_cap{0.2f};
+        float m_tension{0.02f};
+        float m_cohesion_hardening{0.2f};
+        float m_cap_hardening{0.5f};
+        /// 0 < phi0 <= 1-epsilon; beta,kappa >= 0; 0 < epsilon < 1.
+        float m_solid_fraction0{0.3f};
+        float m_compaction_rate{0.5f};
+        float m_solid_exponent{2.0f};
+        float m_dense_epsilon{0.01f};
+    };
+
+    /// Borrowed only during preparation; the solver owns an immutable copy and
+    /// device buffer through publication, cancellation and every tick fence.
+    /// Indices correspond to the supplied particle suffix on append.
+    struct GpuMaterialTableView {
+        std::span<const GpuMaterialProperties> m_rows{};
+        std::span<const u32> m_particle_rows{};
+    };
+
+    /// Stamp a fresh particle only; never use on restored or evolved history.
+    void initializeMaterialState(GpuParticle &particle, const GpuMaterialProperties &row) noexcept;
+
+    [[nodiscard]] bool validMaterialProperties(const GpuMaterialProperties &row) noexcept;
+    [[nodiscard]] bool validMaterialState(const GpuParticle &particle, const GpuMaterialProperties &row) noexcept;
+    [[nodiscard]] std::error_code validateMaterialTable(std::span<const GpuMaterialProperties> rows);
+
+    static_assert(
+        std::is_standard_layout_v<GpuMaterialProperties> and std::is_trivially_copyable_v<GpuMaterialProperties>);
+    static_assert(sizeof(GpuMaterialProperties) == 76u and alignof(GpuMaterialProperties) == 4u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_cohesion) == 40u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_dense_epsilon) == 72u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_elasticity_ratio) == 8u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_reference_density) == 32u);
+    static_assert(PPR_OFFSETOF(GpuMaterialProperties, m_sand_yield_ratio) == 36u);
 
     // ------------------------------------------------------------------
     // per-tick radial acceleration
@@ -286,7 +362,9 @@ export namespace pP::matter {
     static_assert(sizeof(SourceMatrix) == 16u and alignof(SourceMatrix) == 4u);
     static_assert(PPR_OFFSETOF(SourceMatrix, m_c0y) == 4u and PPR_OFFSETOF(SourceMatrix, m_c1x) == 8u);
     static_assert(std::is_standard_layout_v<GpuParticle> and std::is_trivially_copyable_v<GpuParticle>);
-    static_assert(sizeof(GpuParticle) == 88u and alignof(GpuParticle) == 4u);
+    static_assert(sizeof(GpuParticle) == 96u and alignof(GpuParticle) == 4u);
+    static_assert(PPR_OFFSETOF(GpuParticle, m_compaction) == 88u);
+    static_assert(PPR_OFFSETOF(GpuParticle, m_solid_fraction) == 92u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_deformation_gradient) == 16u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_deformation_displacement) == 32u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_liquid_density) == 48u);
@@ -294,7 +372,9 @@ export namespace pP::matter {
     static_assert(PPR_OFFSETOF(GpuParticle, m_color_r) == 72u);
     static_assert(PPR_OFFSETOF(GpuParticle, m_enabled) == 84u);
     static_assert(std::is_standard_layout_v<ParticleWrite> and std::is_trivially_copyable_v<ParticleWrite>);
-    static_assert(sizeof(ParticleWrite) == 64u and alignof(ParticleWrite) == 4u);
+    static_assert(sizeof(ParticleWrite) == 72u and alignof(ParticleWrite) == 4u);
+    static_assert(PPR_OFFSETOF(ParticleWrite, m_compaction) == 64u);
+    static_assert(PPR_OFFSETOF(ParticleWrite, m_solid_fraction) == 68u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_position_x) == 0u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_position_y) == 4u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_displacement_x) == 8u);
@@ -306,7 +386,8 @@ export namespace pP::matter {
     static_assert(PPR_OFFSETOF(ParticleWrite, m_lambda) == 56u);
     static_assert(PPR_OFFSETOF(ParticleWrite, m_enabled) == 60u);
     static_assert(std::is_standard_layout_v<ParticleReadonly> and std::is_trivially_copyable_v<ParticleReadonly>);
-    static_assert(sizeof(ParticleReadonly) == 24u and alignof(ParticleReadonly) == 4u);
+    static_assert(sizeof(ParticleReadonly) == 28u and alignof(ParticleReadonly) == 4u);
+    static_assert(PPR_OFFSETOF(ParticleReadonly, m_property_row) == 24u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_mass) == 0u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_volume) == 4u);
     static_assert(PPR_OFFSETOF(ParticleReadonly, m_material) == 8u);

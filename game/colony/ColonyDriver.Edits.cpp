@@ -596,6 +596,11 @@ namespace pP::colony {
         } else {
             const auto *const material = contentCatalog()->findMaterial(command.m_material);
             PPR_ASSERT(material != nullptr);
+            const auto defaults = defaultMatterProperties(*material, working.m_profile);
+            const auto saved_property = std::ranges::find(
+                working.m_properties, command.m_material, &matter::GpuMaterialProperties::m_substance_id);
+            const auto &property = saved_property != working.m_properties.end() ? *saved_property : defaults;
+
             const double cell = working.m_cell_metres;
             const auto first_x = static_cast<u32>(
                 std::max(0.0, std::floor((command.m_x_m - command.m_radius_m) / cell)));
@@ -660,9 +665,7 @@ namespace pP::colony {
                     particle.m_position_x = static_cast<float>(x) + 0.5f + kMatterOrigin;
                     particle.m_position_y = static_cast<float>(y) + 0.5f + kMatterOrigin;
                     particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-                    particle.m_material = static_cast<float>(
-                        material->m_phase == EMaterialPhase::liquid ? matter::ESourceMaterial::liquid
-                                                                    : matter::ESourceMaterial::sand);
+                    matter::initializeMaterialState(particle, property);
                     working.m_records.push_back(record);
                     working.m_particles.push_back(particle);
                     ++spawned;
@@ -681,6 +684,7 @@ namespace pP::colony {
 
         ++working.m_identity.m_publication;
         working.m_profile.m_particle_count = static_cast<u32>(working.m_particles.size());
+        PPR_RETURN_ERROR_ON_FAIL(ColonyEdits, completeMatterProperties(working, contentCatalog()));
         PPR_RETURN_ERROR_ON_FAIL(
             ColonyEdits, validateMatterState(
                              working, preparedWorld()->generated().m_plan.recipe().m_materials, working.m_cell_metres,

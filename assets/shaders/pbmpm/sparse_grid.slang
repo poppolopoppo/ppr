@@ -1,4 +1,7 @@
 #include "types.slang"
+// Maintenance reads the same 28-byte rows as the fused solver, without
+// enabling constitutive/contact adapters or changing the fork's 24-byte ABI.
+#define PBMPM_ENGINE_PARTICLE_ROWS 1
 #define PBMPM_SPARSE_STORAGE 1
 #include "fork_core.slang"
 
@@ -86,7 +89,15 @@ void initializeBucketsAndDiscoverPages(uint lane:SV_GroupIndex,uint3 group:SV_Gr
     uint flat;
     if (!sparseFlatKey(node,flat)) return;
     uint page=sparsePageKey(flat), previous;
-    InterlockedExchange(g_pageIndexB[page].generation,g_sparse.generation,previous);
+    // Publish the page set for the first fused stage's destination side only.
+    // The side the previous substep finished on keeps its index and generation,
+    // so that stage can still read what it wrote.
+    if (g_sparse.destinationA!=0u) {
+        InterlockedExchange(g_pageIndexA[page].generation,g_sparse.generation,previous);
+    }
+    else {
+        InterlockedExchange(g_pageIndexB[page].generation,g_sparse.generation,previous);
+    }
     if (previous==g_sparse.generation) return;
 
     uint pageSlot;
@@ -96,7 +107,8 @@ void initializeBucketsAndDiscoverPages(uint lane:SV_GroupIndex,uint3 group:SV_Gr
         return;
     }
     g_pageKeys[pageSlot]=page;
-    g_pageIndexB[page].slot=pageSlot;
+    if (g_sparse.destinationA!=0u) g_pageIndexA[page].slot=pageSlot;
+    else g_pageIndexB[page].slot=pageSlot;
 }
 
 [shader("compute")][numthreads(64,1,1)]
@@ -164,9 +176,12 @@ void initializeSparseDestination(uint lane:SV_GroupIndex,uint3 group:SV_GroupID)
         recordError(128u,0xffffffffu,4u,0xffffffffu);
         return;
     }
-    if (g_sparse.destinationA!=0u && lane==0u) {
+    if (lane==0u) {
+        // Every stage publishes its own destination page set, so a side is
+        // readable at exactly the generation it was last written with.
         SparseIndex entry={g_sparse.generation,slot};
-        g_pageIndexA[page]=entry;
+        if (g_sparse.destinationA!=0u) g_pageIndexA[page]=entry;
+        else g_pageIndexB[page]=entry;
     }
 
     // The destination is immutable for this dispatch. Keep its choice outside

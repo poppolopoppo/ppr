@@ -73,7 +73,7 @@ namespace pP::colony {
 
             auto state = makeMatterState(
                 *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration(),
-                grid().edge());
+                grid().edge(), contentCatalog());
             PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, state);
             state->m_identity.m_terrain_revision = 1u;
             m_matter = std::move(*state);
@@ -530,7 +530,8 @@ namespace pP::colony {
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, particles);
 
         auto initialized = makeMatterState(
-            *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration(), grid().edge());
+            *particles, 1.0 / cellsPerMetre(), referenceThicknessMetres(), kGravityY, worldGeneration(), grid().edge(),
+            contentCatalog());
         PPR_RETURN_UNEXPECTED_ON_FAIL(ColonyMatter, initialized);
         initialized->m_identity.m_terrain_revision = 1u;
         return initialized;

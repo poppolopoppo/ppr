@@ -1,0 +1,12 @@
+# Installed Node dependency (webgpu 0.6.2 plus its downloaded Dawn binary).
+# Never committed; see README.md.
+node_modules/
+
+# Default trace output (the script-local scratch directory). Traces are
+# generated artifacts and belong outside the source tree.
+out/
+
+# No lockfile is committed; package.json pins only the direct webgpu version,
+# not transitive dependencies or the downloaded Dawn artifact.
+package-lock.json
+npm-shrinkwrap.json

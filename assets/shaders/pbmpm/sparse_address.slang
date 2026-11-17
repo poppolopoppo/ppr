@@ -4,6 +4,9 @@ struct SparseBucket { uint key, count, rowStart, inserted; };
 struct SparseConstants {
     uint width, height, rows, bucketColumns;
     uint pageColumns, bucketCapacity, pageCapacity, groupCapacity;
+    // generation is the substep's write generation; sourceGeneration is the
+    // generation of the ping-pong side this stage reads. The host names both,
+    // because the schedule decides which side it wrote last.
     uint generation, sourceGeneration, dispatchWidth, destinationA;
     uint bucketKeys, pageKeys, reserved0, reserved1;
 };

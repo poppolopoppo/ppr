@@ -606,7 +606,7 @@ These figures exclude allocator metadata, simultaneous old/new reallocation
 buffers, opaque noise and task allocations, thread stacks, content catalogs,
 physics and GPU storage. They are neither total allocations nor process peak
 memory. Record process peaks separately. These observations do not affect
-persistent checksums and are deliberately absent from checkpoint v6; restored
+persistent checksums and are deliberately absent from checkpoint v7; restored
 checkpoints display allocation observations as unrecorded rather than zero cost.
 
 With `--worldgen-report`, admission observations also report attempted/skipped

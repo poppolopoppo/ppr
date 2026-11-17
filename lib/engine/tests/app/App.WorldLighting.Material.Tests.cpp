@@ -3550,7 +3550,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         // Three moving rows: hot position + enabled in native cells (the packer
         // subtracts the view's 3-cell origin), cold volume -> radius 1 m.
-        std::array<std::array<float, 16u>, 3u> hot{};
+        std::array<std::array<float, 18u>, 3u> hot{};
         hot[0u][0u] = 4.5f;
         hot[0u][1u] = 5.5f;
         hot[0u][15u] = 1.0f;
@@ -3560,7 +3560,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         hot[2u][0u] = 8.5f;
         hot[2u][1u] = 5.5f;
         hot[2u][15u] = 1.0f;
-        std::array<std::array<float, 6u>, 3u> cold{};
+        std::array<std::array<float, 7u>, 3u> cold{};
         cold[0u][1u] = std::numbers::pi_v<float>;
         cold[1u][1u] = std::numbers::pi_v<float>;
         cold[2u][1u] = std::numbers::pi_v<float>;
@@ -3923,7 +3923,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // amplitude ramp has something to converge to and survivors can be compared
         // bit for bit.
         const auto makeHot = [](const u32 count) {
-            Array<std::array<float, 16u>> hot(count);
+            Array<std::array<float, 18u>> hot(count);
             for (u32 row = 0u; row < count; ++row) {
                 hot[row][0u] = 4.5f + 2.0f * static_cast<float>(row);
                 hot[row][1u] = 5.5f;
@@ -3935,14 +3935,14 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return hot;
         };
         const auto makeCold = [](const u32 count) {
-            Array<std::array<float, 6u>> cold(count);
+            Array<std::array<float, 7u>> cold(count);
             for (auto &row: cold)
                 row[1u] = std::numbers::pi_v<float>;
 
             return cold;
         };
         const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
-                                  const Array<std::array<float, 16u>> &hot, const Array<std::array<float, 6u>> &cold,
+                                  const Array<std::array<float, 18u>> &hot, const Array<std::array<float, 7u>> &cold,
                                   const u64 epoch) {
             GridParticleGpuView view{};
             view.m_numerical = makeBuffer(
@@ -4257,7 +4257,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // can tell these records apart.
         constexpr std::array<std::array<float, 2u>, 2u> motions{{{0.03f, 0.04f}, {0.04f, -0.03f}}};
         const auto makeHot = [&](const std::array<float, 2u> positions_x_m) {
-            Array<std::array<float, 16u>> hot(positions_x_m.size());
+            Array<std::array<float, 18u>> hot(positions_x_m.size());
             for (std::size_t row = 0u; row < hot.size(); ++row) {
                 hot[row][0u] = positions_x_m[row] + origin_cells;
                 hot[row][1u] = 1.0f + origin_cells;
@@ -4269,7 +4269,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return hot;
         };
         const auto makeCold = [&](const u32 count) {
-            Array<std::array<float, 6u>> cold(count);
+            Array<std::array<float, 7u>> cold(count);
             for (auto &row: cold) {
                 row[1u] = std::numbers::pi_v<float> * particle_radius_m * particle_radius_m;
             }
@@ -4277,7 +4277,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return cold;
         };
         const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
-                                  const Array<std::array<float, 16u>> &hot, const Array<std::array<float, 6u>> &cold,
+                                  const Array<std::array<float, 18u>> &hot, const Array<std::array<float, 7u>> &cold,
                                   const std::shared_ptr<std::atomic<u64>> &live_epoch, const u64 epoch) {
             GridParticleGpuView view{};
             view.m_numerical = makeBuffer(
@@ -4757,9 +4757,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         };
         auto live = std::make_shared<std::atomic<u64>>(1u);
         // The numerical and readonly staging rows must match their declared strides
-        // (64 and 24 bytes), so each has its own array type.
+        // (16 * 4 = 64 and 6 * 4 + 4 property-index bytes = 28), so each has its own array type.
         const auto makeHot = [&]() {
-            Array<std::array<float, 16u>> rows(row_count);
+            Array<std::array<float, 18u>> rows(row_count);
             for (u32 row = 0u; row < row_count; ++row) {
                 const bool visible = std::ranges::find(visible_rows, row) != visible_rows.end();
                 rows[row][0u] = (visible ? 1.0f : 2000.0f) + origin_cells;
@@ -4770,7 +4770,7 @@ namespace pP::tests::detail::WorldLightingMaterial {
             return rows;
         };
         const auto makeCold = [&]() {
-            Array<std::array<float, 6u>> rows(row_count);
+            Array<std::array<float, 7u>> rows(row_count);
             for (auto &row: rows) {
                 row[1u] = std::numbers::pi_v<float> * particle_radius_m * particle_radius_m;
             }
@@ -5014,8 +5014,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         };
         const auto makeView = [&](const std::shared_ptr<const GridParticleMetadataResource> &metadata,
                                   const std::shared_ptr<std::atomic<u64>> &live_epoch, const u64 epoch) {
-            Array<std::array<float, 16u>> hot(2u);
-            Array<std::array<float, 6u>> cold(2u);
+            Array<std::array<float, 18u>> hot(2u);
+            Array<std::array<float, 7u>> cold(2u);
             for (u32 row = 0u; row < 2u; ++row) {
                 const bool accepted_inventory = metadata->m_materials.front() == 1u;
                 hot[row][0u] = (accepted_inventory ? 1.0f + static_cast<float>(row) : 2000.0f) + origin_cells;
@@ -5469,8 +5469,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
         // excavated vacuum cell, (1.5, 2.5) sits under the opaque cell above.
         const auto publish = [&](const std::optional<float2> position) {
             GridParticleGpuView view{};
-            std::array<std::array<float, 16u>, 1u> hot{};
-            std::array<std::array<float, 6u>, 1u> cold{};
+            std::array<std::array<float, 18u>, 1u> hot{};
+            std::array<std::array<float, 7u>, 1u> cold{};
             if (position) {
                 // Hot rows are native cells and the packer subtracts the view's
                 // 3-cell origin, so the authored world metre position lands at
@@ -9322,8 +9322,8 @@ namespace pP::tests::detail::WorldLightingMaterial {
 
         const std::size_t count = spec.m_particles.size();
         std::vector<GridParticleMetadataRow> rows(count);
-        std::vector<std::array<float, 16u>> hot(std::max<std::size_t>(count, 1u));
-        std::vector<std::array<float, 6u>> cold(std::max<std::size_t>(count, 1u));
+        std::vector<std::array<float, 18u>> hot(std::max<std::size_t>(count, 1u));
+        std::vector<std::array<float, 7u>> cold(std::max<std::size_t>(count, 1u));
         for (std::size_t row = 0u; row < count; ++row) {
             const auto &particle = spec.m_particles[row];
             rows[row].m_id_low = static_cast<u32>(row) + 1u;
@@ -9350,9 +9350,9 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(metadata.has_value());
         GridParticleGpuView view{};
         view.m_numerical = makeBuffer(
-            device, hot.size() * sizeof(std::array<float, 16u>), sizeof(std::array<float, 16u>), hot.data());
+            device, hot.size() * sizeof(std::array<float, 18u>), sizeof(std::array<float, 18u>), hot.data());
         view.m_readonly = makeBuffer(
-            device, cold.size() * sizeof(std::array<float, 6u>), sizeof(std::array<float, 6u>), cold.data());
+            device, cold.size() * sizeof(std::array<float, 7u>), sizeof(std::array<float, 7u>), cold.data());
         view.m_metadata = *metadata;
         const auto live_epoch = std::make_shared<std::atomic<u64>>(1u);
         view.m_live_epoch = live_epoch;

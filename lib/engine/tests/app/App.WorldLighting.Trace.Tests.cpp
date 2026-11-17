@@ -1718,14 +1718,14 @@ namespace pP::tests::detail::WorldLightingTrace {
         const auto metadata = prepareGridParticleMetadata(fixture.device(), rows, 2u, 1.0, 1u);
         PPR_TEST_ASSERT(metadata.has_value());
 
-        std::array<std::array<float, 16u>, 2u> hot{};
+        std::array<std::array<float, 18u>, 2u> hot{};
         hot[0u][0u] = 3.0f + 500.5f;
         hot[0u][1u] = 3.0f + 500.5f;
         hot[0u][15u] = 1.0f;
         hot[1u][0u] = 3.0f + 501.5f;
         hot[1u][1u] = 3.0f + 500.5f;
         hot[1u][15u] = 1.0f;
-        std::array<std::array<float, 6u>, 2u> cold{};
+        std::array<std::array<float, 7u>, 2u> cold{};
         for (auto &row: cold) {
             row[1u] = std::numbers::pi_v<float> * 0.25f;
         }

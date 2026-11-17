@@ -304,7 +304,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
     # loop. The two worldgen preview replay/crop leaves dominate that budget
     # and own a separate entry; the remaining preview widget leaf stays here.
     ppr_add_test_entry(TARGET game.tests
-        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu,game/lighting_lab/"
+        EXCLUDE "game/worldgen_preview/bounded_samples_replay_and_export_the_exact_visible_draft,game/worldgen_preview/whole_world_crops_preserve_production_formations_seams_and_matter,game/checkpoint_gpu,game/lighting_lab,game/checkpoint"
         LOOPS
         TIMEOUT 600
         LABELS unit game cpu
@@ -321,15 +321,30 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game cpu
     )
 
+    # Gate contract: `matter_fast` is the repeated-use simulation gate
+    # (transaction safety, transfer identities, scheduling, restore, inventory).
+    # `matter_long` holds long-horizon stability and runs at phase-end/delivery.
+    # Every retained simulation correctness entry belongs to one of the two;
+    # moving an entry to `matter_long` does not weaken it.
+
+    # Checkpoint CPU contracts are mandatory for the simulation gates; measured 11.8 s per loop (120 s ceiling).
+    ppr_add_test_entry(TARGET game.tests
+        NAME checkpoint_cpu
+        FILTER "game/checkpoint/"
+        LOOPS
+        TIMEOUT 120
+        LABELS unit game cpu matter_fast
+    )
+
     # Each full-domain lifecycle witness has its own device lock and existing
     # 180-second ceiling; do not aggregate cold-owner submissions in the CPU shard.
     ppr_add_test_entry(TARGET game.tests
         NAME particle_tools_gpu
-        FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero"
+        FILTER "game/checkpoint_gpu/paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,game/checkpoint_gpu/particle_tool_initializes_material_families_and_preserves_restored_history"
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME service_door_gpu
@@ -337,7 +352,18 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
+    )
+    ppr_add_test_entry(TARGET game.tests
+        NAME element_calibration_gpu
+        FILTER "game/checkpoint_gpu/shipped_liquids_have_distinct_loaded_gpu_responses"
+        LOOPS
+        RESOURCE_LOCK gpu
+        # Measured 150 s (Debug, exclusive) and 295 s under contention: this
+        # liquid-comparison workload is evidence, not a per-change gate, so it
+        # stays out of matter_fast and keeps a wide ceiling.
+        TIMEOUT 400
+        LABELS unit game gpu_validation matter_long
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_edit_gpu
@@ -345,7 +371,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_coverage_gpu
@@ -353,7 +379,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_restore_gpu
@@ -361,15 +387,24 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
+    ppr_add_test_entry(TARGET game.tests
+        NAME matter_schedule_restore_gpu
+        FILTER "game/checkpoint_gpu/saved_schedule_controls_restored_ticks_after_append_and_replacement"
+        LOOPS
+        TIMEOUT 180
+        RESOURCE_LOCK gpu
+        LABELS unit game gpu_validation matter_fast
+    )
+
     ppr_add_test_entry(TARGET game.tests
         NAME matter_stall_gpu
         FILTER "game/checkpoint_gpu/terrain_position_rejection_freezes_matter_until_a_committed_mutation"
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     # Task 5 publication liveness: the device-free contract leaves, and the dug
@@ -381,7 +416,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/held_publication_carries_no_buffers_and_keeps_the_rest_of_the_payload,game/checkpoint_gpu/publication_hold_does_not_change_solver_or_presentation_storage"
         LOOPS
         TIMEOUT 120
-        LABELS unit game cpu
+        LABELS unit game cpu matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_publication_gpu
@@ -389,7 +424,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 450
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     ppr_add_test_entry(TARGET game.tests
@@ -398,7 +433,7 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LOOPS
         RESOURCE_LOCK gpu
         TIMEOUT 180
-        LABELS unit game gpu_validation
+        LABELS unit game gpu_validation matter_fast
     )
 
     # Separate process budgets cover developer sanitizer startup for each
@@ -408,19 +443,22 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         FILTER "game/checkpoint_gpu/frontier_seed_42_five_by_seven_dig_stays_stable_for_3700_ticks"
         LOOPS
         RESOURCE_LOCK gpu
-        # Measured 591.47 s on 2026-11-12; the former 600 s ceiling left a
-        # 1.4% margin and timed out once without any assertion failure. The
-        # 900 s ceiling keeps an honest margin; assertions are unchanged.
-        TIMEOUT 900
-        LABELS unit game gpu_validation
+        # Measured 2286.84 s under the K=5 new-world schedule; the former 900 s
+        # ceiling timed out without any assertion failure. The 2750 s ceiling
+        # keeps a 20% margin; assertions are unchanged.
+        TIMEOUT 2750
+        LABELS unit game gpu_validation matter_long
     )
     ppr_add_test_entry(TARGET game.tests
         NAME matter_pressure_onset_gpu
         FILTER "game/checkpoint_gpu/frontier_seed_42_liquids_stay_stable_past_prior_explosion"
         LOOPS
         RESOURCE_LOCK gpu
-        TIMEOUT 300
-        LABELS unit game gpu_validation
+        # Measured 304.84 s under the K=5 new-world schedule, past the former
+        # 300 s ceiling; the 370 s ceiling keeps a 21% margin and assertions
+        # are unchanged.
+        TIMEOUT 370
+        LABELS unit game gpu_validation matter_long
     )
 
     # Heavy worldgen preview leaves: exact-visible-draft sample replay/export

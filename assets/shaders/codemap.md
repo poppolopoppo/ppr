@@ -141,7 +141,9 @@ one sample list, the retained L1 schedule identity and `angularMean` for the
 ## Design
 
 `grid_particle_prepare.slang` is GridPass-owned resident-particle presentation:
-numerical64/readonly24/metadata32/packed24/frame128 byte protocols. Packing uses
+numerical64/readonly28/metadata32/packed24/frame128 byte protocols. The cold row's
+last word is the engine's immutable substance-property index; presentation ignores
+it and retains its original physical/visual fields. Packing uses
 the committed hot/cold row identity and physical metric; three stable visibility
 scan/compaction dispatches produce ordered IDs and indirect arguments without
 reordering solver storage. The packed row's fourth word is the stable-identity

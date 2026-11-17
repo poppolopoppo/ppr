@@ -1,6 +1,7 @@
 // Copyright (c) 2024 Electronic Arts Inc. All rights reserved.
 // Selected fork ErikSom/pbmpm 859c449; BSD-3-Clause notice: LICENSE.md.
 #include "types.slang"
+#define PBMPM_ENGINE_PARTICLE_ROWS 1
 #define PBMPM_ENGINE_ADAPTERS 1
 #define PBMPM_SPARSE_STORAGE 1
 #include "fork_core.slang"
@@ -8,7 +9,7 @@
 // ------------------------------------------------------------------
 // engine transaction error and contact adapters
 // ------------------------------------------------------------------
-void recordError(uint flag, uint node, uint field, uint particle, uint body) {
+bool recordError(uint flag, uint node, uint field, uint particle, uint body) {
     InterlockedOr(g_errors[0], flag);
     uint previous;
     InterlockedCompareExchange(g_errors[1], 0u, 1u, previous);
@@ -18,10 +19,159 @@ void recordError(uint flag, uint node, uint field, uint particle, uint body) {
         g_errors[4] = particle;
         g_errors[5] = body;
     }
+
+    return previous == 0u;
 }
 
 void recordError(uint flag, uint node, uint field, uint particle) {
     recordError(flag, node, field, particle, 0xffffffffu);
+}
+
+// ------------------------------------------------------------------
+// opt-in first-rejection operand evidence
+// ------------------------------------------------------------------
+
+// PPR_PBMPM_RETURN_DIAGNOSTIC=1 provisions 31 words instead of six. Only
+// the first-error claimant reaches this replay; accepted particles never call it.
+// Replay the unchanged arithmetic prefix, stopping at the identified guard.
+// NaN means not reached/not applicable, not an invented downstream operand.
+// Payload after marker word 6: sigma.xy,t,dev.xy,n,phi,C,D,c,radicand,
+// projected.xy,H,nextPhi,nextC,ratio,denominator,returned,increment,edge,
+// strengthPhi,voidFraction,updateHistory. Floats use asuint, not conversion.
+void captureCalibratedRejection(uint field, float2 sigma, float C, float phi,
+                                float H, MaterialProperties a, bool updateHistory) {
+    uint words, stride;
+    g_errors.GetDimensions(words, stride);
+    if (words < 31u) return;
+
+    for (uint i = 7u; i < 31u; ++i) g_errors[i] = 0x7fc00000u;
+    g_errors[6] = 1u;
+    g_errors[7] = asuint(sigma.x);
+    g_errors[8] = asuint(sigma.y);
+    g_errors[13] = asuint(phi);
+    g_errors[14] = asuint(C);
+    g_errors[20] = asuint(H);
+    g_errors[30] = asuint(updateHistory ? 1.0 : 0.0);
+    if (field == 27u || field == 28u || field == 22u || field == 23u) return;
+
+    float2 e = log(sigma);
+    float trial = e.x + e.y + H;
+    float2 dev = e - trial*0.5;
+    float n = length(dev);
+    float sine = sin(a.frictionAngle / 180.0 * 3.14159);
+    float denominator = 3.0-sine;
+    g_errors[9] = asuint(trial);
+    g_errors[10] = asuint(dev.x);
+    g_errors[11] = asuint(dev.y);
+    g_errors[12] = asuint(n);
+    g_errors[24] = asuint(denominator);
+    if (field == 29u || field == 30u || field == 31u) return;
+
+    float alpha = sqrt(2.0/3.0)*2.0*sine/denominator;
+    float cohesion = a.cohesion;
+    float cap = a.cap;
+    float phiDense = 1.0-a.denseEpsilon;
+    float maxCap = log(phiDense/phi);
+    if (field == 33u && (!isfinite(maxCap) || maxCap < 0.0)) {
+        g_errors[15] = asuint(maxCap);
+        return;
+    }
+
+    float nextC = C;
+    float nextPhi = phi;
+    float returned = min(trial, a.tension);
+    bool porous = a.family == uint(MaterialCompacting);
+    bool dense = porous && phi >= 1.0-a.denseEpsilon;
+    g_errors[15] = asuint(cap);
+    g_errors[16] = asuint(cohesion);
+    g_errors[21] = asuint(nextPhi);
+    g_errors[22] = asuint(nextC);
+    g_errors[25] = asuint(returned);
+    if (!porous) {
+        cap += a.capHardening*C;
+        g_errors[15] = asuint(cap);
+        if (field == 26u) return;
+
+        cap = min(cap, maxCap);
+        returned = max(returned, -cap);
+        if (updateHistory) nextC = max(C, -min(returned, 0.0));
+        cohesion += a.cohesionHardening*nextC;
+    } else {
+        if (!dense) {
+            cap = maxCap;
+            g_errors[15] = asuint(cap);
+            if (field == 33u) return;
+
+            returned = max(returned, -cap);
+            g_errors[25] = asuint(returned);
+            if (updateHistory) {
+                float remaining = phiDense-phi;
+                float increment = remaining * (1.0-exp(-a.compactionRate*max(0.0, returned-trial)));
+                g_errors[26] = asuint(increment);
+                if (field == 34u) return;
+
+                nextPhi = clamp(phi+increment, a.solidFraction0, 1.0-a.denseEpsilon);
+            }
+        }
+
+        dense = nextPhi >= 1.0-a.denseEpsilon;
+        float strengthPhi = dense ? 1.0-a.denseEpsilon : nextPhi;
+        g_errors[21] = asuint(nextPhi);
+        g_errors[28] = asuint(strengthPhi);
+        if (field == 35u) return;
+
+        cohesion *= pow(strengthPhi, a.solidExponent);
+        g_errors[16] = asuint(cohesion);
+        if (!dense) {
+            cap = log(phiDense/nextPhi);
+            g_errors[15] = asuint(cap);
+            if (field == 37u) return;
+        } else {
+            cap = 0.0;
+        }
+
+        returned = max(returned, -cap);
+    }
+
+    float edge = alpha*max(-returned, 0.0)+cohesion;
+    g_errors[15] = asuint(cap);
+    g_errors[16] = asuint(cohesion);
+    g_errors[21] = asuint(nextPhi);
+    g_errors[22] = asuint(nextC);
+    g_errors[25] = asuint(returned);
+    g_errors[27] = asuint(edge);
+    if (field == 38u) return;
+
+    if (porous && !dense && returned <= 0.0) {
+        float ratio = -returned/cap;
+        g_errors[23] = asuint(ratio);
+        if (!isfinite(ratio)) return;
+
+        float projectedRatio = min(ratio, 1.0);
+        float radicand = 1.0-projectedRatio*projectedRatio;
+        g_errors[17] = asuint(radicand);
+        if (field == 25u) return;
+
+        edge *= sqrt(radicand);
+        g_errors[27] = asuint(edge);
+    }
+
+    if (n > edge) {
+        if (field == 39u) return;
+
+        dev *= edge/n;
+    }
+
+    float2 projected = dev + returned*0.5;
+    g_errors[18] = asuint(projected.x);
+    g_errors[19] = asuint(projected.y);
+}
+
+void rejectCalibrated(uint field, uint row, float2 sigma, float C, float phi,
+                      float H, MaterialProperties a, bool updateHistory) {
+    if (recordError(8u, 0xffffffffu, field, row, 0xffffffffu)) {
+        captureCalibratedRejection(field, sigma, C, phi, H, a, updateHistory);
+    }
 }
 
 void fail(uint flag, uint row, uint field) {
@@ -79,6 +229,29 @@ bool validParticle(Particle p, uint row) {
     uint field=invalidParticleField(p,g_parameters);
     if (field!=0xffffffffu) {
         recordError(8u,0xffffffffu,field,row);
+        return false;
+    }
+
+    return true;
+}
+
+// Property failures have their own flag (512): node carries the property index,
+// field 0 means absent/out-of-range storage, field 1 means an empty/mismatched row.
+// UINT_MAX is the explicit global-profile route and never reads the table.
+bool particlePropertiesUsable(uint row) {
+    uint index = g_cold[row].propertyRow;
+    if (index == 0xffffffffu) return true;
+
+    uint count, stride;
+    g_properties.GetDimensions(count, stride);
+    if (index >= count) {
+        recordError(512u, index, 0u, row);
+        return false;
+    }
+
+    MaterialProperties properties = g_properties[index];
+    if (properties.substanceId == 0u || properties.family != uint(g_cold[row].material)) {
+        recordError(512u, index, 1u, row);
         return false;
     }
 
@@ -228,6 +401,100 @@ void applySandVolumeImpulse(inout Particle p, float referenceVolume) {
 }
 
 // ------------------------------------------------------------------
+// constitutive operand domains
+// ------------------------------------------------------------------
+
+bool finiteMatrix(SourceMatrix m) {
+    return isfinite(m.c0x) && isfinite(m.c0y) && isfinite(m.c1x) && isfinite(m.c1y);
+}
+
+// The determinant, its reciprocal and every inverse component must stay usable.
+// A zero or nonfinite determinant has no admitted reciprocal; an overflowing
+// reciprocal or product has no admitted inverse. This is the same reciprocal
+// constraint forms from inverted(F), and no decomposition is evaluated.
+bool usableInverse(SourceMatrix m) {
+    float df = determinant(m);
+    if (!isfinite(df) || df == 0.0) return false;
+
+    float reciprocal = 1.0 / df;
+    if (!isfinite(reciprocal)) return false;
+
+    return finiteMatrix(scale(matrix(m.c1y, -m.c0y, -m.c1x, m.c0x), reciprocal));
+}
+
+// forkSvd forms E=(c0x+c1y)/2, F=(c0x-c1y)/2, G=(c0y+c1x)/2, H=(c0y-c1x)/2 and
+// evaluates sqrt(E*E + H*H) and sqrt(F*F + G*G). Testing those two radicands
+// directly admits exactly the arithmetic domain where the squares and both
+// square roots stay finite, instead of a conservative per-entry box: diag(2e19,1)
+// is admitted because H and G are zero, while its source decomposition is finite.
+// Deliberate singular-value limiting happens after this point, on finite values,
+// so it is never re-inspected here.
+bool usableRadicands(SourceMatrix m) {
+    float e = (m.c0x + m.c1y) * 0.5;
+    float f = (m.c0x - m.c1y) * 0.5;
+    float g = (m.c0y + m.c1x) * 0.5;
+    float h = (m.c0y - m.c1x) * 0.5;
+
+    return isfinite(e * e + h * h) && isfinite(f * f + g * g);
+}
+
+bool usableDeformation(SourceMatrix m) {
+    return finiteMatrix(m) && usableRadicands(m) && usableInverse(m);
+}
+
+// Records the first unusable constitutive operand for this row and reports
+// whether the production constraint/integration may run. Stored F is field 4 and
+// the trial (I + D)F is field 8 of the validation record; a liquid's density
+// reciprocal is field 12. The device may flush a subnormal density to zero, so
+// the reciprocal is validated explicitly rather than through that comparison.
+bool deformationOperandsUsable(Particle p, uint row) {
+    if (p.material == MaterialLiquid) {
+        if (!isfinite(1.0 / p.liquidDensity)) {
+            recordError(8u, 0xffffffffu, 12u, row);
+            return false;
+        }
+
+        return true;
+    }
+
+    if (!usableDeformation(p.deformationGradient)) {
+        recordError(8u, 0xffffffffu, 4u, row);
+        return false;
+    }
+
+    SourceMatrix trial = product(add(identity(), p.deformationDisplacement), p.deformationGradient);
+    if (!usableDeformation(trial)) {
+        recordError(8u, 0xffffffffu, 8u, row);
+        return false;
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------
+// produced-state backstop
+// ------------------------------------------------------------------
+
+// A constitutive coefficient product can overflow even when every admitted
+// operand was finite. Check the produced D itself for finiteness (field 8),
+// leaving encodability to the actual weighted scatter operands. A liquid density
+// must be finite, positive and invertible (field 12). No value is repaired.
+bool producedStateUsable(Particle p, uint row) {
+    if (!finiteMatrix(p.deformationDisplacement)) {
+        recordError(8u, 0xffffffffu, 8u, row);
+        return false;
+    }
+
+    if (p.material == MaterialLiquid &&
+        (!isfinite(p.liquidDensity) || p.liquidDensity <= 0.0 || !isfinite(1.0 / p.liquidDensity))) {
+        recordError(8u, 0xffffffffu, 12u, row);
+        return false;
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------
 // bootstrap error acceptance without an unused numerical source tile
 // ------------------------------------------------------------------
 
@@ -271,12 +538,16 @@ void checkBootstrapGridCoverage(int2 node, uint key, int4 source, bool valid) {
 // ------------------------------------------------------------------
 // fused selected source stage; all lanes cross shared barriers on rejection
 // ------------------------------------------------------------------
-void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint3 group) {
+// The host encodes exactly two programs: the bootstrap entry runs stage 0 and
+// the gather entry every later stage, so K is a runtime count. The final stage
+// is the one whose index satisfies reserved0 + 1 >= reserved1, which keeps the
+// schedule bounded without a third entry point or per-K specialization.
+void fusedIteration<let FirstStage : bool, let Cooperative : bool>(uint lane,uint3 group) {
     uint groupIndex=sparseGroup(group);
     if (groupIndex>=g_sparseCounters[2]) return;
 
     for (uint i=lane;i<256;i+=64) {
-        if (Iteration != 0u) s_src[i]=0;
+        if (!FirstStage) s_src[i]=0;
         s_dst[i]=0;
         s_absolute[i]=0u; s_contributor[i]=0xffffffffu;
     }
@@ -289,13 +560,15 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
     uint key=0xffffffffu;
     bool valid=sparseFlatKey(node,key);
     bool bootstrap = false;
-    if (Iteration == 0u) bootstrap = bootstrapGridCertified();
+    if (FirstStage) bootstrap = bootstrapGridCertified();
 
     int4 source=int4(0);
     if (valid && (!bootstrap || (g_environment.hasTerrain != 0u && (g_environment.reserved & 1u) == 0u))) {
+        // This stage writes one ping-pong side and reads the other. The host
+        // tracks which side the schedule wrote last and names that side's
+        // generation, so no stage parity is implied here.
         bool sourceA=g_sparse.destinationA==0u;
-        uint generation=sourceA ? g_sparse.sourceGeneration : g_sparse.generation;
-        source=sparseSource(key,sourceA,generation);
+        source=sparseSource(key,sourceA,g_sparse.sourceGeneration);
     }
 
     // The certificate depends only on uniform constants/body rows. Every lane
@@ -305,7 +578,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
     } else {
         float2 sandDisplacement = float2(0.0);
         float4 state;
-        if (Iteration == 0u) state = contactGridState<Cooperative>(node, key, source, valid);
+        if (FirstStage) state = contactGridState<Cooperative>(node, key, source, valid);
         else state = projectGridContacts<Cooperative, true>(node, key, source, valid, sandDisplacement);
         if (valid) {
             float2 d=state.xy;
@@ -314,7 +587,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
             s_src[tile+1]=checkedEncodeNode(d.y,key,1u);
             s_src[tile+2]=checkedEncodeNode(mass,key,2u);
             s_src[tile+3]=checkedEncodeNode(decodeWord(source.w),key,3u);
-            if (Iteration != 0u) {
+            if (!FirstStage) {
                 // Reuse exact source quantization unless terrain friction made
                 // the sand candidate distinct. No extra error or rounding path
                 // enters sand-free or frictionless execution.
@@ -326,7 +599,7 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
                         decodeWord(checkedEncodeNode(sandDisplacement.y, key, 1u)));
                 }
             }
-        } else if (Iteration != 0u) {
+        } else if (!FirstStage) {
             s_sandVelocity[lane] = float2(0.0);
         }
     }
@@ -335,10 +608,11 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
 
     if (lane<bucket.count) {
         uint row=g_rows[bucket.start+lane];
+        bool propertiesUsable=particlePropertiesUsable(row);
         Particle p=loadParticle(row);
         float2 oldPosition=float2(p.positionX,p.positionY);
         Weights weights=quadraticWeights(oldPosition);
-        if (Iteration!=0) {
+        if (!FirstStage && propertiesUsable) {
             SourceMatrix B=zeroMatrix();
             float2 d=float2(0); float volume=0;
             for (int i=0;i<3;++i) {
@@ -365,39 +639,58 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
 
             float referenceVolume = volume;
             if (g_parameters.useGridVolumeForLiquid!=0) {
-                volume=1.0/volume;
-                if (volume<1.0) p.liquidDensity=lerp(p.liquidDensity,volume,0.1);
+                // Quantization can leave zero support at this node. An empty
+                // reciprocal would otherwise be an accidental infinity that the
+                // comparison happens to discard; with no support there is no
+                // objective-volume feedback and the density stays unchanged.
+                if (volume > 0.0) {
+                    volume=1.0/volume;
+                    if (volume<1.0) p.liquidDensity=lerp(p.liquidDensity,volume,0.1);
+                }
             }
             p.deformationDisplacement=scale(B,4.0); p.displacementX=d.x; p.displacementY=d.y;
-            if (Iteration==1) {
-                p=integration(p,row);
-                // Like retained gravity translation, pressure acts through the
-                // next transfer. Current position and return-mapped F stay intact.
-                applySandVolumeImpulse(p, referenceVolume);
+            if (g_parameters.reserved0 + 1u >= g_parameters.reserved1) {
+                // Integration carries gravity and external acceleration, so it
+                // runs exactly once per substep: on the final stage. Unusable
+                // constitutive operands are a per-particle rejection: no
+                // integration, no engine pressure feedback, no early return.
+                if (deformationOperandsUsable(p,row)) {
+                    p=integration(p,row);
+                    // Like retained gravity translation, pressure acts through the
+                    // next transfer. Current position and return-mapped F stay intact.
+                    applySandVolumeImpulse(p, referenceVolume);
+                }
             }
             if (validParticle(p,row)) saveParticle(row,p);
         }
 
-        Particle updated=constraint(p);
-        for (int i=0;i<3;++i) {
-            for (int j=0;j<3;++j) {
-                float weight=weights.w[i].x*weights.w[j].y;
-                int2 neighbour=weights.base+int2(i,j), localNeighbour=neighbour-origin;
-                if (any(localNeighbour<0) || any(localNeighbour>=8)) {
-                    uint invalidKey=uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x);
-                    recordError(128u,invalidKey,0xffffffffu,row);
-                    continue;
-                }
+        Particle updated=p;
+        bool scatterable=propertiesUsable && deformationOperandsUsable(p,row);
+        if (scatterable) {
+            updated=constraint(p,row);
+            scatterable=producedStateUsable(updated,row);
+        }
+        if (scatterable) {
+            for (int i=0;i<3;++i) {
+                for (int j=0;j<3;++j) {
+                    float weight=weights.w[i].x*weights.w[j].y;
+                    int2 neighbour=weights.base+int2(i,j), localNeighbour=neighbour-origin;
+                    if (any(localNeighbour<0) || any(localNeighbour>=8)) {
+                        uint invalidKey=uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x);
+                        recordError(128u,invalidKey,0xffffffffu,row);
+                        continue;
+                    }
 
-                uint at=(uint(localNeighbour.y)*8+uint(localNeighbour.x))*4;
-                uint globalAt=(uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x))*4;
-                float weightedMass=weight*updated.mass;
-                float2 momentum=weightedMass*(float2(updated.displacementX,updated.displacementY)+
-                    transform(updated.deformationDisplacement,float2(neighbour)-oldPosition+0.5));
-                scatterChecked(at,globalAt,momentum.x,row,0);
-                scatterChecked(at+1,globalAt+1,momentum.y,row,1);
-                scatterChecked(at+2,globalAt+2,weightedMass,row,2);
-                if (g_parameters.useGridVolumeForLiquid!=0) scatterChecked(at+3,globalAt+3,updated.volume*weight,row,3);
+                    uint at=(uint(localNeighbour.y)*8+uint(localNeighbour.x))*4;
+                    uint globalAt=(uint(neighbour.y)*g_parameters.gridWidth+uint(neighbour.x))*4;
+                    float weightedMass=weight*updated.mass;
+                    float2 momentum=weightedMass*(float2(updated.displacementX,updated.displacementY)+
+                        transform(updated.deformationDisplacement,float2(neighbour)-oldPosition+0.5));
+                    scatterChecked(at,globalAt,momentum.x,row,0);
+                    scatterChecked(at+1,globalAt+1,momentum.y,row,1);
+                    scatterChecked(at+2,globalAt+2,weightedMass,row,2);
+                    if (g_parameters.useGridVolumeForLiquid!=0) scatterChecked(at+3,globalAt+3,updated.volume*weight,row,3);
+                }
             }
         }
     }
@@ -424,28 +717,28 @@ void fusedIteration<let Iteration : uint, let Cooperative : bool>(uint lane,uint
 }
 
 // ------------------------------------------------------------------
-// fixed K2 iteration entries
+// two runtime-parameterised stage entries
 // ------------------------------------------------------------------
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused0(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<0u, false>(lane,group);
+    fusedIteration<true, false>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused1(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<1u, false>(lane,group);
+    fusedIteration<false, false>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused0Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<0u, true>(lane,group);
+    fusedIteration<true, true>(lane,group);
 }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void fused1Wave(uint lane:SV_GroupIndex,uint3 group:SV_GroupID) {
-    fusedIteration<1u, true>(lane,group);
+    fusedIteration<false, true>(lane,group);
 }

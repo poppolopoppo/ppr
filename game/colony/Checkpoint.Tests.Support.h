@@ -12,6 +12,111 @@ namespace pP::game::tests::detail::checkpoint {
 
     PPR_DECLARE_LOG_CATEGORY(CheckpointTests)
 
+    // ------------------------------------------------------------------
+    // historical checkpoint wire reconstruction
+    // ------------------------------------------------------------------
+
+    struct CheckpointWireOffsets {
+        std::size_t m_properties, m_particles, m_schedule;
+    };
+
+    inline CheckpointWireOffsets checkpointWireOffsets(
+        const std::size_t length, const std::size_t snapshot_bytes, const MatterState &state) {
+        // L is the v9 envelope size, S the raw snapshot size, M the material
+        // count and N the particle count. The suffix is table + u64 size + S.
+        // property offset = L - S - 8 - (16 + 76*M).
+        const std::size_t table_bytes = 16u + 76u * state.m_properties.size();
+        PPR_TEST_ASSERT(length >= snapshot_bytes + 8u + table_bytes);
+        const std::size_t properties = length - snapshot_bytes - 8u - table_bytes;
+
+        // particle offset = property offset - 96*N; schedule offset =
+        // particle offset - (4 + 64 + 4): K, profile, particle count.
+        const std::size_t particle_bytes = 96u * state.m_particles.size();
+        PPR_TEST_ASSERT(properties >= particle_bytes + 4u + 64u + 4u);
+        const std::size_t particles = properties - particle_bytes;
+        return {properties, particles, particles - (4u + 64u + 4u)};
+    }
+
+    inline Array<u8> historicalCheckpointBytes(
+        const Array<u8> &encoded, const std::size_t snapshot_bytes, const MatterState &state, const u32 version) {
+        PPR_TEST_ASSERT(version >= 6u and version <= 9u);
+        const auto offsets = checkpointWireOffsets(encoded.size(), snapshot_bytes, state);
+        auto bytes = encoded;
+        std::size_t table_bytes = 16u + 76u * state.m_properties.size();
+        std::size_t particle_stride = 96u;
+
+        if (version < 9u) {
+            bytes.erase(
+                bytes.begin() + static_cast<std::ptrdiff_t>(offsets.m_properties),
+                bytes.begin() + static_cast<std::ptrdiff_t>(offsets.m_properties + table_bytes));
+            table_bytes = 0u;
+
+            // Drop the two v9-only particle words at [88,96), last record
+            // first so removal never shifts an earlier record's 96-byte offset.
+            for (std::size_t row = state.m_particles.size(); row > 0u; --row) {
+                const auto tail = bytes.begin() +
+                                  static_cast<std::ptrdiff_t>(offsets.m_particles + (row - 1u) * 96u + 88u);
+                bytes.erase(tail, tail + 8);
+            }
+            particle_stride = 88u;
+
+            if (version == 8u) {
+                Array<u8> table;
+                const auto append_word = [&](const u32 word) {
+                    for (u32 byte = 0u; byte < 4u; ++byte)
+                        table.push_back(static_cast<u8>(word >> (8u * byte)));
+                };
+
+                // v8's policy word is 1, not v9's policy. Its identity is
+                // FNV-1a over little-endian policy=1, count=M, then ten-word
+                // rows sorted by substance ID (offset basis 14695981039346656037,
+                // prime 1099511628211), excluding all nine v9-only row words.
+                append_word(1u);
+                const u64 identity = matterMaterialTableIdentity(state.m_properties, 1u);
+                append_word(static_cast<u32>(identity));
+                append_word(static_cast<u32>(identity >> 32u));
+                append_word(static_cast<u32>(state.m_properties.size()));
+                for (const auto &row: state.m_properties) {
+                    const auto words = std::bit_cast<std::array<u32, 19u>>(row);
+                    for (u32 index = 0u; index < 10u; ++index)
+                        append_word(words[index]);
+                }
+
+                table_bytes = 16u + 40u * state.m_properties.size();
+                PPR_TEST_ASSERT(table.size() == table_bytes);
+                bytes.insert(
+                    bytes.begin() +
+                        static_cast<std::ptrdiff_t>(offsets.m_particles + particle_stride * state.m_particles.size()),
+                    table.begin(), table.end());
+            }
+        }
+
+        // v6 predates K; v7/v8 retain the exact saved schedule word.
+        const std::size_t schedule_bytes = version == 6u ? 0u : 4u;
+        if (version == 6u) {
+            const auto schedule = bytes.begin() + static_cast<std::ptrdiff_t>(offsets.m_schedule);
+            bytes.erase(schedule, schedule + 4);
+        }
+        bytes[8u] = static_cast<u8>(version);
+
+        // Guard the forged envelope before any decoder sees it: prefix + K +
+        // profile + count + records + table + snapshot length + snapshot.
+        PPR_TEST_ASSERT(
+            bytes.size() == offsets.m_schedule +
+                                schedule_bytes +
+                                64u +
+                                4u +
+                                particle_stride * state.m_particles.size() +
+                                table_bytes +
+                                8u +
+                                snapshot_bytes);
+        return bytes;
+    }
+
+    // ------------------------------------------------------------------
+    // explicit owned descriptor fixtures
+    // ------------------------------------------------------------------
+
     struct Fixture {
         std::filesystem::path m_root;
         std::string m_namespace, m_world_key, m_manifest;
@@ -19,7 +124,8 @@ namespace pP::game::tests::detail::checkpoint {
 
         explicit inline Fixture(
             std::string name_space = "checkpoint", std::string world_key = "frontier",
-            const u32 world_edge = sim::kWorldEdge)
+            const u32 world_edge = sim::kWorldEdge, const bool material_families = false,
+            const bool terrain_families = false)
             : m_namespace{std::move(name_space)}, m_world_key{std::move(world_key)},
               m_manifest{"schema_version = 1\npack_id = '" + m_namespace + "'\n"} {
             static std::atomic<u32> ordinal{};
@@ -67,6 +173,27 @@ namespace pP::game::tests::detail::checkpoint {
             material.m_appearance.m_alpha_mode = EMaterialAlphaMode::blend;
             material.m_appearance.m_texture_sampling = EMaterialTextureSampling::repeat;
             add("sandstone", sim::asset::kMaterialKind, "sandstone.toml", material);
+
+            if (material_families) {
+                auto family_material = material;
+                if (not terrain_families) {
+                    family_material.m_representation = sim::definition::EMaterialRepresentation::particle;
+                    family_material.m_diggable.reset();
+                }
+
+                for (const char *const key: {"snow", "clay", "sand", "obsidian", "slime", "pumice", "bedrock"}) {
+                    if (std::string_view{key} == "obsidian" or
+                        std::string_view{key} == "slime" or
+                        std::string_view{key} == "pumice" or
+                        std::string_view{key} == "bedrock") {
+                        family_material.m_representation = sim::definition::EMaterialRepresentation::terrain;
+                        family_material.m_diggable = true;
+                    }
+
+                    family_material.m_appearance.m_display_name = key;
+                    add(key, sim::asset::kMaterialKind, std::string{key} + ".toml", family_material);
+                }
+            }
 
             material.m_element = "liquid";
             material.m_diggable.reset();
@@ -138,6 +265,16 @@ namespace pP::game::tests::detail::checkpoint {
             world.m_palette.m_materials.m_entries = {
                 {"basalt", {"basalt", 1u}}, {"sandstone", {"sandstone", 2u}}, {"water", {"water", 3u}},
                 {"oxygen", {"oxygen", 4u}}};
+            if (material_families) {
+                world.m_palette.m_materials.m_entries.push_back({"snow", {"snow", 5u}});
+                world.m_palette.m_materials.m_entries.push_back({"clay", {"clay", 6u}});
+                world.m_palette.m_materials.m_entries.push_back({"sand", {"sand", 7u}});
+                world.m_palette.m_materials.m_entries.push_back({"obsidian", {"obsidian", 8u}});
+                world.m_palette.m_materials.m_entries.push_back({"slime", {"slime", 9u}});
+                world.m_palette.m_materials.m_entries.push_back({"pumice", {"pumice", 10u}});
+                world.m_palette.m_materials.m_entries.push_back({"bedrock", {"bedrock", 11u}});
+            }
+
             world.m_palette.m_fields.m_entries.push_back({"noise", {"noise", 0u}});
             world.m_palette.m_biomes.m_entries.push_back({"hearth", {"hearth", 0u}});
             world.m_palette.m_features.m_entries.push_back({"landing", {"landing", 0u}});
@@ -171,7 +308,7 @@ namespace pP::game::tests::detail::checkpoint {
 
             m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
 
-            PPR_TEST_ASSERT(m_catalog->materials().size() == 4u);
+            PPR_TEST_ASSERT(m_catalog->materials().size() == (material_families ? 11u : 4u));
             const auto *const oxygen = m_catalog->findMaterial("oxygen");
             PPR_TEST_ASSERT(oxygen != nullptr);
             PPR_TEST_ASSERT(oxygen->m_numeric_id == 4u and oxygen->m_phase == EMaterialPhase::gas);
