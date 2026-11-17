@@ -2007,9 +2007,15 @@ namespace pP::tests::detail::WorldLightingMaterial {
         PPR_TEST_ASSERT(std::abs(dark_center[3] - 1.0f) <= 0.003f);
 
         // The right column's unshifted point is inside the map, but the bounded
-        // depth offset pushes its CH position outside; that layer is zero.
+        // depth offset pushes its CH position outside the field. A receiver
+        // outside the field clamps to the field's edge instead of reading black,
+        // so the layer standing in for the sky above and beside the world takes
+        // the nearest solved value. With a uniform field the exterior pixel is
+        // therefore identical to the centre, and nothing is emitted as zero.
         const auto exterior = pixel(lit, kEdge - 1u, kEdge / 2u);
-        assert_black(exterior);
+        PPR_TEST_ASSERT(std::abs(exterior[0] - 0.5f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(exterior[1] - 0.25f) <= 0.003f);
+        PPR_TEST_ASSERT(std::abs(exterior[2] - 0.125f) <= 0.003f);
         PPR_TEST_ASSERT(std::abs(exterior[3] - 1.0f) <= 0.003f);
 
         // The visual guard reads the production predicate directly. Optical
