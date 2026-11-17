@@ -1149,3 +1149,27 @@ The geometric acceptance gate intentionally remains capable of failing after
 the scalar safeguards. If it fails, the planning owner must decide the spatial
 occupied-volume coupling; do not weaken the test to accept coincident particles
 merely because F and phi remain finite. The live runaway is not claimed fixed.
+
+## Full-suite green (identity `52e1fc67`)
+
+| Item | Value |
+|---|---|
+| Source | `52e1fc67` (`pbmpm/phase-a`, clean tree, no builds during the run) |
+| Command | `ctest --test-dir out/build/clang-dev -j4 --output-on-failure` |
+| Result | **85/85 passed**, 4690 s |
+| Log | `/tmp/opencode/full-suite5.log` |
+
+Defects fixed on the way to this run, each found by a real failure rather than inspection:
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| Noise/splatter under liquids | renderer ownership bit never published by the fixture | test-only winner-grid seam; kernel-derived bleed band |
+| Fresh checkout cannot configure | CMake probed libstdc++'s std module for a libc++ build | manifest preselected before `project()` |
+| Snow spawn aborted the app | fresh particles inherited the legacy `logJp = 1` | `initializeMaterialState` at every creation site |
+| Lighting-lab crash after mixing liquids | magic `D_max ≈ 4.6` allowed ~100× compression; a wide exponent band then overflowed a later SVD | porosity-derived cap `ln(φ_dense/φ)`, saturating compaction, explicit dense branch |
+| Snow visibly shrank forever | same unbounded cap | bounded to the porosity limit; regression separates settling from collapse |
+| Asset accounting test red on `particles` | accounting omitted slot conic buffers | counted; expectation derived (456 B) |
+| Settlement tests red | view validation ordered before liveness, breaking main's hold contract | order restored; superseded views held |
+| `BAD_COMMAND`, window font errors | builds overlapping the suite run | hygiene: no edits or builds during acceptance |
+
+Remaining known limits, unchanged: Windows/D3D12 unrun; clay and snow coefficients are calibration placeholders; sand K10 conformance is structural-only; elastic recovery undetermined (rock/ore stay granular); occupied-volume transport across particles is B2's scope.
