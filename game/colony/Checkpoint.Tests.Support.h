@@ -181,7 +181,15 @@ namespace pP::game::tests::detail::checkpoint {
                     family_material.m_diggable.reset();
                 }
 
-                for (const char *const key: {"snow", "clay", "sand"}) {
+                for (const char *const key: {"snow", "clay", "sand", "obsidian", "slime", "pumice", "bedrock"}) {
+                    if (std::string_view{key} == "obsidian" or
+                        std::string_view{key} == "slime" or
+                        std::string_view{key} == "pumice" or
+                        std::string_view{key} == "bedrock") {
+                        family_material.m_representation = sim::definition::EMaterialRepresentation::terrain;
+                        family_material.m_diggable = true;
+                    }
+
                     family_material.m_appearance.m_display_name = key;
                     add(key, sim::asset::kMaterialKind, std::string{key} + ".toml", family_material);
                 }
@@ -261,6 +269,10 @@ namespace pP::game::tests::detail::checkpoint {
                 world.m_palette.m_materials.m_entries.push_back({"snow", {"snow", 5u}});
                 world.m_palette.m_materials.m_entries.push_back({"clay", {"clay", 6u}});
                 world.m_palette.m_materials.m_entries.push_back({"sand", {"sand", 7u}});
+                world.m_palette.m_materials.m_entries.push_back({"obsidian", {"obsidian", 8u}});
+                world.m_palette.m_materials.m_entries.push_back({"slime", {"slime", 9u}});
+                world.m_palette.m_materials.m_entries.push_back({"pumice", {"pumice", 10u}});
+                world.m_palette.m_materials.m_entries.push_back({"bedrock", {"bedrock", 11u}});
             }
 
             world.m_palette.m_fields.m_entries.push_back({"noise", {"noise", 0u}});
@@ -296,7 +308,7 @@ namespace pP::game::tests::detail::checkpoint {
 
             m_catalog = std::make_shared<const ContentCatalog>(std::move(*selected));
 
-            PPR_TEST_ASSERT(m_catalog->materials().size() == (material_families ? 7u : 4u));
+            PPR_TEST_ASSERT(m_catalog->materials().size() == (material_families ? 11u : 4u));
             const auto *const oxygen = m_catalog->findMaterial("oxygen");
             PPR_TEST_ASSERT(oxygen != nullptr);
             PPR_TEST_ASSERT(oxygen->m_numeric_id == 4u and oxygen->m_phase == EMaterialPhase::gas);

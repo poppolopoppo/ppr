@@ -14,6 +14,11 @@ namespace pP::colony {
     // ------------------------------------------------------------------
 
     namespace {
+        std::string_view calibrationKey(const std::string_view key) {
+            // Explicit shipped lighting-lab alias; unrelated lab materials retain defaults.
+            return key == "lab_magma" ? "magma" : key;
+        }
+
         matter::ESourceMaterial catalogFamily(const std::string_view key, const sim::EGenerationMatter phase) {
             using Family = matter::ESourceMaterial;
             static constexpr std::pair<std::string_view, Family> entries[]{
@@ -23,7 +28,11 @@ namespace pP::colony {
                 {"copper_ore", Family::sand}, {"iron_ore", Family::sand}, {"uranium_ore", Family::sand},
                 {"wolframite", Family::sand}, {"autunite", Family::sand}, {"azurite", Family::sand},
                 {"clay", Family::cohesive}, {"wet_sand", Family::cohesive}, {"snow", Family::compacting},
-                {"pebbles", Family::sand}, {"gravel", Family::sand}};
+                {"pebbles", Family::sand}, {"gravel", Family::sand}, {"pumice", Family::compacting},
+                {"glass", Family::elastic}, {"obsidian", Family::elastic}, {"clear_quartz", Family::elastic},
+                {"crystal", Family::elastic}, {"diamond", Family::elastic}, {"emerald", Family::elastic},
+                {"ruby", Family::elastic}, {"ice", Family::elastic}, {"polluted_ice", Family::elastic},
+                {"slime", Family::visco}};
 
             for (const auto &[name, family]: entries) {
                 if (key == name)
@@ -38,6 +47,65 @@ namespace pP::colony {
         return catalogFamily(
             material.m_key, material.m_phase == EMaterialPhase::liquid ? sim::EGenerationMatter::liquid
                                                                        : sim::EGenerationMatter::solid);
+    }
+
+    matter::GpuMaterialProperties defaultMatterProperties(
+        const MaterialDefinition &material, const matter::GpuParameters &profile) {
+        matter::GpuMaterialProperties row{};
+        row.m_substance_id = material.m_numeric_id;
+        row.m_family = matterFamily(material);
+        row.m_reference_density = static_cast<float>(material.m_reference_density_kg_m3 / 1000.0);
+        row.m_elasticity_ratio = profile.m_elasticity_ratio;
+        row.m_elastic_relaxation = profile.m_elastic_relaxation;
+        row.m_liquid_relaxation = profile.m_liquid_relaxation;
+        row.m_liquid_viscosity = profile.m_liquid_viscosity;
+        row.m_friction_angle = profile.m_friction_angle;
+        row.m_plasticity = profile.m_plasticity;
+        row.m_sand_yield_ratio = profile.m_elasticity_ratio;
+
+        // Calibration, not measured constitutive constants. Unlisted fields retain
+        // the previous profile/default row; see docs/pbmpm-element-calibration.md.
+        const auto key = calibrationKey(material.m_key);
+        static constexpr std::tuple<std::string_view, float, float> liquids[]{
+            {"water", 0.01f, 1.0f}, {"polluted_water", 0.02f, 1.0f}, {"brine", 0.03f, 1.0f}, {"crude_oil", 0.25f, 0.8f},
+            {"magma", 2.0f, 0.5f}};
+        for (const auto &[name, viscosity, relaxation]: liquids) {
+            if (key == name) {
+                row.m_liquid_viscosity = viscosity;
+                row.m_liquid_relaxation = relaxation;
+            }
+        }
+
+        static constexpr std::tuple<std::string_view, float, float> sands[]{
+            {"sand", 30.0f, 1.0f}, {"sandstone", 34.0f, 1.1f}, {"basalt", 36.0f, 1.15f}, {"granite", 36.0f, 1.15f},
+            {"limestone", 33.0f, 1.05f}, {"coal", 28.0f, 0.9f}, {"dirt", 32.0f, 1.0f}, {"regolith", 30.0f, 1.0f},
+            {"ash", 26.0f, 0.85f}, {"pebbles", 38.0f, 1.25f}, {"gravel", 38.0f, 1.25f}, {"salt", 30.0f, 1.0f},
+            {"copper_ore", 34.0f, 1.1f}, {"iron_ore", 34.0f, 1.1f}, {"uranium_ore", 34.0f, 1.1f},
+            {"wolframite", 34.0f, 1.1f}, {"autunite", 34.0f, 1.1f}, {"azurite", 34.0f, 1.1f}};
+        for (const auto &[name, friction, yield]: sands) {
+            if (key == name) {
+                row.m_friction_angle = friction;
+                row.m_sand_yield_ratio = yield;
+            }
+        }
+
+        if (row.m_family == matter::ESourceMaterial::elastic or row.m_family == matter::ESourceMaterial::visco) {
+            row.m_elasticity_ratio = 1.0f;
+            row.m_elastic_relaxation = 1.5f;
+            if (row.m_family == matter::ESourceMaterial::visco)
+                row.m_plasticity = 0.9f;
+        }
+
+        if (key == "clay" or key == "wet_sand") {
+            row.m_cohesion = key == "clay" ? 0.12f : 0.06f;
+            row.m_cap = key == "clay" ? 0.5f : 0.4f;
+            row.m_cohesion_hardening = key == "clay" ? 0.4f : 0.6f;
+        }
+
+        if (key == "pumice")
+            row.m_solid_fraction0 = 0.4f;
+
+        return row;
     }
 
     u64 matterMaterialTableIdentity(const std::span<const matter::GpuMaterialProperties> rows, const u32 policy) {
@@ -173,13 +241,8 @@ namespace pP::colony {
             row.m_sand_yield_ratio = state.m_profile.m_elasticity_ratio;
             row.m_reference_density = static_cast<float>(
                 (definition ? definition->m_reference_density_kg_m3 : record.m_bulk_density_kg_m3) / 1000.0);
-            if (not legacy and definition and (definition->m_key == "pebbles" or definition->m_key == "gravel")) {
-                row.m_friction_angle = 38.0f;
-                row.m_sand_yield_ratio = 1.25f;
-            }
-
-            if (not legacy and definition and definition->m_key == "wet_sand")
-                row.m_cohesion = 0.02f;
+            if (not legacy and definition)
+                row = defaultMatterProperties(*definition, state.m_profile);
 
             rows.push_back(row);
         }
@@ -267,6 +330,9 @@ namespace pP::colony {
             const auto *const definition = catalog ? catalog->findMaterial(record.m_material) : nullptr;
             matter::GpuMaterialProperties property{};
             property.m_family = catalogFamily(definition ? definition->m_key : std::string_view{}, record.m_phase);
+            if (definition)
+                property = defaultMatterProperties(*definition, result.m_profile);
+
             matter::initializeMaterialState(particle, property);
 
             if (not std::isfinite(particle.m_mass) or
@@ -680,8 +746,7 @@ namespace pP::colony {
             particle.m_position_x = static_cast<float>(position.m_x) + 0.5f + kMatterOrigin;
             particle.m_position_y = static_cast<float>(position.m_y) + 0.5f + kMatterOrigin;
             particle.m_mass = static_cast<float>(mass / (1000.0 * volume));
-            matter::GpuMaterialProperties defaults{};
-            defaults.m_family = catalogFamily(material->m_key, record.m_phase);
+            const auto defaults = defaultMatterProperties(*material, source.m_profile);
 
             // Reuse saved rows for dug particles, including migrated legacy families.
             const auto property = std::ranges::find(

@@ -596,8 +596,7 @@ namespace pP::colony {
         } else {
             const auto *const material = contentCatalog()->findMaterial(command.m_material);
             PPR_ASSERT(material != nullptr);
-            matter::GpuMaterialProperties defaults{};
-            defaults.m_family = matterFamily(*material);
+            const auto defaults = defaultMatterProperties(*material, working.m_profile);
             const auto saved_property = std::ranges::find(
                 working.m_properties, command.m_material, &matter::GpuMaterialProperties::m_substance_id);
             const auto &property = saved_property != working.m_properties.end() ? *saved_property : defaults;

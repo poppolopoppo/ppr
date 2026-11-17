@@ -57,6 +57,9 @@ export namespace pP::colony {
     /// Stable policy plus canonical row values form the persisted table identity.
     inline constexpr u32 kMatterMaterialTablePolicy = 2u;
     [[nodiscard]] matter::ESourceMaterial matterFamily(const MaterialDefinition &material);
+    /// Fresh catalog calibration; saved property rows remain authoritative.
+    [[nodiscard]] matter::GpuMaterialProperties defaultMatterProperties(
+        const MaterialDefinition &material, const matter::GpuParameters &profile);
     [[nodiscard]] u64 matterMaterialTableIdentity(
         std::span<const matter::GpuMaterialProperties> rows, u32 policy = kMatterMaterialTablePolicy);
     [[nodiscard]] Expected<Array<u32>> matterPropertyIndices(const MatterState &state);

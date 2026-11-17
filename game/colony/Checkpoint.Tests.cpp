@@ -117,6 +117,77 @@ namespace pP::game::tests::detail::checkpoint {
         }
     };
 
+    PPR_UNIT_TEST (destroyed_solids_use_calibrated_families_and_initial_history) {
+        Fixture fixture{"destroyed_families", "frontier", 1024u, true, true};
+        const auto source = editedCheckpoint(*fixture.m_catalog).m_current_matter;
+        sim::ChunkGrid grid{1024u};
+        using Family = matter::ESourceMaterial;
+        const std::pair<const char *, Family> cases[]{
+            {"sandstone", Family::sand}, {"obsidian", Family::elastic}, {"slime", Family::visco},
+            {"clay", Family::cohesive}, {"snow", Family::compacting}, {"pumice", Family::compacting}};
+        for (u32 index = 0u; index < std::size(cases); ++index) {
+            const auto *const material = fixture.m_catalog->findMaterial(cases[index].first);
+            PPR_TEST_ASSERT(material != nullptr and material->m_representation == EMaterialRepresentation::terrain);
+            PPR_TEST_ASSERT(not grid.setCell({60u + index, 60u}, {material->m_numeric_id, 300.0f}));
+        }
+
+        auto candidate = grid.captureChunk({0u, 0u});
+        PPR_TEST_ASSERT(candidate.has_value());
+        for (u32 index = 0u; index < std::size(cases); ++index)
+            PPR_TEST_ASSERT(not grid.setCell({60u + index, 60u}, {}));
+
+        grid.exchangeChunk(*candidate);
+        const std::array edits{std::move(*candidate)};
+        const auto prepared = prepareMatterTerrainEdit(source, grid, edits, *fixture.m_catalog);
+        PPR_TEST_ASSERT(prepared and prepared->has_value());
+        const auto &state = **prepared;
+        PPR_TEST_ASSERT(state.m_particles.size() == source.m_particles.size() + std::size(cases));
+        const auto indices = matterPropertyIndices(state);
+        PPR_TEST_ASSERT(indices.has_value());
+
+        for (u32 index = 0u; index < std::size(cases); ++index) {
+            const auto offset = source.m_particles.size() + index;
+            const auto [key, family] = cases[index];
+            const auto &row = state.m_properties[(*indices)[offset]];
+            const auto &particle = state.m_particles[offset];
+            const auto *const material = fixture.m_catalog->findMaterial(key);
+            PPR_TEST_ASSERT(state.m_records[offset].m_material == material->m_numeric_id);
+            PPR_TEST_ASSERT(row.m_family == family and particle.m_material == static_cast<float>(family));
+            PPR_TEST_ASSERT(
+                static_cast<double>(row.m_reference_density) == material->m_reference_density_kg_m3 / 1000.0);
+            const bool history = family == Family::cohesive or family == Family::compacting;
+            const float phi = std::string_view{key} == "pumice" ? 0.4f : 0.3f;
+            PPR_TEST_ASSERT(particle.m_log_jp == (history ? 0.0f : 1.0f));
+            PPR_TEST_ASSERT(particle.m_compaction == 0.0f and particle.m_solid_fraction == phi);
+            PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+            PPR_TEST_ASSERT(particle.m_liquid_density == 1.0f);
+            PPR_TEST_ASSERT(row.m_solid_fraction0 == phi);
+
+            if (family == Family::sand) {
+                PPR_TEST_ASSERT(row.m_friction_angle == 34.0f and row.m_sand_yield_ratio == 1.1f);
+            } else if (family == Family::elastic or family == Family::visco) {
+                PPR_TEST_ASSERT(row.m_elasticity_ratio == 1.0f and row.m_elastic_relaxation == 1.5f);
+                PPR_TEST_ASSERT(row.m_plasticity == (family == Family::visco ? 0.9f : 0.0f));
+            } else if (family == Family::cohesive) {
+                PPR_TEST_ASSERT(row.m_cohesion == 0.12f and row.m_cap == 0.5f and row.m_cohesion_hardening == 0.4f);
+            }
+        }
+
+        // Reseeding through the production snapshot adapter must use the same phi0,
+        // especially pumice's 0.4 rather than the generic particle's 0.3.
+        const auto snapshot = captureMovingMatter(state, state.m_particles);
+        PPR_TEST_ASSERT(snapshot.has_value());
+        const auto seeded = makeMatterState(
+            *snapshot, state.m_cell_metres, state.m_thickness_metres, kMatterGravityY, 8u, 1024u,
+            fixture.m_catalog.get());
+        PPR_TEST_ASSERT(seeded.has_value());
+        for (std::size_t index = source.m_particles.size(); index < state.m_particles.size(); ++index) {
+            PPR_TEST_ASSERT(seeded->m_particles[index].m_material == state.m_particles[index].m_material);
+            PPR_TEST_ASSERT(seeded->m_particles[index].m_log_jp == state.m_particles[index].m_log_jp);
+            PPR_TEST_ASSERT(seeded->m_particles[index].m_solid_fraction == state.m_particles[index].m_solid_fraction);
+        }
+    };
+
     PPR_UNIT_TEST (dug_and_seeded_material_families_initialize_from_properties) {
         Fixture fixture{"dug_families", "frontier", 1024u, true, true};
         const auto checkpoint = editedCheckpoint(*fixture.m_catalog);
@@ -1483,6 +1554,7 @@ namespace pP::game::tests {
                 restored_current_matter_is_frozen_until_attached_and_keeps_physical_inventory,
                 dig_candidate_preserves_carried_columns_and_emits_original_seam_inventory_once,
                 dug_and_seeded_material_families_initialize_from_properties,
+                destroyed_solids_use_calibrated_families_and_initial_history,
                 new_contour_coverage_rejects_moving_and_gas_but_preserves_prior_overlap,
                 current_round_trip_preserves_all_words_and_rebinds_only_world,
                 current_particle_wire_payload_is_the_exact_semantic_word_sequence,

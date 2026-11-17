@@ -355,6 +355,14 @@ if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
         LABELS unit game gpu_validation matter_fast
     )
     ppr_add_test_entry(TARGET game.tests
+        NAME element_calibration_gpu
+        FILTER "game/checkpoint_gpu/shipped_liquids_have_distinct_loaded_gpu_responses"
+        LOOPS
+        RESOURCE_LOCK gpu
+        TIMEOUT 180
+        LABELS unit game gpu_validation matter_fast
+    )
+    ppr_add_test_entry(TARGET game.tests
         NAME matter_edit_gpu
         FILTER "game/checkpoint_gpu/attached_dig_preparation_retry_publishes_inventory_once_without_render_ack"
         LOOPS

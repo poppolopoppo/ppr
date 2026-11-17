@@ -338,6 +338,80 @@ namespace pP::game::tests::detail::checkpoint {
             rememberAdmission();
         }
 
+        // Identical gravity-loaded columns; report late height/speed, early speed,
+        // normalized compression and physical density from committed GPU snapshots.
+        std::array<double, 5u> liquidResponse(
+            const matter::GpuMaterialProperties &row, const u32 fixed_point_multiplier = 10'000'000u) {
+            matter::GpuParameters profile{};
+            profile.m_grid_width = profile.m_grid_height = 32u;
+            profile.m_gravity_strength = 0.3f;
+            profile.m_fixed_point_multiplier = fixed_point_multiplier;
+            matter::GpuSolver solver;
+            PPR_TEST_ASSERT(not solver.initialize(
+                m_rhi->getDevice(), *m_queue, *m_shaders, std::filesystem::current_path(), profile));
+            PPR_DEFER {
+                PPR_TEST_ASSERT(not solver.shutdown());
+            };
+
+            Array<matter::GpuParticle> particles;
+            for (u32 y = 0u; y < 8u; ++y) {
+                for (u32 x = 0u; x < 8u; ++x) {
+                    matter::GpuParticle particle{};
+                    particle.m_position_x = 12.25f + static_cast<float>(x) * 0.5f;
+                    particle.m_position_y = 6.25f + static_cast<float>(y) * 0.5f;
+                    particle.m_volume = 0.25f;
+                    particle.m_mass = row.m_reference_density * particle.m_volume;
+                    matter::initializeMaterialState(particle, row);
+                    particles.push_back(particle);
+                }
+            }
+
+            const std::array rows{row};
+            const Array<u32> indices(particles.size(), 0u);
+            PPR_TEST_ASSERT(not solver.prepareReplacement(
+                particles, {}, solver.accounting().m_epoch, {}, matter::ETerrainUpdate::replace, {rows, indices}));
+            solver.publishReplacement();
+
+            std::array<double, 5u> metrics{};
+            constexpr u32 ticks = 240u, window = 30u;
+            for (u32 tick = 0u; tick < ticks; ++tick) {
+                PPR_TEST_ASSERT(
+                    not solver.submitResidentTick(solver.accounting().m_epoch, 8u, matter::kDefaultIterations));
+                PPR_TEST_ASSERT(not solver.drain());
+                const auto completed = solver.pollTick();
+                PPR_TEST_ASSERT(completed and *completed);
+                solver.publishTick();
+
+                if (tick >= window and tick < ticks - window)
+                    continue;
+
+                PPR_TEST_ASSERT(not solver.beginSnapshot(solver.accounting().m_epoch));
+                PPR_TEST_ASSERT(not solver.drain());
+                const auto captured = solver.pollSnapshot();
+                PPR_TEST_ASSERT(captured and captured->has_value());
+                for (const auto &particle: (**captured).m_particles) {
+                    const double speed = static_cast<double>(
+                        std::hypot(particle.m_displacement_x, particle.m_displacement_y) / profile.m_delta_time);
+                    const double weight = 1.0 / static_cast<double>(window * particles.size());
+                    if (tick < window) {
+                        metrics[2u] += speed * weight;
+                    } else {
+                        metrics[0u] += static_cast<double>(particle.m_position_y) * weight;
+                        metrics[1u] += speed * weight;
+                        metrics[3u] += static_cast<double>(particle.m_liquid_density) * weight;
+                        // liquidDensity evolves multiplicatively with volume change (J).
+                        metrics[4u] += static_cast<double>(row.m_reference_density / particle.m_liquid_density) *
+                                       weight;
+                    }
+                }
+            }
+
+            for (const double value: metrics)
+                PPR_TEST_ASSERT(std::isfinite(value));
+
+            return metrics;
+        }
+
         void restore(
             const std::shared_ptr<const ContentCatalog> &catalog, const WorldCheckpoint &checkpoint, const u64 world) {
             if (m_driver)
@@ -771,6 +845,75 @@ namespace pP::game::tests::detail::checkpoint {
         PPR_TEST_ASSERT(not driver.finishServiceDoor(move_b));
     };
 
+    PPR_UNIT_TEST (shipped_liquids_have_distinct_loaded_gpu_responses) {
+        config::Diagnostics diagnostics{32u};
+        auto imported = loadContentCatalog(
+            hal::process::currentExecutablePath().parent_path() / "worldgen/default", diagnostics);
+        PPR_TEST_ASSERT(imported.has_value());
+        auto definitions = std::make_shared<const ContentDescriptorCatalog>(std::move(*imported));
+        const auto world = resolveContentWorld(*definitions, "lighting_lab", diagnostics);
+        PPR_TEST_ASSERT(world.has_value());
+        const auto catalog = selectWorldCatalog(definitions, *world, worldCompileParameters(1024u), diagnostics);
+        PPR_TEST_ASSERT(catalog.has_value());
+
+        const auto property = [&](const char *const key) {
+            const auto *const material = catalog->findMaterial(key);
+            PPR_TEST_ASSERT(material != nullptr);
+            const auto row = defaultMatterProperties(*material, {});
+            PPR_TEST_ASSERT(matter::validMaterialProperties(row));
+            return row;
+        };
+
+        const auto water = property("water"), magma = property("magma"), oil = property("crude_oil");
+        auto alias = property("lab_magma");
+        PPR_TEST_ASSERT(alias.m_substance_id != magma.m_substance_id);
+        alias.m_substance_id = magma.m_substance_id;
+        PPR_TEST_ASSERT((std::bit_cast<std::array<u32, 19u>>(alias) == std::bit_cast<std::array<u32, 19u>>(magma)));
+        PPR_TEST_ASSERT(water.m_liquid_viscosity == 0.01f and magma.m_liquid_viscosity == 2.0f);
+        PPR_TEST_ASSERT(water.m_liquid_relaxation == 1.0f and magma.m_liquid_relaxation == 0.5f);
+
+        GpuOwner owner;
+        owner.initialize();
+        const auto water_result = owner.liquidResponse(water);
+        // Change transfer precision, not load or coefficients: a deterministic
+        // same-precision repeat alone cannot expose fixed-point transfer noise.
+        const auto refined = owner.liquidResponse(water, 20'000'000u);
+        const auto magma_result = owner.liquidResponse(alias);
+        const auto oil_result = owner.liquidResponse(oil);
+
+        // One refinement spread is the observed transfer-precision sensitivity,
+        // not a statistical confidence interval. Retain a 1e-4 quantisation floor
+        // in each observable's units so identical rounded results imply no zero tolerance.
+        constexpr double quantisation_floor = 1.0e-4;
+        std::array<double, 5u> noise{};
+        for (u32 index = 0u; index < noise.size(); ++index)
+            noise[index] = std::max(quantisation_floor, std::abs(water_result[index] - refined[index]));
+
+        for (const auto &[name, result]:
+            {std::pair{"water", water_result}, std::pair{"water-refined-transfer", refined},
+                std::pair{"lab_magma", magma_result}, std::pair{"crude_oil", oil_result},
+                std::pair{"noise", noise}}) {
+            std::fprintf(
+                stderr,
+                "[element-calibration] %s late-height=%.9g late-speed=%.9g early-speed=%.9g compression=%.9g density=%.9g\n",
+                name, result[0u], result[1u], result[2u], result[3u], result[4u]);
+        }
+
+        // Magma's late height and speed separate beyond the refinement spread;
+        // compression and density separate beyond the quantisation floor.
+        // Early speed is a transfer-sensitive transient, so keep it diagnostic-only.
+        PPR_TEST_ASSERT(std::abs(water_result[0u] - magma_result[0u]) > noise[0u]);
+        PPR_TEST_ASSERT(std::abs(water_result[1u] - magma_result[1u]) > noise[1u]);
+        PPR_TEST_ASSERT(std::abs(water_result[3u] - magma_result[3u]) > noise[3u]);
+        PPR_TEST_ASSERT(magma_result[4u] - water_result[4u] > noise[4u]);
+
+        // Oil's height, late speed and density exceed their refined noise;
+        // its compression difference remains below the quantisation floor.
+        PPR_TEST_ASSERT(std::abs(water_result[0u] - oil_result[0u]) > noise[0u]);
+        PPR_TEST_ASSERT(std::abs(water_result[1u] - oil_result[1u]) > noise[1u]);
+        PPR_TEST_ASSERT(water_result[4u] - oil_result[4u] > noise[4u]);
+    };
+
     PPR_UNIT_TEST (particle_tool_initializes_material_families_and_preserves_restored_history) {
         Fixture fixture{"tool_families", "frontier", 1024u, true};
         auto checkpoint = editedCheckpoint(*fixture.m_catalog);
@@ -781,7 +924,11 @@ namespace pP::game::tests::detail::checkpoint {
             auto &driver = *owner.m_driver;
             driver.setPaused(true);
 
-            for (const char *const key: {"snow", "clay", "sand", "water"}) {
+            using Family = matter::ESourceMaterial;
+            const std::pair<const char *, Family> cases[]{
+                {"snow", Family::compacting}, {"clay", Family::cohesive}, {"sand", Family::sand},
+                {"water", Family::liquid}};
+            for (const auto &[key, family]: cases) {
                 const auto *const material = fixture.m_catalog->findMaterial(key);
                 PPR_TEST_ASSERT(material != nullptr);
                 const auto before = driver.matterState()->m_particles.size();
@@ -796,11 +943,34 @@ namespace pP::game::tests::detail::checkpoint {
                 PPR_TEST_ASSERT(indices.has_value());
                 const auto &row = state.m_properties[indices->back()];
                 const auto &particle = state.m_particles.back();
-                const bool new_family = std::string_view{key} == "snow" or std::string_view{key} == "clay";
+                const bool new_family = family == Family::compacting or family == Family::cohesive;
                 PPR_TEST_ASSERT(particle.m_log_jp == (new_family ? 0.0f : 1.0f));
                 PPR_TEST_ASSERT(particle.m_compaction == 0.0f);
                 PPR_TEST_ASSERT(particle.m_solid_fraction == (new_family ? row.m_solid_fraction0 : 0.3f));
-                PPR_TEST_ASSERT(particle.m_material == static_cast<float>(matterFamily(*material)));
+                PPR_TEST_ASSERT(row.m_family == family and particle.m_material == static_cast<float>(family));
+                PPR_TEST_ASSERT(particle.m_solid_fraction == 0.3f);
+                PPR_TEST_ASSERT(particle.m_liquid_density == 1.0f);
+                PPR_TEST_ASSERT(particle.m_displacement_x == 0.0f and particle.m_displacement_y == 0.0f);
+                PPR_TEST_ASSERT(particle.m_deformation_gradient.m_c0x == 1.0f);
+                PPR_TEST_ASSERT(particle.m_deformation_gradient.m_c1y == 1.0f);
+                PPR_TEST_ASSERT(particle.m_deformation_gradient.m_c0y == 0.0f);
+                PPR_TEST_ASSERT(particle.m_deformation_gradient.m_c1x == 0.0f);
+            }
+
+            const auto gas = fixture.m_catalog->findMaterial("oxygen")->m_numeric_id;
+            PPR_TEST_ASSERT(
+                driver.requestParticleTool({20.0, 20.0, 2.0, 1u, gas, EParticleToolKind::spawn}) ==
+                std::errc::invalid_argument);
+
+            for (const char *const key: {"obsidian", "slime", "pumice", "bedrock"}) {
+                const auto *const material = fixture.m_catalog->findMaterial(key);
+                PPR_TEST_ASSERT(material->m_representation == EMaterialRepresentation::terrain);
+                const auto before = driver.matterState()->m_next_id;
+                PPR_TEST_ASSERT(
+                    driver.requestParticleTool(
+                        {20.0, 20.0, 2.0, 1u, material->m_numeric_id, EParticleToolKind::spawn}) ==
+                    std::errc::invalid_argument);
+                PPR_TEST_ASSERT(driver.matterState()->m_next_id == before and not driver.editPending());
             }
 
             const auto captured = captureWorldCheckpoint(driver, driver.preparedWorld()->generated());
@@ -3629,6 +3799,7 @@ namespace pP::game::tests {
             detail::checkpoint::service_door_cancel_reused_matter_target_rejects_stale_outer_activation,
             detail::checkpoint::paused_particle_tools_preserve_prefix_ids_and_terrain_then_destroy_to_zero,
             detail::checkpoint::particle_tool_initializes_material_families_and_preserves_restored_history,
+            detail::checkpoint::shipped_liquids_have_distinct_loaded_gpu_responses,
             detail::checkpoint::terrain_position_rejection_freezes_matter_until_a_committed_mutation,
             detail::checkpoint::attached_dig_preparation_retry_publishes_inventory_once_without_render_ack,
             detail::checkpoint::particle_occupied_wall_order_is_rejected_then_succeeds_after_evolution,
