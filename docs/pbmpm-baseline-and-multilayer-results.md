@@ -1173,3 +1173,18 @@ Defects fixed on the way to this run, each found by a real failure rather than i
 | `BAD_COMMAND`, window font errors | builds overlapping the suite run | hygiene: no edits or builds during acceptance |
 
 Remaining known limits, unchanged: Windows/D3D12 unrun; clay and snow coefficients are calibration placeholders; sand K10 conformance is structural-only; elastic recovery undetermined (rock/ore stay granular); occupied-volume transport across particles is B2's scope.
+
+## Rebase onto `particles` (`e6384ccc`) and full-suite green
+
+| Item | Value |
+|---|---|
+| Rebase | 42 commits onto `particles` `e6384ccc`, no conflicts (overlap limited to the three `GridPass` files) |
+| Full suite | **85/85 passed**, 4449 s, `-j4`, no concurrent builds |
+| Log | `/tmp/opencode/full-suite8.log` |
+
+Two failures seen immediately after the rebase were **pre-existing on `particles`**, proven by building its tip detached and reproducing both:
+
+1. `evolved_liquid_pool_has_no_interior_render_holes` — a genuine main-branch renderer defect: the attribute narrowing updated MSAA/reactive programs but missed the **single-sample** solid/liquid program, which paired the old vertex entry with `fragmentSolidLiquidMain`, losing material, shape-scale, flow and tangent inputs. Fixed by pairing `vertexParticleSolidLiquid`; the pool is watertight again.
+2. `asset.resident_particles_gpu` — the same mismatched pair made the resident particle composite off its half-coverage expectation; fixed by the same change, assertion unchanged.
+
+One further failure was **flaky infrastructure, not code**: `services_window` passes 3/3 serially but leaked libdbus allocations twice under parallel suite load, after all 61 of its leaves passed. The sanitizer policy forbids DBus/unknown-module suppressions, so the entry now runs `RUN_SERIAL` with the reason recorded in CMake rather than silencing the report.
