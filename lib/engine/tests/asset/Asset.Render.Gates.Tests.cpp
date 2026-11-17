@@ -4375,22 +4375,16 @@ void dumpSpatialSamples(uint3 id:SV_DispatchThreadID) {
             PPR_TEST_ASSERT(args.instanceCount == 0u);
             PPR_TEST_ASSERT(grid.observations().m_particle_uploads == before.m_particle_uploads);
 
+            // Null GPU buffers and layout/stride mismatches make current() false
+            // and therefore hold. Probe structural rejection with current views.
             auto invalid = selected;
-            // ReadonlyRow / ParticleReadonly is six floats plus propertyRow: 7 * 4 = 28 bytes.
-            // 64 is still explicitly invalid; admission must reject it rather than hold the publication.
-            invalid.m_readonly_stride = 64u;
-            const auto invalid_stride_error = apply_view(invalid);
-            _.log(
-                std::format(
-                    "PARTICLE_INVALID_VIEW error={}:{} message={} numerical_stride={} readonly_stride={} "
-                    "numerical_buffer_stride={} readonly_buffer_stride={}",
-                    invalid_stride_error.category().name(), invalid_stride_error.value(),
-                    invalid_stride_error.message(), invalid.m_stride, invalid.m_readonly_stride,
-                    invalid.m_numerical->getDesc().elementSize, invalid.m_readonly->getDesc().elementSize));
-            PPR_TEST_ASSERT(invalid_stride_error == std::errc::invalid_argument);
+            invalid.m_origin = 0.0;
+            PPR_TEST_ASSERT(invalid.current());
+            PPR_TEST_ASSERT(apply_view(invalid) == std::errc::invalid_argument);
 
             invalid = selected;
-            invalid.m_readonly.setNull();
+            invalid.m_metadata.reset();
+            PPR_TEST_ASSERT(invalid.current());
             PPR_TEST_ASSERT(apply_view(invalid) == std::errc::invalid_argument);
 
             const auto uploads_before_hold = grid.observations().m_particle_uploads;

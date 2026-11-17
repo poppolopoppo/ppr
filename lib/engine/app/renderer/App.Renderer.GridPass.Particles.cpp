@@ -946,8 +946,17 @@ namespace pP {
             GridPass,
             gpuParticleFrameCurrent(view) ? std::error_code{} : std::make_error_code(std::errc::invalid_argument));
 
-        // Structural validity is independent of liveness: reject an invalid
-        // view before allowing a stale-but-valid view to hold the last publication.
+        // Liveness (finding D10): a not-current view is held without structural
+        // admission because its buffers may belong to a superseded publication.
+        // `publishTick` swaps the pairs in place and bumps the live epoch, so
+        // installing that view could pack a torn buffer. The renderer retains its
+        // own packed rows, matching the packet's hold (finding D11). The frame's
+        // held preparation counts and logs it once in prepareGpuParticles.
+        if (not view.current()) {
+            m_world.m_particle_presentation = EParticlePresentation::held;
+            return {};
+        }
+
         PPR_RETURN_ERROR_ON_FAIL(
             GridPass, view.m_metadata and
                               view.m_numerical and
@@ -976,18 +985,6 @@ namespace pP {
                                   ? std::error_code{}
                                   : std::make_error_code(std::errc::invalid_argument));
             }
-        }
-
-        // Liveness (finding D10): the renderer decides for itself whether the
-        // committed rows are still its own. `publishTick` swaps the pairs in
-        // place and bumps the live epoch, so installing a not-current view would
-        // pack a torn buffer. It is the same hold the packet reports, so the two
-        // layers cannot disagree about liveness (finding D11). The frame's held
-        // preparation counts and logs it once in prepareGpuParticles, which owns
-        // the per-frame decision.
-        if (not view.current()) {
-            m_world.m_particle_presentation = EParticlePresentation::held;
-            return {};
         }
 
         if (not m_world.m_gpu_particles) {
